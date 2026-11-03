@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 
 declare const Bun: {
   file(path: string): {
@@ -185,7 +186,7 @@ describe("privacy shield device guardrails", () => {
     expect(backend).toContain("match fleet_privacy_alert_mode(class).await {");
   });
 
-  test("Fleet attention alerts wake the heartbeat owner even when detector IPC uses another Pro worker", async () => {
+  test.skipIf(!existsSync("../wincommander-pro/commander-pro/src/fleet_agent/legacy_transport.rs"))("Fleet attention alerts wake the heartbeat owner even when detector IPC uses another Pro worker", async () => {
     const backend = await read("src-tauri/commander-free/src/backend.rs");
     const proTransport = await read("../wincommander-pro/commander-pro/src/fleet_agent/legacy_transport.rs");
 

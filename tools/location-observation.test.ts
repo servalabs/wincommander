@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
 
+const powershell = process.platform === "win32" ? "powershell.exe" : "pwsh";
+
 test("location actions propagate failed observations without calling Windows", async () => {
   const script = String.raw`
 $ProgressPreference = 'SilentlyContinue'
@@ -37,7 +39,7 @@ foreach ($name in @('Disable-LocationTracking', 'Enable-LocationTracking')) {
 }
 `;
   const encoded = Buffer.from(script, "utf16le").toString("base64");
-  const process = Bun.spawn(["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { stdout: "pipe", stderr: "pipe" });
+  const process = Bun.spawn([powershell, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { stdout: "pipe", stderr: "pipe" });
   const stderr = await new Response(process.stderr).text();
   expect({ code: await process.exited, stderr }).toEqual({ code: 0, stderr: "" });
 });
@@ -70,7 +72,7 @@ $script:missingMaster=$false; $script:serviceStart='Disabled'; $r=Get-LocationTr
 $script:serviceStart='Manual'; $script:master='invalid'; $r=Get-LocationTrackingStatus; if ($r.error -ne $true -or $null -ne $r.disabled) { throw 'malformed master became known' }
 `;
   const encoded = Buffer.from(script, "utf16le").toString("base64");
-  const process = Bun.spawn(["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { stdout: "pipe", stderr: "pipe" });
+  const process = Bun.spawn([powershell, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { stdout: "pipe", stderr: "pipe" });
   const stderr = await new Response(process.stderr).text();
   expect({ code: await process.exited, stderr }).toEqual({ code: 0, stderr: "" });
 });
@@ -84,7 +86,8 @@ test("startup and hardening preserve unknown location observations", async () =>
   expect(bridge).toContain("$locationStatus = Get-LocationTrackingStatus");
   expect(bridge).toContain("$locationStatus.disabled -is [bool]");
   expect(hardening).toContain("$locationStatus.disabled -isnot [bool]) { $null }");
-  const composition = backend.slice(backend.indexOf('} else if command == "Get-WCSystemProbe"'), backend.indexOf('} else if command == "Get-DashboardPrivacyPolicyStatus"'));
+  const composition = backend.slice(backend.indexOf('} else if command == "Get-WCSystemProbe"'), backend.indexOf('} else if command == "Get-HardeningStatus"'));
+  expect(composition).toContain('command == "Get-DashboardPrivacyPolicyStatus"');
   expect(composition).toContain('load_module("privacy/telemetry")');
 });
 
@@ -125,7 +128,7 @@ foreach ($value in @(@{error=$true;disabled=$null},@{disabled='bad'})) { $locati
 foreach ($value in @($true,$false)) { $locationStatus=@{disabled=$value}; if ((. $expr) -ne $value) { throw 'known hardening state changed' } }
 `;
   const encoded = Buffer.from(script, "utf16le").toString("base64");
-  const process = Bun.spawn(["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { stdout: "pipe", stderr: "pipe" });
+  const process = Bun.spawn([powershell, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { stdout: "pipe", stderr: "pipe" });
   const stderr = await new Response(process.stderr).text();
   expect({ code: await process.exited, stderr }).toEqual({ code: 0, stderr: "" });
 });

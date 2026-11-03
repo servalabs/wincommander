@@ -69,7 +69,7 @@ pub(super) fn walk_dir(
 ) -> DiskNode {
     #[cfg(windows)]
     {
-        return walk_dir_windows(dir, acc, cancelled, depth, entry_id);
+        walk_dir_windows(dir, acc, cancelled, depth, entry_id)
     }
     #[cfg(not(windows))]
     {

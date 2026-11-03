@@ -82,6 +82,13 @@ fn handle_rename_preserves_the_verified_file_and_never_replaces_an_occupant() {
     };
     let before_sddl = security_sddl(&link.file);
     let before_info = file_info(&link.file);
+    // Exercise different UTF-16 buffer alignments, including lengths that
+    // previously left no room for the terminating NUL.
+    for name in ["x.lnk", "xy.lnk", "xyz.lnk", "xyzw.lnk"] {
+        let destination = root.join(name);
+        move_link(&link, &destination).unwrap();
+        assert_eq!(std::fs::read(destination).unwrap(), b"original shortcut bytes");
+    }
     move_link(&link, &backup).unwrap();
     assert!(!source.exists());
     assert_eq!(std::fs::read(&backup).unwrap(), b"original shortcut bytes");

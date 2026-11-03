@@ -10,8 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, sync::Mutex};
 
 #[cfg(windows)]
-#[path = "peer_auth_deployment_acl.rs"]
-mod protected_acl;
+use crate::peer_auth_deployment_acl as protected_acl;
 
 /// Separate trust store. Existing directories and files are checked before
 /// any ACL change or read, preventing adoption of pre-planted trust.

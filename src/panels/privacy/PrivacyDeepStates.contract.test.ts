@@ -64,8 +64,8 @@ describe("Privacy deep-state and responsive contracts", () => {
     expect(source).toContain('const stateUnknown = privacyShieldRunning === null');
     expect(source).toContain('Camera availability could not be confirmed. You can try starting Shield to check the camera.');
     expect(source).toContain('setStopError(res.error || "Privacy Shield could not start.');
-    expect(source).toContain('generation !== statusGeneration.current || shieldActionInFlight.current');
-    expect(source).toContain('if (shieldActionInFlight.current) return;');
+    expect(source).toContain('if (!gate.canApply(generation)) return;');
+    expect(source).toContain('if (statusGate.current.actionPending) return;');
     expect(source).toContain('shieldWaiting ? "Waiting for Shield"');
     expect(source).toContain('text="Refresh status"');
     expect(source).toContain('notification sent');

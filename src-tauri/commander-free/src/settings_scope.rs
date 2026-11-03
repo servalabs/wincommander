@@ -491,6 +491,10 @@ pub(super) const SYSTEM_STATE_SCOPE_TABLE: &[SystemStateScopeRule] = &[
         scope: SettingsScope::User,
     },
     SystemStateScopeRule {
+        path: "privacy.privacyShield.sendIncidentCapturesToFleet",
+        scope: SettingsScope::User,
+    },
+    SystemStateScopeRule {
         path: "privacy.privacyShield.fleetCaptureOnPhone",
         scope: SettingsScope::User,
     },

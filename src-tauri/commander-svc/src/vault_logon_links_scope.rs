@@ -87,7 +87,7 @@ fn saved_owner(sid: &str, session: u32) -> Result<OwnerSession, ()> {
 fn could_share_namespace(expected: &OwnerSession, actual: Option<&OwnerSession>) -> bool {
     // Missing LSA data cannot exclude an old paired alias. Keep it in the
     // inspection scope; removal still needs the exact dead encrypted target.
-    actual.is_none_or(|actual| actual == expected)
+    actual.map_or(true, |actual| actual == expected)
 }
 
 #[cfg_attr(test, allow(dead_code))]

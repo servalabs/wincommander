@@ -116,7 +116,7 @@ mod tests {
     fn enriched_inventory_requires_explicit_version_and_preserves_authority() {
         let version = parse_query(&json!({"personal":true,"inventory_version":2})).unwrap();
         let fixture = fixture();
-        let response = reply(version, &[fixture.clone()]).unwrap();
+        let response = reply(version, std::slice::from_ref(&fixture)).unwrap();
         assert_eq!(
             serde_json::from_value::<Vec<PersonalVaultMountedVolume>>(response).unwrap(),
             vec![fixture]

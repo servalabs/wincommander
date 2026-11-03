@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use std::fs;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -283,7 +283,7 @@ fn now_unix() -> u64 {
 /// `fs::write` call could leave a half-written file that the next
 /// load would refuse to parse, locking the user out of their
 /// licence/trial state until they re-activated.
-fn atomic_write(path: &PathBuf, data: &[u8]) -> Result<(), String> {
+fn atomic_write(path: &Path, data: &[u8]) -> Result<(), String> {
     // Licence refreshes from different Windows sessions must own separate staging files.
     crate::datastore_io::atomic_write(path, data)
 }

@@ -37,6 +37,8 @@ mod shared_shortcuts_file;
 mod shared_shortcuts_acl;
 #[cfg(windows)]
 mod shared_shortcuts;
+#[cfg(windows)]
+mod peer_auth_deployment_acl;
 mod settings_host;
 #[cfg(any(windows, test))]
 mod managed_deployment;

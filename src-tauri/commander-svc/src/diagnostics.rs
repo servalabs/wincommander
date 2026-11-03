@@ -1127,7 +1127,7 @@ mod tests {
         let decrypt = |value: &str| {
             value
                 .find('{')
-                .map(|index| value[index..].as_bytes().to_vec())
+                .map(|index| value.as_bytes()[index..].to_vec())
         };
         let retained = retain_diagnostic_records(&line, "2026-10-01".into(), decrypt);
         assert_eq!(retained.content, line);

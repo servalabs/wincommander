@@ -284,16 +284,18 @@ mod platform {
         let title = wide("WinCommander Safe Copy");
         let instruction = wide("Preparing a safe copy");
         let content = wide("Preparing Safe Copy…");
-        let mut config = TASKDIALOGCONFIG::default();
-        config.cbSize = std::mem::size_of::<TASKDIALOGCONFIG>() as u32;
-        config.hwndParent = std::ptr::null_mut();
-        config.dwFlags = TDF_SHOW_PROGRESS_BAR | TDF_SHOW_MARQUEE_PROGRESS_BAR | TDF_CALLBACK_TIMER;
-        config.dwCommonButtons = TDCBF_OK_BUTTON | TDCBF_CANCEL_BUTTON;
-        config.pszWindowTitle = title.as_ptr();
-        config.pszMainInstruction = instruction.as_ptr();
-        config.pszContent = content.as_ptr();
-        config.pfCallback = Some(task_dialog_callback);
-        config.lpCallbackData = Arc::as_ptr(&shared) as isize;
+        let config = TASKDIALOGCONFIG {
+            cbSize: std::mem::size_of::<TASKDIALOGCONFIG>() as u32,
+            hwndParent: std::ptr::null_mut(),
+            dwFlags: TDF_SHOW_PROGRESS_BAR | TDF_SHOW_MARQUEE_PROGRESS_BAR | TDF_CALLBACK_TIMER,
+            dwCommonButtons: TDCBF_OK_BUTTON | TDCBF_CANCEL_BUTTON,
+            pszWindowTitle: title.as_ptr(),
+            pszMainInstruction: instruction.as_ptr(),
+            pszContent: content.as_ptr(),
+            pfCallback: Some(task_dialog_callback),
+            lpCallbackData: Arc::as_ptr(&shared) as isize,
+            ..Default::default()
+        };
 
         let result = unsafe {
             TaskDialogIndirect(
@@ -526,6 +528,8 @@ mod platform {
         }
     }
 
+    pub use SafeCopyProgressDialog as Dialog;
+
     #[cfg(test)]
     mod operation_state_tests {
         use super::{
@@ -556,8 +560,6 @@ mod platform {
             );
         }
     }
-
-    pub use SafeCopyProgressDialog as Dialog;
 }
 
 #[cfg(windows)]

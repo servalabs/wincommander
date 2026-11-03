@@ -462,7 +462,7 @@ fn write_json_atomic<T: Serialize>(path: &Path, value: &T, tmp_name: &str) -> Re
     let bytes = serde_json::to_vec_pretty(value).map_err(|e| format!("serialize: {e}"))?;
     let tmp = parent.join(tmp_name);
     std::fs::write(&tmp, &bytes).map_err(|e| format!("write temp: {e}"))?;
-    std::fs::rename(&tmp, &path).map_err(|e| {
+    std::fs::rename(&tmp, path).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         format!("atomic rename: {e}")
     })
@@ -1096,9 +1096,7 @@ pub fn handle_safe_copy_cli(args: &[String]) {
 pub fn handle_safe_paste_cli(args: &[String]) -> i32 {
     let dest = args
         .iter()
-        .skip(1)
-        .filter(|arg| !arg.starts_with("--"))
-        .next()
+        .skip(1).find(|arg| !arg.starts_with("--"))
         .cloned();
     let Some(dest) = dest else {
         let error = "Safe Paste did not receive a destination folder. Refresh the context-menu integration and try again.";

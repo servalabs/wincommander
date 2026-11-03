@@ -167,14 +167,14 @@ mod rollback_recovery {
             }
         }
     }
-    fn fixture_with_initial_policy(
-        installed: bool,
-    ) -> (
+    type RecoveryFixture = (
         VaultAccessStore,
         Arc<Controls>,
         Arc<Mutex<HashMap<PathBuf, Vec<u8>>>>,
         VaultAccessPolicy,
-    ) {
+    );
+
+    fn fixture_with_initial_policy(installed: bool) -> RecoveryFixture {
         let files = Arc::new(Mutex::new(HashMap::new()));
         let controls = Arc::new(Controls::default());
         let store = VaultAccessStore::open_with_groups(
@@ -211,12 +211,7 @@ mod rollback_recovery {
         edit.entries[0].mount.preferred_letter = Some("W".into());
         (store, controls, files, edit)
     }
-    fn fixture() -> (
-        VaultAccessStore,
-        Arc<Controls>,
-        Arc<Mutex<HashMap<PathBuf, Vec<u8>>>>,
-        VaultAccessPolicy,
-    ) {
+    fn fixture() -> RecoveryFixture {
         fixture_with_initial_policy(true)
     }
     fn assert_blocked(store: &VaultAccessStore) {

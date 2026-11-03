@@ -1037,12 +1037,9 @@ fn read_machine_pro_update_outcome(job_id: &str) -> Result<serde_json::Value, St
             .result
             .ok_or_else(|| "elevation:elevated Pro update returned no result".to_string())
     } else {
-        Err(format!(
-            "{}",
-            outcome
+        Err(outcome
                 .error
-                .unwrap_or_else(|| "elevation:elevated Pro update failed".to_string())
-        ))
+                .unwrap_or_else(|| "elevation:elevated Pro update failed".to_string()).to_string())
     }
 }
 
@@ -1052,12 +1049,12 @@ fn parse_machine_pro_update_request(
     if args.first().map(String::as_str) != Some(MACHINE_PRO_UPDATE_FLAG) {
         return Ok(None);
     }
-    if args.len() < 3 || args.len() % 2 == 0 {
+    if args.len() < 3 || args.len().is_multiple_of(2) {
         return Err("machine Pro update arguments are incomplete".to_string());
     }
 
     let mut values = BTreeMap::new();
-    for pair in args[1..].chunks_exact(2) {
+    for pair in args[1..].as_chunks::<2>().0 {
         let key = &pair[0];
         let value = &pair[1];
         if !matches!(
@@ -1482,8 +1479,8 @@ async fn install_pro_binary_machine(
         .map_err(|e| format!("disk:tmp fsync: {}", e))?;
     drop(f);
 
-    if let Err(error) = verify_pro_package_version(&tmp_path, pro_version.as_deref()) {
-        let _ = std::fs::remove_file(&tmp_path);
+    if let Err(error) = verify_pro_package_version(tmp_path, pro_version.as_deref()) {
+        let _ = std::fs::remove_file(tmp_path);
         return Err(error);
     }
     crate::updater::require_selected_channel(channel)?;

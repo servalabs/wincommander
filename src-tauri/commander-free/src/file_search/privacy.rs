@@ -171,9 +171,9 @@ pub(super) fn scope_roots(scope: Option<&str>, allowed: &[PathBuf]) -> Vec<PathB
     allowed
         .iter()
         .filter_map(|root| {
-            if contains(&scope, &[root.clone()]) {
+            if contains(&scope, std::slice::from_ref(root)) {
                 Some(scope.clone())
-            } else if contains(root, &[scope.clone()]) {
+            } else if contains(root, std::slice::from_ref(&scope)) {
                 Some(root.clone())
             } else {
                 None
@@ -243,7 +243,7 @@ mod tests {
     #[test]
     fn a_different_container_at_the_same_letter_is_blocked() {
         let impostor = volume(r"V:\", "vault-b", "b:1");
-        let plan = resolve(&bound_settings(), &[impostor.clone()], |_| {
+        let plan = resolve(&bound_settings(), std::slice::from_ref(&impostor), |_| {
             Ok(impostor.clone())
         });
         assert!(plan.private.is_empty());
@@ -254,7 +254,7 @@ mod tests {
     #[test]
     fn the_same_container_can_move_letters_without_authorizing_the_old_drive() {
         let mounted = volume(r"W:\", "vault-a", "a:2");
-        let plan = resolve(&bound_settings(), &[mounted.clone()], |_| {
+        let plan = resolve(&bound_settings(), std::slice::from_ref(&mounted), |_| {
             Ok(mounted.clone())
         });
         assert_eq!(plan.private.len(), 1);
@@ -267,8 +267,8 @@ mod tests {
     fn locking_or_remounting_changes_the_generation_and_retains_history_protection() {
         let first = volume(r"V:\", "vault-a", "a:1");
         let second = volume(r"V:\", "vault-a", "a:2");
-        let one = resolve(&bound_settings(), &[first.clone()], |_| Ok(first.clone()));
-        let two = resolve(&bound_settings(), &[second.clone()], |_| Ok(second.clone()));
+        let one = resolve(&bound_settings(), std::slice::from_ref(&first), |_| Ok(first.clone()));
+        let two = resolve(&bound_settings(), std::slice::from_ref(&second), |_| Ok(second.clone()));
         let locked = resolve(&bound_settings(), &[], |_| Err("missing".into()));
         assert_ne!(one.generation, two.generation);
         assert_ne!(one.generation, locked.generation);

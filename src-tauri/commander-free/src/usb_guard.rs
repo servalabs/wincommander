@@ -1095,8 +1095,10 @@ mod tests {
 
     #[test]
     fn requested_watcher_needs_a_fresh_successful_observation() {
-        let mut health = BasicMonitorHealth::default();
-        health.monitor_started_at = Some(100);
+        let mut health = BasicMonitorHealth {
+            monitor_started_at: Some(100),
+            ..Default::default()
+        };
         assert!(!observation_is_fresh(&health, 100));
         health.last_poll_at = Some(100);
         assert!(observation_is_fresh(&health, 105));

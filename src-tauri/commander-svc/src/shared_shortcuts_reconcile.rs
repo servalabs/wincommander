@@ -66,7 +66,7 @@ fn original_public(spec: &LinkSpec, original: &LinkOriginal) -> bool {
     }
 }
 
-fn alias_at<'a>(
+fn alias_at(
     path: &Path,
     spec: &LinkSpec,
     expected: &crate::shared_shortcuts_file::LinkIdentity,

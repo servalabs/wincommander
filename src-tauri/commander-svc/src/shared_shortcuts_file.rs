@@ -222,7 +222,9 @@ fn trusted_owner(file: &File) -> io::Result<bool> {
 pub(super) fn move_link(link: &OpenedLink, destination: &Path) -> io::Result<()> {
     let name: Vec<u16> = destination.as_os_str().encode_wide().collect();
     let header = std::mem::offset_of!(FILE_RENAME_INFO, FileName);
-    let length = header + name.len() * 2;
+    // Some Windows versions inspect the trailing wide NUL even though
+    // FileNameLength excludes it. Reserve a zeroed code unit explicitly.
+    let length = header + (name.len() + 1) * 2;
     let words = length.div_ceil(std::mem::size_of::<usize>());
     let mut buffer = vec![0usize; words];
     let rename = buffer.as_mut_ptr().cast::<FILE_RENAME_INFO>();

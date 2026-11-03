@@ -47,7 +47,7 @@ impl VaultAccessStore {
                 return Err(VaultError::Forbidden);
             }
             let drops_name =
-                next.is_none_or(|group| !group.local_group.eq_ignore_ascii_case(&old.local_group));
+                next.map_or(true, |group| !group.local_group.eq_ignore_ascii_case(&old.local_group));
             if drops_name
                 && state.active.as_ref().is_some_and(|active| {
                     active.policy.entries.iter().any(|entry| {
@@ -85,7 +85,7 @@ impl VaultAccessStore {
                 continue;
             }
             let new_name =
-                old.is_none_or(|old| !old.local_group.eq_ignore_ascii_case(&group.local_group));
+                old.map_or(true, |old| !old.local_group.eq_ignore_ascii_case(&group.local_group));
             if new_name {
                 if active_principals.contains(&local_name(&group.local_group)) {
                     return Err(VaultError::GroupInUse);

@@ -54,7 +54,7 @@ fn live_registry_projection_diagnostic_reads_only() {
         "diagnostic-no-private-owner",
         false,
     ) {
-        Ok(rows) => println!("ordinary_projection_ok={} rows={}", true, rows.len()),
+        Ok(rows) => println!("ordinary_projection_ok=true rows={}", rows.len()),
         Err(reason) => println!("ordinary_projection_error={}", reason.as_str()),
     }
 }

@@ -5,7 +5,7 @@ use super::*;
 #[test]
 fn project_cleanup_revalidates_plain_artifact_paths_after_preview() {
     let temp = tempfile::tempdir().unwrap();
-    let project = temp.path().join("project");
+    let project = fs::canonicalize(temp.path()).unwrap().join("project");
     let artifact = project.join(".next/cache");
     let documents = project.join("documents");
     fs::create_dir_all(&artifact).unwrap();
@@ -56,7 +56,7 @@ fn project_cleanup_revalidates_plain_artifact_paths_after_preview() {
 #[test]
 fn refuses_intermediate_artifact_junctions_even_when_the_target_is_inside_the_project() {
     let temp = tempfile::tempdir().unwrap();
-    let project = temp.path().join("project");
+    let project = fs::canonicalize(temp.path()).unwrap().join("project");
     let documents = project.join("documents");
     fs::create_dir_all(documents.join("cache")).unwrap();
     fs::write(project.join("package.json"), "{}").unwrap();
@@ -106,12 +106,13 @@ fn refuses_intermediate_artifact_junctions_even_when_the_target_is_inside_the_pr
 #[test]
 fn requires_project_markers_and_preserves_arbitrary_build_folders() {
     let temp = tempfile::tempdir().unwrap();
-    fs::create_dir_all(temp.path().join("dist")).unwrap();
-    fs::create_dir_all(temp.path().join("target")).unwrap();
-    fs::create_dir_all(temp.path().join("node_modules/.cache")).unwrap();
-    assert!(artifact_paths(temp.path()).is_empty());
-    fs::write(temp.path().join("package.json"), "{}").unwrap();
-    let (targets, _) = discover(temp.path(), &AtomicBool::new(false)).unwrap();
+    let root = fs::canonicalize(temp.path()).unwrap();
+    fs::create_dir_all(root.join("dist")).unwrap();
+    fs::create_dir_all(root.join("target")).unwrap();
+    fs::create_dir_all(root.join("node_modules/.cache")).unwrap();
+    assert!(artifact_paths(&root).is_empty());
+    fs::write(root.join("package.json"), "{}").unwrap();
+    let (targets, _) = discover(&root, &AtomicBool::new(false)).unwrap();
     assert_eq!(targets.len(), 1);
     assert_eq!(targets[0].label, "JavaScript project build cache");
     assert!(!targets[0].recommended);
@@ -137,7 +138,7 @@ fn cargo_artifacts_require_cache_signature() {
 #[test]
 fn cancellation_produces_no_candidates() {
     let temp = tempfile::tempdir().unwrap();
-    assert!(discover(temp.path(), &AtomicBool::new(true))
+    assert!(discover(&fs::canonicalize(temp.path()).unwrap(), &AtomicBool::new(true))
         .unwrap()
         .0
         .is_empty());
@@ -156,8 +157,9 @@ fn rejects_project_junctions_and_caches_redirected_outside_the_chosen_root() {
         assert!(output.status.success());
     }
     let temp = tempfile::tempdir().unwrap();
-    let project = temp.path().join("project");
-    let outside = temp.path().join("outside");
+    let root = fs::canonicalize(temp.path()).unwrap();
+    let project = root.join("project");
+    let outside = root.join("outside");
     fs::create_dir_all(outside.join("cache")).unwrap();
     let protected = outside.join("cache/user-data");
     fs::write(&protected, b"preserve this outside file").unwrap();
@@ -183,7 +185,7 @@ fn rejects_project_junctions_and_caches_redirected_outside_the_chosen_root() {
     assert_eq!(scan.total_files, 0);
     assert_eq!(scan.skipped_targets, 0);
     assert!(protected.exists());
-    let link = temp.path().join("project-link");
+    let link = root.join("project-link");
     junction(&link, &project);
     assert!(discover(&link, &AtomicBool::new(false)).is_err());
     fs::remove_dir(link).unwrap();

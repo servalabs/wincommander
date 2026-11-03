@@ -3265,7 +3265,7 @@ pub(crate) fn set_calculator_lock_enabled(enabled: bool) -> Result<AppSettings, 
         |settings| prepare_calculator_lock(settings, enabled),
         crate::license::has_paid_entitlement(),
         write_settings_internal,
-        |old, new| crate::flow_bridge::on_settings_written(old, new),
+        crate::flow_bridge::on_settings_written,
     )
 }
 
@@ -3327,9 +3327,8 @@ fn mutate_settings_from(
     if is_decoy_mode() {
         return Err("Settings are read-only in decoy mode.".to_string());
     }
-    let settings = load().map_err(|error| {
+    let settings = load().inspect_err(|_error| {
         invalidate_cache_locked();
-        error
     })?;
     let mut updated = prepare(&settings)?;
     updated.last_seen_at = now_iso8601();

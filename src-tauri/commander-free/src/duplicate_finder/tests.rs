@@ -4,6 +4,7 @@ static SERIAL: Mutex<()> = Mutex::new(());
 
 #[test]
 fn inventory_excludes_its_own_database_inside_the_scanned_folder() {
+    let _serial = SERIAL.lock().unwrap();
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("one.bin"), b"same").unwrap();
     std::fs::write(root.path().join("two.bin"), b"same").unwrap();

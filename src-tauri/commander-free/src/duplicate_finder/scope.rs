@@ -84,25 +84,6 @@ pub(super) fn error(path: &Path, error: impl std::fmt::Display) {
         }
     });
 }
-
-#[cfg(test)]
-mod tests {
-    use super::display_path;
-    use std::path::Path;
-
-    #[test]
-    fn displays_extended_drive_paths_as_explorer_paths() {
-        assert_eq!(
-            display_path(Path::new(r"\\?\C:\Program Files")),
-            Some(r"C:\Program Files".into())
-        );
-        assert_eq!(
-            display_path(Path::new(r"\\?\UNC\server\share\folder")),
-            Some(r"\\server\share\folder".into())
-        );
-        assert_eq!(display_path(Path::new(r"\\?\Volume{test}")), None);
-    }
-}
 pub(super) fn finish(cancelled: bool) {
     update(|state| {
         state.running = false;
@@ -158,6 +139,25 @@ pub(super) fn local_fixed_roots() -> Result<(Vec<PathBuf>, Vec<String>), String>
         );
     }
     Ok((roots, excluded))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::display_path;
+    use std::path::Path;
+
+    #[test]
+    fn displays_extended_drive_paths_as_explorer_paths() {
+        assert_eq!(
+            display_path(Path::new(r"\\?\C:\Program Files")),
+            Some(r"C:\Program Files".into())
+        );
+        assert_eq!(
+            display_path(Path::new(r"\\?\UNC\server\share\folder")),
+            Some(r"\\server\share\folder".into())
+        );
+        assert_eq!(display_path(Path::new(r"\\?\Volume{test}")), None);
+    }
 }
 #[cfg(not(windows))]
 pub(super) fn local_fixed_roots() -> Result<(Vec<PathBuf>, Vec<String>), String> {

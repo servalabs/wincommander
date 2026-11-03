@@ -5035,7 +5035,7 @@ fn shield_launch_identity() -> &'static std::sync::Mutex<Option<ShieldLaunchIden
 
 fn remember_shield_launch(result: Option<&serde_json::Value>, origin: Option<&'static str>) {
     let identity = result.and_then(|value| {
-        if value.get("success")?.as_bool()? != true { return None; }
+        if !value.get("success")?.as_bool()? { return None; }
         let pid = value.get("processId")?.as_u64()?;
         let ticks = value.get("processStartTicks")?.as_str()?;
         if pid == 0 || ticks.is_empty() || !ticks.bytes().all(|ch| ch.is_ascii_digit()) { return None; }
@@ -5045,7 +5045,7 @@ fn remember_shield_launch(result: Option<&serde_json::Value>, origin: Option<&'s
 }
 
 pub(crate) fn shield_launch_origin(status: &serde_json::Value) -> Option<&'static str> {
-    if status.get("running")?.as_bool()? != true { return None; }
+    if !status.get("running")?.as_bool()? { return None; }
     let pid = status.get("processId")?.as_u64()?;
     let ticks = status.get("processStartTicks")?.as_str()?;
     let current = shield_launch_identity().lock().ok()?;
@@ -6003,10 +6003,7 @@ pub(crate) async fn run_backend_script_with_timeout(
         additional_modules.push_str("\n\n");
         additional_modules.push_str(&load_module("apps/winget")?);
         additional_modules.push_str("\n\n");
-    } else if command == "Get-WCSystemProbe" {
-        additional_modules.push_str(&load_module("privacy/telemetry")?);
-        additional_modules.push_str("\n\n");
-    } else if command == "Get-DashboardPrivacyPolicyStatus" {
+    } else if command == "Get-WCSystemProbe" || command == "Get-DashboardPrivacyPolicyStatus" {
         additional_modules.push_str(&load_module("privacy/telemetry")?);
         additional_modules.push_str("\n\n");
     } else if command == "Get-HardeningStatus" {

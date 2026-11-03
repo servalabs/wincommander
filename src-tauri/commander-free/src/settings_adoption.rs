@@ -33,7 +33,7 @@ pub(super) fn apply(patch: Value) -> Result<AppSettings, String> {
                 .ok_or("Settings adoption lease missing")?;
             super::write_settings_under_lease(settings, elevated, writer.is_some())
         },
-        |old, new| crate::flow_bridge::on_settings_written(old, new),
+        crate::flow_bridge::on_settings_written,
     )
 }
 
@@ -46,12 +46,11 @@ fn apply_with(
 ) -> Result<AppSettings, String> {
     super::mutate_settings_from(
         |current| {
-            prepare(current, &patch).map_err(|error| {
+            prepare(current, &patch).inspect_err(|_error| {
                 // The fresh load may already have advanced the personal session
                 // revision. Never leave an older cache beside that revision,
                 // even when policy/input validation rejects before persistence.
                 super::invalidate_cache_locked();
-                error
             })
         },
         paid,

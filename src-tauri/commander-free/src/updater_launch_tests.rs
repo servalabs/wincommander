@@ -56,7 +56,7 @@ async fn installer_launch_failure_keeps_app_resources_available_for_retry() {
                 .unwrap()
                 .unwrap();
             let mut request = [0u8; 4096];
-            stream.read(&mut request).await.unwrap();
+            assert!(stream.read(&mut request).await.unwrap() > 0);
             stream.write_all(format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 manifest.len(), manifest,

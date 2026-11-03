@@ -26,7 +26,9 @@ $result = Get-AutoEraseSchedules
 if ($result.error -or $result.schedules.Count -ne 4) { throw 'schedule readback failed' }
 if (-not $result.schedules[0].managedByAutoSet -or -not $result.schedules[1].managedByAutoSet -or -not $result.schedules[2].managedByAutoSet -or $result.schedules[3].managedByAutoSet) { throw 'bulk ownership was misclassified' }
 `;
-  const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")]);
+  const powershell = process.platform === "win32" ? "powershell.exe" : "pwsh";
+  const result = spawnSync(powershell, ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")]);
+  if (result.error) throw result.error;
   expect({ code: result.status, stderr: result.stderr.toString() }).toEqual({ code: 0, stderr: "" });
 });
 

@@ -257,8 +257,7 @@ fn explorer_select_argument(path: &std::path::Path) -> Result<std::ffi::OsString
     let raw = path.to_string_lossy();
     let explorer_path = if let Some(rest) = raw.strip_prefix(r"\\?\UNC\") {
         format!(r"\\{rest}")
-    } else if raw.starts_with(r"\\?\") {
-        let rest = &raw[4..];
+    } else if let Some(rest) = raw.strip_prefix(r"\\?\") {
         if rest.len() >= 3 && rest.as_bytes()[1] == b':' && rest.as_bytes()[2] == b'\\' {
             rest.to_string()
         } else {

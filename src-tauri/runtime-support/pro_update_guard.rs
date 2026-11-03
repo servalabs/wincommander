@@ -82,7 +82,7 @@ pub(crate) fn operation_lease(
             return Ok(None);
         };
         let file =
-            open_image(&path).map_err(|error| format!("Pro image could not be opened: {error}"))?;
+            open_image(path).map_err(|error| format!("Pro image could not be opened: {error}"))?;
         let lease = lock_image(file, false)?;
         // Closes the race with a maintenance request arriving between probe and lease.
         require_available(marker)?;

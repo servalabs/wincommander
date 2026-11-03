@@ -9,7 +9,7 @@ use wincmd_shared::vault_inventory::{
 };
 
 async fn mounts() -> Result<Vec<PersonalVaultMountedVolume>, String> {
-    mounts_via(|verb, args| crate::svc_client::call(verb, args)).await
+    mounts_via(crate::svc_client::call).await
 }
 
 async fn mounts_via<F, Fut>(call: F) -> Result<Vec<PersonalVaultMountedVolume>, String>

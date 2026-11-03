@@ -26,6 +26,9 @@ declare module "bun:test" {
 
   export function describe(name: string, fn: TestFn): void;
   export function test(name: string, fn: TestFn, timeout?: number): void;
+  export namespace test {
+    function skipIf(condition: boolean): typeof test;
+  }
   /** Alias for `test`. */
   export function it(name: string, fn: TestFn): void;
   export function beforeEach(fn: TestFn): void;
@@ -40,5 +43,6 @@ declare module "node:fs" {
   }
 
   export function readFileSync(path: string, encoding: "utf8" | "utf-8"): string;
+  export function existsSync(path: string): boolean;
   export function readdirSync(path: string, options: { withFileTypes: true }): Dirent[];
 }

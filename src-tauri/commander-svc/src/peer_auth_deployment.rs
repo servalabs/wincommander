@@ -8,8 +8,7 @@ use windows_sys::Win32::System::RemoteDesktop::{
     WTSActive, WTSDisconnected, WTS_CONNECTSTATE_CLASS,
 };
 
-#[path = "peer_auth_deployment_acl.rs"]
-mod acl;
+use crate::peer_auth_deployment_acl as acl;
 
 #[cfg(debug_assertions)]
 fn dev_helper_path() -> Result<std::path::PathBuf, PeerAuthError> {

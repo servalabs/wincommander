@@ -2889,7 +2889,7 @@ async fn apply_fleet_privacy_shield_policy(
         crate::set_tray_shield_running(app, true);
         let mut params = fleet_shield_start_params(&state, &settings.ideal.privacy.privacy_shield)?;
         params.insert("LookAwayDelaySeconds".into(), fleet_policy_active.map_or(10, |policy| policy.0).to_string());
-        params.insert("CheckGaze".into(), fleet_policy_active.map_or(true, |policy| policy.1).to_string());
+        params.insert("CheckGaze".into(), fleet_policy_active.is_none_or(|policy| policy.1).to_string());
         if let Some(policy) = fleet_policy_active {
             params.insert("CaptureOnDevice".into(), policy.2.to_string());
             params.insert("CaptureOnMultiFace".into(), policy.3.to_string());
@@ -2939,7 +2939,7 @@ async fn apply_fleet_privacy_shield_policy(
     }
     let mut params = fleet_shield_start_params(&state, &settings.ideal.privacy.privacy_shield)?;
     params.insert("LookAwayDelaySeconds".into(), fleet_policy_active.map_or(10, |policy| policy.0).to_string());
-    params.insert("CheckGaze".into(), fleet_policy_active.map_or(true, |policy| policy.1).to_string());
+    params.insert("CheckGaze".into(), fleet_policy_active.is_none_or(|policy| policy.1).to_string());
     if let Some(policy) = fleet_policy_active {
         params.insert("CaptureOnDevice".into(), policy.2.to_string());
         params.insert("CaptureOnMultiFace".into(), policy.3.to_string());
@@ -3229,7 +3229,7 @@ async fn resume_shield_policy_transaction(
     };
     if !local_session {
         params.insert("LookAwayDelaySeconds".into(), fleet_policy_active.map_or(10, |policy| policy.0).to_string());
-        params.insert("CheckGaze".into(), fleet_policy_active.map_or(true, |policy| policy.1).to_string());
+        params.insert("CheckGaze".into(), fleet_policy_active.is_none_or(|policy| policy.1).to_string());
         if let Some(policy) = fleet_policy_active {
             params.insert("CaptureOnDevice".into(), policy.2.to_string());
             params.insert("CaptureOnMultiFace".into(), policy.3.to_string());
@@ -4040,8 +4040,8 @@ mod tests {
 
     #[test]
     fn signed_detector_policy_defaults_enabled_and_rejects_malformed_values() {
-        assert_eq!(super::signed_shield_look_away_detection(&serde_json::json!({})).unwrap(), true);
-        assert_eq!(super::signed_shield_look_away_detection(&serde_json::json!({"lookAwayDetectionEnabled":false})).unwrap(), false);
+        assert!(super::signed_shield_look_away_detection(&serde_json::json!({})).unwrap());
+        assert!(!super::signed_shield_look_away_detection(&serde_json::json!({"lookAwayDetectionEnabled":false})).unwrap());
         assert!(super::signed_shield_look_away_detection(&serde_json::json!({"lookAwayDetectionEnabled":"false"})).is_err());
     }
 
@@ -4186,9 +4186,8 @@ mod tests {
     fn unreadable_native_shield_status_is_not_stopped() {
         assert!(super::fleet_shield_running_state(&json!({"error": true})).is_err());
         assert!(super::fleet_shield_running_state(&json!({})).is_err());
-        assert_eq!(
-            super::fleet_shield_running_state(&json!({"running": false})).unwrap(),
-            false
+        assert!(
+            !super::fleet_shield_running_state(&json!({"running": false})).unwrap()
         );
     }
 
@@ -4973,8 +4972,10 @@ mod tests {
             "multiFaceWakeMultiplier": 5.0, "bufferFrames": 2, "captureSpeed": 1
         }))
         .unwrap();
-        let mut shield = crate::settings::PrivacyShieldSettings::default();
-        shield.wake_delay_seconds = Some(240);
+        let mut shield = crate::settings::PrivacyShieldSettings {
+            wake_delay_seconds: Some(240),
+            ..Default::default()
+        };
         let params =
             super::local_shield_restart_params("notify_only", 2, &native, &shield, None, None).unwrap();
         assert_eq!(params["Camera"], "2");

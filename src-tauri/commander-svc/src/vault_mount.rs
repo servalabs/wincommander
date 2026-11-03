@@ -238,7 +238,7 @@ fn syncthing_lifecycle_call(
     #[cfg(test)]
     {
         let _ = (feature_id, operation_id, entry_id, mount, caller_token);
-        return Ok(SyncthingLifecycleResult::default());
+        Ok(SyncthingLifecycleResult::default())
     }
     #[cfg(not(test))]
     {
@@ -683,6 +683,8 @@ struct InternalMountReply {
 /// Internal-only service-to-Pro SDDL; no serde implementation by design.
 struct MountedRootAclSddl(String);
 
+type EngineSnapshot = fn() -> Result<HashMap<u8, String>, String>;
+
 pub struct VaultMountBroker {
     active: Mutex<HashMap<String, ActiveMount>>,
     // One policy generation must not interleave with an authorization/mount or
@@ -692,7 +694,7 @@ pub struct VaultMountBroker {
     broker: Box<dyn AuthenticatedVaultBroker>,
     caller_mount_attestor: CallerMountAttestor,
     drive_letter_probe: fn() -> Result<HashSet<String>, ()>,
-    engine_snapshot: Option<fn() -> Result<HashMap<u8, String>, String>>,
+    engine_snapshot: Option<EngineSnapshot>,
     owner_logon_probe: fn(&ActiveMount) -> Result<bool, ()>,
     machine_alias_cleanup: fn(&ActiveMount) -> Result<bool, ()>,
     private_alias_absent: fn(&ActiveMount) -> Result<bool, ()>,
@@ -2150,6 +2152,8 @@ impl VaultMountBroker {
     /// removes the durable active record only after the broker confirms the
     /// same slot closed, so an unavailable presentation cannot linger in the
     /// UI as a false mounted volume.
+    // Keep the authorization inputs explicit at this security boundary.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn dismount_personal_for_caller(
         &self,
         store: &VaultAccessStore,
@@ -2198,6 +2202,8 @@ impl VaultMountBroker {
     /// Vault. The service supplies the stable entry, owner and mounted
     /// identity; Pro only creates/controls the owner-session profile selected
     /// by those facts.
+    // These are separate validated fields of the existing service request.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn enroll_personal_syncthing(
         &self,
         store: &VaultAccessStore,
@@ -2305,6 +2311,7 @@ impl VaultMountBroker {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn enroll_personal_syncthing_with_prepare(
         &self,
         store: &VaultAccessStore,
@@ -2926,9 +2933,8 @@ impl VaultMountBroker {
             return Err(VaultMountReason::MountStateUnknown);
         }
         for (entry_id, mut mount) in registry.mounts {
-            let live = self.live_mount_matches(&mount).map_err(|reason| {
+            let live = self.live_mount_matches(&mount).inspect_err(|_reason| {
                 self.mark_registry_untrusted();
-                reason
             })?;
             let owner_logon_ended = self.owner_logon_ended(&mount);
             let broker_closed = self
@@ -3422,7 +3428,7 @@ fn quick_mount_receipt_for_caller(
         || active.authentication_id.is_none()
         || active.authentication_id != authentication_id
         || !same_mount_owner(active, session_id, caller_sid, authentication_id)
-        || active.engine_mount_identity.as_ref().is_none_or(|identity|
+        || active.engine_mount_identity.as_ref().map_or(true, |identity|
             identity.is_empty() || slots.get(&active.internal_drive) != Some(identity))
     {
         return None;
@@ -4340,7 +4346,7 @@ mod tests {
 
     #[test]
     fn a_viewer_mount_does_not_make_the_shared_device_read_only_for_the_owner() {
-        assert!(!SHARED_VAULT_DEVICE_READ_ONLY);
+        const _: () = assert!(!SHARED_VAULT_DEVICE_READ_ONLY);
     }
     #[test]
     fn broker_drive_reply_is_bounded() {

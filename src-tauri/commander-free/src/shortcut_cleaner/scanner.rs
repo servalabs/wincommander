@@ -130,37 +130,37 @@ pub(super) fn lnk_local_target(path: &Path) -> Option<PathBuf> {
 }
 
 fn lnk_local_target_from_bytes(data: &[u8]) -> Option<PathBuf> {
-    if data.len() < 0x4c || read_u32(&data, 0)? != 0x4c || read_u32(&data, 0x14)? & 0x2 == 0 {
+    if data.len() < 0x4c || read_u32(data, 0)? != 0x4c || read_u32(data, 0x14)? & 0x2 == 0 {
         return None;
     }
     let mut offset = 0x4c;
-    if read_u32(&data, 0x14)? & 0x1 != 0 {
-        offset += read_u16(&data, offset)? as usize + 2;
+    if read_u32(data, 0x14)? & 0x1 != 0 {
+        offset += read_u16(data, offset)? as usize + 2;
     }
-    let info_size = read_u32(&data, offset)? as usize;
-    let header_size = read_u32(&data, offset + 4)? as usize;
+    let info_size = read_u32(data, offset)? as usize;
+    let header_size = read_u32(data, offset + 4)? as usize;
     if info_size < header_size || offset.checked_add(info_size)? > data.len() || header_size < 0x1c
     {
         return None;
     }
     let unicode_base_offset = if header_size >= 0x24 {
-        read_u32(&data, offset + 0x1c)? as usize
+        read_u32(data, offset + 0x1c)? as usize
     } else {
         0
     };
     let unicode_suffix_offset = if header_size >= 0x24 {
-        read_u32(&data, offset + 0x20)? as usize
+        read_u32(data, offset + 0x20)? as usize
     } else {
         0
     };
-    let base_offset = read_u32(&data, offset + 0x10)? as usize;
-    let suffix_offset = read_u32(&data, offset + 0x18)? as usize;
-    let base = read_lnk_string(&data, offset, info_size, unicode_base_offset, true)
+    let base_offset = read_u32(data, offset + 0x10)? as usize;
+    let suffix_offset = read_u32(data, offset + 0x18)? as usize;
+    let base = read_lnk_string(data, offset, info_size, unicode_base_offset, true)
         .filter(|value| !value.is_empty())
-        .or_else(|| read_lnk_string(&data, offset, info_size, base_offset, false))?;
-    let suffix = read_lnk_string(&data, offset, info_size, unicode_suffix_offset, true)
+        .or_else(|| read_lnk_string(data, offset, info_size, base_offset, false))?;
+    let suffix = read_lnk_string(data, offset, info_size, unicode_suffix_offset, true)
         .filter(|value| !value.is_empty())
-        .or_else(|| read_lnk_string(&data, offset, info_size, suffix_offset, false))
+        .or_else(|| read_lnk_string(data, offset, info_size, suffix_offset, false))
         .unwrap_or_default();
     (!base.is_empty()).then(|| PathBuf::from(base).join(suffix))
 }
@@ -194,8 +194,8 @@ fn decode_ansi_path(bytes: &[u8]) -> String {
     #[cfg(windows)]
     {
         // The LinkInfo ANSI field follows Windows' active code page; UTF-8 is only a last-resort display fallback if conversion fails.
-        return decode_windows_ansi(bytes)
-            .unwrap_or_else(|| String::from_utf8_lossy(bytes).into_owned());
+        decode_windows_ansi(bytes)
+            .unwrap_or_else(|| String::from_utf8_lossy(bytes).into_owned())
     }
     #[cfg(not(windows))]
     String::from_utf8_lossy(bytes).into_owned()

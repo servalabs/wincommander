@@ -2182,7 +2182,7 @@ impl VaultAccessStore {
             .filter(|entry| {
                 entry.primary_owner_sid.as_deref() == Some(caller_sid)
                 && fleet_group_member_sids(entry, &state.access_directory)
-                        .is_none_or(|members| members.contains(caller_sid))
+                        .map_or(true, |members| members.contains(caller_sid))
             })
             .map(|entry| entry.id.as_str())
             .collect::<HashSet<_>>();
@@ -2391,7 +2391,7 @@ impl VaultAccessStore {
         self.policy_projection_for(false, |entry| {
             entry.primary_owner_sid.as_deref() == Some(caller_sid)
                 && fleet_group_member_sids(entry, &directory)
-                    .is_none_or(|members| members.contains(caller_sid))
+                    .map_or(true, |members| members.contains(caller_sid))
         })
     }
 
@@ -2537,7 +2537,7 @@ impl VaultAccessStore {
             .filter(|grant| {
                 group_members
                     .as_ref()
-                    .is_none_or(|members| members.contains(grant.sid.as_str()))
+                    .map_or(true, |members| members.contains(grant.sid.as_str()))
             })
             .map(|grant| ResolvedGrant {
                 sid: grant.sid.clone(),
@@ -2993,7 +2993,7 @@ impl VaultAccessStore {
             }
         };
         if self.fs.atomic_write(&self.path, &bytes).is_err() {
-            let commit_unconfirmed = capture.checkpoint.as_ref().is_none_or(|prior|
+            let commit_unconfirmed = capture.checkpoint.as_ref().map_or(true, |prior|
                 !self.policy_bytes_match(prior.policy_bytes.as_deref()));
             self.rollback_after_apply(&mut state, &snapshots, &group_snapshots, &capture);
             if commit_unconfirmed { return Err(VaultError::CommitUnconfirmed); }
@@ -3103,7 +3103,7 @@ impl VaultAccessStore {
         }
         if let Err(error) = self.fs.remove(&self.path) {
             if error.kind() != std::io::ErrorKind::NotFound {
-                let commit_unconfirmed = capture.checkpoint.as_ref().is_none_or(|prior|
+                let commit_unconfirmed = capture.checkpoint.as_ref().map_or(true, |prior|
                     !self.policy_bytes_match(prior.policy_bytes.as_deref()));
                 self.rollback_after_apply(&mut state, &snapshots, &group_snapshots, &capture);
                 if commit_unconfirmed { return Err(VaultError::CommitUnconfirmed); }
@@ -8555,7 +8555,7 @@ mod tests {
             restarted.load_at_startup();
             assert!(
                 !restarted
-                    .authorize_mount("shared", &[generated_writer.clone()])
+                    .authorize_mount("shared", std::slice::from_ref(&generated_writer))
                     .allowed
             );
             if unexpected_grant {

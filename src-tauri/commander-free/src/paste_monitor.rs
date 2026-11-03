@@ -1176,6 +1176,8 @@ fn should_submit_organisation_match(source: PolicySource, actions: &[Action]) ->
 /// exactly matches the legacy engine's copy and behaviour (see
 /// `detection_copy`); Fleet-rule reports are then transferred into Pro's
 /// authenticated Clipboard Guard outbox without ever carrying clipboard text.
+// Keep the already-validated event fields explicit at the reporting boundary.
+#[allow(clippy::too_many_arguments)]
 fn handle_combined_emit(
     app: &AppHandle,
     fleet_policy_version: i64,

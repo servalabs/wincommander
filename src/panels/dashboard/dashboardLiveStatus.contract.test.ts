@@ -22,7 +22,7 @@ test("Fix All uses the all-users scope chosen in Settings, without a dashboard c
   expect(source).toContain("applyFixAllMachineWide === true");
   expect(source).toContain("MachineWide: machineWide");
   expect(source).not.toContain("if (machineWide && needsElevation)");
-  expect(source).toContain("failFast: false");
+  expect(source).toContain("runDashboardFixes(opSteps");
   expect(source).toContain("assertDashboardFixSucceeded(res)");
   expect(source).toContain("assertDashboardFixSucceeded(await executeBackendCommand('Disable-SetupCompletionNags'");
   expect(source).not.toContain("dashboard-fix-all-scope");

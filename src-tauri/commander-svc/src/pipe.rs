@@ -925,7 +925,6 @@ fn handle_apply_machine_setting(args: serde_json::Value) -> Result<serde_json::V
 /// own `ActivePolicy::empty()` represents on the client side — version 0,
 /// no rules — rather than a differently-shaped "not installed" marker a
 /// required-field struct could never parse.
-
 #[cfg(test)]
 const VAULT_POLICY_MAX_ENTRIES: usize = 64;
 #[cfg(test)]
@@ -1491,7 +1490,7 @@ fn merge_owner_fragment_policy_with_scope(
         if group_scope.get(&owned.entry.id) == Some(&false) {
             let unchanged = previous
                 .as_ref()
-                .is_some_and(|policy| policy.entries.iter().any(|entry| *entry == owned.entry));
+                .is_some_and(|policy| policy.entries.contains(&owned.entry));
             if unchanged {
                 continue;
             }

@@ -332,8 +332,8 @@ impl ShieldJournal {
             && state
                 .pending
                 .as_ref()
-                .is_none_or(|p| p.sequence < receipt.sequence)
-            && state.stop_sequence.is_none_or(|s| s < receipt.sequence))
+                .map_or(true, |p| p.sequence < receipt.sequence)
+            && state.stop_sequence.map_or(true, |s| s < receipt.sequence))
     }
 }
 

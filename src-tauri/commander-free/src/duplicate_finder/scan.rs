@@ -605,11 +605,16 @@ fn sample_candidates(index: &ScanIndex, cancelled: &AtomicBool) -> Result<(), St
 /// Runs a fixed set of content workers for the whole candidate set. The caller
 /// remains the only SQLite writer, while workers take the next file dynamically
 /// so a few large files cannot leave the other workers idle.
+type CandidateResults<T> = Result<Vec<(i64, String, Result<T, String>)>, String>;
+type FileIdentity = (u32, u64);
+type SampleDigest = ([u8; 32], Option<FileIdentity>);
+type FullDigest = ([u8; 32], Option<String>);
+
 fn process_candidate_batch<T: Send, F>(
     batch: &[CandidateRow],
     cancelled: &AtomicBool,
     process: F,
-) -> Result<Vec<(i64, String, Result<T, String>)>, String>
+) -> CandidateResults<T>
 where
     F: Fn(&Path, u64, Option<(u32, u64)>, &AtomicBool, &mut [u8]) -> Result<T, String> + Sync,
 {
@@ -668,14 +673,14 @@ where
 fn sample_candidate_batch(
     batch: &[CandidateRow],
     cancelled: &AtomicBool,
-) -> Result<Vec<(i64, String, Result<([u8; 32], Option<(u32, u64)>), String>)>, String> {
+) -> CandidateResults<SampleDigest> {
     process_candidate_batch(batch, cancelled, sample_candidate_with_buffer)
 }
 
 fn hash_candidate_batch(
     batch: &[CandidateRow],
     cancelled: &AtomicBool,
-) -> Result<Vec<(i64, String, Result<([u8; 32], Option<String>), String>)>, String> {
+) -> CandidateResults<FullDigest> {
     process_candidate_batch(batch, cancelled, hash_candidate_with_buffer)
 }
 
@@ -685,7 +690,7 @@ fn sample_candidate_with_buffer(
     _identity: Option<(u32, u64)>,
     cancelled: &AtomicBool,
     buffer: &mut [u8],
-) -> Result<([u8; 32], Option<(u32, u64)>), String> {
+) -> Result<SampleDigest, String> {
     let before = fs::symlink_metadata(path).map_err(|error| error.to_string())?;
     if !before.is_file() || safety::is_link_or_reparse(&before) || before.len() != size {
         return Err("File changed before content comparison".into());

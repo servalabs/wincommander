@@ -86,12 +86,12 @@ async fn verify_pixels(window: &tauri::WebviewWindow, name: &str) -> Result<(), 
     let image = tauri::image::Image::from_bytes(&bytes).map_err(|e| e.to_string())?;
     let green = image
         .rgba()
-        .chunks_exact(4)
+        .as_chunks::<4>().0.iter()
         .filter(|p| p[..3] == [65, 165, 48])
         .count();
     let blue = image
         .rgba()
-        .chunks_exact(4)
+        .as_chunks::<4>().0.iter()
         .filter(|p| p[..3] == [18, 52, 86])
         .count();
     if green < 1000 || blue < 1000 {

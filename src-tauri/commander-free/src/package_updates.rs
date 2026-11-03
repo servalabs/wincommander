@@ -103,12 +103,7 @@ impl Manager {
                 }
             }
         }
-        for candidate in self.fallback_paths() {
-            if std::path::Path::new(&candidate).is_file() {
-                return Some(candidate);
-            }
-        }
-        None
+        self.fallback_paths().into_iter().find(|candidate| std::path::Path::new(candidate).is_file())
     }
 }
 
