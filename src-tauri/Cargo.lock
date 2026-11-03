@@ -1969,6 +1969,7 @@ name = "fleet-proto"
 version = "3.0.7"
 dependencies = [
  "base64 0.22.1",
+ "chrono",
  "ed25519-dalek 2.2.0",
  "ed25519-dalek 3.0.0",
  "json-syntax",

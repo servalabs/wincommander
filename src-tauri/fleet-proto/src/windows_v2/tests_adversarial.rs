@@ -55,7 +55,7 @@ fn all_outcome_evidence_fields_are_hashed_and_signed_without_time_normalization(
         "outcome",
         "failure_stage",
         "observed_at",
-        "result_digest",
+        "summary",
     ] {
         let mut raw = v["outcome"].clone();
         raw[field] = match field {
@@ -65,7 +65,7 @@ fn all_outcome_evidence_fields_are_hashed_and_signed_without_time_normalization(
             "outcome" => json!("fail"),
             "failure_stage" => json!("execute"),
             "observed_at" => json!("2026-01-01T00:00:00.123456+00:00"),
-            "result_digest" => json!(json!({"typed_result_sha256":"cd".repeat(32)}).to_string()),
+            "summary" => json!({"kind":"command","result_sha256":"cd".repeat(32)}),
             _ => json!("changed"),
         };
         let mut changed: WindowsActionOutcomeV2 = serde_json::from_value(raw).unwrap();

@@ -6,6 +6,11 @@
 //! reject mixed v1 reports. Decode original complete wire bytes with
 //! [`decode_windows_v2`] before extracting this block. Arbitrary JSON is exact
 //! text; counters wider than u16 are canonical decimal strings on the wire.
+//! Signed outcomes use a closed summary: exact optional ACK-result hash or the
+//! existing readiness self-test states/timestamp. They never copy ACK details.
+//! Preserve the original signed summary and timestamp spelling in storage;
+//! validate parsed fields separately. This contract is not an absolute privacy
+//! guarantee against a malicious device encoding data in otherwise valid fields.
 //!
 //! Consume one detached proof only for its live nonce, original request/response
 //! buffers and current enrollment/lifecycle. Verify it before acting on any

@@ -230,3 +230,6 @@ mod adversarial;
 
 #[path = "tests_lossless.rs"]
 mod lossless_tests;
+
+#[path = "tests_summary.rs"]
+mod summary_tests;

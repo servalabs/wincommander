@@ -21,6 +21,22 @@ mod tests {
             &outcome.binding,
             fixture["device_key"].as_str().unwrap()
         ));
+        assert_eq!(
+            outcome.summary,
+            WindowsOutcomeSummaryV2::Command {
+                result_sha256: fixture["result_hash"].as_str().unwrap().into()
+            }
+        );
+        let readiness: WindowsActionOutcomeV2 =
+            serde_json::from_value(fixture["readiness"].clone()).unwrap();
+        assert!(verify_windows_outcome(
+            &readiness,
+            &readiness.binding,
+            fixture["device_key"].as_str().unwrap()
+        ));
+        let mut malformed = fixture["outcome"].clone();
+        malformed["summary"]["detail"] = json!("must not be forwarded");
+        assert!(serde_json::from_value::<WindowsActionOutcomeV2>(malformed).is_err());
         let proof: WindowsReceiptProofV2 =
             serde_json::from_value(fixture["proof"].clone()).unwrap();
         assert!(verify_windows_receipt(

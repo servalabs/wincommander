@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 use super::*;
-use crate::{ActionClass, ActionOutcomeState, CommandFailureStage};
+use crate::{ActionClass, ActionOutcomeState, CommandFailureStage, ReadinessSelfTestResult};
 use serde_json::json;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -21,7 +21,7 @@ pub struct WindowsActionOutcomeV2 {
     pub outcome: ActionOutcomeState,
     pub failure_stage: Option<CommandFailureStage>,
     pub observed_at: String,
-    pub result_digest: LosslessJson,
+    pub summary: WindowsOutcomeSummaryV2,
     pub record_hash: String,
     pub signature: String,
 }
@@ -40,7 +40,7 @@ pub fn windows_outcome_preimage(outcome: &WindowsActionOutcomeV2) -> Vec<u8> {
         outcome.outcome,
         outcome.failure_stage,
         outcome.observed_at,
-        outcome.result_digest
+        outcome.summary
     ]))
 }
 
@@ -58,7 +58,8 @@ pub fn verify_windows_outcome(
         || outcome.binding != *expected
         || outcome.receipt_id.is_empty()
         || outcome.catalog_id.is_empty()
-        || outcome.observed_at.is_empty()
+        || !valid_timestamp(&outcome.observed_at)
+        || !outcome.summary.is_valid_for(outcome)
         || outcome.command_id.as_ref().is_some_and(String::is_empty)
         || !valid_chain_position(outcome.sequence, outcome.previous_hash.as_deref())
         || (outcome.outcome == ActionOutcomeState::Pass) != outcome.failure_stage.is_none()
@@ -80,4 +81,39 @@ pub(super) fn valid_chain_position(sequence: u64, previous: Option<&str>) -> boo
         (2.., Some(hash)) => hash_shape(hash),
         _ => false,
     }
+}
+
+/// Closed signed evidence summary. The ACK retains its separately sanitized
+/// result; outcomes contain only its exact optional-result hash, never details.
+/// This prevents accidental free-text forwarding by conforming producers, not
+/// arbitrary encoding by a malicious device in otherwise legitimate fields.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[cfg_attr(feature = "ts-codegen", ts(tag = "kind", rename_all = "snake_case"))]
+pub enum WindowsOutcomeSummaryV2 {
+    /// Compute with `windows_result_hash` over the exact optional ACK result.
+    /// Unlinked reports remain representable for server-side quarantine.
+    Command { result_sha256: String },
+    /// Verification only; this never authorizes a destructive action.
+    Readiness { result: ReadinessSelfTestResult },
+}
+
+impl WindowsOutcomeSummaryV2 {
+    fn is_valid_for(&self, outcome: &WindowsActionOutcomeV2) -> bool {
+        match self {
+            Self::Command { result_sha256 } => hash_shape(result_sha256),
+            Self::Readiness { result } => {
+                outcome.catalog_id == "readiness.self_test"
+                    && outcome.action_class == ActionClass::Safe
+                    && outcome.command_id.is_none()
+                    && valid_timestamp(&result.observed_at)
+            }
+        }
+    }
+}
+
+fn valid_timestamp(value: &str) -> bool {
+    chrono::DateTime::parse_from_rfc3339(value).is_ok()
 }

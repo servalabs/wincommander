@@ -36,7 +36,7 @@ test("Python, Rust and JavaScript agree on exact command/outcome/receipt signing
   assert.equal(sign(null, message, privateKey(13)).toString("base64"), command.signature);
   assert.ok(verify(null, message, publicKey(command.signer_key), Buffer.from(command.signature, "base64")));
   const outcome = JSON.parse(JSON.stringify(fixture.outcome));
-  const outcomeBytes = bytes(["fleet.windows.action-outcome.v2", outcome.version, outcome.binding, outcome.receipt_id, outcome.sequence, outcome.previous_hash, outcome.command_id, outcome.catalog_id, outcome.action_class, outcome.outcome, outcome.failure_stage, outcome.observed_at, outcome.result_digest]);
+  const outcomeBytes = bytes(["fleet.windows.action-outcome.v2", outcome.version, outcome.binding, outcome.receipt_id, outcome.sequence, outcome.previous_hash, outcome.command_id, outcome.catalog_id, outcome.action_class, outcome.outcome, outcome.failure_stage, outcome.observed_at, outcome.summary]);
   assert.equal(outcomeBytes.toString("utf8"), fixture.outcome_preimage);
   assert.equal(hash(outcomeBytes).toString("hex"), outcome.record_hash);
   assert.equal(sign(null, hash(outcomeBytes), privateKey(7)).toString("base64"), outcome.signature);
@@ -59,4 +59,23 @@ test("outer JSON roundtrip keeps full counters and payload spelling; altered tex
   assert.equal(BigInt(head.last_sequence), 18446744073709551615n);
   const altered = { ...fixture.command, payload: ` ${fixture.command.payload}` };
   assert.ok(!verify(null, commandBytes(altered), publicKey(altered.signer_key), Buffer.from(altered.signature, "base64")));
+});
+
+
+test("closed command/readiness summaries roundtrip and bind every structured field", () => {
+  assert.deepEqual(fixture.outcome.summary, { kind: "command", result_sha256: fixture.result_hash });
+  const readiness = JSON.parse(JSON.stringify(fixture.readiness));
+  assert.deepEqual(Object.keys(readiness.summary).sort(), ["kind", "result"]);
+  assert.equal(readiness.summary.kind, "readiness");
+  assert.deepEqual(Object.keys(readiness.summary.result).sort(), ["arm_predicate", "observed_at", "recovery_path", "signed_dispatch", "simulate_branch"]);
+  const preimage = outcome => bytes(["fleet.windows.action-outcome.v2", outcome.version, outcome.binding, outcome.receipt_id, outcome.sequence, outcome.previous_hash, outcome.command_id, outcome.catalog_id, outcome.action_class, outcome.outcome, outcome.failure_stage, outcome.observed_at, outcome.summary]);
+  const message = preimage(readiness);
+  assert.equal(message.toString("utf8"), fixture.readiness_preimage);
+  assert.equal(hash(message).toString("hex"), readiness.record_hash);
+  assert.equal(sign(null, hash(message), privateKey(7)).toString("base64"), readiness.signature);
+  for (const field of Object.keys(readiness.summary.result)) {
+    const changed = structuredClone(readiness);
+    changed.summary.result[field] = field === "observed_at" ? "2026-02-01T00:00:00Z" : (changed.summary.result[field] === "pass" ? "fail" : "pass");
+    assert.ok(!verify(null, hash(preimage(changed)), publicKey(fixture.device_key), Buffer.from(readiness.signature, "base64")));
+  }
 });

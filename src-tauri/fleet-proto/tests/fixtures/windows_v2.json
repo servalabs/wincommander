@@ -36,11 +36,14 @@
     "outcome": "unknown",
     "failure_stage": "report",
     "observed_at": "2026-01-01T00:00:00.123456789Z",
-    "result_digest": "{\"detail\":\"fixture\",\"typed_result_sha256\":\"abababababababababababababababababababababababababababababababab\"}",
-    "record_hash": "0bfd18d855ab12562a9f360269777f80cec06b55dc2342c714d90b7a0e73b77e",
-    "signature": "4BVRXt0zzFZnec35QS3uMiZNLrG19K9ACwWKb7g2gDKVkVEPSdDmxTCSHCehIsNPQroP+kFNgkQey+Krth2sBw=="
+    "summary": {
+      "kind": "command",
+      "result_sha256": "e2e175b1ff3fbd206e4a3a6a2aa2cdecaf9442e3ea391d043085e14ef158de5e"
+    },
+    "record_hash": "9182be38b02fcd4b6d241bd106ddbb6db741894e53d9c9dd123c2e2e32eb6ebd",
+    "signature": "XNApeDdNwdkcBRvnINEELxzlo7DSycPsOTKvzE+OCGgvVtDmKOn/+H09IO3tKNWfRvVTxTvibbuR2VKH6gaRCA=="
   },
-  "outcome_preimage": "[\"fleet.windows.action-outcome.v2\",2,{\"authority_key_b64\":\"Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo=\",\"device_id\":\"Desk/Łaptop?1\",\"enrollment_generation\":\"11111111-1111-4111-8111-111111111111\",\"org_id\":\"org-alpha\"},\"receipt-1\",\"1\",null,\"delivery-1\",\"fixture.inspect\",\"safe\",\"unknown\",\"report\",\"2026-01-01T00:00:00.123456789Z\",\"{\\\"detail\\\":\\\"fixture\\\",\\\"typed_result_sha256\\\":\\\"abababababababababababababababababababababababababababababababab\\\"}\"]",
+  "outcome_preimage": "[\"fleet.windows.action-outcome.v2\",2,{\"authority_key_b64\":\"Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo=\",\"device_id\":\"Desk/Łaptop?1\",\"enrollment_generation\":\"11111111-1111-4111-8111-111111111111\",\"org_id\":\"org-alpha\"},\"receipt-1\",\"1\",null,\"delivery-1\",\"fixture.inspect\",\"safe\",\"unknown\",\"report\",\"2026-01-01T00:00:00.123456789Z\",{\"kind\":\"command\",\"result_sha256\":\"e2e175b1ff3fbd206e4a3a6a2aa2cdecaf9442e3ea391d043085e14ef158de5e\"}]",
   "ack": {
     "binding": {
       "org_id": "org-alpha",
@@ -58,8 +61,8 @@
   },
   "result_hash": "e2e175b1ff3fbd206e4a3a6a2aa2cdecaf9442e3ea391d043085e14ef158de5e",
   "ack_hash": "606448b3df48327c4443d728e17431bae5782239f11a3a7f9b3b38aadc3b5f98",
-  "request_bytes": "{\"nonce\":\"nonce-1\",\"windows_v2\":{\"acks\":[{\"binding\":{\"authority_key_b64\":\"Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo=\",\"device_id\":\"Desk/Łaptop?1\",\"enrollment_generation\":\"11111111-1111-4111-8111-111111111111\",\"org_id\":\"org-alpha\"},\"command_id\":\"delivery-1\",\"detail\":\"fixture\",\"phase\":null,\"report_id\":\"report-1\",\"result\":\"{\\\"error\\\":\\\"fixture\\\"}\",\"success\":false,\"terminal_reason\":null}],\"binding\":{\"authority_key_b64\":\"Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo=\",\"device_id\":\"Desk/Łaptop?1\",\"enrollment_generation\":\"11111111-1111-4111-8111-111111111111\",\"org_id\":\"org-alpha\"},\"outcomes\":[{\"action_class\":\"safe\",\"binding\":{\"authority_key_b64\":\"Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo=\",\"device_id\":\"Desk/Łaptop?1\",\"enrollment_generation\":\"11111111-1111-4111-8111-111111111111\",\"org_id\":\"org-alpha\"},\"catalog_id\":\"fixture.inspect\",\"command_id\":\"delivery-1\",\"failure_stage\":\"report\",\"observed_at\":\"2026-01-01T00:00:00.123456789Z\",\"outcome\":\"unknown\",\"previous_hash\":null,\"receipt_id\":\"receipt-1\",\"record_hash\":\"0bfd18d855ab12562a9f360269777f80cec06b55dc2342c714d90b7a0e73b77e\",\"result_digest\":\"{\\\"detail\\\":\\\"fixture\\\",\\\"typed_result_sha256\\\":\\\"abababababababababababababababababababababababababababababababab\\\"}\",\"sequence\":\"1\",\"signature\":\"4BVRXt0zzFZnec35QS3uMiZNLrG19K9ACwWKb7g2gDKVkVEPSdDmxTCSHCehIsNPQroP+kFNgkQey+Krth2sBw==\",\"version\":2}],\"version\":2}}",
-  "response_bytes": "{\"windows_v2\":{\"ack_receipts\":[{\"command_id\":\"delivery-1\",\"disposition\":\"accepted\",\"report_id\":\"report-1\",\"report_sha256\":\"606448b3df48327c4443d728e17431bae5782239f11a3a7f9b3b38aadc3b5f98\",\"resulting_status\":\"failed\"}],\"binding\":{\"authority_key_b64\":\"Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo=\",\"device_id\":\"Desk/Łaptop?1\",\"enrollment_generation\":\"11111111-1111-4111-8111-111111111111\",\"org_id\":\"org-alpha\"},\"commands\":[{\"action_class\":\"safe\",\"binding\":{\"authority_key_b64\":\"Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo=\",\"device_id\":\"Desk/Łaptop?1\",\"enrollment_generation\":\"11111111-1111-4111-8111-111111111111\",\"org_id\":\"org-alpha\"},\"catalog_id\":\"fixture.inspect\",\"command_id\":\"delivery-1\",\"epoch_version\":\"4\",\"idempotency_key\":\"request-1\",\"payload\":\"{\\\"z\\\":false,\\\"a\\\":[\\\"é\\\",null,7],\\\"big\\\":12345678901234567890123456789012345678901234567890,\\\"exponent\\\":1e400,\\\"escape\\\":\\\"line\\\\nslash\\\\\\\\🔒\\\"}\",\"signature\":\"etCCdyVuglvsiUI3U/Kboe4HeAfnsWlJaQcJISgqWX1+b36f2sI1UhpQucipmldRYnzsGClz7/yMTderDiRWDQ==\",\"signer_key\":\"kaKKC3Q4FZOk2UaVeSCJJq/IrYLIg5t2RDWbnrqaSzo=\",\"version\":2}],\"head\":{\"last_sequence\":\"1\",\"previous_hash\":\"0bfd18d855ab12562a9f360269777f80cec06b55dc2342c714d90b7a0e73b77e\"},\"outcome_receipts\":[{\"disposition\":\"accepted\",\"receipt_id\":\"receipt-1\",\"record_hash\":\"0bfd18d855ab12562a9f360269777f80cec06b55dc2342c714d90b7a0e73b77e\",\"sequence\":\"1\"}],\"version\":2}}",
+  "request_bytes": "{\"nonce\":\"nonce-1\",\"windows_v2\":{\"acks\":[{\"binding\":{\"authority_key_b64\":\"Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo=\",\"device_id\":\"Desk/Łaptop?1\",\"enrollment_generation\":\"11111111-1111-4111-8111-111111111111\",\"org_id\":\"org-alpha\"},\"command_id\":\"delivery-1\",\"detail\":\"fixture\",\"phase\":null,\"report_id\":\"report-1\",\"result\":\"{\\\"error\\\":\\\"fixture\\\"}\",\"success\":false,\"terminal_reason\":null}],\"binding\":{\"authority_key_b64\":\"Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo=\",\"device_id\":\"Desk/Łaptop?1\",\"enrollment_generation\":\"11111111-1111-4111-8111-111111111111\",\"org_id\":\"org-alpha\"},\"outcomes\":[{\"action_class\":\"safe\",\"binding\":{\"authority_key_b64\":\"Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo=\",\"device_id\":\"Desk/Łaptop?1\",\"enrollment_generation\":\"11111111-1111-4111-8111-111111111111\",\"org_id\":\"org-alpha\"},\"catalog_id\":\"fixture.inspect\",\"command_id\":\"delivery-1\",\"failure_stage\":\"report\",\"observed_at\":\"2026-01-01T00:00:00.123456789Z\",\"outcome\":\"unknown\",\"previous_hash\":null,\"receipt_id\":\"receipt-1\",\"record_hash\":\"9182be38b02fcd4b6d241bd106ddbb6db741894e53d9c9dd123c2e2e32eb6ebd\",\"sequence\":\"1\",\"signature\":\"XNApeDdNwdkcBRvnINEELxzlo7DSycPsOTKvzE+OCGgvVtDmKOn/+H09IO3tKNWfRvVTxTvibbuR2VKH6gaRCA==\",\"summary\":{\"kind\":\"command\",\"result_sha256\":\"e2e175b1ff3fbd206e4a3a6a2aa2cdecaf9442e3ea391d043085e14ef158de5e\"},\"version\":2}],\"version\":2}}",
+  "response_bytes": "{\"windows_v2\":{\"ack_receipts\":[{\"command_id\":\"delivery-1\",\"disposition\":\"accepted\",\"report_id\":\"report-1\",\"report_sha256\":\"606448b3df48327c4443d728e17431bae5782239f11a3a7f9b3b38aadc3b5f98\",\"resulting_status\":\"failed\"}],\"binding\":{\"authority_key_b64\":\"Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo=\",\"device_id\":\"Desk/Łaptop?1\",\"enrollment_generation\":\"11111111-1111-4111-8111-111111111111\",\"org_id\":\"org-alpha\"},\"commands\":[{\"action_class\":\"safe\",\"binding\":{\"authority_key_b64\":\"Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo=\",\"device_id\":\"Desk/Łaptop?1\",\"enrollment_generation\":\"11111111-1111-4111-8111-111111111111\",\"org_id\":\"org-alpha\"},\"catalog_id\":\"fixture.inspect\",\"command_id\":\"delivery-1\",\"epoch_version\":\"4\",\"idempotency_key\":\"request-1\",\"payload\":\"{\\\"z\\\":false,\\\"a\\\":[\\\"é\\\",null,7],\\\"big\\\":12345678901234567890123456789012345678901234567890,\\\"exponent\\\":1e400,\\\"escape\\\":\\\"line\\\\nslash\\\\\\\\🔒\\\"}\",\"signature\":\"etCCdyVuglvsiUI3U/Kboe4HeAfnsWlJaQcJISgqWX1+b36f2sI1UhpQucipmldRYnzsGClz7/yMTderDiRWDQ==\",\"signer_key\":\"kaKKC3Q4FZOk2UaVeSCJJq/IrYLIg5t2RDWbnrqaSzo=\",\"version\":2}],\"head\":{\"last_sequence\":\"1\",\"previous_hash\":\"9182be38b02fcd4b6d241bd106ddbb6db741894e53d9c9dd123c2e2e32eb6ebd\"},\"outcome_receipts\":[{\"disposition\":\"accepted\",\"receipt_id\":\"receipt-1\",\"record_hash\":\"9182be38b02fcd4b6d241bd106ddbb6db741894e53d9c9dd123c2e2e32eb6ebd\",\"sequence\":\"1\"}],\"version\":2}}",
   "proof": {
     "version": 2,
     "binding": {
@@ -69,10 +72,41 @@
       "authority_key_b64": "Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo="
     },
     "nonce": "nonce-1",
-    "request_sha256": "+CRGAxj4pYYep8Dgp9PN5PS/rd9POe1jeOg7O37RS98=",
+    "request_sha256": "A5ITyzd1D8SkIcA3CCCTFtpvWeC+UzIYMduT1cKAD5Q=",
     "http_status": 200,
-    "response_sha256": "n7rQMm6Yv0jtiW34bgHa6ilsNFUNlagMhjclkibiYnk=",
-    "signature": "o2+BQGt3PU0m69SVn/KArXba63JK9IDgMwm4DJEoq0Hes/ppnsQy+WVKrd0geaGhG7+JZtip2t3mfVcV95tIBQ=="
+    "response_sha256": "60Xj9siPbPWS4Y3yIYLDUaQlgZ8MR6n4vdVppPbsz0M=",
+    "signature": "x7irT0tZ1YVPjkFM7Tn8UCZC0rp7BosX9EngrqaR2s0ixLkwhKDskmfCbJnvPiM0yqTVkx59UI939kU4G3HTCw=="
   },
-  "proof_preimage": "[\"fleet.windows.outcome-receipt.v2\",{\"authority_key_b64\":\"Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo=\",\"device_id\":\"Desk/Łaptop?1\",\"enrollment_generation\":\"11111111-1111-4111-8111-111111111111\",\"org_id\":\"org-alpha\"},\"nonce-1\",\"+CRGAxj4pYYep8Dgp9PN5PS/rd9POe1jeOg7O37RS98=\",200,\"n7rQMm6Yv0jtiW34bgHa6ilsNFUNlagMhjclkibiYnk=\"]"
+  "proof_preimage": "[\"fleet.windows.outcome-receipt.v2\",{\"authority_key_b64\":\"Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo=\",\"device_id\":\"Desk/Łaptop?1\",\"enrollment_generation\":\"11111111-1111-4111-8111-111111111111\",\"org_id\":\"org-alpha\"},\"nonce-1\",\"A5ITyzd1D8SkIcA3CCCTFtpvWeC+UzIYMduT1cKAD5Q=\",200,\"60Xj9siPbPWS4Y3yIYLDUaQlgZ8MR6n4vdVppPbsz0M=\"]",
+  "readiness": {
+    "version": 2,
+    "binding": {
+      "org_id": "org-alpha",
+      "device_id": "Desk/Łaptop?1",
+      "enrollment_generation": "11111111-1111-4111-8111-111111111111",
+      "authority_key_b64": "Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo="
+    },
+    "receipt_id": "readiness-1",
+    "sequence": "1",
+    "previous_hash": null,
+    "command_id": null,
+    "catalog_id": "readiness.self_test",
+    "action_class": "safe",
+    "outcome": "unknown",
+    "failure_stage": "report",
+    "observed_at": "2026-01-01T00:00:00.123456789Z",
+    "summary": {
+      "kind": "readiness",
+      "result": {
+        "arm_predicate": "unknown",
+        "signed_dispatch": "pass",
+        "simulate_branch": "pass",
+        "recovery_path": "fail",
+        "observed_at": "2025-12-31T23:00:00-01:00"
+      }
+    },
+    "record_hash": "cfec0cf77b46957f4d3e4bc36a9a9b17572ba306ad0a0fd58181460dc4c9f678",
+    "signature": "wQP1sCdcQjwaB3j/TGlbZvwH03Y0UdQBB6Ere0C8Tdd6dbGVCQk7UeLK/x6RWasD2MLo44V3CHzHTVCXMzf2Dg=="
+  },
+  "readiness_preimage": "[\"fleet.windows.action-outcome.v2\",2,{\"authority_key_b64\":\"Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo=\",\"device_id\":\"Desk/Łaptop?1\",\"enrollment_generation\":\"11111111-1111-4111-8111-111111111111\",\"org_id\":\"org-alpha\"},\"readiness-1\",\"1\",null,null,\"readiness.self_test\",\"safe\",\"unknown\",\"report\",\"2026-01-01T00:00:00.123456789Z\",{\"kind\":\"readiness\",\"result\":{\"arm_predicate\":\"unknown\",\"observed_at\":\"2025-12-31T23:00:00-01:00\",\"recovery_path\":\"fail\",\"signed_dispatch\":\"pass\",\"simulate_branch\":\"pass\"}}]"
 }

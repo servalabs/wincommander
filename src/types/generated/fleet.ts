@@ -1418,7 +1418,7 @@ export type WindowsAckReceiptV2 = { command_id: string, report_id: string, repor
  */
 export type WindowsAckV2 = { binding: FleetEnrollmentBinding, command_id: string, report_id: string, success: boolean, detail: string | null, result: LosslessJson | null, phase: string | null, terminal_reason: string | null, };
 
-export type WindowsActionOutcomeV2 = { version: number, binding: FleetEnrollmentBinding, receipt_id: string, sequence: string, previous_hash: string | null, command_id: string | null, catalog_id: string, action_class: ActionClass, outcome: ActionOutcomeState, failure_stage: CommandFailureStage | null, observed_at: string, result_digest: LosslessJson, record_hash: string, signature: string, };
+export type WindowsActionOutcomeV2 = { version: number, binding: FleetEnrollmentBinding, receipt_id: string, sequence: string, previous_hash: string | null, command_id: string | null, catalog_id: string, action_class: ActionClass, outcome: ActionOutcomeState, failure_stage: CommandFailureStage | null, observed_at: string, summary: WindowsOutcomeSummaryV2, record_hash: string, signature: string, };
 
 /**
  * Carry under windows_v2 in the existing full-body HMAC-v2 check-in envelope.
@@ -1443,6 +1443,14 @@ export type WindowsOutcomeDisposition = "accepted" | "quarantined" | "orphaned" 
 export type WindowsOutcomeHeadV2 = { last_sequence: string, previous_hash: string | null, };
 
 export type WindowsOutcomeReceiptV2 = { receipt_id: string, sequence: string, record_hash: string, disposition: WindowsOutcomeDisposition, };
+
+/**
+ * Closed signed evidence summary. The ACK retains its separately sanitized
+ * result; outcomes contain only its exact optional-result hash, never details.
+ * This prevents accidental free-text forwarding by conforming producers, not
+ * arbitrary encoding by a malicious device in otherwise legitimate fields.
+ */
+export type WindowsOutcomeSummaryV2 = { "kind": "command", result_sha256: string, } | { "kind": "readiness", result: ReadinessSelfTestResult, };
 
 /**
  * Detached from the response body to avoid a self-referential body hash.
