@@ -63,11 +63,11 @@ fn write_with_anchor(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(_) => return Err("license cache is unavailable"),
     };
-    if let Some(existing) = existing {
-        check_previous_with_history(&existing, candidate, public_key, trust, old_trust.as_ref())?;
+    if let Some(existing) = existing.as_deref() {
+        check_previous_with_history(existing, candidate, public_key, trust, old_trust.as_ref())?;
     }
     let retained = anchor.read().map_err(|_| "license security record is unavailable")?;
-    let retained = ledger::advance(retained.as_deref(), candidate, bytes, public_key, trust, old_trust.as_ref())?;
+    let retained = ledger::advance(retained.as_deref(), existing.as_deref(), candidate, bytes, public_key, trust, old_trust.as_ref())?;
     // Record the authenticated candidate first. If the cache write is interrupted,
     // a retry of the same candidate is allowed while an older one remains blocked.
     anchor.write(&retained).map_err(|_| "license security record is unavailable")?;

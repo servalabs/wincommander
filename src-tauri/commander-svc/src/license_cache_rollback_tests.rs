@@ -184,11 +184,11 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
     assert!(!path.exists());
     assert!(write_with_anchor(&path, &exact_retry, &cache(&exact_retry), &public, &current, &anchor).is_ok());
     let later_bytes = cache(&later);
-    assert!(ledger::advance(None, &later, &high_bytes, &public, &current, None).is_err());
+    assert!(ledger::advance(None, None, &later, &high_bytes, &public, &current, None).is_err());
     let mut ambiguous: serde_json::Value = serde_json::from_slice(&high_bytes).unwrap();
     ambiguous["version"] = 1.into();
     ambiguous["records"] = serde_json::json!([]);
-    assert!(ledger::advance(Some(&serde_json::to_vec(&ambiguous).unwrap()), &later, &later_bytes, &public, &current, None).is_err());
+    assert!(ledger::advance(Some(&serde_json::to_vec(&ambiguous).unwrap()), None, &later, &later_bytes, &public, &current, None).is_err());
     let missing_parent = dir.join("missing").join("license_cache.json");
     assert!(write_with_anchor(&missing_parent, &later, &later_bytes, &public, &current, &anchor).is_err());
     assert!(write_with_anchor(&path, &previous_epoch9, &high_bytes, &public, &current, &anchor).is_err());
@@ -207,6 +207,11 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
     assert!(write_with_anchor(&path, &fifth, &cache(&fifth), &public, &current, &anchor).is_err());
     assert_eq!(anchor.read().unwrap().unwrap(), full);
     assert_eq!(fs::read(&path).unwrap(), before);
+    fs::write(&path, cache(&fifth)).unwrap();
+    assert!(write_with_anchor(&path, &later, &later_bytes, &public, &current, &anchor).is_err());
+    assert_eq!(anchor.read().unwrap().unwrap(), full);
+    assert_eq!(fs::read(&path).unwrap(), cache(&fifth));
+    fs::write(&path, &before).unwrap();
     assert!(write_with_anchor(&path, &later, &later_bytes, &public, &current, &anchor).is_ok());
     let mut damaged: serde_json::Value = serde_json::from_slice(&anchor.read().unwrap().unwrap()).unwrap();
     damaged["records"][0] = "invalid".into();
@@ -216,6 +221,25 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
     anchor.write(b"invalid").unwrap();
     assert!(write_with_anchor(&path, &later, &later_bytes, &public, &current, &anchor).is_err());
     assert_eq!(fs::read(&path).unwrap(), later_bytes);
+    // Missing anchor: preserve the verified current licence before switching.
+    anchor::remove_test_key(&anchor_path).unwrap();
+    assert!(write_with_anchor(&path, &other, &cache(&other), &public, &current, &anchor).is_ok());
+    assert!(write_with_anchor(&path, &previous_epoch9, &high_bytes, &public, &current, &anchor).is_err());
+    assert!(write_with_anchor(&path, &later, &later_bytes, &public, &current, &anchor).is_ok());
+    // A restored older anchor and newer cache must be reconciled first.
+    anchor.write(&high_bytes).unwrap();
+    assert!(write_with_anchor(&path, &other, &cache(&other), &public, &current, &anchor).is_err());
+    assert_eq!(fs::read(&path).unwrap(), later_bytes);
+    assert!(write_with_anchor(&path, &later, &later_bytes, &public, &current, &anchor).is_ok());
+    assert!(write_with_anchor(&path, &other, &cache(&other), &public, &current, &anchor).is_ok());
+    assert!(write_with_anchor(&path, &previous_epoch9, &high_bytes, &public, &current, &anchor).is_err());
+    // A restored history with a different licence retains the current cache too.
+    anchor.write(&cache(&other)).unwrap();
+    fs::write(&path, &later_bytes).unwrap();
+    let third = make("lic-c", 103, 10000, 9, &new_ed, &new_pq, "new-ed", "new-pq");
+    assert!(write_with_anchor(&path, &third, &cache(&third), &public, &current, &anchor).is_ok());
+    assert!(write_with_anchor(&path, &previous_epoch9, &high_bytes, &public, &current, &anchor).is_err());
+    assert!(write_with_anchor(&path, &later, &later_bytes, &public, &current, &anchor).is_ok());
     fs::remove_file(path).unwrap();
     anchor::remove_test_key(&anchor_path).unwrap();
     fs::remove_dir(dir).unwrap();
