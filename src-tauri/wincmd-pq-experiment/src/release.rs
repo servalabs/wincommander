@@ -42,7 +42,7 @@ pub fn verify_metadata(
     envelope: &[u8],
     expected_version: &str,
     trust: &jws::Trust<'_>,
-) -> Result<ProRelease, &'static str> {
+) -> Result<(ProRelease, u64), &'static str> {
     if envelope.len() > MAX_ENVELOPE
         || trust.purpose != Purpose::Release
         || trust.minimum_epoch == 0
@@ -73,5 +73,5 @@ pub fn verify_metadata(
     {
         return Err("release metadata does not match policy");
     }
-    Ok(release)
+    Ok((release, verified.epoch))
 }

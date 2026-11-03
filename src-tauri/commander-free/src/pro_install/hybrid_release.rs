@@ -1,11 +1,11 @@
 use super::*;
 
 pub(super) struct HybridProTrust {
-    ed_key: [u8; 32],
-    pq_key: [u8; wincmd_pq_experiment::ML_DSA_65_PUBLIC_KEY_LEN],
-    ed_id: String,
-    pq_id: String,
-    minimum_epoch: u64,
+    pub(super) ed_key: [u8; 32],
+    pub(super) pq_key: [u8; wincmd_pq_experiment::ML_DSA_65_PUBLIC_KEY_LEN],
+    pub(super) ed_id: String,
+    pub(super) pq_id: String,
+    pub(super) minimum_epoch: u64,
 }
 
 pub(super) fn hybrid_pro_trust() -> Result<HybridProTrust, String> {
@@ -48,7 +48,7 @@ pub(super) fn verify_hybrid_pro(
     version: Option<&str>,
     sha256: &str,
     expected_url: Option<&str>,
-) -> Result<(), String> {
+) -> Result<u64, String> {
     use wincmd_pq_experiment::{jws, Purpose};
     let policy = jws::Trust {
         purpose: Purpose::Release,
@@ -59,7 +59,7 @@ pub(super) fn verify_hybrid_pro(
         ml_dsa_65_public: &trust.pq_key,
     };
     let expected_version = version.ok_or("Hybrid Pro release version is missing")?;
-    let release =
+    let (release, epoch) =
         wincmd_pq_experiment::release::verify_metadata(envelope, expected_version, &policy)
             .map_err(|_| "Hybrid Pro release signature or metadata is invalid")?;
     if !release.sha256.eq_ignore_ascii_case(sha256)
@@ -67,7 +67,7 @@ pub(super) fn verify_hybrid_pro(
     {
         return Err("Hybrid Pro release does not match the requested artifact".into());
     }
-    Ok(())
+    Ok(epoch)
 }
 
 pub(super) async fn fetch_hybrid_pro(version: &str) -> Result<String, String> {

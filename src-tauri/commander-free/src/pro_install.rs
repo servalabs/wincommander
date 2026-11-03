@@ -26,6 +26,9 @@ use std::{collections::BTreeMap, path::PathBuf};
 mod hybrid_release;
 #[cfg(feature = "experimental-pq-pro-release")]
 use hybrid_release::{fetch_hybrid_pro, hybrid_pro_trust, verify_hybrid_pro};
+#[cfg(feature = "experimental-pq-pro-release")]
+#[path = "pro_install/hybrid_rollback.rs"]
+mod hybrid_rollback;
 
 
 #[path = "../../runtime-support/pro_update_guard.rs"]
@@ -1489,6 +1492,10 @@ async fn install_pro_binary_machine(
         .ok_or_else(|| "validation:install path has no parent".to_string())?;
     std::fs::create_dir_all(parent).map_err(|e| format!("disk:create install dir: {}", e))?;
     let _install_reservation = update_guard::reserve_install(&install_path)?;
+    #[cfg(feature = "experimental-pq-pro-release")]
+    hybrid_rollback::check_installed_floor(
+        &pro_install_metadata_path()?, &signed_manifest, pro_version.as_deref(), &expected_sha256,
+    )?;
     if install_path.exists()
         && compute_pro_sha256_at(&install_path)
             .map(|sha| sha.eq_ignore_ascii_case(&expected_sha256))

@@ -13,7 +13,7 @@ pub fn verify_artifact<R: Read>(
     expected_version: &str,
     trust: &jws::Trust<'_>,
 ) -> Result<(), &'static str> {
-    let release = release::verify_metadata(envelope, expected_version, trust)?;
+    let (release, _) = release::verify_metadata(envelope, expected_version, trust)?;
     let mut digest = Sha256::new();
     let mut total = 0_u64;
     let mut buffer = [0_u8; 65536];
@@ -90,6 +90,7 @@ mod tests {
             ("size", serde_json::json!(MAX_RELEASE_TEST + 1)),
             ("version", serde_json::json!("3.7.1")),
             ("unexpected", serde_json::json!(true)),
+            ("epoch", serde_json::json!(8)),
         ] {
             let mut bad: serde_json::Value = serde_json::from_slice(&payload).unwrap();
             bad[field] = value;
