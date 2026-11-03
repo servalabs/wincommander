@@ -72,7 +72,7 @@
 //! here — this crate is pure crypto + format.
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 
 // ── Errors ────────────────────────────────────────────────────────────────────
 
@@ -253,9 +253,11 @@ pub fn verifying_key_to_bytes(vk: &VerifyingKey) -> [u8; 32] {
 }
 
 /// Reconstruct a verifying key from 32 bytes read from the USB.
-/// Returns `None` if the bytes are not a valid Ed25519 point.
+/// Returns `None` if the bytes are not a valid, non-weak Ed25519 point.
 pub fn verifying_key_from_bytes(bytes: &[u8; 32]) -> Option<VerifyingKey> {
-    VerifyingKey::from_bytes(bytes).ok()
+    VerifyingKey::from_bytes(bytes)
+        .ok()
+        .filter(|key| !key.is_weak())
 }
 
 /// Serialize a signing key to its canonical 32-byte seed.
@@ -354,8 +356,11 @@ pub fn verify_wipe_token(
     let signature = Signature::from_bytes(&sig_arr);
 
     // ── 2. Signature ──
+    if verifying_key.is_weak() {
+        return Err(WipeTokenError::BadSignature);
+    }
     verifying_key
-        .verify(&payload_bytes, &signature)
+        .verify_strict(&payload_bytes, &signature)
         .map_err(|_| WipeTokenError::BadSignature)?;
 
     // ── 3–7. Payload fields ──
@@ -386,6 +391,26 @@ pub fn verify_wipe_token(
 mod tests {
     use super::*;
     use ed25519_dalek::SigningKey;
+
+    #[test]
+    fn identity_key_cannot_authorize_a_forged_wipe_token() {
+        let mut identity = [0u8; 32];
+        identity[0] = 1;
+        let verifying = VerifyingKey::from_bytes(&identity).unwrap();
+        assert!(verifying_key_from_bytes(&identity).is_none());
+        let payload = canonical_payload_bytes(1, "test-device", &[7; 32], 100, 200, "wipe");
+        let mut forged = [0u8; 64];
+        forged[0] = 1;
+        let token = format!(
+            "{}.{}",
+            URL_SAFE_NO_PAD.encode(payload),
+            URL_SAFE_NO_PAD.encode(forged)
+        );
+        assert_eq!(
+            verify_wipe_token(&token, &verifying, "test-device", 150),
+            Err(WipeTokenError::BadSignature)
+        );
+    }
 
     // Deterministic signing key for tests that don't need randomness.
     fn test_signing_key() -> SigningKey {
