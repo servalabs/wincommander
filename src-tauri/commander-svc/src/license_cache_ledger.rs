@@ -23,6 +23,49 @@ struct LegacyCache {
     _seat_limit: Option<u32>,
 }
 
+/// Confirm that the exact signed token is already in the protected history.
+/// This does not create or update the history and does not authorize a device.
+pub(super) fn verify_current(
+    retained: &[u8],
+    candidate: &StoreLicenseCacheRequest,
+    bytes: &[u8],
+    public_key: &str,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>,
+    old_trust: Option<&history::HistoricalTrust>,
+) -> Result<(), &'static str> {
+    // This validates every retained proof, the candidate and rollback ordering.
+    advance(
+        Some(retained),
+        None,
+        candidate,
+        bytes,
+        public_key,
+        trust,
+        old_trust,
+    )?;
+    let records = match serde_json::from_slice::<Ledger>(retained) {
+        Ok(ledger) => ledger.records,
+        Err(_) => {
+            let _: LegacyCache = serde_json::from_slice(retained)
+                .map_err(|_| "license security record is invalid")?;
+            vec![std::str::from_utf8(retained)
+                .map_err(|_| "license security record is invalid")?
+                .to_owned()]
+        }
+    };
+    for record in records {
+        let old: ExistingCache =
+            serde_json::from_str(&record).map_err(|_| "license security record is invalid")?;
+        if old.token.payload == candidate.payload
+            && old.token.signature == candidate.signature
+            && old.token.hybrid == candidate.hybrid
+        {
+            return Ok(());
+        }
+    }
+    Err("license cache does not match security history")
+}
+
 pub(super) fn advance(
     retained: Option<&[u8]>,
     existing: Option<&[u8]>,

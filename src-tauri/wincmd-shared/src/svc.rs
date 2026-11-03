@@ -91,6 +91,8 @@ pub const APPLY_MACHINE_SETTING_VERB: &str = "svc.apply.machine_setting";
 /// The service independently verifies the worker signature before it writes
 /// the fixed cache path; this is not a general file-write capability.
 pub const STORE_LICENSE_CACHE_VERB: &str = "svc.license.store_cache";
+/// Confirms an exact current licence against service-protected signed history.
+pub const VERIFY_LICENSE_CACHE_VERB: &str = "svc.license.verify_cache";
 
 /// Exact verbs implemented by the current service dispatcher.
 ///
@@ -114,6 +116,7 @@ pub fn is_known_verb(feature_id: &str) -> bool {
             | "svc.personal_settings.write"
             | APPLY_MACHINE_SETTING_VERB
             | STORE_LICENSE_CACHE_VERB
+            | VERIFY_LICENSE_CACHE_VERB
             | "svc.clipboard.get_policy"
             | "svc.clipboard.report_event"
             | "svc.clipboard.set_enabled"
@@ -322,7 +325,7 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         // The service verifies the signed worker envelope and writes only the
         // fixed machine licence cache, so this is deliberately not a broad
         // ProgramData-write or administrator capability.
-        STORE_LICENSE_CACHE_VERB => CapabilityClass::InteractiveSession,
+        STORE_LICENSE_CACHE_VERB | VERIFY_LICENSE_CACHE_VERB => CapabilityClass::InteractiveSession,
         // ── Existing read-only verbs (unchanged) ──────────────────────────
         "svc.status" => CapabilityClass::ReadOnly,
         "svc.get_settings" => CapabilityClass::ReadOnly,
@@ -497,6 +500,11 @@ mod tests {
             CapabilityClass::InteractiveSession
         );
         assert!(is_known_verb(STORE_LICENSE_CACHE_VERB));
+        assert_eq!(
+            classify_verb(VERIFY_LICENSE_CACHE_VERB),
+            CapabilityClass::InteractiveSession
+        );
+        assert!(is_known_verb(VERIFY_LICENSE_CACHE_VERB));
     }
 
     #[test]
@@ -585,6 +593,7 @@ mod tests {
             "svc.diagnostics.query",
             APPLY_MACHINE_SETTING_VERB,
             STORE_LICENSE_CACHE_VERB,
+            VERIFY_LICENSE_CACHE_VERB,
             "svc.clipboard.get_policy",
             "svc.clipboard.report_event",
             "svc.clipboard.set_enabled",

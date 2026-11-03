@@ -105,6 +105,11 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
     let previous = make("lic-a", 100, 10000, 7, &old_ed, &old_pq, "old-ed", "old-pq");
     let next = make("lic-a", 101, 10000, 8, &new_ed, &new_pq, "new-ed", "new-pq");
     let old_bytes = cache(&previous);
+    let rotated_other = make("lic-b", 101, 10000, 8, &new_ed, &new_pq, "new-ed", "new-pq");
+    let rotated_bytes = cache(&rotated_other);
+    let rotated_ledger = ledger::advance(Some(&old_bytes), None, &rotated_other, &rotated_bytes, &public, &current, Some(&historical)).unwrap();
+    assert!(ledger::verify_current(&rotated_ledger, &rotated_other, &rotated_bytes, &public, &current, Some(&historical)).is_ok());
+    assert!(ledger::verify_current(&rotated_ledger, &rotated_other, &rotated_bytes, &public, &current, None).is_err());
     assert!(validate_dual_request(&next, &public, &current).is_ok());
     assert!(
         check_previous_with_history(&old_bytes, &next, &public, &current, Some(&historical))
@@ -171,14 +176,21 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
     let anchor_path = format!(r"SOFTWARE\WinCommanderLicenceTest-{}-{}", std::process::id(), NEXT_TEMP.fetch_add(1, Ordering::Relaxed));
     let anchor = anchor::Anchor::test_user(anchor_path.clone());
     fs::write(&path, &high_bytes).unwrap();
+    assert!(verify_with_anchor(&path, &previous_epoch9, &public, &current, &anchor).is_err());
     // Upgrade the previous single-record format without losing its floor.
     anchor.write(&high_bytes).unwrap();
+    assert!(verify_with_anchor(&path, &previous_epoch9, &public, &current, &anchor).is_ok());
     assert!(write_with_anchor(&path, &same_second, b"replacement", &public, &current, &anchor).is_err());
     assert_eq!(fs::read(&path).unwrap(), high_bytes);
     assert!(write_with_anchor(&path, &next, b"replacement", &public, &current, &anchor).is_err());
     assert_eq!(fs::read(&path).unwrap(), high_bytes);
     assert!(write_with_anchor(&path, &previous_epoch9, &high_bytes, &public, &current, &anchor).is_ok());
+    let retained_before_check = anchor.read().unwrap();
+    assert!(verify_with_anchor(&path, &previous_epoch9, &public, &current, &anchor).is_ok());
+    assert_eq!(anchor.read().unwrap(), retained_before_check);
+    assert!(verify_with_anchor(&path, &same_second, &public, &current, &anchor).is_err());
     fs::remove_file(&path).unwrap();
+    assert!(verify_with_anchor(&path, &previous_epoch9, &public, &current, &anchor).is_err());
     let older = make("lic-a", 99, 10000, 9, &new_ed, &new_pq, "new-ed", "new-pq");
     assert!(write_with_anchor(&path, &older, &cache(&older), &public, &current, &anchor).is_err());
     assert!(!path.exists());
@@ -191,8 +203,13 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
     assert!(ledger::advance(Some(&serde_json::to_vec(&ambiguous).unwrap()), None, &later, &later_bytes, &public, &current, None).is_err());
     let missing_parent = dir.join("missing").join("license_cache.json");
     assert!(write_with_anchor(&missing_parent, &later, &later_bytes, &public, &current, &anchor).is_err());
+    assert!(verify_with_anchor(&path, &exact_retry, &public, &current, &anchor).is_err());
     assert!(write_with_anchor(&path, &previous_epoch9, &high_bytes, &public, &current, &anchor).is_err());
     assert!(write_with_anchor(&path, &later, &later_bytes, &public, &current, &anchor).is_ok());
+    assert!(verify_with_anchor(&path, &later, &public, &current, &anchor).is_ok());
+    fs::write(&path, &high_bytes).unwrap();
+    assert!(verify_with_anchor(&path, &previous_epoch9, &public, &current, &anchor).is_err());
+    fs::write(&path, &later_bytes).unwrap();
     let other = make("lic-b", 102, 10000, 9, &new_ed, &new_pq, "new-ed", "new-pq");
     assert!(write_with_anchor(&path, &other, &cache(&other), &public, &current, &anchor).is_ok());
     assert!(write_with_anchor(&path, &previous_epoch9, &high_bytes, &public, &current, &anchor).is_err());
@@ -216,6 +233,7 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
     let mut damaged: serde_json::Value = serde_json::from_slice(&anchor.read().unwrap().unwrap()).unwrap();
     damaged["records"][0] = "invalid".into();
     anchor.write(&serde_json::to_vec(&damaged).unwrap()).unwrap();
+    assert!(verify_with_anchor(&path, &later, &public, &current, &anchor).is_err());
     assert!(write_with_anchor(&path, &later, &later_bytes, &public, &current, &anchor).is_err());
     assert_eq!(fs::read(&path).unwrap(), later_bytes);
     anchor.write(b"invalid").unwrap();
@@ -228,6 +246,7 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
     assert!(write_with_anchor(&path, &later, &later_bytes, &public, &current, &anchor).is_ok());
     // A restored older anchor and newer cache must be reconciled first.
     anchor.write(&high_bytes).unwrap();
+    assert!(verify_with_anchor(&path, &later, &public, &current, &anchor).is_err());
     assert!(write_with_anchor(&path, &other, &cache(&other), &public, &current, &anchor).is_err());
     assert_eq!(fs::read(&path).unwrap(), later_bytes);
     assert!(write_with_anchor(&path, &later, &later_bytes, &public, &current, &anchor).is_ok());

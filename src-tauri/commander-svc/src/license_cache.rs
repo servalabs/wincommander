@@ -118,6 +118,21 @@ pub fn store(args: serde_json::Value) -> Result<(), &'static str> {
     }
 }
 
+/// Read-only confirmation that the current signed cache matches protected history.
+#[cfg(feature = "experimental-pq-licence")]
+pub fn verify_current(args: serde_json::Value) -> Result<(), &'static str> {
+    let request: StoreLicenseCacheRequest =
+        serde_json::from_value(args).map_err(|_| "license cache request is invalid")?;
+    let public_key = service_public_key().ok_or("license verification is unavailable")?;
+    let trust = hybrid_trust::configured()?;
+    rollback::verify_current(&machine_license_cache_path()?, &request, public_key, &trust.policy())
+}
+
+#[cfg(not(feature = "experimental-pq-licence"))]
+pub fn verify_current(_args: serde_json::Value) -> Result<(), &'static str> {
+    Err("hybrid license verification is unavailable")
+}
+
 fn signed_verification_time(payload: &str, now: u64) -> Result<u64, &'static str> {
     let claims: SignedClaims =
         serde_json::from_str(payload).map_err(|_| "license cache payload is invalid")?;

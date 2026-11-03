@@ -38,7 +38,7 @@ use wincmd_shared::fleet::{Action, ClipboardEventReport};
 use wincmd_shared::vault_access::VaultMountReason;
 use wincmd_shared::svc::{
     classify_verb, is_known_verb, ApplyMachineSettingRequest, CapabilityClass,
-    APPLY_MACHINE_SETTING_VERB, STORE_LICENSE_CACHE_VERB, SVC_PIPE_NAME, SVC_PROTOCOL_VERSION,
+    APPLY_MACHINE_SETTING_VERB, STORE_LICENSE_CACHE_VERB, VERIFY_LICENSE_CACHE_VERB, SVC_PIPE_NAME, SVC_PROTOCOL_VERSION,
 };
 use wincmd_shared::{Envelope, ErrorReply, Hello, Request, Response};
 
@@ -642,6 +642,10 @@ async fn dispatch_verb(
 
         STORE_LICENSE_CACHE_VERB => crate::license_cache::store(args)
             .map(|_| serde_json::json!({ "stored": true }))
+            .map_err(|message| VerbError::new("license_cache_rejected", message)),
+
+        VERIFY_LICENSE_CACHE_VERB => crate::license_cache::verify_current(args)
+            .map(|_| serde_json::json!({ "verified": true }))
             .map_err(|message| VerbError::new("license_cache_rejected", message)),
 
         "svc.clipboard.get_policy" => fleet_machine_policy_store().and_then(|store|store.read_current(|bound,policy| {
@@ -5971,6 +5975,20 @@ mod integration {
                 assert_eq!(kind, "forbidden", "expected kind=forbidden, got {:?}", kind);
             }
             other => panic!("expected Envelope::Error, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn licence_history_check_rejects_noninteractive_callers() {
+        let reply = run_one_request(
+            "license-history-denied",
+            wincmd_shared::svc::VERIFY_LICENSE_CACHE_VERB,
+            false,
+            false,
+        ).await;
+        match reply {
+            Envelope::Error(ErrorReply { kind, .. }) => assert_eq!(kind, "forbidden"),
+            other => panic!("expected licence history permission denial, got {other:?}"),
         }
     }
 
