@@ -1,0 +1,148 @@
+use super::*;
+
+#[tokio::test]
+async fn signed_manifest_rejects_oversized_chunked_response() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let thread = std::thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        socket
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        let mut request = [0; 1024];
+        let _ = socket.read(&mut request);
+        let _ = socket.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n10001\r\n");
+        let _ = socket.write_all(&vec![b'x'; MAX_MANIFEST_BYTES + 1]);
+        let _ = socket.write_all(b"\r\n0\r\n\r\n");
+    });
+    let response = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .unwrap()
+        .get(format!("http://{address}/"))
+        .send()
+        .await
+        .unwrap();
+    assert!(read_signed_envelope(response)
+        .await
+        .unwrap_err()
+        .contains("size limit"));
+    thread.join().unwrap();
+}
+
+#[test]
+fn signed_pro_record_verifies_and_rejects_tampering() {
+    let mut envelope: SignedManifestEnvelope =
+        serde_json::from_str(include_str!("../../tests/fixtures/signed-pro-test.json"))
+            .unwrap();
+    let public_key = include_str!("../../tests/fixtures/signed-pro-test.pub").trim();
+    let release = verify_signed_pro_with_key(&envelope, public_key).unwrap();
+    assert_eq!(release.version, "3.7.0");
+    assert_eq!(release.sha256, "a".repeat(64));
+    envelope.payload = envelope.payload.replace(&"a".repeat(64), &"b".repeat(64));
+    assert!(verify_signed_pro_with_key(&envelope, public_key).is_err());
+    envelope.signature.clear();
+    assert!(verify_signed_pro_with_key(&envelope, public_key).is_err());
+}
+
+#[test]
+fn signed_pro_record_rejects_wrong_scope_and_invalid_fields() {
+    let envelope: SignedManifestEnvelope =
+        serde_json::from_str(include_str!("../../tests/fixtures/signed-pro-test.json"))
+            .unwrap();
+    let mut value: serde_json::Value = serde_json::from_str(&envelope.payload).unwrap();
+    for (field, invalid) in [
+        ("format", serde_json::json!("other-product")),
+        (
+            "url",
+            serde_json::json!("https://evil.example/pro/v3.7.0/wincommander-pro.exe"),
+        ),
+        (
+            "url",
+            serde_json::json!(
+                "https://winupdates.servalabs.com/pro/v3.7.1/wincommander-pro.exe"
+            ),
+        ),
+        ("sha256", serde_json::json!("not-a-hash")),
+        ("size", serde_json::json!(0)),
+    ] {
+        let old = value[field].clone();
+        value[field] = invalid;
+        let release: SignedProRelease = serde_json::from_value(value.clone()).unwrap();
+        assert!(validate_signed_pro(&release).is_err());
+        value[field] = old;
+    }
+}
+
+#[test]
+fn versioned_pro_manifest_url_cannot_escape_approved_path() {
+    assert_eq!(
+        versioned_manifest_url("3.6.7.0").unwrap(),
+        "https://winupdates.servalabs.com/investigator/v3.6.7/latest.json"
+    );
+    assert_eq!(
+        versioned_manifest_url("3.6.7.2").unwrap(),
+        "https://winupdates.servalabs.com/investigator/v3.6.7.2/latest.json"
+    );
+    for invalid in [
+        "",
+        "3.6",
+        "3.6.7/../../pro",
+        "3.6.7?x=1",
+        "3.6.7.0.1",
+        "9999999999999999999999.1.1",
+    ] {
+        assert!(versioned_manifest_url(invalid).is_err());
+    }
+}
+
+#[test]
+fn wincommander_minisign_envelope_verifies_before_manifest_parsing() {
+    let public_key = "untrusted comment: minisign public key\nRWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3\n";
+    let signature = "untrusted comment: signature from minisign secret key\nRUQf6LRCGA9i559r3g7V1qNyJDApGip8MfqcadIgT9CuhV3EMhHoN1mGTkUidF/z7SrlQgXdy8ofjb7bNJJylDOocrCo8KLzZwo=\ntrusted comment: timestamp:1633700835\tfile:test\tprehashed\nwLMDjy9FLAuxZ3q4NlEvkgtyhrr0gtTu6KC4KBJdITbbOeAi1zBIYo0v4iTgt8jJpIidRJnp94ABQkJAgAooBQ==";
+    let envelope = SignedManifestEnvelope {
+        payload: "test".to_string(),
+        signature: general_purpose::STANDARD.encode(signature),
+    };
+    let encoded_key = general_purpose::STANDARD.encode(public_key);
+
+    let error = match verify_manifest_with_key(envelope, &encoded_key) {
+        Err(error) => error,
+        Ok(_) => panic!("non-JSON fixture unexpectedly parsed as a manifest"),
+    };
+    assert!(error.starts_with("parse:invalid signed manifest payload:"));
+}
+
+#[test]
+fn manifest_requires_both_expected_artifacts() {
+    let manifest: InvestigatorManifest = serde_json::from_str(
+        r#"{"version":"1.0.0","artifacts":[{"name":"wincommander-investigator.exe","url":"https://winupdates.servalabs.com/investigator/wincommander-investigator.exe","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":1},{"name":"wincommander-pro.exe","url":"https://winupdates.servalabs.com/investigator/wincommander-pro.exe","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","size":1}]}"#,
+    )
+    .unwrap();
+    assert!(validate_manifest(&manifest).is_ok());
+}
+
+#[test]
+fn manifest_rejects_urls_outside_investigator_channel() {
+    let manifest: InvestigatorManifest = serde_json::from_str(
+        r#"{"version":"1.0.0","artifacts":[{"name":"wincommander-investigator.exe","url":"https://winupdates.servalabs.com/pro/wincommander-investigator.exe","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":1},{"name":"wincommander-pro.exe","url":"https://winupdates.servalabs.com/investigator/wincommander-pro.exe","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","size":1}]}"#,
+    )
+    .unwrap();
+    assert!(validate_manifest(&manifest).is_err());
+}
+
+#[test]
+fn manifest_rejects_reordered_or_noncanonical_artifacts() {
+    let mut manifest: InvestigatorManifest = serde_json::from_str(
+        r#"{"version":"1.0.0","artifacts":[{"name":"wincommander-investigator.exe","url":"https://winupdates.servalabs.com/investigator/wincommander-investigator.exe","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":1},{"name":"wincommander-pro.exe","url":"https://winupdates.servalabs.com/investigator/wincommander-pro.exe","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","size":1}]}"#,
+    )
+    .unwrap();
+    manifest.artifacts.swap(0, 1);
+    assert!(validate_manifest(&manifest).is_err());
+
+    manifest.artifacts.swap(0, 1);
+    manifest.artifacts[0].sha256.replace_range(0..1, "A");
+    assert!(validate_manifest(&manifest).is_err());
+}
