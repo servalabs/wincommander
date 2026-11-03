@@ -7,6 +7,7 @@
 
 pub mod free_release;
 pub mod jws;
+pub mod licence_device_proof;
 pub mod release;
 #[cfg(feature = "experimental-offline-verifier")]
 pub mod offline_release;
