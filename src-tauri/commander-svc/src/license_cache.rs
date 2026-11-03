@@ -18,6 +18,10 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(feature = "experimental-pq-licence")]
+#[path = "license_hybrid_trust.rs"]
+mod hybrid_trust;
+
 const DEFAULT_LICENSE_PUBLIC_KEY_B64: &str = "Z4ulYtrFLpOZYVLGpNo_PlegZsitTmJx2JwfyIqSJpY";
 const MAINLINE_APP_ID: &str = "com.servalabs.wincommander";
 const MAX_SIGNED_PAYLOAD_BYTES: usize = 16 * 1024;
@@ -36,6 +40,9 @@ struct StoreLicenseCacheRequest {
     seats_used: Option<u32>,
     #[serde(default)]
     seat_limit: Option<u32>,
+    #[cfg(feature = "experimental-pq-licence")]
+    #[serde(default)]
+    hybrid: Option<String>,
 }
 
 /// The parts of the signed worker claim needed to reject malformed envelopes.
@@ -60,6 +67,8 @@ struct PersistedLicenseCache<'a> {
 struct PersistedTokenEnvelope<'a> {
     payload: &'a str,
     signature: &'a str,
+    #[cfg(feature = "experimental-pq-licence")]
+    hybrid: &'a str,
 }
 
 /// Validate and persist a signed Worker envelope at the one machine-owned
@@ -68,15 +77,21 @@ struct PersistedTokenEnvelope<'a> {
 pub fn store(args: serde_json::Value) -> Result<(), &'static str> {
     let request: StoreLicenseCacheRequest =
         serde_json::from_value(args).map_err(|_| "license cache request is invalid")?;
-    validate_request(
-        &request,
-        service_public_key().ok_or("license verification is unavailable")?,
-    )?;
+    let public_key = service_public_key().ok_or("license verification is unavailable")?;
+    #[cfg(not(feature = "experimental-pq-licence"))]
+    validate_request(&request, public_key)?;
+    #[cfg(feature = "experimental-pq-licence")]
+    {
+        let trust = hybrid_trust::configured()?;
+        validate_dual_request(&request, public_key, &trust.policy())?;
+    }
 
     let persisted = PersistedLicenseCache {
         token: PersistedTokenEnvelope {
             payload: &request.payload,
             signature: &request.signature,
+            #[cfg(feature = "experimental-pq-licence")]
+            hybrid: request.hybrid.as_deref().ok_or("hybrid license is required")?,
         },
         last_verified_at: now_unix(),
         seats_used: request.seats_used,
@@ -133,10 +148,9 @@ fn validate_claims(payload: &[u8]) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// Experimental validation only: no service verb, key loading or cache write.
+/// Validate the experimental hybrid proof before the service persists it.
 /// Rollback protection and every licence reader must be implemented before use.
 #[cfg(feature = "experimental-pq-licence")]
-#[allow(dead_code)]
 fn validate_hybrid_request(
     envelope: &[u8],
     trust: &wincmd_pq_experiment::jws::Trust<'_>,
@@ -151,6 +165,21 @@ fn validate_hybrid_request(
         .map_err(|_| "license cache signature is invalid")?;
     validate_claims(&verified.payload)?;
     Ok(verified)
+}
+
+#[cfg(feature = "experimental-pq-licence")]
+fn validate_dual_request(
+    request: &StoreLicenseCacheRequest,
+    public_key: &str,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>,
+) -> Result<(), &'static str> {
+    validate_request(request, public_key)?;
+    let hybrid = request.hybrid.as_deref().ok_or("hybrid license is required")?;
+    let verified = validate_hybrid_request(hybrid.as_bytes(), trust)?;
+    if verified.payload != request.payload.as_bytes() {
+        return Err("hybrid license does not match the classical license");
+    }
+    Ok(())
 }
 
 fn service_public_key() -> Option<&'static str> {
@@ -254,6 +283,8 @@ mod tests {
                 signature,
                 seats_used: Some(1),
                 seat_limit: Some(3),
+                #[cfg(feature = "experimental-pq-licence")]
+                hybrid: None,
             },
             public_key,
         )
@@ -348,6 +379,44 @@ mod tests {
             validate_claims(br#"{"device_hash":"x","iat":3,"exp":2}"#),
             Err("license cache payload is invalid")
         );
+    }
+
+    #[cfg(feature = "experimental-pq-licence")]
+    #[test]
+    fn missing_hybrid_trust_cannot_write_a_classical_only_cache() {
+        if option_env!("WINCMD_PQ_LIC_ED_KEY").is_some() { return; }
+        assert!(hybrid_trust::configured().is_err());
+        let (request, _) = signed_request();
+        let args = serde_json::json!({"payload":request.payload,"signature":request.signature});
+        assert!(store(args).is_err());
+    }
+
+    #[cfg(feature = "experimental-pq-licence")]
+    #[test]
+    fn service_requires_matching_classical_and_hybrid_licences_before_cache_write() {
+        use wincmd_pq_experiment::{jws, Purpose, ML_DSA_65_PUBLIC_KEY_LEN};
+        let fixture: serde_json::Value = serde_json::from_str(include_str!("fixtures/hybrid-licence-test.json")).unwrap();
+        let ed: [u8; 32] = general_purpose::URL_SAFE_NO_PAD.decode(fixture["publicEd"].as_str().unwrap()).unwrap().try_into().unwrap();
+        let pq: [u8; ML_DSA_65_PUBLIC_KEY_LEN] = general_purpose::URL_SAFE_NO_PAD.decode(fixture["publicPq"].as_str().unwrap()).unwrap().try_into().unwrap();
+        let trust = jws::Trust { purpose: Purpose::Licence, minimum_epoch: 7, ed_key_id: "ed-key", ed25519_public: &ed, pq_key_id: "pq-key", ml_dsa_65_public: &pq };
+        let classic_key = SigningKey::from_bytes(&[7;32]);
+        let public = general_purpose::URL_SAFE_NO_PAD.encode(classic_key.verifying_key().to_bytes());
+        let payload = String::from_utf8(general_purpose::URL_SAFE_NO_PAD.decode(fixture["jws"]["payload"].as_str().unwrap()).unwrap()).unwrap();
+        let mut request = StoreLicenseCacheRequest { signature: general_purpose::URL_SAFE_NO_PAD.encode(classic_key.sign(payload.as_bytes()).to_bytes()), payload, seats_used: None, seat_limit: None, hybrid: Some(serde_json::to_string(&fixture["jws"]).unwrap()) };
+        assert!(validate_dual_request(&request, &public, &trust).is_ok());
+        let persisted = PersistedLicenseCache { token: PersistedTokenEnvelope { payload: &request.payload, signature: &request.signature, hybrid: request.hybrid.as_deref().unwrap() }, last_verified_at: 123, seats_used: None, seat_limit: None };
+        let json = serde_json::to_value(persisted).unwrap();
+        assert_eq!(json["token"]["hybrid"].as_str(), request.hybrid.as_deref());
+        let original = request.hybrid.take().unwrap();
+        assert_eq!(validate_dual_request(&request, &public, &trust), Err("hybrid license is required"));
+        request.hybrid = Some(original.clone());
+        request.payload.push(' ');
+        request.signature = general_purpose::URL_SAFE_NO_PAD.encode(classic_key.sign(request.payload.as_bytes()).to_bytes());
+        assert_eq!(validate_dual_request(&request, &public, &trust), Err("hybrid license does not match the classical license"));
+        request.payload.pop();
+        request.signature = general_purpose::URL_SAFE_NO_PAD.encode(classic_key.sign(request.payload.as_bytes()).to_bytes());
+        request.hybrid = Some(format!("{original}x"));
+        assert!(validate_dual_request(&request, &public, &trust).is_err());
     }
 
     #[cfg(feature = "experimental-pq-licence")]
