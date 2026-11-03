@@ -171,6 +171,8 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
     let anchor_path = format!(r"SOFTWARE\WinCommanderLicenceTest-{}-{}", std::process::id(), NEXT_TEMP.fetch_add(1, Ordering::Relaxed));
     let anchor = anchor::Anchor::test_user(anchor_path.clone());
     fs::write(&path, &high_bytes).unwrap();
+    // Upgrade the previous single-record format without losing its floor.
+    anchor.write(&high_bytes).unwrap();
     assert!(write_with_anchor(&path, &same_second, b"replacement", &public, &current, &anchor).is_err());
     assert_eq!(fs::read(&path).unwrap(), high_bytes);
     assert!(write_with_anchor(&path, &next, b"replacement", &public, &current, &anchor).is_err());
@@ -182,10 +184,35 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
     assert!(!path.exists());
     assert!(write_with_anchor(&path, &exact_retry, &cache(&exact_retry), &public, &current, &anchor).is_ok());
     let later_bytes = cache(&later);
+    assert!(ledger::advance(None, &later, &high_bytes, &public, &current, None).is_err());
+    let mut ambiguous: serde_json::Value = serde_json::from_slice(&high_bytes).unwrap();
+    ambiguous["version"] = 1.into();
+    ambiguous["records"] = serde_json::json!([]);
+    assert!(ledger::advance(Some(&serde_json::to_vec(&ambiguous).unwrap()), &later, &later_bytes, &public, &current, None).is_err());
     let missing_parent = dir.join("missing").join("license_cache.json");
     assert!(write_with_anchor(&missing_parent, &later, &later_bytes, &public, &current, &anchor).is_err());
     assert!(write_with_anchor(&path, &previous_epoch9, &high_bytes, &public, &current, &anchor).is_err());
     assert!(write_with_anchor(&path, &later, &later_bytes, &public, &current, &anchor).is_ok());
+    let other = make("lic-b", 102, 10000, 9, &new_ed, &new_pq, "new-ed", "new-pq");
+    assert!(write_with_anchor(&path, &other, &cache(&other), &public, &current, &anchor).is_ok());
+    assert!(write_with_anchor(&path, &previous_epoch9, &high_bytes, &public, &current, &anchor).is_err());
+    assert!(write_with_anchor(&path, &later, &later_bytes, &public, &current, &anchor).is_ok());
+    for id in ["lic-c", "lic-d"] {
+        let item = make(id, 103, 10000, 9, &new_ed, &new_pq, "new-ed", "new-pq");
+        assert!(write_with_anchor(&path, &item, &cache(&item), &public, &current, &anchor).is_ok());
+    }
+    let before = fs::read(&path).unwrap();
+    let full = anchor.read().unwrap().unwrap();
+    let fifth = make("lic-e", 104, 10000, 9, &new_ed, &new_pq, "new-ed", "new-pq");
+    assert!(write_with_anchor(&path, &fifth, &cache(&fifth), &public, &current, &anchor).is_err());
+    assert_eq!(anchor.read().unwrap().unwrap(), full);
+    assert_eq!(fs::read(&path).unwrap(), before);
+    assert!(write_with_anchor(&path, &later, &later_bytes, &public, &current, &anchor).is_ok());
+    let mut damaged: serde_json::Value = serde_json::from_slice(&anchor.read().unwrap().unwrap()).unwrap();
+    damaged["records"][0] = "invalid".into();
+    anchor.write(&serde_json::to_vec(&damaged).unwrap()).unwrap();
+    assert!(write_with_anchor(&path, &later, &later_bytes, &public, &current, &anchor).is_err());
+    assert_eq!(fs::read(&path).unwrap(), later_bytes);
     anchor.write(b"invalid").unwrap();
     assert!(write_with_anchor(&path, &later, &later_bytes, &public, &current, &anchor).is_err());
     assert_eq!(fs::read(&path).unwrap(), later_bytes);

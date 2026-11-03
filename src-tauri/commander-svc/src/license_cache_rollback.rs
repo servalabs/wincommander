@@ -5,6 +5,8 @@ use std::{io::Read, sync::Mutex};
 
 #[path = "license_cache_history.rs"]
 mod history;
+#[path = "license_cache_ledger.rs"]
+mod ledger;
 #[path = "../../commander-free/src/updater/hybrid_free_anchor.rs"]
 mod anchor;
 
@@ -65,12 +67,10 @@ fn write_with_anchor(
         check_previous_with_history(&existing, candidate, public_key, trust, old_trust.as_ref())?;
     }
     let retained = anchor.read().map_err(|_| "license security record is unavailable")?;
-    if let Some(retained) = retained {
-        check_previous_with_history(&retained, candidate, public_key, trust, old_trust.as_ref())?;
-    }
+    let retained = ledger::advance(retained.as_deref(), candidate, bytes, public_key, trust, old_trust.as_ref())?;
     // Record the authenticated candidate first. If the cache write is interrupted,
     // a retry of the same candidate is allowed while an older one remains blocked.
-    anchor.write(bytes).map_err(|_| "license security record is unavailable")?;
+    anchor.write(&retained).map_err(|_| "license security record is unavailable")?;
     atomic_write(path, bytes).map_err(|_| "machine license cache is unavailable")
 }
 
@@ -122,11 +122,7 @@ fn check_previous_with_history(
         serde_json::from_str(&previous.payload).map_err(|_| "license cache is invalid")?;
     let new: SignedClaims =
         serde_json::from_str(&candidate.payload).map_err(|_| "license cache is invalid")?;
-    let same_licence = match (&old.license_id, &new.license_id) {
-        (Some(a), Some(b)) => !a.is_empty() && a == b,
-        (None, None) => old.device_hash == new.device_hash,
-        _ => false,
-    };
+    let same_licence = same_licence(&old, &new);
     if same_licence && new.iat < old.iat {
         return Err("license cache would restore an older signed licence");
     }
@@ -138,6 +134,14 @@ fn check_previous_with_history(
         return Err("license cache has conflicting licences issued in the same second; retry");
     }
     Ok(())
+}
+
+fn same_licence(old: &SignedClaims, new: &SignedClaims) -> bool {
+    match (&old.license_id, &new.license_id) {
+        (Some(a), Some(b)) => !a.is_empty() && a == b,
+        (None, None) => old.device_hash == new.device_hash,
+        _ => false,
+    }
 }
 
 #[cfg(test)]
