@@ -26,13 +26,19 @@ fn is_content_part(name: &str) -> bool {
 pub fn extract_office(path: &Path) -> Result<(String, DocProps)> {
     let file = std::fs::File::open(path)?;
     let mut archive = ZipArchive::new(file).map_err(|e| SearchError::Extract(e.to_string()))?;
+    if archive.has_duplicate_names() {
+        return Err(SearchError::Extract("archive contains duplicate entry names".into()));
+    }
 
     let mut text = String::new();
     for i in 0..archive.len() {
         let mut entry = archive
             .by_index(i)
             .map_err(|e| SearchError::Extract(e.to_string()))?;
-        let name = entry.name().to_owned();
+        let name = entry
+            .name()
+            .map_err(|e| SearchError::Extract(e.to_string()))?
+            .into_owned();
         // Only extract content-carrying parts; skip styles/themes/settings/etc.
         if is_content_part(&name) {
             // Cap decompressed size (audit M2): a zip bomb (tiny compressed,
@@ -266,6 +272,31 @@ mod tests {
         zip.write_all(xml.as_bytes()).unwrap();
         zip.finish().unwrap();
         f
+    }
+
+    #[test]
+    fn rejects_duplicate_office_parts_instead_of_silently_losing_text() {
+        let file = NamedTempFile::with_suffix(".docx").unwrap();
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(file.path()).unwrap());
+        let options = zip::write::SimpleFileOptions::default();
+        for name in ["word/document.xml", "word/documenU.xml"] {
+            zip.start_file(name, options).unwrap();
+            zip.write_all(b"<w:t>text</w:t>").unwrap();
+        }
+        zip.finish().unwrap();
+        let mut bytes = std::fs::read(file.path()).unwrap();
+        let name = b"word/documenU.xml";
+        let offsets: Vec<_> = bytes
+            .windows(name.len())
+            .enumerate()
+            .filter_map(|(index, window)| (window == name).then_some(index))
+            .collect();
+        assert_eq!(offsets.len(), 2);
+        for index in offsets {
+            bytes[index + 12] = b't';
+        }
+        std::fs::write(file.path(), bytes).unwrap();
+        assert!(extract_office(file.path()).is_err());
     }
 
     /// Build a minimal valid .pptx in memory: a zip with ppt/slides/slide1.xml

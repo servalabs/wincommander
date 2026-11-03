@@ -25,6 +25,44 @@ fn config(root: &Path) -> IndexConfig {
     }
 }
 
+#[test]
+fn reads_and_updates_a_tantivy_026_index_from_an_existing_install() {
+    let root = TempDir::new().unwrap();
+    let cfg = config(root.path());
+    fs::create_dir(&cfg.index_dir).unwrap();
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tantivy26");
+    for entry in fs::read_dir(fixture).unwrap() {
+        let entry = entry.unwrap();
+        fs::copy(entry.path(), cfg.index_dir.join(entry.file_name())).unwrap();
+    }
+    let query = ContentQuery {
+        terms: "legacysearchtoken".into(),
+        roots: vec![],
+        limit: 10,
+        offset: 0,
+        keyword_only: true,
+    };
+    let reader = SearchEngine::open_existing_shared(cfg.clone()).unwrap();
+    assert_eq!(reader.search(&query).unwrap().len(), 1);
+    drop(reader);
+    let index = ContentIndex::open_or_create(&cfg.index_dir).unwrap();
+    let mut writer = index.writer().unwrap();
+    let meta = FileMeta {
+        doc_id: 124,
+        path: "C:/synthetic-new-document.txt".into(),
+        name: "synthetic-new-document.txt".into(),
+        ext: "txt".into(),
+        mtime: 0,
+        size: 10,
+    };
+    index.upsert(&mut writer, &meta, "new", "legacysearchtoken", &DocProps::default()).unwrap();
+    index.commit(&mut writer).unwrap();
+    drop(writer);
+    drop(index);
+    let reader = SearchEngine::open_existing_shared(cfg).unwrap();
+    assert_eq!(reader.search(&query).unwrap().len(), 2);
+}
+
 fn snapshot(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     fs::read_dir(root)
         .unwrap()

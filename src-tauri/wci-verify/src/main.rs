@@ -141,6 +141,10 @@ fn main() -> ExitCode {
             return ExitCode::from(10);
         }
     };
+    if z.has_duplicate_names() {
+        eprintln!("error: duplicate zip entry name");
+        return ExitCode::from(10);
+    }
 
     let expected: HashMap<String, String> = manifest.file_hashes.iter().cloned().collect();
     let mut mismatches = 0usize;
@@ -150,7 +154,13 @@ fn main() -> ExitCode {
             Ok(e) => e,
             Err(_) => continue,
         };
-        let name = entry.name().to_string();
+        let name = match entry.name() {
+            Ok(name) => name.into_owned(),
+            Err(e) => {
+                eprintln!("error: invalid zip entry name: {}", e);
+                return ExitCode::from(10);
+            }
+        };
         // Skip the special files (the manifest itself is hashed separately
         // in hashes.txt; the signature artefacts aren't expected to be hashed).
         if matches!(
