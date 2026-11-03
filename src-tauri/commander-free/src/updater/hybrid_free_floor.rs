@@ -4,6 +4,10 @@ use super::{channel_name, Trust, VerifiedUpdate};
 use serde::{Deserialize, Serialize};
 use std::io::Read;
 
+#[cfg(windows)]
+#[path = "hybrid_free_anchor.rs"]
+mod anchor;
+
 const LIMIT: usize = 65536;
 const NAME: &str = "hybrid-free-update-floor.json";
 
@@ -91,21 +95,38 @@ fn read_record(path: &std::path::Path) -> Result<Option<Vec<u8>>, String> {
 }
 
 /// Advance before launch so a cancelled or failed installer can retry the same release.
+#[cfg(windows)]
 pub(super) fn record(
     candidate: &VerifiedUpdate,
     trust: &Trust,
 ) -> Result<crate::paths::MachineStateLock, String> {
-    record_with_lock(candidate, trust, "hybrid-free-update")
+    record_with_lock(
+        candidate,
+        trust,
+        "hybrid-free-update",
+        &anchor::Anchor::machine(),
+    )
 }
 
+#[cfg(not(windows))]
+pub(super) fn record(
+    _candidate: &VerifiedUpdate,
+    _trust: &Trust,
+) -> Result<crate::paths::MachineStateLock, String> {
+    Err("Free update registry protection requires Windows".into())
+}
+
+#[cfg(windows)]
 fn record_with_lock(
     candidate: &VerifiedUpdate,
     trust: &Trust,
     lock_name: &str,
+    registry: &anchor::Anchor,
 ) -> Result<crate::paths::MachineStateLock, String> {
     let lock = crate::paths::acquire_machine_state_lock(lock_name)?;
     let path = crate::paths::machine_state_file(NAME)?;
     let old = read_record(&path)?;
+    let anchored = registry.read()?;
     let record = Record {
         version: candidate.version.clone(),
         channel: channel_name(candidate.channel).into(),
@@ -113,10 +134,13 @@ fn record_with_lock(
             .map_err(|_| "Free update proof is invalid")?,
     };
     check(old.as_deref(), &record, trust)?;
+    check(anchored.as_deref(), &record, trust)?;
     let encoded = serde_json::to_vec(&record).map_err(|_| "Cannot encode Free update record")?;
     if encoded.len() > LIMIT {
         return Err("Free update record is too large".into());
     }
+    // Commit the registry copy first: retry accepts this candidate if the file write fails.
+    registry.write(&encoded)?;
     crate::paths::atomic_write_machine_state(&path, &encoded)
         .map_err(|_| "Cannot save Free update record".to_string())?;
     if read_record(&path)?.as_deref() != Some(encoded.as_slice()) {

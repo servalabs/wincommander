@@ -117,8 +117,9 @@ fn record_process_child() {
         channel: crate::settings::UpdateChannel::Stable,
     };
     let lock_name = fixture["lock"].as_str().unwrap();
+    let registry = anchor::Anchor::test_user(fixture["registry"].as_str().unwrap().into());
     std::fs::write(root.join(format!("{mode}.started")), b"ready").unwrap();
-    let result = record_with_lock(&candidate, &trust, lock_name);
+    let result = record_with_lock(&candidate, &trust, lock_name, &registry);
     if old || mode == "corrupt" {
         assert!(
             result.is_err(),
@@ -184,8 +185,12 @@ fn separate_processes_serialize_recording_and_retry_after_failed_launch() {
         .unwrap()
     };
     let lock_name = format!("free-test-{}", uuid::Uuid::new_v4().simple());
+    let registry_path = format!(
+        r"SOFTWARE\WinCommanderPqTest-{}",
+        uuid::Uuid::new_v4().simple()
+    );
     let fixture = serde_json::json!({"ed":URL_SAFE_NO_PAD.encode(trust.ed), "pq":URL_SAFE_NO_PAD.encode(trust.pq),
-        "current":make("3.7.0"), "old":make("3.6.9"), "lock":lock_name});
+        "current":make("3.7.0"), "old":make("3.6.9"), "lock":lock_name, "registry":registry_path});
     std::fs::write(
         root.join("fixture.json"),
         serde_json::to_vec(&fixture).unwrap(),
@@ -250,8 +255,36 @@ fn separate_processes_serialize_recording_and_retry_after_failed_launch() {
     let record_path = state.join(NAME);
     let recorded: Record = serde_json::from_slice(&std::fs::read(&record_path).unwrap()).unwrap();
     assert_eq!(recorded.version, "3.7.0");
+    // A removed file does not erase the independently stored signed floor.
+    std::fs::remove_file(&record_path).unwrap();
+    finish(spawn("rollback"));
+    finish(spawn("retry"));
+    // A registry-first interrupted write still rejects an older file and can retry.
+    let old = Record {
+        version: "3.6.9".into(),
+        channel: "stable".into(),
+        envelope: fixture["old"].as_str().unwrap().into(),
+    };
+    std::fs::write(&record_path, serde_json::to_vec(&old).unwrap()).unwrap();
+    finish(spawn("rollback"));
+    finish(spawn("retry"));
     std::fs::write(&record_path, b"corrupt").unwrap();
     finish(spawn("corrupt"));
+    std::fs::remove_file(&record_path).unwrap();
+    finish(spawn("retry"));
+    let anchor = anchor::Anchor::test_user(registry_path.clone());
+    let saved = anchor.read().unwrap().unwrap();
+    // Either surviving copy prevents rollback when the other is missing or stale.
+    anchor::remove_test_key(&registry_path).unwrap();
+    finish(spawn("rollback"));
+    finish(spawn("retry"));
+    anchor.write(&serde_json::to_vec(&old).unwrap()).unwrap();
+    finish(spawn("rollback"));
+    finish(spawn("retry"));
+    anchor.write(b"corrupt").unwrap();
+    finish(spawn("corrupt"));
+    anchor.write(&saved).unwrap();
+    anchor::remove_test_key(&registry_path).unwrap();
     std::fs::remove_file(record_path).unwrap();
     std::fs::remove_dir(state).unwrap();
     std::fs::remove_dir(machine).unwrap();
