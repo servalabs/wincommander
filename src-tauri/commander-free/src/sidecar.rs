@@ -454,7 +454,7 @@ where
 /// without needing a Tauri context.
 type NotificationSink = Box<dyn Fn(String, serde_json::Value) + Send + Sync>;
 
-/// The only reverse request a verified Pro Fleet agent may make to Free.
+/// A fixed read-only reverse request a verified Pro Fleet agent may make to Free.
 /// Keeping this identifier and its category list closed prevents the sidecar
 /// pipe from becoming a general local-command RPC surface.
 const FREE_FORENSIC_PROJECTION_FEATURE: &str = "free.system_cleanup.forensic_projection";
@@ -482,13 +482,33 @@ fn fleet_forensic_projection_category(args: &serde_json::Value) -> Result<&'stat
         .ok_or_else(|| "collector category is not allowed".to_string())
 }
 
-async fn respond_to_free_forensic_projection(
+async fn respond_to_free_request(
     request: Request,
     session_token: String,
     writer: Arc<Mutex<WriteHalf<NamedPipeServer>>>,
 ) -> bool {
     let request_id = request.request_id;
+    let error_kind = if request.feature_id == crate::fleet_local_arming::FEATURE_ID {
+        "local_arming_refused"
+    } else {
+        "free_collector_refused"
+    };
     let response = async {
+        if request.feature_id == crate::fleet_local_arming::FEATURE_ID {
+            crate::license::require_service_feature("fleet")?;
+            let settings = crate::settings::read_settings()
+                .map_err(|_| "local_arming_settings_unavailable".to_string())?;
+            return crate::fleet_local_arming::evaluate(
+                &request.args,
+                crate::fleet_local_arming::OwnerSettings {
+                    device_id: &settings.device_id,
+                    fleet_enabled: settings.app.fleet.enabled,
+                    dispatch_enabled: settings.app.fleet.dispatch,
+                    signing_key_pub: &settings.app.fleet.signing_key_pub,
+                    enabled: settings.ideal.privacy.self_destruct.enabled,
+                },
+            );
+        }
         if request.feature_id != FREE_FORENSIC_PROJECTION_FEATURE {
             return Err("reverse IPC feature is not allowed".to_string());
         }
@@ -502,7 +522,7 @@ async fn respond_to_free_forensic_projection(
         Ok(result) => Envelope::Response(Response { request_id, result }),
         Err(message) => Envelope::Error(ErrorReply {
             request_id,
-            kind: "free_collector_refused".to_string(),
+            kind: error_kind.to_string(),
             // The Free runner returns only its bounded category-level failure
             // vocabulary. Preserve it so Fleet can distinguish a disabled
             // module, timeout, malformed table, and collector refusal without
@@ -515,7 +535,7 @@ async fn respond_to_free_forensic_projection(
     if let Err(error) = deadlines::write_frame(&writer, &envelope, WRITE_TIMEOUT).await {
         crate::log_message(
             "warn",
-            &format!("[ProReader] failed to reply to Free forensic request: {error}"),
+            &format!("[ProReader] failed to reply to Free request: {error}"),
         );
         return false;
     }
@@ -626,7 +646,9 @@ async fn reader_loop<R>(
                     );
                     continue;
                 };
-                if request.feature_id != FREE_FORENSIC_PROJECTION_FEATURE {
+                if request.feature_id != FREE_FORENSIC_PROJECTION_FEATURE
+                    && request.feature_id != crate::fleet_local_arming::FEATURE_ID
+                {
                     crate::log_message(
                         "warn",
                         "[ProReader] rejected non-allowlisted reverse Request from Pro",
@@ -637,7 +659,7 @@ async fn reader_loop<R>(
                 // Box this arm because the local collector uses the backend
                 // runner, which also contains the ordinary Pro-dispatch path.
                 // The box breaks that otherwise-recursive async future type.
-                if !Box::pin(respond_to_free_forensic_projection(request, token, writer)).await {
+                if !Box::pin(respond_to_free_request(request, token, writer)).await {
                     break;
                 }
             }

@@ -62,6 +62,7 @@ mod file_search;
 mod file_watch_trigger;
 mod firewall_audit;
 mod fleet_agent;
+mod fleet_local_arming;
 mod flow_bridge;
 mod flow_bundle;
 mod flow_capabilities;

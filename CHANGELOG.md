@@ -5,6 +5,9 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Let the connected Fleet agent read the owning desktop session's current local
+  arming setting through authenticated IPC, without retaining an armed snapshot.
+
 - Show the last verified Fleet contact from the device status as a historical
   observation, without treating it as the current connection state.
 - Show the calculator before any startup animation when its PIN gate is active,
