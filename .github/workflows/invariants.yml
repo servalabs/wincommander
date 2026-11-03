@@ -228,7 +228,15 @@ jobs:
       - name: Test experimental service licence validation
         run: cargo test --locked -p commander-svc --features experimental-pq-licence license_cache::tests
       - name: Test experimental desktop licence validation
-        run: cargo test --locked -p commander-free --lib --features experimental-pq-licence hybrid_licence_claims_require_both_signatures_and_local_policy
+        shell: pwsh
+        run: |
+          $fixture = Get-Content commander-svc/src/fixtures/hybrid-licence-test.json -Raw | ConvertFrom-Json
+          $env:WINCMD_PQ_LIC_ED_KEY = $fixture.publicEd
+          $env:WINCMD_PQ_LIC_MLDSA_KEY = $fixture.publicPq
+          $env:WINCMD_PQ_LIC_ED_ID = "ed-key"
+          $env:WINCMD_PQ_LIC_MLDSA_ID = "pq-key"
+          $env:WINCMD_PQ_LIC_EPOCH = "7"
+          cargo test --locked -p commander-free --lib --features experimental-pq-licence hybrid_licence
       - name: Test experimental hybrid Pro release validation
         shell: pwsh
         run: |

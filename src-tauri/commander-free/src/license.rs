@@ -10,6 +10,10 @@ use std::process::Command;
 use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+#[cfg(feature = "experimental-pq-licence")]
+#[path = "../../runtime-support/license_hybrid_trust.rs"]
+mod hybrid_trust;
+
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
@@ -73,6 +77,8 @@ static DEVICE_IDENTITY: OnceLock<DeviceIdentity> = OnceLock::new();
 struct SignedTokenEnvelope {
     payload: String,
     signature: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    hybrid: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -159,6 +165,8 @@ struct WorkerTokenResponse {
     ok: bool,
     payload: Option<String>,
     signature: Option<String>,
+    #[serde(default)]
+    hybrid: Option<String>,
     error: Option<String>,
     #[serde(default)]
     entitlement_revoked: bool,
@@ -253,6 +261,8 @@ struct WorkerDeactivateRequest<'a> {
 struct ServiceLicenseCacheWriteRequest<'a> {
     payload: &'a str,
     signature: &'a str,
+    #[cfg(feature = "experimental-pq-licence")]
+    hybrid: Option<&'a str>,
     seats_used: Option<u32>,
     seat_limit: Option<u32>,
 }
@@ -385,11 +395,7 @@ pub fn has_update_entitlement() -> bool {
     let Ok(Some(cached)) = load_cached_license() else {
         return false;
     };
-    let Ok(claims) = parse_and_verify_claims(
-        &cached.token.payload,
-        &cached.token.signature,
-        &public_key_b64,
-    ) else {
+    let Ok(claims) = verify_token_claims(&cached.token, &public_key_b64) else {
         return false;
     };
     device_hash_matches(&claims.device_hash)
@@ -441,11 +447,7 @@ fn current_features_raw() -> Vec<String> {
     let Ok(Some(cached)) = load_cached_license() else {
         return Vec::new();
     };
-    let Ok(claims) = parse_and_verify_claims(
-        &cached.token.payload,
-        &cached.token.signature,
-        &public_key_b64,
-    ) else {
+    let Ok(claims) = verify_token_claims(&cached.token, &public_key_b64) else {
         return Vec::new();
     };
 
@@ -914,6 +916,8 @@ async fn save_cached_license(cached: &CachedLicense) -> Result<(), String> {
         let args = serde_json::to_value(ServiceLicenseCacheWriteRequest {
             payload: &cached.token.payload,
             signature: &cached.token.signature,
+            #[cfg(feature = "experimental-pq-licence")]
+            hybrid: cached.token.hybrid.as_deref(),
             seats_used: cached.seats_used,
             seat_limit: cached.seat_limit,
         })
@@ -1201,6 +1205,37 @@ fn parse_and_verify_hybrid_claims(
     Ok((claims, verified.epoch))
 }
 
+fn verify_token_claims(token: &SignedTokenEnvelope, public_key: &str) -> Result<LicenseClaims, String> {
+    let claims = parse_and_verify_claims(&token.payload, &token.signature, public_key)?;
+    #[cfg(feature = "experimental-pq-licence")]
+    {
+        let trust = hybrid_trust::configured().map_err(str::to_owned)?;
+        verify_matching_hybrid(token, &trust.policy())?;
+    }
+    Ok(claims)
+}
+
+// An administrator may use a legacy token only to remove its seat;
+// it never grants features or authorizes refresh in a hybrid build.
+fn verify_token_for_removal(token: &SignedTokenEnvelope, public_key: &str) -> Result<LicenseClaims, String> {
+    #[cfg(feature = "experimental-pq-licence")]
+    if token.hybrid.is_none() {
+        return parse_and_verify_claims(&token.payload, &token.signature, public_key);
+    }
+    verify_token_claims(token, public_key)
+}
+
+#[cfg(feature = "experimental-pq-licence")]
+fn verify_matching_hybrid(token: &SignedTokenEnvelope, trust: &wincmd_pq_experiment::jws::Trust<'_>) -> Result<(), String> {
+    let hybrid = token.hybrid.as_deref().ok_or("Hybrid licence proof is required")?;
+    if hybrid.len() > 32 * 1024 || trust.purpose != wincmd_pq_experiment::Purpose::Licence {
+        return Err("Invalid hybrid licence proof".into());
+    }
+    let verified = wincmd_pq_experiment::jws::verify(hybrid.as_bytes(), trust).map_err(|_| "Invalid hybrid licence proof")?;
+    if verified.payload != token.payload.as_bytes() { return Err("Hybrid licence does not match the classical licence".into()); }
+    Ok(())
+}
+
 fn status_from_cached(
     cached: &CachedLicense,
     claims: &LicenseClaims,
@@ -1373,11 +1408,7 @@ async fn get_license_status_inner() -> Result<serde_json::Value, String> {
         return serde_json::to_value(status).map_err(|e| e.to_string());
     };
 
-    let claims = match parse_and_verify_claims(
-        &cached.token.payload,
-        &cached.token.signature,
-        &public_key_b64,
-    ) {
+    let claims = match verify_token_claims(&cached.token, &public_key_b64) {
         Ok(c) => c,
         Err(e) => {
             // Token signature doesn't verify with the current build key.
@@ -1387,10 +1418,11 @@ async fn get_license_status_inner() -> Result<serde_json::Value, String> {
                 configured: true,
                 licensed: true,
                 valid: false,
-                reason: Some(format!(
-                    "Token verification failed (key mismatch): {}. Use Refresh to recover or re-activate.",
-                    e
-                )),
+                reason: Some(if cfg!(feature = "experimental-pq-licence") && cached.token.hybrid.is_none() {
+                    "This older licence needs authenticated reactivation for the new security mode.".to_string()
+                } else {
+                    format!("Token verification failed (key mismatch): {}. Use Refresh to recover or re-activate.", e)
+                }),
                 plan: None,
                 features: vec![],
                 base_features: vec![],
@@ -1487,7 +1519,9 @@ pub async fn activate_license(license_key: String) -> Result<serde_json::Value, 
         .signature
         .ok_or_else(|| "License server did not return signature.".to_string())?;
 
-    let claims = parse_and_verify_claims(&signed_payload, &signature, &public_key_b64)?;
+    let claims = verify_token_claims(&SignedTokenEnvelope {
+        payload: signed_payload.clone(), signature: signature.clone(), hybrid: payload.hybrid.clone(),
+    }, &public_key_b64)?;
     if claims.device_hash != device_hash {
         return Err("Activation token device hash mismatch.".to_string());
     }
@@ -1496,6 +1530,7 @@ pub async fn activate_license(license_key: String) -> Result<serde_json::Value, 
         token: SignedTokenEnvelope {
             payload: signed_payload,
             signature,
+            hybrid: payload.hybrid,
         },
         last_verified_at: now_unix(),
         seats_used: payload.seats_used,
@@ -1520,11 +1555,7 @@ pub async fn refresh_license_if_due() -> Result<serde_json::Value, String> {
     let Some(cached) = load_cached_license()? else {
         return get_license_status_inner().await;
     };
-    let claims = parse_and_verify_claims(
-        &cached.token.payload,
-        &cached.token.signature,
-        &public_key_b64,
-    )?;
+    let claims = verify_token_claims(&cached.token, &public_key_b64)?;
     if !device_hash_matches(&claims.device_hash) {
         return Err(
             "License token does not match this device. Reactivate this device.".to_string(),
@@ -1549,11 +1580,7 @@ pub async fn refresh_license() -> Result<serde_json::Value, String> {
     let (api_base, public_key_b64) = get_config()?;
     let cached =
         load_cached_license()?.ok_or_else(|| "No license token to refresh.".to_string())?;
-    let cached_claims = parse_and_verify_claims(
-        &cached.token.payload,
-        &cached.token.signature,
-        &public_key_b64,
-    )?;
+    let cached_claims = verify_token_claims(&cached.token, &public_key_b64)?;
     if !device_hash_matches(&cached_claims.device_hash) {
         return Err(
             "License token does not match this device. Reactivate this device.".to_string(),
@@ -1611,7 +1638,9 @@ pub async fn refresh_license() -> Result<serde_json::Value, String> {
         .signature
         .ok_or_else(|| "Refresh response missing signature.".to_string())?;
 
-    let claims = parse_and_verify_claims(&signed_payload, &signature, &public_key_b64)?;
+    let claims = verify_token_claims(&SignedTokenEnvelope {
+        payload: signed_payload.clone(), signature: signature.clone(), hybrid: payload.hybrid.clone(),
+    }, &public_key_b64)?;
     if claims.device_hash != device_hash {
         return Err("Refreshed token does not match this device.".to_string());
     }
@@ -1621,6 +1650,7 @@ pub async fn refresh_license() -> Result<serde_json::Value, String> {
         token: SignedTokenEnvelope {
             payload: signed_payload,
             signature,
+            hybrid: payload.hybrid,
         },
         last_verified_at: refreshed_at,
         seats_used: payload.seats_used,
@@ -1638,11 +1668,7 @@ pub async fn clear_license_cache() -> Result<(), String> {
         return Ok(());
     };
     let (_, public_key_b64) = get_config()?;
-    let claims = parse_and_verify_claims(
-        &cached.token.payload,
-        &cached.token.signature,
-        &public_key_b64,
-    )?;
+    let claims = verify_token_for_removal(&cached.token, &public_key_b64)?;
 
     require_license_removal_administrator()?;
 
@@ -1748,7 +1774,9 @@ pub async fn start_trial() -> Result<serde_json::Value, String> {
             .signature
             .ok_or_else(|| "Trial server did not return a signature.".to_string())?;
 
-        let claims = parse_and_verify_claims(&signed_payload, &signature, &public_key_b64)?;
+        let claims = verify_token_claims(&SignedTokenEnvelope {
+            payload: signed_payload.clone(), signature: signature.clone(), hybrid: payload.hybrid.clone(),
+        }, &public_key_b64)?;
         if claims.device_hash != device_hash {
             return Err("Trial token device hash mismatch.".to_string());
         }
@@ -1768,6 +1796,7 @@ pub async fn start_trial() -> Result<serde_json::Value, String> {
             token: SignedTokenEnvelope {
                 payload: signed_payload,
                 signature,
+                hybrid: payload.hybrid,
             },
             last_verified_at: now_unix(),
             seats_used: None,
@@ -1789,11 +1818,7 @@ pub async fn deactivate_license_internal() -> Result<(), String> {
     let cached =
         load_cached_license()?.ok_or_else(|| "No license token to deactivate.".to_string())?;
     require_license_removal_administrator()?;
-    let device_hash = parse_and_verify_claims(
-        &cached.token.payload,
-        &cached.token.signature,
-        &public_key_b64,
-    )
+    let device_hash = verify_token_for_removal(&cached.token, &public_key_b64)
     .ok()
     .filter(|claims| device_hash_matches(&claims.device_hash))
     .map(|claims| claims.device_hash.clone())
@@ -1855,6 +1880,42 @@ pub async fn deactivate_license() -> Result<(), String> {
 mod tests {
     use super::*;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+
+    #[cfg(feature = "experimental-pq-licence")]
+    #[test]
+    fn hybrid_licence_cache_requires_matching_proof_and_allows_legacy_removal_only() {
+        use ed25519_dalek::{Signer, SigningKey};
+        use wincmd_pq_experiment::{jws, Purpose, ML_DSA_65_PUBLIC_KEY_LEN};
+        let fixture: serde_json::Value = serde_json::from_str(include_str!("../../commander-svc/src/fixtures/hybrid-licence-test.json")).unwrap();
+        let ed: [u8;32] = URL_SAFE_NO_PAD.decode(fixture["publicEd"].as_str().unwrap()).unwrap().try_into().unwrap();
+        let pq: [u8;ML_DSA_65_PUBLIC_KEY_LEN] = URL_SAFE_NO_PAD.decode(fixture["publicPq"].as_str().unwrap()).unwrap().try_into().unwrap();
+        let trust = jws::Trust { purpose: Purpose::Licence, minimum_epoch: 7, ed_key_id: "ed-key", ed25519_public: &ed, pq_key_id: "pq-key", ml_dsa_65_public: &pq };
+        let signing_key = SigningKey::from_bytes(&[7;32]);
+        let public = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
+        let payload = String::from_utf8(URL_SAFE_NO_PAD.decode(fixture["jws"]["payload"].as_str().unwrap()).unwrap()).unwrap();
+        let mut token = SignedTokenEnvelope { signature: URL_SAFE_NO_PAD.encode(signing_key.sign(payload.as_bytes()).to_bytes()), payload, hybrid: Some(serde_json::to_string(&fixture["jws"]).unwrap()) };
+        assert!(verify_matching_hybrid(&token, &trust).is_ok());
+        let roundtrip: SignedTokenEnvelope = serde_json::from_slice(&serde_json::to_vec(&token).unwrap()).unwrap();
+        assert!(verify_matching_hybrid(&roundtrip, &trust).is_ok());
+        let args = ServiceLicenseCacheWriteRequest { payload: &token.payload, signature: &token.signature, hybrid: token.hybrid.as_deref(), seats_used: None, seat_limit: None };
+        assert_eq!(serde_json::to_value(args).unwrap()["hybrid"].as_str(), token.hybrid.as_deref());
+        if option_env!("WINCMD_PQ_LIC_ED_KEY") == fixture["publicEd"].as_str()
+            && option_env!("WINCMD_PQ_LIC_MLDSA_KEY") == fixture["publicPq"].as_str()
+            && option_env!("WINCMD_PQ_LIC_ED_ID") == Some("ed-key")
+            && option_env!("WINCMD_PQ_LIC_MLDSA_ID") == Some("pq-key")
+            && option_env!("WINCMD_PQ_LIC_EPOCH").and_then(|v| v.parse::<u64>().ok()).is_some_and(|v| (1..=7).contains(&v))
+        {
+            assert!(verify_token_claims(&token, &public).is_ok());
+        }
+        let original = token.hybrid.take().unwrap();
+        assert!(verify_token_claims(&token, &public).is_err());
+        assert!(verify_token_for_removal(&token, &public).is_ok());
+        token.hybrid = Some(original);
+        token.payload.push(' ');
+        token.signature = URL_SAFE_NO_PAD.encode(signing_key.sign(token.payload.as_bytes()).to_bytes());
+        assert!(verify_matching_hybrid(&token, &trust).is_err());
+        assert!(verify_token_for_removal(&token, &public).is_err());
+    }
 
     #[cfg(feature = "experimental-pq-licence")]
     #[test]
@@ -2098,6 +2159,7 @@ mod tests {
             token: SignedTokenEnvelope {
                 payload: "payload".to_string(),
                 signature: "signature".to_string(),
+                hybrid: None,
             },
             last_verified_at: now - 1,
             seats_used: None,
@@ -2150,6 +2212,7 @@ mod tests {
             ok: false,
             payload: Some("forged payload".to_string()),
             signature: Some("forged signature".to_string()),
+            hybrid: None,
             error: error.map(str::to_string),
             entitlement_revoked,
             seats_used: Some(99),

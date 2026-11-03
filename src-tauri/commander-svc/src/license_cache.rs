@@ -19,7 +19,7 @@ use std::{
 };
 
 #[cfg(feature = "experimental-pq-licence")]
-#[path = "license_hybrid_trust.rs"]
+#[path = "../../runtime-support/license_hybrid_trust.rs"]
 mod hybrid_trust;
 
 const DEFAULT_LICENSE_PUBLIC_KEY_B64: &str = "Z4ulYtrFLpOZYVLGpNo_PlegZsitTmJx2JwfyIqSJpY";
