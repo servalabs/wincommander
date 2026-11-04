@@ -21,8 +21,8 @@
 // All payloads are one of {Hello, Request, Response, Error, Notification, Bye}.
 
 use serde::{Deserialize, Serialize};
-pub mod vault_sync;
 pub mod managed_deployment;
+pub mod vault_sync;
 
 /// Magic string in the Hello frame so a connecting peer can spot a
 /// protocol-mismatch immediately. Bumped on incompatible wire-format

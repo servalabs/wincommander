@@ -121,9 +121,19 @@ pub fn show_native_notification(app: &AppHandle, title: &str, body: &str) -> Res
 
 /// Backend-owned operational results use explicit severity rather than the
 /// security-monitor keyword inference. The host verifies saved suppression first.
-pub(crate) fn show_operation_notification(app: &AppHandle, title: &str, body: &str, severity: &str, source: &str) -> Result<(), String> {
-    if !matches!(severity, "info" | "warning" | "danger") { return Err("invalid operational severity".into()); }
-    if crate::settings::is_native_notifications_disabled() || crate::settings::is_decoy_mode() { return Ok(()); }
+pub(crate) fn show_operation_notification(
+    app: &AppHandle,
+    title: &str,
+    body: &str,
+    severity: &str,
+    source: &str,
+) -> Result<(), String> {
+    if !matches!(severity, "info" | "warning" | "danger") {
+        return Err("invalid operational severity".into());
+    }
+    if crate::settings::is_native_notifications_disabled() || crate::settings::is_decoy_mode() {
+        return Ok(());
+    }
     show_custom_notification(app, title, body, severity, source)
 }
 

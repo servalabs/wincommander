@@ -104,15 +104,20 @@ mod tests {
 
     #[test]
     fn normal_users_cannot_mutate_even_if_called_after_dispatch() {
-        assert!(
-            validate_request("svc.bluetooth.policy.set_blocked", json!({"blocked":true}), false).is_err()
-        );
+        assert!(validate_request(
+            "svc.bluetooth.policy.set_blocked",
+            json!({"blocked":true}),
+            false
+        )
+        .is_err());
         assert!(validate_request("svc.bluetooth.policy.status", json!({}), false).is_ok());
     }
 
     #[test]
     fn callers_cannot_select_arbitrary_devices_or_supply_coerced_values() {
-        assert!(validate_request("svc.bluetooth.set_blocked", json!({"blocked":true}), true).is_err());
+        assert!(
+            validate_request("svc.bluetooth.set_blocked", json!({"blocked":true}), true).is_err()
+        );
         assert!(validate_request("svc.bluetooth.status", json!({}), true).is_err());
         for args in [
             json!({"blocked":true,"instanceId":"anything"}),
@@ -122,9 +127,16 @@ mod tests {
             assert!(validate_request("svc.bluetooth.policy.set_blocked", args, true).is_err());
         }
         assert_eq!(
-            validate_request("svc.bluetooth.policy.set_blocked", json!({"blocked":false}), true).unwrap(),
+            validate_request(
+                "svc.bluetooth.policy.set_blocked",
+                json!({"blocked":false}),
+                true
+            )
+            .unwrap(),
             Some(false)
         );
-        assert!(validate_request("svc.bluetooth.policy.status", json!({"blocked":true}), true).is_err());
+        assert!(
+            validate_request("svc.bluetooth.policy.status", json!({"blocked":true}), true).is_err()
+        );
     }
 }

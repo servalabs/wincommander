@@ -6,12 +6,21 @@ use std::sync::mpsc;
 async fn letter_cleanup_refuses_a_running_settings_write_and_releases_its_permit() {
     let scheduler = Scheduler::new();
     let writer = scheduler.acquire("fixture-account").await.unwrap();
-    assert_eq!(scheduler.try_transaction("fixture-account", || Ok(1)), Err(BUSY));
+    assert_eq!(
+        scheduler.try_transaction("fixture-account", || Ok(1)),
+        Err(BUSY)
+    );
     drop(writer);
-    assert_eq!(scheduler.try_transaction("fixture-account", || {
-        assert_eq!(scheduler.try_transaction("fixture-account", || Ok(2)), Err(BUSY));
+    assert_eq!(
+        scheduler.try_transaction("fixture-account", || {
+            assert_eq!(
+                scheduler.try_transaction("fixture-account", || Ok(2)),
+                Err(BUSY)
+            );
+            Ok(1)
+        }),
         Ok(1)
-    }), Ok(1));
+    );
     assert_eq!(scheduler.run("fixture-account", || Ok(3)).await, Ok(3));
 }
 

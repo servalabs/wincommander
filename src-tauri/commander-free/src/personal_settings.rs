@@ -193,13 +193,21 @@ fn notification_overlay_from_record(record: PersonalSettingsRecord) -> Result<Va
     if record.revision == 0 || record.legacy_recovery_required {
         return Err("notification_preferences_record_unverified".into());
     }
-    let mut value = record.value.ok_or("notification_preferences_record_unverified")?;
-    let object = value.as_object_mut().ok_or("notification_preferences_record_unverified")?;
+    let mut value = record
+        .value
+        .ok_or("notification_preferences_record_unverified")?;
+    let object = value
+        .as_object_mut()
+        .ok_or("notification_preferences_record_unverified")?;
     // Ordinary preferences need no secret decryption, session publication or migration.
-    if !matches!(object.remove(SECRET_ENVELOPE), None | Some(Value::Null) | Some(Value::String(_))) {
+    if !matches!(
+        object.remove(SECRET_ENVELOPE),
+        None | Some(Value::Null) | Some(Value::String(_))
+    ) {
         return Err("notification_preferences_record_unverified".into());
     }
-    super::split_settings_value(value).map(|(_, ordinary)| ordinary)
+    super::split_settings_value(value)
+        .map(|(_, ordinary)| ordinary)
         .map_err(|_| "notification_preferences_schema_invalid".into())
 }
 

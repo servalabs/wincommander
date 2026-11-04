@@ -223,7 +223,15 @@ pub async fn fleet_connect(
     signing_key_pub: String,
     confirmation: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    fleet_connect_inner(app, server_url, dispatch, signing_key_pub, confirmation, None).await
+    fleet_connect_inner(
+        app,
+        server_url,
+        dispatch,
+        signing_key_pub,
+        confirmation,
+        None,
+    )
+    .await
 }
 
 /// Repair a missing service trust record for this already-linked device.
@@ -232,7 +240,9 @@ pub async fn fleet_connect(
 /// same-device enrollment challenge is requested. This path never asks Fleet
 /// to revoke, unenroll, or disconnect the device.
 #[tauri::command]
-pub async fn fleet_repair_machine_trust(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+pub async fn fleet_repair_machine_trust(
+    app: tauri::AppHandle,
+) -> Result<serde_json::Value, String> {
     crate::license::require_service_feature("fleet")?;
     let current = crate::settings::read_settings()?;
     if !current.app.fleet.enabled
@@ -276,20 +286,27 @@ pub async fn fleet_repair_machine_trust(app: tauri::AppHandle) -> Result<serde_j
 #[tauri::command]
 pub async fn fleet_machine_trust_status() -> Result<serde_json::Value, String> {
     let response = crate::svc_client::call("svc.fleet.get_policy", serde_json::json!({})).await?;
-    let trust_bound = response.get("trust_bound").and_then(Value::as_bool)
+    let trust_bound = response
+        .get("trust_bound")
+        .and_then(Value::as_bool)
         .ok_or("Fleet service trust status is unavailable")?;
     let settings = crate::settings::read_settings()?;
     let shield_policy_status = shield_profile_status(&settings, &response);
     Ok(serde_json::json!({"trustBound": trust_bound, "shieldPolicyStatus": shield_policy_status}))
 }
 
-fn shield_profile_status(settings: &crate::settings::AppSettings, response: &Value) -> &'static str {
+fn shield_profile_status(
+    settings: &crate::settings::AppSettings,
+    response: &Value,
+) -> &'static str {
     if response.get("trust_bound").and_then(Value::as_bool) != Some(true) {
         return "unverified";
     }
     match verify_shield_profile_against_service(settings, response) {
         Ok(()) => "verified",
-        Err(error) if error == "protected Fleet Shield configuration is unavailable" => "effective_config_unavailable",
+        Err(error) if error == "protected Fleet Shield configuration is unavailable" => {
+            "effective_config_unavailable"
+        }
         Err(_) => "unverified",
     }
 }
@@ -322,7 +339,10 @@ async fn fleet_connect_inner(
         dispatch,
         signing_key_pub.clone(),
     )?;
-    if repair_expected_binding.as_deref().is_some_and(|binding| !repair_connection_matches(&plan, binding)) {
+    if repair_expected_binding
+        .as_deref()
+        .is_some_and(|binding| !repair_connection_matches(&plan, binding))
+    {
         return Err("Fleet identity changed during machine trust repair; retry".into());
     }
     let confirmed = if plan.needs_confirmation() {
@@ -355,23 +375,32 @@ async fn fleet_connect_inner(
     let prior = if plan.needs_service_challenge() || repair_expected_binding.is_some() {
         Some(crate::svc_client::call("svc.fleet.get_trust", serde_json::json!({})).await?)
     } else {
-        crate::svc_client::call("svc.fleet.get_trust", serde_json::json!({})).await.ok()
+        crate::svc_client::call("svc.fleet.get_trust", serde_json::json!({}))
+            .await
+            .ok()
     };
-    if prior.as_ref().is_some_and(|reply| reply.get("trust").is_none()) {
+    if prior
+        .as_ref()
+        .is_some_and(|reply| reply.get("trust").is_none())
+    {
         return Err("Fleet service trust response is incomplete".into());
     }
-    let previous_trust = prior.as_ref()
+    let previous_trust = prior
+        .as_ref()
         .and_then(|reply| reply.get("trust"))
         .filter(|value| !value.is_null())
         .cloned();
     if repair_expected_binding.is_some() && previous_trust.is_some() {
         return Err("Machine Fleet trust changed during repair; retry".into());
     }
-    let needs_challenge = plan.needs_service_challenge()
-        || (prior.is_some() && previous_trust.is_none());
+    let needs_challenge =
+        plan.needs_service_challenge() || (prior.is_some() && previous_trust.is_none());
     let service_challenge = if needs_challenge {
         if previous_trust.is_some() && !plan.allows_trust_replacement() {
-            return Err("This machine already has Fleet trust; a confirmed re-enrollment is required".into());
+            return Err(
+                "This machine already has Fleet trust; a confirmed re-enrollment is required"
+                    .into(),
+            );
         }
         let challenge_reply = crate::svc_client::call(
             "svc.fleet.begin_enrollment",
@@ -384,7 +413,11 @@ async fn fleet_connect_inner(
         let challenge = challenge_reply
             .get("challenge")
             .and_then(Value::as_str)
-            .filter(|value| uuid::Uuid::parse_str(value).ok().is_some_and(|id| id.to_string() == *value))
+            .filter(|value| {
+                uuid::Uuid::parse_str(value)
+                    .ok()
+                    .is_some_and(|id| id.to_string() == *value)
+            })
             .ok_or("Fleet service enrollment challenge is invalid")?
             .to_string();
         Some((challenge, previous_trust))
@@ -424,7 +457,9 @@ fn service_enrollment_action(
         None => Ok(Some("svc.fleet.provision_trust")),
         Some(previous) if previous == replacement => Ok(None),
         Some(_) if confirmed_identity_change => Ok(Some("svc.fleet.replace_trust")),
-        Some(_) => Err("A confirmed Fleet identity change is required to replace machine trust".into()),
+        Some(_) => {
+            Err("A confirmed Fleet identity change is required to replace machine trust".into())
+        }
     }
 }
 
@@ -435,32 +470,48 @@ async fn establish_service_enrollment_trust(
     confirmed_identity_change: bool,
 ) -> Result<(), String> {
     for _ in 0..40 {
-        if let Ok(proof) = crate::sidecar::dispatch_paid_command(
-            "fleet_agent_enrollment_trust", Value::Null,
-        ).await {
+        if let Ok(proof) =
+            crate::sidecar::dispatch_paid_command("fleet_agent_enrollment_trust", Value::Null).await
+        {
             if let Some(replacement) = proof.get("trust") {
                 if replacement.get("device_id").and_then(Value::as_str) == Some(device_id)
                     && replacement.get("signer_key").and_then(Value::as_str) == Some(signer_key)
-                    && replacement.get("org_id").and_then(Value::as_str).is_some_and(|v| !v.is_empty())
-                    && replacement.get("enrollment_generation").and_then(Value::as_str)
+                    && replacement
+                        .get("org_id")
+                        .and_then(Value::as_str)
+                        .is_some_and(|v| !v.is_empty())
+                    && replacement
+                        .get("enrollment_generation")
+                        .and_then(Value::as_str)
                         .is_some_and(|v| uuid::Uuid::parse_str(v).is_ok())
                     && proof.get("signature").and_then(Value::as_str).is_some()
                 {
                     match service_enrollment_action(
-                        previous_trust.as_ref(), replacement, confirmed_identity_change,
+                        previous_trust.as_ref(),
+                        replacement,
+                        confirmed_identity_change,
                     )? {
                         None => return Ok(()),
                         Some("svc.fleet.provision_trust") => {
-                            if crate::svc_client::call("svc.fleet.provision_trust", proof.clone()).await.is_ok() {
+                            if crate::svc_client::call("svc.fleet.provision_trust", proof.clone())
+                                .await
+                                .is_ok()
+                            {
                                 return Ok(());
                             }
                         }
                         Some("svc.fleet.replace_trust") => {
-                            if crate::svc_client::call("svc.fleet.replace_trust", serde_json::json!({
-                                "previous": previous_trust,
-                                "replacement": replacement,
-                                "signature": proof["signature"],
-                            })).await.is_ok() {
+                            if crate::svc_client::call(
+                                "svc.fleet.replace_trust",
+                                serde_json::json!({
+                                    "previous": previous_trust,
+                                    "replacement": replacement,
+                                    "signature": proof["signature"],
+                                }),
+                            )
+                            .await
+                            .is_ok()
+                            {
                                 return Ok(());
                             }
                         }
@@ -773,7 +824,9 @@ async fn fleet_apply_pending_epoch_inner() -> Result<serde_json::Value, ApplyErr
         .unwrap_or(serde_json::Value::Null);
     if epoch.is_null() {
         let remote_updates_applied = apply_remote_command_updates(&resp).await?;
-        refresh_cached_service_shield_policy(&resp).await.map_err(ApplyError::PolicyError)?;
+        refresh_cached_service_shield_policy(&resp)
+            .await
+            .map_err(ApplyError::PolicyError)?;
         record_fleet_lifecycle(
             &operation_id,
             DiagnosticLifecycle::Verified,
@@ -793,7 +846,9 @@ async fn fleet_apply_pending_epoch_inner() -> Result<serde_json::Value, ApplyErr
     let applied = settings.policy.master_config_version.unwrap_or(0) as i64;
     if version <= applied {
         let remote_updates_applied = apply_remote_command_updates(&resp).await?;
-        refresh_cached_service_shield_policy(&resp).await.map_err(ApplyError::PolicyError)?;
+        refresh_cached_service_shield_policy(&resp)
+            .await
+            .map_err(ApplyError::PolicyError)?;
         record_fleet_lifecycle(
             &operation_id,
             DiagnosticLifecycle::Verified,
@@ -886,26 +941,52 @@ async fn fleet_apply_pending_epoch_inner() -> Result<serde_json::Value, ApplyErr
     let shield_changed = serde_json::to_value(&preview.ideal.privacy.privacy_shield).ok()
         != serde_json::to_value(&settings.ideal.privacy.privacy_shield).ok();
     let shield_policy_envelope = if shield_changed
-        || settings.app.fleet.privacy_shield_policy_transaction.is_some()
+        || settings
+            .app
+            .fleet
+            .privacy_shield_policy_transaction
+            .is_some()
     {
-        let envelope: wincmd_shared::fleet::PolicyEnvelope = serde_json::from_value(
-            resp.get("policyEnvelope").cloned().unwrap_or(Value::Null),
-        )
-        .map_err(|_| ApplyError::PolicyError("signed Shield policy envelope is unavailable".into()))?;
-        let pinned = settings.policy.fleet_signing_key.as_deref().ok_or_else(||
-            ApplyError::PolicyError("Fleet signing key is unavailable".into()))?;
+        let envelope: wincmd_shared::fleet::PolicyEnvelope =
+            serde_json::from_value(resp.get("policyEnvelope").cloned().unwrap_or(Value::Null))
+                .map_err(|_| {
+                    ApplyError::PolicyError("signed Shield policy envelope is unavailable".into())
+                })?;
+        let pinned = settings
+            .policy
+            .fleet_signing_key
+            .as_deref()
+            .ok_or_else(|| ApplyError::PolicyError("Fleet signing key is unavailable".into()))?;
         if envelope.signer_key != pinned
             || envelope.device_id.0 != settings.device_id
-            || !wincmd_shared::fleet::verify_signature_b64(pinned, &envelope.preimage(), &envelope.signature)
+            || !wincmd_shared::fleet::verify_signature_b64(
+                pinned,
+                &envelope.preimage(),
+                &envelope.signature,
+            )
             || serde_json::to_value(envelope.config.as_ref()).ok() != Some(epoch.clone())
-            || envelope.enrollment_generation.as_ref().is_none_or(|generation| uuid::Uuid::parse_str(generation).ok().is_none_or(|id| id.to_string() != *generation))
-            || envelope.config_revision.is_none_or(|revision| revision < i64::from(config_version))
-            || envelope.resolution_revision.is_none_or(|revision| revision < 0)
+            || envelope
+                .enrollment_generation
+                .as_ref()
+                .is_none_or(|generation| {
+                    uuid::Uuid::parse_str(generation)
+                        .ok()
+                        .is_none_or(|id| id.to_string() != *generation)
+                })
+            || envelope
+                .config_revision
+                .is_none_or(|revision| revision < i64::from(config_version))
+            || envelope
+                .resolution_revision
+                .is_none_or(|revision| revision < 0)
         {
-            return Err(ApplyError::PolicyError("signed Shield policy envelope failed device binding".into()));
+            return Err(ApplyError::PolicyError(
+                "signed Shield policy envelope failed device binding".into(),
+            ));
         }
         install_service_shield_policy(&envelope, pinned)
-            .await.map_err(ApplyError::PolicyError)?;
+            .await
+            .map_err(ApplyError::PolicyError)?;
         Some(envelope)
     } else {
         None
@@ -924,10 +1005,17 @@ async fn fleet_apply_pending_epoch_inner() -> Result<serde_json::Value, ApplyErr
                 &preview,
                 config_version,
                 &epoch_signature_hash,
-                shield_policy_envelope.as_ref()
-                    .ok_or_else(|| ApplyError::PolicyError("signed Shield policy envelope is unavailable".into()))?,
-                shield_policy_envelope.as_ref().and_then(|envelope| envelope.resolution_revision)
-                    .ok_or_else(|| ApplyError::PolicyError("signed Shield resolution revision is unavailable".into()))?,
+                shield_policy_envelope.as_ref().ok_or_else(|| {
+                    ApplyError::PolicyError("signed Shield policy envelope is unavailable".into())
+                })?,
+                shield_policy_envelope
+                    .as_ref()
+                    .and_then(|envelope| envelope.resolution_revision)
+                    .ok_or_else(|| {
+                        ApplyError::PolicyError(
+                            "signed Shield resolution revision is unavailable".into(),
+                        )
+                    })?,
             )
             .await
             .map_err(ApplyError::PolicyError)?,
@@ -1027,13 +1115,15 @@ async fn install_service_shield_policy(
     // A first enrollment may have a verified Pro proof but no provisioned
     // service trust yet. The SYSTEM service independently validates the
     // service-issued one-use challenge, signature and captured admin token.
-    let proof = crate::sidecar::dispatch_paid_command(
-        "fleet_agent_enrollment_trust", Value::Null,
-    ).await?;
-    let trust = proof.get("trust").ok_or("Fleet enrollment trust is unavailable")?;
-    let generation = envelope.enrollment_generation.as_deref().ok_or(
-        "signed Shield enrollment generation is unavailable",
-    )?;
+    let proof =
+        crate::sidecar::dispatch_paid_command("fleet_agent_enrollment_trust", Value::Null).await?;
+    let trust = proof
+        .get("trust")
+        .ok_or("Fleet enrollment trust is unavailable")?;
+    let generation = envelope
+        .enrollment_generation
+        .as_deref()
+        .ok_or("signed Shield enrollment generation is unavailable")?;
     if trust.get("device_id").and_then(Value::as_str) != Some(envelope.device_id.0.as_str())
         || trust.get("org_id").and_then(Value::as_str) != Some(envelope.org_id.0.as_str())
         || trust.get("signer_key").and_then(Value::as_str) != Some(pinned)
@@ -1048,7 +1138,10 @@ async fn install_service_shield_policy(
 }
 
 fn service_policy_not_provisioned(error: &str) -> bool {
-    error.strip_prefix("service rejected request: fleet_policy_rejected (not_provisioned) [operation ")
+    error
+        .strip_prefix(
+            "service rejected request: fleet_policy_rejected (not_provisioned) [operation ",
+        )
         .and_then(|rest| rest.strip_suffix(']'))
         .is_some_and(|id| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()))
 }
@@ -1060,7 +1153,8 @@ async fn refresh_cached_service_shield_policy(resp: &Value) -> Result<(), String
         resp,
         crate::settings::read_settings,
         |envelope, pinned| async move { install_service_shield_policy(&envelope, &pinned).await },
-    ).await
+    )
+    .await
 }
 
 async fn refresh_cached_service_shield_policy_with<F, Fut>(
@@ -1086,25 +1180,43 @@ fn validate_cached_shield_envelope(
     settings: &crate::settings::AppSettings,
     envelope: &wincmd_shared::fleet::PolicyEnvelope,
 ) -> Result<String, String> {
-    let pinned = settings.policy.fleet_signing_key.as_deref()
+    let pinned = settings
+        .policy
+        .fleet_signing_key
+        .as_deref()
         .filter(|key| !key.is_empty())
         .ok_or("Fleet signing key is unavailable")?;
-    let generation = envelope.enrollment_generation.as_deref()
-        .and_then(|value| uuid::Uuid::parse_str(value).ok().filter(|id| id.to_string() == value))
+    let generation = envelope
+        .enrollment_generation
+        .as_deref()
+        .and_then(|value| {
+            uuid::Uuid::parse_str(value)
+                .ok()
+                .filter(|id| id.to_string() == value)
+        })
         .ok_or("signed Shield enrollment generation is unavailable")?;
     if generation.is_nil()
         || envelope.signer_key != pinned
         || envelope.device_id.0 != settings.device_id
         || envelope.shield_revision < 0
         || envelope.config_revision.is_none_or(|revision| revision < 0)
-        || envelope.resolution_revision.is_none_or(|revision| revision < 0)
+        || envelope
+            .resolution_revision
+            .is_none_or(|revision| revision < 0)
         || envelope.config.as_ref().is_some_and(|config| {
-            envelope.config_revision.is_none_or(|revision| revision < config.version)
+            envelope
+                .config_revision
+                .is_none_or(|revision| revision < config.version)
         })
-        || envelope.shield.as_ref().is_some_and(|shield| {
-            shield.revision < 0 || shield.revision > envelope.shield_revision
-        })
-        || !wincmd_shared::fleet::verify_signature_b64(pinned, &envelope.preimage(), &envelope.signature)
+        || envelope
+            .shield
+            .as_ref()
+            .is_some_and(|shield| shield.revision < 0 || shield.revision > envelope.shield_revision)
+        || !wincmd_shared::fleet::verify_signature_b64(
+            pinned,
+            &envelope.preimage(),
+            &envelope.signature,
+        )
     {
         return Err("signed Shield policy envelope failed device binding".into());
     }
@@ -1119,7 +1231,10 @@ pub(crate) async fn verify_service_shield_profile() -> Result<(), String> {
     let settings = crate::settings::read_settings()?;
     let response = crate::svc_client::call("svc.fleet.get_policy", serde_json::json!({}))
         .await
-        .map_err(|_| "WinCommander service is unavailable; Shield cannot verify this machine's Fleet policy".to_string())?;
+        .map_err(|_| {
+            "WinCommander service is unavailable; Shield cannot verify this machine's Fleet policy"
+                .to_string()
+        })?;
     verify_shield_profile_against_service(&settings, &response)
 }
 
@@ -1127,30 +1242,43 @@ fn verify_shield_profile_against_service(
     settings: &crate::settings::AppSettings,
     response: &Value,
 ) -> Result<(), String> {
-    let managed = response.get("trust_bound").and_then(Value::as_bool)
+    let managed = response
+        .get("trust_bound")
+        .and_then(Value::as_bool)
         .ok_or("service Fleet trust state is unavailable")?;
     if !managed {
         if response.get("policy").is_some_and(|value| !value.is_null())
-            || settings.policy.fleet_signing_key.as_deref().is_some_and(|key| !key.is_empty())
+            || settings
+                .policy
+                .fleet_signing_key
+                .as_deref()
+                .is_some_and(|key| !key.is_empty())
             || settings.policy.master_config_version.unwrap_or(0) > 0
         {
             return Err("service and local Fleet trust state disagree".into());
         }
         return Ok(());
     }
-    let pinned = settings.policy.fleet_signing_key.as_deref()
+    let pinned = settings
+        .policy
+        .fleet_signing_key
+        .as_deref()
         .filter(|key| !key.is_empty())
         .ok_or("this Windows profile lacks the machine Fleet signing key")?;
     if settings.policy.master_config_version.unwrap_or(0) == 0 {
         return Err("this Windows profile lacks the current Fleet epoch".into());
     }
-    let envelope: wincmd_shared::fleet::PolicyEnvelope = serde_json::from_value(
-        response.get("policy").cloned().unwrap_or(Value::Null),
-    ).map_err(|_| "service Shield policy is unavailable".to_string())?;
+    let envelope: wincmd_shared::fleet::PolicyEnvelope =
+        serde_json::from_value(response.get("policy").cloned().unwrap_or(Value::Null))
+            .map_err(|_| "service Shield policy is unavailable".to_string())?;
     if envelope.signer_key != pinned
         || envelope.device_id.0 != settings.device_id
         || envelope.enrollment_generation.is_none()
-        || !wincmd_shared::fleet::verify_signature_b64(pinned, &envelope.preimage(), &envelope.signature)
+        || !wincmd_shared::fleet::verify_signature_b64(
+            pinned,
+            &envelope.preimage(),
+            &envelope.signature,
+        )
     {
         return Err("service Shield policy identity is not verified".into());
     }
@@ -1163,10 +1291,15 @@ fn verify_shield_profile_against_service(
     let Some(signed_shield) = epoch.config_json.pointer("/privacy/privacyShield") else {
         return Ok(());
     };
-    let signed_fields = signed_shield.as_object().ok_or("signed Shield policy is malformed")?;
+    let signed_fields = signed_shield
+        .as_object()
+        .ok_or("signed Shield policy is malformed")?;
     let stored = serde_json::to_value(&settings.ideal.privacy.privacy_shield)
         .map_err(|_| "stored Shield settings are unavailable")?;
-    if signed_fields.iter().any(|(key, value)| stored.get(key) != Some(value)) {
+    if signed_fields
+        .iter()
+        .any(|(key, value)| stored.get(key) != Some(value))
+    {
         return Err("this Windows profile retains stale Shield settings".into());
     }
     Ok(())
@@ -1354,12 +1487,18 @@ async fn fleet_sync_authoritative_shield_state_with(
     expected_precommit: Option<&wincmd_shared::fleet::PolicyEnvelope>,
     allow_detargeted_stop: bool,
 ) -> Result<serde_json::Value, String> {
-    let handoff = crate::sidecar::dispatch_paid_command(
-        "fleet_agent_shield_state", serde_json::Value::Null,
-    ).await?;
+    let handoff =
+        crate::sidecar::dispatch_paid_command("fleet_agent_shield_state", serde_json::Value::Null)
+            .await?;
     let service = crate::svc_client::call("svc.fleet.get_policy", serde_json::json!({})).await?;
     let settings = crate::settings::read_settings()?;
-    let state = authoritative_shield_state(&settings, &service, &handoff, expected_precommit, allow_detargeted_stop)?;
+    let state = authoritative_shield_state(
+        &settings,
+        &service,
+        &handoff,
+        expected_precommit,
+        allow_detargeted_stop,
+    )?;
     crate::settings::patch_settings(serde_json::json!({
         "app": { "fleet": { "shieldDesiredState": state } }
     }))?;
@@ -1378,9 +1517,9 @@ fn authoritative_shield_state(
             return Err("protected Fleet Shield trust is unavailable".into());
         }
         validate_cached_shield_envelope(settings, expected)?;
-        let actual: wincmd_shared::fleet::PolicyEnvelope = serde_json::from_value(
-            service.get("policy").cloned().unwrap_or(Value::Null),
-        ).map_err(|_| "protected Fleet Shield policy is unavailable".to_string())?;
+        let actual: wincmd_shared::fleet::PolicyEnvelope =
+            serde_json::from_value(service.get("policy").cloned().unwrap_or(Value::Null))
+                .map_err(|_| "protected Fleet Shield policy is unavailable".to_string())?;
         if &actual != expected {
             return Err("protected Fleet Shield policy changed before commit".into());
         }
@@ -1388,15 +1527,20 @@ fn authoritative_shield_state(
         if service.get("trust_bound").and_then(Value::as_bool) != Some(true) {
             return Err("protected Fleet Shield trust is unavailable".into());
         }
-        let envelope: wincmd_shared::fleet::PolicyEnvelope = serde_json::from_value(
-            service.get("policy").cloned().unwrap_or(Value::Null),
-        ).map_err(|_| "protected Fleet Shield policy is unavailable".to_string())?;
+        let envelope: wincmd_shared::fleet::PolicyEnvelope =
+            serde_json::from_value(service.get("policy").cloned().unwrap_or(Value::Null))
+                .map_err(|_| "protected Fleet Shield policy is unavailable".to_string())?;
         validate_cached_shield_envelope(settings, &envelope)?;
-        if envelope.config.is_some() || !envelope.shield.as_ref().is_some_and(|shield| {
-            !shield.enabled && shield.command_id.as_deref().is_some_and(|id| {
-                uuid::Uuid::parse_str(id).ok().is_some_and(|uuid| !uuid.is_nil() && uuid.to_string() == id)
+        if envelope.config.is_some()
+            || !envelope.shield.as_ref().is_some_and(|shield| {
+                !shield.enabled
+                    && shield.command_id.as_deref().is_some_and(|id| {
+                        uuid::Uuid::parse_str(id)
+                            .ok()
+                            .is_some_and(|uuid| !uuid.is_nil() && uuid.to_string() == id)
+                    })
             })
-        }) {
+        {
             return Err("a protected signed de-targeted Stop is unavailable".into());
         }
     } else {
@@ -1405,29 +1549,40 @@ fn authoritative_shield_state(
     if handoff.get("policyAvailable").and_then(Value::as_bool) != Some(true) {
         return Err("Fleet Shield policy handoff is unavailable".into());
     }
-    let envelope: wincmd_shared::fleet::PolicyEnvelope = serde_json::from_value(
-        service.get("policy").cloned().unwrap_or(Value::Null),
-    ).map_err(|_| "protected Fleet Shield policy is unavailable".to_string())?;
-    let revision = handoff.get("shieldRevision").and_then(Value::as_i64)
+    let envelope: wincmd_shared::fleet::PolicyEnvelope =
+        serde_json::from_value(service.get("policy").cloned().unwrap_or(Value::Null))
+            .map_err(|_| "protected Fleet Shield policy is unavailable".to_string())?;
+    let revision = handoff
+        .get("shieldRevision")
+        .and_then(Value::as_i64)
         .ok_or("Fleet Shield handoff revision is unavailable")?;
     if revision != envelope.shield_revision
         || handoff.get("orgId").and_then(Value::as_str) != Some(envelope.org_id.0.as_str())
         || handoff.get("deviceId").and_then(Value::as_str) != Some(envelope.device_id.0.as_str())
-        || handoff.get("enrollmentGeneration").and_then(Value::as_str) != envelope.enrollment_generation.as_deref()
+        || handoff.get("enrollmentGeneration").and_then(Value::as_str)
+            != envelope.enrollment_generation.as_deref()
         || handoff.get("configRevision").and_then(Value::as_i64) != envelope.config_revision
         || handoff.get("resolutionRevision").and_then(Value::as_i64) != envelope.resolution_revision
     {
-        return Err("Fleet Shield handoff does not match protected policy identity or revision".into());
+        return Err(
+            "Fleet Shield handoff does not match protected policy identity or revision".into(),
+        );
     }
-    let state_value = handoff.get("shieldState").cloned().ok_or("Fleet Shield state is unavailable")?;
+    let state_value = handoff
+        .get("shieldState")
+        .cloned()
+        .ok_or("Fleet Shield state is unavailable")?;
     let state = parse_fleet_shield_state(state_value.clone())?;
-    let signed = envelope.shield.as_ref().map(|shield| crate::settings::FleetShieldDesiredState {
-        enabled: shield.enabled,
-        mode: shield.mode.clone(),
-        revision: shield.revision,
-        updated_at: shield.updated_at.clone(),
-        command_id: shield.command_id.clone(),
-    });
+    let signed = envelope
+        .shield
+        .as_ref()
+        .map(|shield| crate::settings::FleetShieldDesiredState {
+            enabled: shield.enabled,
+            mode: shield.mode.clone(),
+            revision: shield.revision,
+            updated_at: shield.updated_at.clone(),
+            command_id: shield.command_id.clone(),
+        });
     if state != signed {
         return Err("Fleet Shield handoff does not match protected signed state".into());
     }
@@ -1511,22 +1666,31 @@ pub(crate) fn require_single_interactive_shield_session() -> Result<(), String> 
     #[cfg(windows)]
     {
         use windows_sys::Win32::System::RemoteDesktop::{
-            WTSEnumerateSessionsW, WTSFreeMemory, WTSActive,
-            WTSConnected, WTSDisconnected, WTSIdle, WTS_CURRENT_SERVER_HANDLE,
+            WTSActive, WTSConnected, WTSDisconnected, WTSEnumerateSessionsW, WTSFreeMemory,
+            WTSIdle, WTS_CURRENT_SERVER_HANDLE,
         };
         let current = current_shield_session_id()?;
         let mut sessions = std::ptr::null_mut();
         let mut count = 0u32;
-        if unsafe { WTSEnumerateSessionsW(WTS_CURRENT_SERVER_HANDLE, 0, 1, &mut sessions, &mut count) } == 0 {
+        if unsafe {
+            WTSEnumerateSessionsW(WTS_CURRENT_SERVER_HANDLE, 0, 1, &mut sessions, &mut count)
+        } == 0
+        {
             return Err("Shield Windows session enumeration is unavailable".into());
         }
         let result = if count > 256 || (count > 0 && sessions.is_null()) {
             Err("Shield Windows session enumeration is invalid".into())
         } else {
-            let active: Vec<u32> = if count == 0 { Vec::new() } else {
+            let active: Vec<u32> = if count == 0 {
+                Vec::new()
+            } else {
                 unsafe { std::slice::from_raw_parts(sessions, count as usize) }
                     .iter()
-                    .filter(|row| row.SessionId != 0 && [WTSActive, WTSConnected, WTSDisconnected, WTSIdle].contains(&row.State))
+                    .filter(|row| {
+                        row.SessionId != 0
+                            && [WTSActive, WTSConnected, WTSDisconnected, WTSIdle]
+                                .contains(&row.State)
+                    })
                     .map(|row| row.SessionId)
                     .collect()
             };
@@ -1618,7 +1782,10 @@ fn stop_after_authority_check(started_by_attempt: bool, current: &Result<bool, S
 
 fn require_no_unverified_recovery_detector(running: bool) -> Result<(), String> {
     if running {
-        Err("Shield recovery is waiting because the running detector's ownership is unverified".into())
+        Err(
+            "Shield recovery is waiting because the running detector's ownership is unverified"
+                .into(),
+        )
     } else {
         Ok(())
     }
@@ -1770,9 +1937,11 @@ async fn prepare_shield_policy_transaction(
                 .map_or(current.app.fleet.privacy_shield_session_owned, |tx| {
                     tx.was_fleet_owned
                 }),
-            owner_session_id: previous
-                .and_then(|tx| tx.owner_session_id)
-                .or(if running { Some(current_shield_session_id()?) } else { None }),
+            owner_session_id: previous.and_then(|tx| tx.owner_session_id).or(if running {
+                Some(current_shield_session_id()?)
+            } else {
+                None
+            }),
             pre_pause_mode: previous
                 .and_then(|tx| tx.pre_pause_mode.clone())
                 .or(pre_pause_mode),
@@ -2726,14 +2895,35 @@ async fn observe_detargeted_stop(
                 .ok_or("protected signed Stop is unavailable".to_string())
         },
         || async { fleet_shield_running_state(&privacy_shield_status(app).await?) },
-    ).await?;
-    let command_id = state.command_id.as_deref().ok_or("protected signed Stop command is unavailable")?;
-    report_fleet_shield_once(app.clone(), reported_for_command, Some(command_id), "received");
+    )
+    .await?;
+    let command_id = state
+        .command_id
+        .as_deref()
+        .ok_or("protected signed Stop command is unavailable")?;
+    report_fleet_shield_once(
+        app.clone(),
+        reported_for_command,
+        Some(command_id),
+        "received",
+    );
     if !stopped {
-        report_fleet_shield_once(app.clone(), reported_for_command, Some(command_id), "stop_waiting_ownership");
-        return Err("Shield Stop is waiting because the running detector's ownership is unverified".into());
+        report_fleet_shield_once(
+            app.clone(),
+            reported_for_command,
+            Some(command_id),
+            "stop_waiting_ownership",
+        );
+        return Err(
+            "Shield Stop is waiting because the running detector's ownership is unverified".into(),
+        );
     }
-    report_fleet_shield_once(app.clone(), reported_for_command, Some(command_id), "disabled_by_policy");
+    report_fleet_shield_once(
+        app.clone(),
+        reported_for_command,
+        Some(command_id),
+        "disabled_by_policy",
+    );
     Ok(())
 }
 
@@ -2849,9 +3039,16 @@ async fn resume_shield_policy_transaction(
         if running {
             if let Some(stop) = state.as_ref().filter(|state| !state.enabled) {
                 if let Some(command_id) = stop.command_id.as_deref().filter(|id| {
-                    uuid::Uuid::parse_str(id).ok().is_some_and(|uuid| !uuid.is_nil() && uuid.to_string() == *id)
+                    uuid::Uuid::parse_str(id)
+                        .ok()
+                        .is_some_and(|uuid| !uuid.is_nil() && uuid.to_string() == *id)
                 }) {
-                    report_fleet_shield_once(app.clone(), reported_for_command, Some(command_id), "stop_waiting_ownership");
+                    report_fleet_shield_once(
+                        app.clone(),
+                        reported_for_command,
+                        Some(command_id),
+                        "stop_waiting_ownership",
+                    );
                 }
             }
             require_no_unverified_recovery_detector(true)?;
@@ -3034,7 +3231,10 @@ async fn resume_shield_policy_transaction(
         if !stop_after_authority_check(started_by_attempt, &current) {
             return match current {
                 Err(error) => Err(error),
-                Ok(_) => Err("newer Shield request is waiting because detector ownership is unverified".into()),
+                Ok(_) => Err(
+                    "newer Shield request is waiting because detector ownership is unverified"
+                        .into(),
+                ),
             };
         }
         let stopped = crate::backend::run_backend_script_unlocked(
@@ -3318,11 +3518,15 @@ mod tests {
         }
     }
 
-    fn signed_shield_envelope() -> (crate::settings::AppSettings, wincmd_shared::fleet::PolicyEnvelope) {
+    fn signed_shield_envelope() -> (
+        crate::settings::AppSettings,
+        wincmd_shared::fleet::PolicyEnvelope,
+    ) {
         use base64::Engine as _;
         use ed25519_dalek::Signer as _;
         let key = ed25519_dalek::SigningKey::from_bytes(&[47; 32]);
-        let signer = base64::engine::general_purpose::STANDARD.encode(key.verifying_key().to_bytes());
+        let signer =
+            base64::engine::general_purpose::STANDARD.encode(key.verifying_key().to_bytes());
         let mut settings = crate::settings::create_default_settings();
         settings.device_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".into();
         settings.policy.fleet_signing_key = Some(signer.clone());
@@ -3338,7 +3542,8 @@ mod tests {
             signer_key: signer,
             signature: String::new(),
         };
-        envelope.signature = base64::engine::general_purpose::STANDARD.encode(key.sign(&envelope.preimage()).to_bytes());
+        envelope.signature = base64::engine::general_purpose::STANDARD
+            .encode(key.sign(&envelope.preimage()).to_bytes());
         (settings, envelope)
     }
 
@@ -3347,18 +3552,31 @@ mod tests {
         use ed25519_dalek::Signer as _;
         let key = ed25519_dalek::SigningKey::from_bytes(&[47; 32]);
         let mut config = wincmd_shared::fleet::ConfigEpoch {
-            org_id: envelope.org_id.clone(), version, config_json: json!({}),
-            target_kind: "org".into(), target_id: None, locked_paths: vec![],
-            managed: false, signature: String::new(), signer_key: envelope.signer_key.clone(),
+            org_id: envelope.org_id.clone(),
+            version,
+            config_json: json!({}),
+            target_kind: "org".into(),
+            target_id: None,
+            locked_paths: vec![],
+            managed: false,
+            signature: String::new(),
+            signer_key: envelope.signer_key.clone(),
         };
-        let preimage = wincmd_shared::fleet::epoch_preimage(&wincmd_shared::fleet::EpochSigningInput {
-            version: config.version, config: &config.config_json, locked_paths: &config.locked_paths,
-            managed: config.managed, target_kind: &config.target_kind, target_id: config.target_id.as_deref(),
-        });
-        config.signature = base64::engine::general_purpose::STANDARD.encode(key.sign(&preimage).to_bytes());
+        let preimage =
+            wincmd_shared::fleet::epoch_preimage(&wincmd_shared::fleet::EpochSigningInput {
+                version: config.version,
+                config: &config.config_json,
+                locked_paths: &config.locked_paths,
+                managed: config.managed,
+                target_kind: &config.target_kind,
+                target_id: config.target_id.as_deref(),
+            });
+        config.signature =
+            base64::engine::general_purpose::STANDARD.encode(key.sign(&preimage).to_bytes());
         envelope.config_revision = Some(version);
         envelope.config = Some(config);
-        envelope.signature = base64::engine::general_purpose::STANDARD.encode(key.sign(&envelope.preimage()).to_bytes());
+        envelope.signature = base64::engine::general_purpose::STANDARD
+            .encode(key.sign(&envelope.preimage()).to_bytes());
     }
 
     #[test]
@@ -3367,10 +3585,19 @@ mod tests {
         settings.policy.master_config_version = Some(5);
         settings.policy.locked_paths = vec!["privacy.privacyShield.blurOpacity".into()];
         let service = json!({"trust_bound": true, "policy": envelope});
-        assert_eq!(super::shield_profile_status(&settings, &service), "effective_config_unavailable");
+        assert_eq!(
+            super::shield_profile_status(&settings, &service),
+            "effective_config_unavailable"
+        );
         assert_eq!(settings.policy.master_config_version, Some(5));
-        assert_eq!(settings.policy.locked_paths, vec!["privacy.privacyShield.blurOpacity"]);
-        assert_eq!(super::shield_profile_status(&settings, &json!({"trust_bound": true, "policy": {}})), "unverified");
+        assert_eq!(
+            settings.policy.locked_paths,
+            vec!["privacy.privacyShield.blurOpacity"]
+        );
+        assert_eq!(
+            super::shield_profile_status(&settings, &json!({"trust_bound": true, "policy": {}})),
+            "unverified"
+        );
     }
 
     #[test]
@@ -3391,28 +3618,53 @@ mod tests {
             "shieldState": null,
         });
         let service = json!({"trust_bound": true, "policy": envelope});
-        assert_eq!(super::authoritative_shield_state(&settings, &service, &handoff, None, false).unwrap(), json!(null));
+        assert_eq!(
+            super::authoritative_shield_state(&settings, &service, &handoff, None, false).unwrap(),
+            json!(null)
+        );
         for (field, value) in [
             ("policyAvailable", json!(false)),
             ("orgId", json!("other")),
             ("deviceId", json!("another")),
-            ("enrollmentGeneration", json!("cccccccc-cccc-4ccc-8ccc-cccccccccccc")),
+            (
+                "enrollmentGeneration",
+                json!("cccccccc-cccc-4ccc-8ccc-cccccccccccc"),
+            ),
             ("configRevision", json!(6)),
             ("resolutionRevision", json!(9)),
             ("shieldRevision", json!(10)),
-            ("shieldState", json!({"enabled":true,"mode":"notify_only","revision":9,"updatedAt":"now","commandId":null})),
+            (
+                "shieldState",
+                json!({"enabled":true,"mode":"notify_only","revision":9,"updatedAt":"now","commandId":null}),
+            ),
         ] {
             let mut changed = handoff.clone();
             changed[field] = value;
-            assert!(super::authoritative_shield_state(&settings, &service, &changed, None, false).is_err(), "{field}");
+            assert!(
+                super::authoritative_shield_state(&settings, &service, &changed, None, false)
+                    .is_err(),
+                "{field}"
+            );
         }
         envelope.shield_revision = 10;
         let key = ed25519_dalek::SigningKey::from_bytes(&[47; 32]);
-        envelope.signature = base64::engine::general_purpose::STANDARD.encode(key.sign(&envelope.preimage()).to_bytes());
+        envelope.signature = base64::engine::general_purpose::STANDARD
+            .encode(key.sign(&envelope.preimage()).to_bytes());
         let newer_service = json!({"trust_bound": true, "policy": envelope});
-        assert!(super::authoritative_shield_state(&settings, &newer_service, &handoff, None, false).is_err());
+        assert!(super::authoritative_shield_state(
+            &settings,
+            &newer_service,
+            &handoff,
+            None,
+            false
+        )
+        .is_err());
         handoff["shieldRevision"] = json!(10);
-        assert_eq!(super::authoritative_shield_state(&settings, &newer_service, &handoff, None, false).unwrap(), json!(null));
+        assert_eq!(
+            super::authoritative_shield_state(&settings, &newer_service, &handoff, None, false)
+                .unwrap(),
+            json!(null)
+        );
     }
 
     #[test]
@@ -3424,10 +3676,29 @@ mod tests {
         let handoff = json!({"policyAvailable": true, "orgId": envelope.org_id.0,
             "deviceId": envelope.device_id.0, "enrollmentGeneration": envelope.enrollment_generation,
             "configRevision": 6, "resolutionRevision": 8, "shieldRevision": 9, "shieldState": null});
-        assert!(super::authoritative_shield_state(&settings, &service, &handoff, None, false).is_err());
-        assert_eq!(super::authoritative_shield_state(&settings, &service, &handoff, Some(&envelope), false).unwrap(), json!(null));
+        assert!(
+            super::authoritative_shield_state(&settings, &service, &handoff, None, false).is_err()
+        );
+        assert_eq!(
+            super::authoritative_shield_state(
+                &settings,
+                &service,
+                &handoff,
+                Some(&envelope),
+                false
+            )
+            .unwrap(),
+            json!(null)
+        );
         let (_, older) = signed_shield_envelope();
-        assert!(super::authoritative_shield_state(&settings, &service, &handoff, Some(&older), false).is_err());
+        assert!(super::authoritative_shield_state(
+            &settings,
+            &service,
+            &handoff,
+            Some(&older),
+            false
+        )
+        .is_err());
     }
 
     #[test]
@@ -3438,80 +3709,136 @@ mod tests {
         settings.policy.master_config_version = Some(5);
         let command_id = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
         envelope.shield = Some(wincmd_shared::fleet::ShieldDesiredState {
-            enabled: false, mode: "notify_only".into(), revision: 9,
-            updated_at: "2026-10-30T00:00:00Z".into(), command_id: Some(command_id.into()),
+            enabled: false,
+            mode: "notify_only".into(),
+            revision: 9,
+            updated_at: "2026-10-30T00:00:00Z".into(),
+            command_id: Some(command_id.into()),
         });
         let key = ed25519_dalek::SigningKey::from_bytes(&[47; 32]);
-        envelope.signature = base64::engine::general_purpose::STANDARD.encode(key.sign(&envelope.preimage()).to_bytes());
+        envelope.signature = base64::engine::general_purpose::STANDARD
+            .encode(key.sign(&envelope.preimage()).to_bytes());
         let handoff = json!({"policyAvailable": true, "orgId": envelope.org_id.0,
             "deviceId": envelope.device_id.0, "enrollmentGeneration": envelope.enrollment_generation,
             "configRevision": 5, "resolutionRevision": 8, "shieldRevision": 9,
             "shieldState": {"enabled":false,"mode":"notify_only","revision":9,
                 "updatedAt":"2026-10-30T00:00:00Z","commandId":command_id}});
         let service = json!({"trust_bound": true, "policy": envelope});
-        assert!(super::authoritative_shield_state(&settings, &service, &handoff, None, false).is_err());
-        assert!(super::authoritative_shield_state(&settings, &service, &handoff, None, true).is_ok());
+        assert!(
+            super::authoritative_shield_state(&settings, &service, &handoff, None, false).is_err()
+        );
+        assert!(
+            super::authoritative_shield_state(&settings, &service, &handoff, None, true).is_ok()
+        );
         for (field, value) in [
-            ("deviceId",json!("other")),
-            ("enrollmentGeneration",json!("cccccccc-cccc-4ccc-8ccc-cccccccccccc")),
-            ("shieldRevision",json!(10)),
-            ("shieldState",json!({"enabled":false,"mode":"notify_only","revision":9,
-                "updatedAt":"2026-10-30T00:00:00Z","commandId":"eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"})),
+            ("deviceId", json!("other")),
+            (
+                "enrollmentGeneration",
+                json!("cccccccc-cccc-4ccc-8ccc-cccccccccccc"),
+            ),
+            ("shieldRevision", json!(10)),
+            (
+                "shieldState",
+                json!({"enabled":false,"mode":"notify_only","revision":9,
+                "updatedAt":"2026-10-30T00:00:00Z","commandId":"eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"}),
+            ),
         ] {
             let mut changed = handoff.clone();
             changed[field] = value;
-            assert!(super::authoritative_shield_state(&settings, &service, &changed, None, true).is_err());
+            assert!(
+                super::authoritative_shield_state(&settings, &service, &changed, None, true)
+                    .is_err()
+            );
         }
         let mut started = envelope.clone();
         started.shield.as_mut().unwrap().enabled = true;
-        started.signature = base64::engine::general_purpose::STANDARD.encode(key.sign(&started.preimage()).to_bytes());
-        assert!(super::authoritative_shield_state(&settings, &json!({"trust_bound":true,"policy":started}), &handoff, None, true).is_err());
+        started.signature = base64::engine::general_purpose::STANDARD
+            .encode(key.sign(&started.preimage()).to_bytes());
+        assert!(super::authoritative_shield_state(
+            &settings,
+            &json!({"trust_bound":true,"policy":started}),
+            &handoff,
+            None,
+            true
+        )
+        .is_err());
         let mut no_command = envelope;
         no_command.shield.as_mut().unwrap().command_id = None;
-        no_command.signature = base64::engine::general_purpose::STANDARD.encode(key.sign(&no_command.preimage()).to_bytes());
-        assert!(super::authoritative_shield_state(&settings, &json!({"trust_bound":true,"policy":no_command}), &handoff, None, true).is_err());
+        no_command.signature = base64::engine::general_purpose::STANDARD
+            .encode(key.sign(&no_command.preimage()).to_bytes());
+        assert!(super::authoritative_shield_state(
+            &settings,
+            &json!({"trust_bound":true,"policy":no_command}),
+            &handoff,
+            None,
+            true
+        )
+        .is_err());
     }
 
     #[tokio::test]
     async fn detargeted_stop_waits_for_running_detector_and_requires_fresh_stopped_readback() {
         let state = crate::settings::FleetShieldDesiredState {
-            enabled: false, mode: "notify_only".into(), revision: 9,
+            enabled: false,
+            mode: "notify_only".into(),
+            revision: 9,
             updated_at: "2026-10-30T00:00:00Z".into(),
             command_id: Some("dddddddd-dddd-4ddd-8ddd-dddddddddddd".into()),
         };
         let (observed, stopped) = super::check_detargeted_stop_with(
             || std::future::ready(Ok(state.clone())),
             || std::future::ready(Ok(true)),
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
         assert_eq!(observed, state);
         assert!(!stopped, "a running detector must remain waiting");
         let (_, stopped) = super::check_detargeted_stop_with(
             || std::future::ready(Ok(state.clone())),
             || std::future::ready(Ok(false)),
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
         assert!(stopped);
         let mut reads = 0;
         let changed = super::check_detargeted_stop_with(
             || {
                 reads += 1;
                 let mut value = state.clone();
-                if reads > 1 { value.revision += 1; }
+                if reads > 1 {
+                    value.revision += 1;
+                }
                 std::future::ready(Ok(value))
             },
             || std::future::ready(Ok(false)),
-        ).await;
-        assert!(changed.is_err(), "a newer policy cannot complete the older Stop");
+        )
+        .await;
+        assert!(
+            changed.is_err(),
+            "a newer policy cannot complete the older Stop"
+        );
         let mut observations = 0;
         let started = super::check_detargeted_stop_with(
             || std::future::ready(Ok(state.clone())),
-            || { observations += 1; std::future::ready(Ok(observations > 1)) },
-        ).await;
-        assert!(started.is_err(), "a detector that restarts before confirmation is not stopped");
+            || {
+                observations += 1;
+                std::future::ready(Ok(observations > 1))
+            },
+        )
+        .await;
+        assert!(
+            started.is_err(),
+            "a detector that restarts before confirmation is not stopped"
+        );
         let unreadable = super::check_detargeted_stop_with(
             || std::future::ready(Ok(state.clone())),
             || std::future::ready(Err("native status unavailable".to_string())),
-        ).await;
-        assert!(unreadable.is_err(), "unavailable native status is not a stopped observation");
+        )
+        .await;
+        assert!(
+            unreadable.is_err(),
+            "unavailable native status is not a stopped observation"
+        );
     }
 
     #[tokio::test]
@@ -3524,8 +3851,13 @@ mod tests {
             super::refresh_cached_service_shield_policy_with(
                 &response,
                 || Ok(settings),
-                move |policy, _| async move { captured.lock().unwrap().push(policy.shield_revision); Ok(()) },
-            ).await.unwrap();
+                move |policy, _| async move {
+                    captured.lock().unwrap().push(policy.shield_revision);
+                    Ok(())
+                },
+            )
+            .await
+            .unwrap();
             assert_eq!(*installed.lock().unwrap(), vec![9]);
         }
     }
@@ -3546,10 +3878,17 @@ mod tests {
             let result = super::refresh_cached_service_shield_policy_with(
                 &response,
                 || Ok(settings),
-                move |_, _| async move { captured.store(true, std::sync::atomic::Ordering::SeqCst); Ok(()) },
-            ).await;
+                move |_, _| async move {
+                    captured.store(true, std::sync::atomic::Ordering::SeqCst);
+                    Ok(())
+                },
+            )
+            .await;
             assert!(result.is_err(), "{attack}");
-            assert!(!called.load(std::sync::atomic::Ordering::SeqCst), "{attack}");
+            assert!(
+                !called.load(std::sync::atomic::Ordering::SeqCst),
+                "{attack}"
+            );
         }
     }
 
@@ -3561,13 +3900,16 @@ mod tests {
             &response,
             || Ok(settings),
             |_, _| async { Err("service unavailable".to_string()) },
-        ).await;
+        )
+        .await;
         assert_eq!(result.unwrap_err(), "service unavailable");
         super::refresh_cached_service_shield_policy_with(
             &json!({"epoch": null}),
             || Err("settings should not be read".to_string()),
             |_, _| async { Err("service should not be called".to_string()) },
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
     }
 
     #[tokio::test]
@@ -3577,7 +3919,8 @@ mod tests {
         let (settings, mut envelope) = signed_shield_envelope();
         envelope.shield_revision = 0;
         let key = ed25519_dalek::SigningKey::from_bytes(&[47; 32]);
-        envelope.signature = base64::engine::general_purpose::STANDARD.encode(key.sign(&envelope.preimage()).to_bytes());
+        envelope.signature = base64::engine::general_purpose::STANDARD
+            .encode(key.sign(&envelope.preimage()).to_bytes());
         let response = json!({"epoch": null, "policyEnvelope": envelope});
         let result = super::refresh_cached_service_shield_policy_with(
             &response,
@@ -3586,7 +3929,8 @@ mod tests {
                 assert_eq!(policy.shield_revision, 0);
                 Err("rollback".to_string())
             },
-        ).await;
+        )
+        .await;
         assert_eq!(result.unwrap_err(), "rollback");
     }
 
@@ -3595,7 +3939,9 @@ mod tests {
         use base64::Engine as _;
         let mut current = crate::settings::create_default_settings();
         let key = base64::engine::general_purpose::STANDARD.encode(
-            ed25519_dalek::SigningKey::from_bytes(&[37; 32]).verifying_key().to_bytes(),
+            ed25519_dalek::SigningKey::from_bytes(&[37; 32])
+                .verifying_key()
+                .to_bytes(),
         );
         current.app.fleet.enabled = true;
         current.app.fleet.dispatch = true;
@@ -3603,24 +3949,53 @@ mod tests {
         current.app.fleet.signing_key_pub = key.clone();
         current.policy.fleet_signing_key = Some(key.clone());
         let plan = crate::settings::fleet_enrollment::ConnectionPlan::new(
-            &current, current.app.fleet.server_url.clone(), true, key.clone(),
-        ).unwrap();
+            &current,
+            current.app.fleet.server_url.clone(),
+            true,
+            key.clone(),
+        )
+        .unwrap();
         let binding = plan.confirmation_binding();
         assert!(super::repair_connection_matches(&plan, &binding));
         current.device_id = uuid::Uuid::new_v4().to_string();
         let changed = crate::settings::fleet_enrollment::ConnectionPlan::new(
-            &current, current.app.fleet.server_url.clone(), true, key,
-        ).unwrap();
+            &current,
+            current.app.fleet.server_url.clone(),
+            true,
+            key,
+        )
+        .unwrap();
         assert!(!super::repair_connection_matches(&changed, &binding));
 
         let source = include_str!("fleet_agent.rs");
-        let repair = source.split("pub async fn fleet_repair_machine_trust").nth(1).unwrap()
-            .split("fn repair_connection_matches").next().unwrap();
-        let connect = source.split("async fn fleet_connect_inner").nth(1).unwrap()
-            .split("pub async fn fleet_status").next().unwrap();
-        for forbidden in ["fleet_request_unenroll", "fleet_disconnect", "fleet_agent_disconnect", "fleet_agent_request_unenroll"] {
-            assert!(!repair.contains(forbidden), "repair must not call {forbidden}");
-            assert!(!connect.contains(forbidden), "connect must not call {forbidden}");
+        let repair = source
+            .split("pub async fn fleet_repair_machine_trust")
+            .nth(1)
+            .unwrap()
+            .split("fn repair_connection_matches")
+            .next()
+            .unwrap();
+        let connect = source
+            .split("async fn fleet_connect_inner")
+            .nth(1)
+            .unwrap()
+            .split("pub async fn fleet_status")
+            .next()
+            .unwrap();
+        for forbidden in [
+            "fleet_request_unenroll",
+            "fleet_disconnect",
+            "fleet_agent_disconnect",
+            "fleet_agent_request_unenroll",
+        ] {
+            assert!(
+                !repair.contains(forbidden),
+                "repair must not call {forbidden}"
+            );
+            assert!(
+                !connect.contains(forbidden),
+                "connect must not call {forbidden}"
+            );
         }
     }
 
@@ -3628,29 +4003,44 @@ mod tests {
     fn fresh_profile_cannot_bypass_machine_fleet_policy() {
         let fresh = crate::settings::create_default_settings();
         assert!(super::verify_shield_profile_against_service(
-            &fresh, &json!({"trust_bound": true, "policy": null})
-        ).is_err());
+            &fresh,
+            &json!({"trust_bound": true, "policy": null})
+        )
+        .is_err());
+        assert!(
+            super::verify_shield_profile_against_service(&fresh, &json!({"policy": null})).is_err()
+        );
         assert!(super::verify_shield_profile_against_service(
-            &fresh, &json!({"policy": null})
-        ).is_err());
-        assert!(super::verify_shield_profile_against_service(
-            &fresh, &json!({"trust_bound": false, "policy": null})
-        ).is_ok());
+            &fresh,
+            &json!({"trust_bound": false, "policy": null})
+        )
+        .is_ok());
         let mut stale = fresh;
         stale.policy.master_config_version = Some(7);
         assert!(super::verify_shield_profile_against_service(
-            &stale, &json!({"trust_bound": false, "policy": null})
-        ).is_err());
+            &stale,
+            &json!({"trust_bound": false, "policy": null})
+        )
+        .is_err());
     }
 
     #[test]
     fn service_trust_replacement_requires_confirmed_identity_change() {
         let old = json!({"org_id":"org-a","device_id":"device-a","enrollment_generation":"generation-a","signer_key":"key-a"});
         let new = json!({"org_id":"org-b","device_id":"device-a","enrollment_generation":"generation-b","signer_key":"key-b"});
-        assert_eq!(super::service_enrollment_action(None, &new, false).unwrap(), Some("svc.fleet.provision_trust"));
-        assert_eq!(super::service_enrollment_action(Some(&old), &old, false).unwrap(), None);
+        assert_eq!(
+            super::service_enrollment_action(None, &new, false).unwrap(),
+            Some("svc.fleet.provision_trust")
+        );
+        assert_eq!(
+            super::service_enrollment_action(Some(&old), &old, false).unwrap(),
+            None
+        );
         assert!(super::service_enrollment_action(Some(&old), &new, false).is_err());
-        assert_eq!(super::service_enrollment_action(Some(&old), &new, true).unwrap(), Some("svc.fleet.replace_trust"));
+        assert_eq!(
+            super::service_enrollment_action(Some(&old), &new, true).unwrap(),
+            Some("svc.fleet.replace_trust")
+        );
     }
 
     #[test]

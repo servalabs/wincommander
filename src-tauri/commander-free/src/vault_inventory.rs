@@ -40,14 +40,18 @@ async fn quick_mounts() -> Result<Vec<PersonalVaultMountedVolume>, String> {
     let response = crate::svc_client::call(
         "svc.vault.list_authorized",
         json!({"personal":true,"inventory_version":2,"quick_mount_receipts":true}),
-    ).await?;
+    )
+    .await?;
     wincmd_shared::vault_inventory::parse_mounts(response)
 }
 
 fn quick_mount_root(
-    mounts: &[PersonalVaultMountedVolume], drive: &str, expected: &str,
+    mounts: &[PersonalVaultMountedVolume],
+    drive: &str,
+    expected: &str,
 ) -> Result<String, String> {
-    if expected.len() != 68 || !expected.starts_with("qm1:")
+    if expected.len() != 68
+        || !expected.starts_with("qm1:")
         || !expected[4..].bytes().all(|byte| byte.is_ascii_hexdigit())
     {
         return Err("mount_state_unknown".into());
@@ -56,7 +60,9 @@ fn quick_mount_root(
     if !matches!(root.as_bytes()[0], b'D'..=b'Z') {
         return Err("not_authorized".into());
     }
-    let mount = mounts.iter().find(|mount| mount.drive_letter.eq_ignore_ascii_case(&root[..2]))
+    let mount = mounts
+        .iter()
+        .find(|mount| mount.drive_letter.eq_ignore_ascii_case(&root[..2]))
         .ok_or("mount_state_unknown")?;
     if mount.quick_mount_receipt.as_deref() != Some(expected) {
         return Err("not_authorized".into());
@@ -65,15 +71,22 @@ fn quick_mount_root(
 }
 
 #[tauri::command]
-pub(crate) async fn open_quick_mount_drive(drive: String, expected_mount_receipt: String) -> Result<(), String> {
+pub(crate) async fn open_quick_mount_drive(
+    drive: String,
+    expected_mount_receipt: String,
+) -> Result<(), String> {
     let mounts = quick_mounts().await?;
     let root = quick_mount_root(&mounts, &drive, &expected_mount_receipt)?;
-    let slot = mounts.iter().find(|mount| mount.drive_letter.eq_ignore_ascii_case(&root[..2]))
-        .ok_or("mount_state_unknown")?.internal_drive;
+    let slot = mounts
+        .iter()
+        .find(|mount| mount.drive_letter.eq_ignore_ascii_case(&root[..2]))
+        .ok_or("mount_state_unknown")?
+        .internal_drive;
     #[cfg(windows)]
     let identity = wincmd_volume::mounted_slot_identities()
         .map_err(|_| "mount_state_unknown".to_owned())?
-        .remove(&slot).ok_or("mount_state_unknown")?;
+        .remove(&slot)
+        .ok_or("mount_state_unknown")?;
     #[cfg(not(windows))]
     let identity = return Err("caller_root_unavailable".into());
     // The second service receipt binds this native snapshot to the authorized mount.
@@ -90,29 +103,48 @@ pub(crate) async fn open_quick_mount_drive(drive: String, expected_mount_receipt
             Ok(())
         };
         check()?;
-        let mut entries = std::fs::read_dir(&root)
-            .map_err(|_| "caller_root_unavailable".to_owned())?;
+        let mut entries =
+            std::fs::read_dir(&root).map_err(|_| "caller_root_unavailable".to_owned())?;
         if let Some(Err(_)) = entries.next() {
             return Err("caller_root_unavailable".to_owned());
         }
         check()?;
-        std::process::Command::new("explorer.exe").arg(&root).spawn()
+        std::process::Command::new("explorer.exe")
+            .arg(&root)
+            .spawn()
             .map_err(|_| "caller_root_unavailable".to_owned())?;
         Ok(())
-    }).await.map_err(|_| "mount_state_unknown".to_owned())?
+    })
+    .await
+    .map_err(|_| "mount_state_unknown".to_owned())?
 }
 
-fn quick_mount_desktop_matches(info: &wincmd_volume::VolumeInfo, root: &str, slot: u8, identity: &str) -> bool {
-    slot <= 25 && info.is_private && !identity.is_empty() && info.identity == identity
+fn quick_mount_desktop_matches(
+    info: &wincmd_volume::VolumeInfo,
+    root: &str,
+    slot: u8,
+    identity: &str,
+) -> bool {
+    slot <= 25
+        && info.is_private
+        && !identity.is_empty()
+        && info.identity == identity
         && info.root == std::path::Path::new(root)
-        && info.device.eq_ignore_ascii_case(&format!("\\Device\\VeraCryptVolume{}", char::from(b'A' + slot)))
+        && info.device.eq_ignore_ascii_case(&format!(
+            "\\Device\\VeraCryptVolume{}",
+            char::from(b'A' + slot)
+        ))
 }
 
 pub(super) async fn status() -> Result<Value, String> {
     let mounts = match quick_mounts().await {
         Ok(mounts) => mounts,
-        Err(error) if error == "vault_validation_failed"
-            || error.starts_with("service rejected request: vault_validation_failed (") => mounts().await?,
+        Err(error)
+            if error == "vault_validation_failed"
+                || error.starts_with("service rejected request: vault_validation_failed (") =>
+        {
+            mounts().await?
+        }
         Err(error) => return Err(error),
     };
     let volumes = mounts
@@ -141,7 +173,8 @@ pub(super) async fn dismount_authorized() -> Result<Value, String> {
     let verified = crate::svc_client::call(
         "svc.vault.list_authorized",
         json!({"personal":true,"inventory_version":2,"verify_cleanup":true}),
-    ).await?;
+    )
+    .await?;
     wincmd_shared::vault_inventory::parse_mounts(verified)?;
     Ok(result)
 }
@@ -187,20 +220,49 @@ mod tests {
     #[test]
     fn quick_mount_explorer_rejects_foreign_alias_slot_and_remounted_identity() {
         let valid = wincmd_volume::VolumeInfo {
-            root: "V:\\".into(), stable_id: "fixture".into(), identity: "fixture:1".into(),
-            device: "\\Device\\VeraCryptVolumeM".into(), is_private: true, read_only: false,
+            root: "V:\\".into(),
+            stable_id: "fixture".into(),
+            identity: "fixture:1".into(),
+            device: "\\Device\\VeraCryptVolumeM".into(),
+            is_private: true,
+            read_only: false,
         };
         assert!(quick_mount_desktop_matches(&valid, "V:\\", 12, "fixture:1"));
         for wrong in [
-            wincmd_volume::VolumeInfo { is_private: false, ..valid.clone() },
-            wincmd_volume::VolumeInfo { device: "\\Device\\VeraCryptVolumeN".into(), ..valid.clone() },
-            wincmd_volume::VolumeInfo { device: "\\Device\\HarddiskVolume12".into(), ..valid.clone() },
-            wincmd_volume::VolumeInfo { identity: "fixture:2".into(), ..valid.clone() },
-            wincmd_volume::VolumeInfo { root: "W:\\".into(), ..valid.clone() },
+            wincmd_volume::VolumeInfo {
+                is_private: false,
+                ..valid.clone()
+            },
+            wincmd_volume::VolumeInfo {
+                device: "\\Device\\VeraCryptVolumeN".into(),
+                ..valid.clone()
+            },
+            wincmd_volume::VolumeInfo {
+                device: "\\Device\\HarddiskVolume12".into(),
+                ..valid.clone()
+            },
+            wincmd_volume::VolumeInfo {
+                identity: "fixture:2".into(),
+                ..valid.clone()
+            },
+            wincmd_volume::VolumeInfo {
+                root: "W:\\".into(),
+                ..valid.clone()
+            },
         ] {
-            assert!(!quick_mount_desktop_matches(&wrong, "V:\\", 12, "fixture:1"));
+            assert!(!quick_mount_desktop_matches(
+                &wrong,
+                "V:\\",
+                12,
+                "fixture:1"
+            ));
         }
-        assert!(!quick_mount_desktop_matches(&valid, "V:\\", 26, "fixture:1"));
+        assert!(!quick_mount_desktop_matches(
+            &valid,
+            "V:\\",
+            26,
+            "fixture:1"
+        ));
         assert!(!quick_mount_desktop_matches(&valid, "V:\\", 12, ""));
     }
     #[test]
@@ -209,11 +271,18 @@ mod tests {
         let rows = json!([{"drive_letter":"V:","internal_drive":12,"presentation":"machine",
             "cleanup_required":false,"browse_allowed":true,"dismount_allowed":true,
             "quick_mount_receipt":receipt}]);
-        assert_eq!(quick_mount_root(&parse_mounts(rows.clone()).unwrap(), "V:", &receipt).unwrap(), "V:\\");
+        assert_eq!(
+            quick_mount_root(&parse_mounts(rows.clone()).unwrap(), "V:", &receipt).unwrap(),
+            "V:\\"
+        );
         for (field, value) in [
             ("quick_mount_receipt", Value::Null),
-            ("quick_mount_receipt", json!(format!("qm1:{}", "b".repeat(64)))),
-            ("browse_allowed", json!(false)), ("cleanup_required", json!(true)),
+            (
+                "quick_mount_receipt",
+                json!(format!("qm1:{}", "b".repeat(64))),
+            ),
+            ("browse_allowed", json!(false)),
+            ("cleanup_required", json!(true)),
         ] {
             let mut invalid = rows.clone();
             invalid[0][field] = value;

@@ -362,12 +362,25 @@ pub trait AclApplier: Send + Sync {
     fn snapshot(&self, plan: &VaultAclPlan) -> Result<Vec<AclSnapshot>, VaultError>;
     /// Capture the old DACL and its authorized identity as one operation.
     /// Production retains a no-delete lease until the policy operation ends.
-    fn capture_policy_snapshot(&self, plan: &VaultAclPlan, expected_identity: &str) -> Result<PolicyAclSnapshotCapture, VaultError> {
+    fn capture_policy_snapshot(
+        &self,
+        plan: &VaultAclPlan,
+        expected_identity: &str,
+    ) -> Result<PolicyAclSnapshotCapture, VaultError> {
         let snapshots = self.snapshot(plan)?;
-        if snapshots.iter().any(|snapshot| snapshot.path != plan.container) { return Err(VaultError::ContainerIdentity); }
-        let identities = snapshots.iter().map(|snapshot| (snapshot.path.clone(), expected_identity.to_owned())).collect();
+        if snapshots
+            .iter()
+            .any(|snapshot| snapshot.path != plan.container)
+        {
+            return Err(VaultError::ContainerIdentity);
+        }
+        let identities = snapshots
+            .iter()
+            .map(|snapshot| (snapshot.path.clone(), expected_identity.to_owned()))
+            .collect();
         Ok(PolicyAclSnapshotCapture {
-            snapshots, identities,
+            snapshots,
+            identities,
             #[cfg(windows)]
             _pins: Vec::new(),
         })
@@ -1680,7 +1693,9 @@ impl VaultAccessStore {
         let key = state
             .personal
             .iter()
-            .find_map(|(key, record)| (record.container_path == container_path).then(|| key.clone()))
+            .find_map(|(key, record)| {
+                (record.container_path == container_path).then(|| key.clone())
+            })
             .ok_or(VaultError::Forbidden)?;
         let original = state
             .personal
@@ -2181,7 +2196,7 @@ impl VaultAccessStore {
             .flat_map(|active| &active.policy.entries)
             .filter(|entry| {
                 entry.primary_owner_sid.as_deref() == Some(caller_sid)
-                && fleet_group_member_sids(entry, &state.access_directory)
+                    && fleet_group_member_sids(entry, &state.access_directory)
                         .is_none_or(|members| members.contains(caller_sid))
             })
             .map(|entry| entry.id.as_str())
@@ -2269,28 +2284,64 @@ impl VaultAccessStore {
         container_identity: Option<&str>,
         caller_sid: &str,
     ) -> bool {
-        if container_identity.is_some_and(str::is_empty) || !valid_windows_sid(caller_sid) { return false; }
-        let Ok(state) = self.state.lock() else { return false; };
-        if !state.access_directory_healthy || state.status.validation_state != VaultValidationState::Current { return false; }
-        let Some(active) = state.active.as_ref() else { return false; };
-        let Some(entry) = active.policy.entries.iter().find(|entry| entry.id == entry_id) else { return false; };
-        let Some(resolved) = active.resolved.iter().find(|entry| entry.id == entry_id) else { return false; };
-        if entry.mount.presentation != VaultPresentation::PerUser || entry.access_pattern.is_some()
+        if container_identity.is_some_and(str::is_empty) || !valid_windows_sid(caller_sid) {
+            return false;
+        }
+        let Ok(state) = self.state.lock() else {
+            return false;
+        };
+        if !state.access_directory_healthy
+            || state.status.validation_state != VaultValidationState::Current
+        {
+            return false;
+        }
+        let Some(active) = state.active.as_ref() else {
+            return false;
+        };
+        let Some(entry) = active
+            .policy
+            .entries
+            .iter()
+            .find(|entry| entry.id == entry_id)
+        else {
+            return false;
+        };
+        let Some(resolved) = active.resolved.iter().find(|entry| entry.id == entry_id) else {
+            return false;
+        };
+        if entry.mount.presentation != VaultPresentation::PerUser
+            || entry.access_pattern.is_some()
             || resolved.identity.is_empty()
             || container_identity.is_some_and(|identity| resolved.identity != identity)
-            || entry.container_identity.as_deref().is_some_and(|identity| resolved.identity != identity)
+            || entry
+                .container_identity
+                .as_deref()
+                .is_some_and(|identity| resolved.identity != identity)
             || resolved.authorization_grants.is_empty()
-            || resolved.authorization_grants.iter().any(|grant| !valid_windows_sid(&grant.sid)) { return false; }
+            || resolved
+                .authorization_grants
+                .iter()
+                .any(|grant| !valid_windows_sid(&grant.sid))
+        {
+            return false;
+        }
         if let Some(owner_sid) = &entry.primary_owner_sid {
-            return valid_windows_sid(owner_sid) && !exclusive_per_user_policy_owner(entry, resolved, owner_sid)
-                && resolved.authorization_grants.iter().any(|grant| grant.sid != *owner_sid);
+            return valid_windows_sid(owner_sid)
+                && !exclusive_per_user_policy_owner(entry, resolved, owner_sid)
+                && resolved
+                    .authorization_grants
+                    .iter()
+                    .any(|grant| grant.sid != *owner_sid);
         }
         // Old group-owner records have no immutable primary-user SID. An
         // authorized token whose user SID is absent from the grants necessarily
         // used a granted group SID; directory groups also retain explicit type.
         access_directory_group_members(&state.access_directory, &entry.owner_account).is_some()
             || resolved.authorization_grants.len() > 1
-            || resolved.authorization_grants.iter().all(|grant| grant.sid != caller_sid)
+            || resolved
+                .authorization_grants
+                .iter()
+                .all(|grant| grant.sid != caller_sid)
     }
 
     /// Only explicit consent permits owner-session Syncthing lifecycle work.
@@ -2617,13 +2668,13 @@ impl VaultAccessStore {
                 .preferred_letter
                 .as_deref()
                 .is_some_and(|letter| {
-                letter.eq_ignore_ascii_case(requested)
-                    && !active.resolved.iter().any(|resolved| {
-                        resolved.id == entry.id
-                            && !resolved.identity.is_empty()
-                            && resolved.identity == container_identity
-                    })
-            })
+                    letter.eq_ignore_ascii_case(requested)
+                        && !active.resolved.iter().any(|resolved| {
+                            resolved.id == entry.id
+                                && !resolved.identity.is_empty()
+                                && resolved.identity == container_identity
+                        })
+                })
         })
     }
 
@@ -2862,7 +2913,7 @@ impl VaultAccessStore {
         let changed_ids = resolved
             .iter()
             .filter(|(entry, plan)| {
-            !policy_entry_plan_unchanged(state.active.as_ref(), &policy, entry, plan)
+                !policy_entry_plan_unchanged(state.active.as_ref(), &policy, entry, plan)
             })
             .map(|(entry, _)| entry.id.clone())
             .collect::<HashSet<_>>();
@@ -2877,12 +2928,25 @@ impl VaultAccessStore {
             .iter()
             .filter(|(entry, _)| changed_ids.contains(&entry.id))
         {
-            snapshot_captures.push(self.acls.capture_policy_snapshot(plan,
-                entry.container_identity.as_deref().ok_or(VaultError::ContainerIdentity)?)?);
+            snapshot_captures.push(
+                self.acls.capture_policy_snapshot(
+                    plan,
+                    entry
+                        .container_identity
+                        .as_deref()
+                        .ok_or(VaultError::ContainerIdentity)?,
+                )?,
+            );
         }
         // Keep every capture lease alive through mutation, commit or rollback.
-        let mut snapshots = snapshot_captures.iter().flat_map(|capture| capture.snapshots.iter().cloned()).collect::<Vec<_>>();
-        let target_identities = snapshot_captures.iter().flat_map(|capture| capture.identities.iter().cloned()).collect::<Vec<_>>();
+        let mut snapshots = snapshot_captures
+            .iter()
+            .flat_map(|capture| capture.snapshots.iter().cloned())
+            .collect::<Vec<_>>();
+        let target_identities = snapshot_captures
+            .iter()
+            .flat_map(|capture| capture.identities.iter().cloned())
+            .collect::<Vec<_>>();
         let group_plans = resolved
             .iter()
             .filter(|(entry, _)| changed_ids.contains(&entry.id))
@@ -2907,7 +2971,8 @@ impl VaultAccessStore {
         let mut all_group_plans = group_plans.clone();
         all_group_plans.extend(removed_group_plans.iter().cloned());
         let group_snapshots = self.groups.snapshot(&all_group_plans)?;
-        let capture = self.policy_rollback_checkpoint_for_mutation(&state, false, &target_identities)?;
+        let capture =
+            self.policy_rollback_checkpoint_for_mutation(&state, false, &target_identities)?;
         for group in &group_plans {
             if let Err(error) = self
                 .groups
@@ -2993,10 +3058,14 @@ impl VaultAccessStore {
             }
         };
         if self.fs.atomic_write(&self.path, &bytes).is_err() {
-            let commit_unconfirmed = capture.checkpoint.as_ref().is_none_or(|prior|
-                !self.policy_bytes_match(prior.policy_bytes.as_deref()));
+            let commit_unconfirmed = capture
+                .checkpoint
+                .as_ref()
+                .is_none_or(|prior| !self.policy_bytes_match(prior.policy_bytes.as_deref()));
             self.rollback_after_apply(&mut state, &snapshots, &group_snapshots, &capture);
-            if commit_unconfirmed { return Err(VaultError::CommitUnconfirmed); }
+            if commit_unconfirmed {
+                return Err(VaultError::CommitUnconfirmed);
+            }
             return Err(Self::policy_rollback_error(&state, VaultError::Persistence));
         }
         // Host/container ACLs are proven here.  Mounted-root enforcement is
@@ -3103,10 +3172,14 @@ impl VaultAccessStore {
         }
         if let Err(error) = self.fs.remove(&self.path) {
             if error.kind() != std::io::ErrorKind::NotFound {
-                let commit_unconfirmed = capture.checkpoint.as_ref().is_none_or(|prior|
-                    !self.policy_bytes_match(prior.policy_bytes.as_deref()));
+                let commit_unconfirmed = capture
+                    .checkpoint
+                    .as_ref()
+                    .is_none_or(|prior| !self.policy_bytes_match(prior.policy_bytes.as_deref()));
                 self.rollback_after_apply(&mut state, &snapshots, &group_snapshots, &capture);
-                if commit_unconfirmed { return Err(VaultError::CommitUnconfirmed); }
+                if commit_unconfirmed {
+                    return Err(VaultError::CommitUnconfirmed);
+                }
                 return Err(Self::policy_rollback_error(&state, VaultError::Persistence));
             }
         }
@@ -3169,7 +3242,7 @@ impl VaultAccessStore {
                 }
             }
             state.rollback_recovery = None;
-        state.active = None;
+            state.active = None;
             state.status = empty_status();
             return Ok(state.status.clone());
         }
@@ -3728,7 +3801,11 @@ impl VaultAccessStore {
     fn policy_rollback_error(state: &State, original: VaultError) -> VaultError {
         if state.status.validation_state == VaultValidationState::Degraded
             && state.rollback_recovery.is_none()
-        { VaultError::RollbackUnverified } else { original }
+        {
+            VaultError::RollbackUnverified
+        } else {
+            original
+        }
     }
 
     fn policy_rollback_checkpoint_for_mutation(
@@ -3743,27 +3820,51 @@ impl VaultAccessStore {
         for active in state.active.iter() {
             for entry in &active.policy.entries {
                 let path = PathBuf::from(&entry.container_path);
-                if target_identities.iter().any(|(existing, _)| existing == &path) { continue; }
-                let resolved = active.resolved.iter().find(|resolved| resolved.id == entry.id)
+                if target_identities
+                    .iter()
+                    .any(|(existing, _)| existing == &path)
+                {
+                    continue;
+                }
+                let resolved = active
+                    .resolved
+                    .iter()
+                    .find(|resolved| resolved.id == entry.id)
                     .ok_or(VaultError::ContainerIdentity)?;
                 target_identities.push((path, resolved.identity.clone()));
             }
         }
-        self.fs.verify_policy_storage(self.path.parent().ok_or(VaultError::Persistence)?)?;
+        self.fs
+            .verify_policy_storage(self.path.parent().ok_or(VaultError::Persistence)?)?;
         let checkpoint = match self.policy_rollback_checkpoint(state) {
             Ok(checkpoint) => checkpoint,
             // Existing explicit administrative repair may have migrated cached
             // grants differing from its legacy durable record. It receives no
             // automatic-recovery proof, but retains every target identity guard.
-            Err(_) if state.status.validation_state == VaultValidationState::Degraded
-                && state.rollback_recovery.is_none() && state.access_directory_healthy => None,
+            Err(_)
+                if state.status.validation_state == VaultValidationState::Degraded
+                    && state.rollback_recovery.is_none()
+                    && state.access_directory_healthy =>
+            {
+                None
+            }
             // Existing authorized full revocation remains idempotent when its
             // record is already absent. Never reconstruct it automatically.
-            Err(_) if clearing && self.fs.read(&self.path)
-                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound) => None,
+            Err(_)
+                if clearing
+                    && self
+                        .fs
+                        .read(&self.path)
+                        .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+            {
+                None
+            }
             Err(error) => return Err(error),
         };
-        Ok(PolicyRollbackCapture { checkpoint, target_identities })
+        Ok(PolicyRollbackCapture {
+            checkpoint,
+            target_identities,
+        })
     }
     fn policy_rollback_checkpoint(
         &self,
@@ -3772,37 +3873,52 @@ impl VaultAccessStore {
         if !state.access_directory_healthy {
             return Err(VaultError::Persistence);
         }
-        self.fs.verify_policy_storage(self.path.parent().ok_or(VaultError::Persistence)?)?;
+        self.fs
+            .verify_policy_storage(self.path.parent().ok_or(VaultError::Persistence)?)?;
         let policy_bytes = match self.fs.read(&self.path) {
             Ok(bytes) => {
                 let active = state.active.as_ref().ok_or(VaultError::Persistence)?;
-                let persisted: PersistedPolicy = serde_json::from_slice(&bytes).map_err(|_| VaultError::Persistence)?;
+                let persisted: PersistedPolicy =
+                    serde_json::from_slice(&bytes).map_err(|_| VaultError::Persistence)?;
                 if serde_json::to_value(&persisted).map_err(|_| VaultError::Persistence)?
-                    != serde_json::to_value(active).map_err(|_| VaultError::Persistence)? {
-                    return Err(VaultError::Persistence);
-                }
-                Some(bytes)
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound && state.active.is_none() => None,
-            Err(_) => return Err(VaultError::Persistence),
-        };
-        let directory_bytes = match self.fs.read(&self.access_directory_path) {
-            Ok(bytes) => {
-                let directory: VaultAccessDirectory = serde_json::from_slice(&bytes)
-                    .map_err(|_| VaultError::Persistence)?;
-                if !valid_access_directory(&directory)
-                    || serde_json::to_value(&directory).map_err(|_| VaultError::Persistence)?
-                        != serde_json::to_value(&state.access_directory).map_err(|_| VaultError::Persistence)?
+                    != serde_json::to_value(active).map_err(|_| VaultError::Persistence)?
                 {
                     return Err(VaultError::Persistence);
                 }
                 Some(bytes)
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound
-                && state.access_directory == empty_access_directory() => None,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound && state.active.is_none() =>
+            {
+                None
+            }
             Err(_) => return Err(VaultError::Persistence),
         };
-        Ok(Some(PolicyRollbackCheckpoint { policy_bytes, directory_bytes }))
+        let directory_bytes = match self.fs.read(&self.access_directory_path) {
+            Ok(bytes) => {
+                let directory: VaultAccessDirectory =
+                    serde_json::from_slice(&bytes).map_err(|_| VaultError::Persistence)?;
+                if !valid_access_directory(&directory)
+                    || serde_json::to_value(&directory).map_err(|_| VaultError::Persistence)?
+                        != serde_json::to_value(&state.access_directory)
+                            .map_err(|_| VaultError::Persistence)?
+                {
+                    return Err(VaultError::Persistence);
+                }
+                Some(bytes)
+            }
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    && state.access_directory == empty_access_directory() =>
+            {
+                None
+            }
+            Err(_) => return Err(VaultError::Persistence),
+        };
+        Ok(Some(PolicyRollbackCheckpoint {
+            policy_bytes,
+            directory_bytes,
+        }))
     }
 
     fn policy_bytes_match(&self, expected: Option<&[u8]>) -> bool {
@@ -3821,14 +3937,25 @@ impl VaultAccessStore {
         capture: &PolicyRollbackCapture,
     ) {
         state.rollback_recovery = None;
-        let targets_match = snapshots.iter().all(|snapshot|
-            capture.target_identities.iter().find(|(path, _)| path == &snapshot.path)
-                .is_some_and(|(path, identity)| self.fs.stable_file_identity(path)
-                    .is_ok_and(|current| current == *identity)));
+        let targets_match = snapshots.iter().all(|snapshot| {
+            capture
+                .target_identities
+                .iter()
+                .find(|(path, _)| path == &snapshot.path)
+                .is_some_and(|(path, identity)| {
+                    self.fs
+                        .stable_file_identity(path)
+                        .is_ok_and(|current| current == *identity)
+                })
+        });
         // Never restore a path that now identifies a different file. Keep the
         // failure explicit rather than applying an old DACL to a replacement.
-        let result = if targets_match { self.acls.restore_verified(snapshots, &capture.target_identities) }
-            else { Err(VaultError::ContainerIdentity) };
+        let result = if targets_match {
+            self.acls
+                .restore_verified(snapshots, &capture.target_identities)
+        } else {
+            Err(VaultError::ContainerIdentity)
+        };
         let groups_restored = self.groups.restore(group_snapshots);
         state.status = match state.active.as_ref() {
             Some(active) => status_for(
@@ -3848,8 +3975,12 @@ impl VaultAccessStore {
         // A rejected edit may have restored a completely valid prior policy.
         // Recover only that exact durable state, without replay, migrations,
         // native operations, ACL repair, or an unconditional healthy reset.
-        if result.is_err() || groups_restored.is_err() { return; }
-        let Some(checkpoint) = capture.checkpoint.as_ref() else { return };
+        if result.is_err() || groups_restored.is_err() {
+            return;
+        }
+        let Some(checkpoint) = capture.checkpoint.as_ref() else {
+            return;
+        };
         state.rollback_recovery = Some(PolicyRollbackRecovery {
             checkpoint: checkpoint.clone(),
             snapshots: snapshots.to_vec(),
@@ -3863,27 +3994,49 @@ impl VaultAccessStore {
     /// service read path). A later refresh may retry verification, never the
     /// original mutation or the ACL/group restoration.
     fn verify_pending_rollback_recovery(&self, state: &mut State) {
-        if state.status.validation_state != VaultValidationState::Degraded { return; }
-        let Some(recovery) = state.rollback_recovery.as_ref() else { return };
+        if state.status.validation_state != VaultValidationState::Degraded {
+            return;
+        }
+        let Some(recovery) = state.rollback_recovery.as_ref() else {
+            return;
+        };
         let verified = (|| {
-            let current = self.policy_rollback_checkpoint(state)?
+            let current = self
+                .policy_rollback_checkpoint(state)?
                 .ok_or(VaultError::Persistence)?;
             if current.policy_bytes != recovery.checkpoint.policy_bytes
                 || current.directory_bytes != recovery.checkpoint.directory_bytes
-            { return Err(VaultError::Persistence); }
+            {
+                return Err(VaultError::Persistence);
+            }
             for (path, expected_identity) in &recovery.target_identities {
-                if self.fs.stable_file_identity(path)? != *expected_identity { return Err(VaultError::ContainerIdentity); }
+                if self.fs.stable_file_identity(path)? != *expected_identity {
+                    return Err(VaultError::ContainerIdentity);
+                }
             }
             self.acls.verify_restored(&recovery.snapshots)?;
-            let plans = recovery.group_snapshots.iter().map(|group| GroupMembershipPlan {
-                group: group.group.clone(), members: group.members.clone(), access: VaultAccess::Write,
-            }).collect::<Vec<_>>();
+            let plans = recovery
+                .group_snapshots
+                .iter()
+                .map(|group| GroupMembershipPlan {
+                    group: group.group.clone(),
+                    members: group.members.clone(),
+                    access: VaultAccess::Write,
+                })
+                .collect::<Vec<_>>();
             let readback = self.groups.snapshot(&plans)?;
             if readback.len() != recovery.group_snapshots.len()
-                || readback.iter().zip(&recovery.group_snapshots).any(|(actual, expected)|
-                    actual.group != expected.group || actual.existed != expected.existed
-                        || actual.members != expected.members)
-            { return Err(VaultError::AclReadback); }
+                || readback
+                    .iter()
+                    .zip(&recovery.group_snapshots)
+                    .any(|(actual, expected)| {
+                        actual.group != expected.group
+                            || actual.existed != expected.existed
+                            || actual.members != expected.members
+                    })
+            {
+                return Err(VaultError::AclReadback);
+            }
             if let Some(active) = state.active.as_ref() {
                 self.revalidate_persisted_policy_with_directory(active, &state.access_directory)?;
             }
@@ -3891,8 +4044,11 @@ impl VaultAccessStore {
         })();
         if verified.is_ok() {
             if let Some(active) = state.active.as_ref() {
-                state.status = status_for(active,
-                    VaultValidationState::Current, VaultEntryResult::Applied);
+                state.status = status_for(
+                    active,
+                    VaultValidationState::Current,
+                    VaultEntryResult::Applied,
+                );
             } else {
                 // Verified absence is the existing never-applied state, not
                 // a fabricated empty/deleted projection from degradation.
@@ -4510,7 +4666,11 @@ impl AclApplier for WindowsAclApplier {
     fn snapshot(&self, plan: &VaultAclPlan) -> Result<Vec<AclSnapshot>, VaultError> {
         Ok(vec![snapshot_one_acl(&plan.container)?])
     }
-    fn capture_policy_snapshot(&self, plan: &VaultAclPlan, expected_identity: &str) -> Result<PolicyAclSnapshotCapture, VaultError> {
+    fn capture_policy_snapshot(
+        &self,
+        plan: &VaultAclPlan,
+        expected_identity: &str,
+    ) -> Result<PolicyAclSnapshotCapture, VaultError> {
         use std::os::windows::io::AsRawHandle;
         let file = open_policy_rollback_target(&plan.container, expected_identity)?;
         let snapshot = snapshot_handle_acl(file.as_raw_handle() as _, &plan.container)?;
@@ -4526,18 +4686,26 @@ impl AclApplier for WindowsAclApplier {
         }
         Ok(())
     }
-    fn restore_verified(&self, snapshots: &[AclSnapshot], identities: &[(PathBuf, String)]) -> Result<(), VaultError> {
+    fn restore_verified(
+        &self,
+        snapshots: &[AclSnapshot],
+        identities: &[(PathBuf, String)],
+    ) -> Result<(), VaultError> {
         use std::os::windows::io::AsRawHandle;
         for snapshot in snapshots {
-            let expected_identity = identities.iter().find(|(path, _)| path == &snapshot.path)
-                .map(|(_, identity)| identity).ok_or(VaultError::ContainerIdentity)?;
+            let expected_identity = identities
+                .iter()
+                .find(|(path, _)| path == &snapshot.path)
+                .map(|(_, identity)| identity)
+                .ok_or(VaultError::ContainerIdentity)?;
             // No delete sharing: the checked object cannot be renamed/replaced
             // between the identity check, DACL write, and DACL readback.
             let file = open_policy_rollback_target(&snapshot.path, expected_identity)?;
             restore_handle_acl(file.as_raw_handle() as _, snapshot)?;
             let actual = snapshot_handle_acl(file.as_raw_handle() as _, &snapshot.path)?;
             if actual.dacl_protected != snapshot.dacl_protected
-                || !same_snapshot_dacl(&actual.descriptor, &snapshot.descriptor)? {
+                || !same_snapshot_dacl(&actual.descriptor, &snapshot.descriptor)?
+            {
                 return Err(VaultError::AclReadback);
             }
         }
@@ -4548,7 +4716,9 @@ impl AclApplier for WindowsAclApplier {
             let actual = snapshot_one_acl(&expected.path)?;
             if actual.dacl_protected != expected.dacl_protected
                 || !same_snapshot_dacl(&actual.descriptor, &expected.descriptor)?
-            { return Err(VaultError::AclReadback); }
+            {
+                return Err(VaultError::AclReadback);
+            }
         }
         Ok(())
     }
@@ -5047,11 +5217,14 @@ fn snapshot_one_acl(path: &Path) -> Result<AclSnapshot, VaultError> {
 }
 
 #[cfg(windows)]
-fn open_policy_rollback_target(path: &Path, expected_identity: &str) -> Result<std::fs::File, VaultError> {
+fn open_policy_rollback_target(
+    path: &Path,
+    expected_identity: &str,
+) -> Result<std::fs::File, VaultError> {
     use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
     use windows_sys::Win32::Storage::FileSystem::{
-        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_READ_DATA,
-        FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL, WRITE_DAC,
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
+        FILE_READ_DATA, FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL, WRITE_DAC,
     };
     let file = std::fs::OpenOptions::new()
         // Metadata-only handles do not reliably participate in Windows share
@@ -5059,10 +5232,13 @@ fn open_policy_rollback_target(path: &Path, expected_identity: &str) -> Result<s
         .access_mode(READ_CONTROL | WRITE_DAC | FILE_READ_ATTRIBUTES | FILE_READ_DATA)
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
-        .open(path).map_err(|_| VaultError::AclReadback)?;
+        .open(path)
+        .map_err(|_| VaultError::AclReadback)?;
     let metadata = file.metadata().map_err(|_| VaultError::ContainerIdentity)?;
-    if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-        || file_identity_from_handle(&file)? != expected_identity {
+    if !metadata.is_file()
+        || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+        || file_identity_from_handle(&file)? != expected_identity
+    {
         return Err(VaultError::ContainerIdentity);
     }
     Ok(file)
@@ -5075,12 +5251,24 @@ fn snapshot_handle_acl(
 ) -> Result<AclSnapshot, VaultError> {
     use windows_sys::Win32::Foundation::{LocalFree, ERROR_SUCCESS};
     use windows_sys::Win32::Security::Authorization::{GetSecurityInfo, SE_FILE_OBJECT};
-    use windows_sys::Win32::Security::{GetSecurityDescriptorControl, GetSecurityDescriptorLength, DACL_SECURITY_INFORMATION, SE_DACL_PROTECTED};
+    use windows_sys::Win32::Security::{
+        GetSecurityDescriptorControl, GetSecurityDescriptorLength, DACL_SECURITY_INFORMATION,
+        SE_DACL_PROTECTED,
+    };
     unsafe {
         let mut descriptor = std::ptr::null_mut();
-        if GetSecurityInfo(handle, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
-            std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(), &mut descriptor)
-            != ERROR_SUCCESS || descriptor.is_null() {
+        if GetSecurityInfo(
+            handle,
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut descriptor,
+        ) != ERROR_SUCCESS
+            || descriptor.is_null()
+        {
             return Err(VaultError::AclReadback);
         }
         let mut control = 0u16;
@@ -5092,7 +5280,11 @@ fn snapshot_handle_acl(
         let length = GetSecurityDescriptorLength(descriptor) as usize;
         let bytes = std::slice::from_raw_parts(descriptor as *const u8, length).to_vec();
         LocalFree(descriptor as _);
-        Ok(AclSnapshot { path: path.to_path_buf(), descriptor: bytes, dacl_protected: control & SE_DACL_PROTECTED != 0 })
+        Ok(AclSnapshot {
+            path: path.to_path_buf(),
+            descriptor: bytes,
+            dacl_protected: control & SE_DACL_PROTECTED != 0,
+        })
     }
 }
 
@@ -5109,15 +5301,31 @@ fn restore_handle_acl(
     };
     unsafe {
         let descriptor = snapshot.descriptor.as_ptr() as _;
-        if snapshot.descriptor.is_empty() || IsValidSecurityDescriptor(descriptor) == 0 { return Err(VaultError::AclReadback); }
+        if snapshot.descriptor.is_empty() || IsValidSecurityDescriptor(descriptor) == 0 {
+            return Err(VaultError::AclReadback);
+        }
         let mut present = 0;
         let mut defaulted = 0;
         let mut acl = std::ptr::null_mut();
-        if GetSecurityDescriptorDacl(descriptor, &mut present, &mut acl, &mut defaulted) == 0 { return Err(VaultError::AclReadback); }
-        let info = DACL_SECURITY_INFORMATION | if snapshot.dacl_protected {
-            PROTECTED_DACL_SECURITY_INFORMATION
-        } else { UNPROTECTED_DACL_SECURITY_INFORMATION };
-        if SetSecurityInfo(handle, SE_FILE_OBJECT, info, std::ptr::null_mut(), std::ptr::null_mut(), acl, std::ptr::null_mut()) != ERROR_SUCCESS {
+        if GetSecurityDescriptorDacl(descriptor, &mut present, &mut acl, &mut defaulted) == 0 {
+            return Err(VaultError::AclReadback);
+        }
+        let info = DACL_SECURITY_INFORMATION
+            | if snapshot.dacl_protected {
+                PROTECTED_DACL_SECURITY_INFORMATION
+            } else {
+                UNPROTECTED_DACL_SECURITY_INFORMATION
+            };
+        if SetSecurityInfo(
+            handle,
+            SE_FILE_OBJECT,
+            info,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            acl,
+            std::ptr::null_mut(),
+        ) != ERROR_SUCCESS
+        {
             return Err(VaultError::AclApply);
         }
         Ok(())
@@ -5130,10 +5338,14 @@ fn same_snapshot_dacl(actual: &[u8], expected: &[u8]) -> Result<bool, VaultError
     // GetNamedSecurityInfo may normalize self-relative offsets/control metadata
     // when Windows restores inheritance. Compare the actual permission data:
     // presence/nullness and every ACE's type, flags, mask, SID, and order.
-    unsafe fn dacl(bytes: &[u8]) -> Result<(bool, *mut windows_sys::Win32::Security::ACL), VaultError> {
+    unsafe fn dacl(
+        bytes: &[u8],
+    ) -> Result<(bool, *mut windows_sys::Win32::Security::ACL), VaultError> {
         use windows_sys::Win32::Security::{GetSecurityDescriptorDacl, IsValidSecurityDescriptor};
         let descriptor = bytes.as_ptr() as _;
-        if bytes.is_empty() || IsValidSecurityDescriptor(descriptor) == 0 { return Err(VaultError::AclReadback); }
+        if bytes.is_empty() || IsValidSecurityDescriptor(descriptor) == 0 {
+            return Err(VaultError::AclReadback);
+        }
         let mut present = 0;
         let mut defaulted = 0;
         let mut acl = std::ptr::null_mut();
@@ -5145,14 +5357,24 @@ fn same_snapshot_dacl(actual: &[u8], expected: &[u8]) -> Result<bool, VaultError
     unsafe {
         let (actual_present, actual_acl) = dacl(actual)?;
         let (expected_present, expected_acl) = dacl(expected)?;
-        if actual_present != expected_present || actual_acl.is_null() != expected_acl.is_null() { return Ok(false); }
-        if actual_acl.is_null() { return Ok(true); }
-        if IsValidAcl(actual_acl) == 0 || IsValidAcl(expected_acl) == 0 { return Err(VaultError::AclReadback); }
-        if (*actual_acl).AceCount != (*expected_acl).AceCount { return Ok(false); }
+        if actual_present != expected_present || actual_acl.is_null() != expected_acl.is_null() {
+            return Ok(false);
+        }
+        if actual_acl.is_null() {
+            return Ok(true);
+        }
+        if IsValidAcl(actual_acl) == 0 || IsValidAcl(expected_acl) == 0 {
+            return Err(VaultError::AclReadback);
+        }
+        if (*actual_acl).AceCount != (*expected_acl).AceCount {
+            return Ok(false);
+        }
         for index in 0..u32::from((*actual_acl).AceCount) {
             let mut actual_ace = std::ptr::null_mut();
             let mut expected_ace = std::ptr::null_mut();
-            if GetAce(actual_acl, index, &mut actual_ace) == 0 || GetAce(expected_acl, index, &mut expected_ace) == 0 {
+            if GetAce(actual_acl, index, &mut actual_ace) == 0
+                || GetAce(expected_acl, index, &mut expected_ace) == 0
+            {
                 return Err(VaultError::AclReadback);
             }
             let actual_len = usize::from((*(actual_ace as *const ACE_HEADER)).AceSize);
@@ -5160,7 +5382,9 @@ fn same_snapshot_dacl(actual: &[u8], expected: &[u8]) -> Result<bool, VaultError
             if actual_len != expected_len
                 || std::slice::from_raw_parts(actual_ace as *const u8, actual_len)
                     != std::slice::from_raw_parts(expected_ace as *const u8, expected_len)
-            { return Ok(false); }
+            {
+                return Ok(false);
+            }
         }
         Ok(true)
     }
@@ -5561,9 +5785,7 @@ fn valid_admin_group_name(name: &str) -> bool {
 /// principal or local-group identities in a settings error.
 fn group_error_reason(error: VaultError) -> String {
     match error {
-        VaultError::PrincipalResolution(_) => {
-            "windows local group operation failed".to_string()
-        }
+        VaultError::PrincipalResolution(_) => "windows local group operation failed".to_string(),
         _ => "local group reconciliation failed".to_string(),
     }
 }
@@ -5614,7 +5836,9 @@ fn startup_validation_result(error: &VaultError) -> VaultEntryResult {
         VaultError::PrincipalResolution(_) => VaultEntryResult::PrincipalResolutionFailed,
         VaultError::ContainerIdentity => VaultEntryResult::ContainerIdentityFailed,
         VaultError::AclApply => VaultEntryResult::AclApplyFailed,
-        VaultError::AclReadback | VaultError::Persistence | VaultError::RollbackUnverified
+        VaultError::AclReadback
+        | VaultError::Persistence
+        | VaultError::RollbackUnverified
         | VaultError::CommitUnconfirmed => VaultEntryResult::AclReadbackFailed,
     }
 }
@@ -8851,7 +9075,7 @@ mod tests {
                     sid: "S-1-5-21-202".into(),
                     username: "Other".into(),
                     display_name: None,
-            });
+                });
             assert_eq!(
                 store.save_access_directory_for_caller(requested, "S-1-5-21-202", || Ok(())),
                 Err(VaultError::Forbidden)
@@ -8934,7 +9158,7 @@ mod tests {
             .push(wincmd_shared::vault_access::VaultGrantInput {
                 principal_name: "WC_Sales".into(),
                 access: VaultAccess::Write,
-        });
+            });
         store.apply(requested, 7).unwrap();
         for remove in [true, false] {
             let mut next = directory.clone();
@@ -9023,8 +9247,8 @@ mod tests {
                     .lock()
                     .unwrap()
                     .insert("WC_Sales".into(), vec!["S-1-5-21-999".into()]);
-            Ok(())
-        });
+                Ok(())
+            });
         assert_eq!(result, Err(VaultError::GroupNameConflict));
         assert_eq!(membership.lock().unwrap()["WC_Sales"], ["S-1-5-21-999"]);
         assert!(store.access_directory().unwrap().groups.is_empty());
@@ -9115,8 +9339,12 @@ mod tests {
             });
         // Model the durable legacy record described above, not unexplained
         // drift between a healthy service cache and its protected disk state.
-        let legacy = serde_json::to_vec(store.state.lock().unwrap().active.as_ref().unwrap()).unwrap();
-        files.lock().unwrap().insert(PathBuf::from("/policy").join(POLICY_FILE), legacy);
+        let legacy =
+            serde_json::to_vec(store.state.lock().unwrap().active.as_ref().unwrap()).unwrap();
+        files
+            .lock()
+            .unwrap()
+            .insert(PathBuf::from("/policy").join(POLICY_FILE), legacy);
         assert!(
             !store
                 .authorize_mount("shared", &["S-1-test-Admin".into()])

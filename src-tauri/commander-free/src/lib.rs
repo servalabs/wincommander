@@ -728,7 +728,8 @@ fn handle_search_hotkey(app: &tauri::AppHandle) {
     .inner_size(760.0, 520.0)
     .center()
     .build()
-    .is_ok() {
+    .is_ok()
+    {
         let app_for_timeout = app.clone();
         tauri::async_runtime::spawn(async move {
             // Never expose a blank or black emergency fallback. If a broken

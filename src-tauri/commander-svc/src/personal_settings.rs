@@ -31,7 +31,10 @@ fn scheduler() -> &'static scheduler::Scheduler {
     SCHEDULER.get_or_init(scheduler::Scheduler::new)
 }
 
-pub(crate) fn with_quick_mount_letters<T>(sid: &str, work: impl FnOnce(Vec<String>) -> StoreResult<T>) -> StoreResult<T> {
+pub(crate) fn with_quick_mount_letters<T>(
+    sid: &str,
+    work: impl FnOnce(Vec<String>) -> StoreResult<T>,
+) -> StoreResult<T> {
     // Cleanup holds this account's writer permit through its final Windows readback.
     scheduler().try_transaction(sid, || {
         let root = platform::store_root()?;
@@ -45,15 +48,27 @@ pub(crate) fn with_quick_mount_letters<T>(sid: &str, work: impl FnOnce(Vec<Strin
 
 fn quick_mount_letters(value: &serde_json::Value) -> StoreResult<Vec<String>> {
     let mut letters = Vec::new();
-    let app = value.get("app").ok_or(INVALID)?.as_object().ok_or(INVALID)?;
+    let app = value
+        .get("app")
+        .ok_or(INVALID)?
+        .as_object()
+        .ok_or(INVALID)?;
     if let Some(vault) = app.get("vault") {
         let vault = vault.as_object().ok_or(INVALID)?;
         if let Some(slots) = vault.get("quickMountSlots") {
-            let slots = slots.as_array().filter(|slots| slots.len() <= 128).ok_or(INVALID)?;
+            let slots = slots
+                .as_array()
+                .filter(|slots| slots.len() <= 128)
+                .ok_or(INVALID)?;
             for slot in slots {
-                let letter = slot.get("driveLetter").and_then(serde_json::Value::as_str).ok_or(INVALID)?;
+                let letter = slot
+                    .get("driveLetter")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or(INVALID)?;
                 let letter = letter.trim_end_matches(':').to_ascii_uppercase();
-                if letter.len() != 1 || !letter.as_bytes()[0].is_ascii_uppercase() { return Err(INVALID); }
+                if letter.len() != 1 || !letter.as_bytes()[0].is_ascii_uppercase() {
+                    return Err(INVALID);
+                }
                 letters.push(letter);
             }
         }

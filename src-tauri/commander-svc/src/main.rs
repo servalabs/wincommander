@@ -27,11 +27,11 @@ fn main() {
 
 // ── Windows implementation ───────────────────────────────────────────────────
 
+#[cfg(any(windows, test))]
+mod managed_deployment;
 #[cfg(windows)]
 mod personal_settings;
 mod settings_host;
-#[cfg(any(windows, test))]
-mod managed_deployment;
 
 #[cfg(windows)]
 mod license_cache;
@@ -41,10 +41,10 @@ mod machine_settings;
 mod rdp_lock_query;
 
 #[cfg(windows)]
+mod bluetooth_control;
+#[cfg(windows)]
 #[path = "../../runtime-support/bluetooth_control.rs"]
 mod bluetooth_control_core;
-#[cfg(windows)]
-mod bluetooth_control;
 
 // G-1 ownership split: endpoint background loops live with their future
 // owners; this root remains process composition only.
@@ -62,8 +62,8 @@ mod reconciler;
 // only its internal `WindowsPolicyFs`/`windows_acl` submodule is
 // `#[cfg(windows)]`-gated. See `policy_store.rs`'s module doc.
 mod diagnostics;
-mod policy_store;
 mod fleet_machine_policy;
+mod policy_store;
 mod shield_journal;
 mod vault_access;
 
