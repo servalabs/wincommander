@@ -1,8 +1,27 @@
 import { copyFileSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { assertSharedAssets } from "./check-shared-assets";
+import { desktopBuildCommand, normalizedPqReleaseEnvironment, serviceBuildCommand, validatePqReleaseTrust } from "./pq-release-profile";
 
 const root = resolve(import.meta.dirname, "..");
+const disposableTrustFiles = [
+  "src-tauri/commander-free/tests/fixtures/hybrid-pro-disposable.json",
+  "src-tauri/commander-svc/src/fixtures/hybrid-licence-test.json",
+  "src-tauri/commander-svc/src/fixtures/hybrid-licence-invalid-test.json",
+  "src-tauri/commander-svc/src/fixtures/workers-hybrid-licence.json",
+  "src-tauri/commander-svc/src/fixtures/workers-enrolment-issuer.json",
+  "src-tauri/commander-svc/src/fixtures/workers-enrolment-receipt.json",
+  "src-tauri/commander-svc/src/fixtures/workers-device-renewal.json",
+  "src-tauri/wincmd-pq-experiment/tests/cloudflare-jws-v1.json",
+  "src-tauri/wincmd-pq-experiment/tests/cloudflare-jws-signer-v1.json",
+];
+const disposableKeys = new Set<string>();
+for (const file of disposableTrustFiles) {
+  const fixture = JSON.parse(readFileSync(resolve(root, file), "utf8")) as Record<string, unknown>;
+  for (const key of [fixture.publicEd, fixture.publicPq]) if (typeof key === "string") disposableKeys.add(key);
+}
+const approval = JSON.parse(readFileSync(resolve(root, "tools/pq-release-approval.json"), "utf8"));
+validatePqReleaseTrust(process.env, disposableKeys, approval);
 assertSharedAssets(root);
 const configPath = resolve(root, "src-tauri", "commander-free", "tauri.conf.json");
 const generatedConfigPath = resolve(root, "src-tauri", "commander-free", "tauri.release.generated.json");
@@ -39,27 +58,31 @@ const rustflags = [process.env.RUSTFLAGS, staticCrtFlags].filter(Boolean).join("
 // C runtime, but use normal release linking for the installer so it is
 // reproducible on both local machines and CI.
 const releaseBuildEnv = {
-  ...process.env,
+  ...normalizedPqReleaseEnvironment(process.env),
   RUSTFLAGS: rustflags,
   CARGO_PROFILE_RELEASE_LTO: "false",
 };
 
-function run(command: string[], label: string) {
+function run(command: string[], label: string, env = releaseBuildEnv) {
   const result = Bun.spawnSync(command, {
     cwd: root,
-    env: releaseBuildEnv,
+    env,
     stdout: "inherit",
     stderr: "inherit",
   });
   if (result.exitCode !== 0) throw new Error(`${label} failed with exit code ${result.exitCode}`);
 }
 
+run(["cargo", "run", "--locked", "--manifest-path", "src-tauri/Cargo.toml", "-p", "wincmd-pq-experiment", "--bin", "wincmd-pq-trust-check"],
+  "Independent release trust proof verification", { ...releaseBuildEnv,
+    AWS_LC_SYS_PREBUILT_NASM: releaseBuildEnv.AWS_LC_SYS_PREBUILT_NASM ?? "1" });
+
 run(
   ["cargo", "build", "--manifest-path", "src-tauri/Cargo.toml", "-p", "commander-context-shred", "--release"],
   "WinCommander context-delete helper release build",
 );
 run(
-  ["cargo", "build", "--manifest-path", "src-tauri/Cargo.toml", "-p", "commander-svc", "--release"],
+  serviceBuildCommand(),
   "WinCommander machine-service release build",
 );
 run(
@@ -96,7 +119,7 @@ copyFileSync(serviceBuildPath, stagedServicePath);
 copyFileSync(calculatorBuildPath, stagedCalculatorPath);
 writeFileSync(generatedConfigPath, `${JSON.stringify(config, null, 2)}\n`);
 try {
-  run(["bun", "x", "--package", "@tauri-apps/cli@2.12.4", "tauri", "build", "--config", generatedConfigPath], "Tauri release bundle");
+  run(desktopBuildCommand(generatedConfigPath), "Tauri release bundle");
 } finally {
   rmSync(generatedConfigPath, { force: true });
   rmSync(stagedContextShredPath, { force: true });

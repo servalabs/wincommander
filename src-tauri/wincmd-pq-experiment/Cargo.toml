@@ -43,3 +43,7 @@ required-features = ["experimental-signer"]
 name = "wincmd-pq-evidence-check"
 path = "src/bin/evidence_check.rs"
 required-features = ["experimental-offline-verifier"]
+
+[[bin]]
+name = "wincmd-pq-trust-check"
+path = "src/bin/trust_check.rs"

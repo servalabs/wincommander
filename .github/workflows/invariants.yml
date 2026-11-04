@@ -271,6 +271,9 @@ jobs:
           if (($output -join "`n") -notmatch 'running 1 test') { throw 'The Fleet mutex acceptance test did not run.' }
       - name: Test experimental offline hybrid release verification
         run: cargo test --locked -p wincmd-pq-experiment --features experimental-offline-verifier,experimental-signer
+      - name: Test release trust proof verification across runtimes
+        working-directory: .
+        run: bun run tools/test-pq-trust-crosswire.ts
       - name: Test experimental Free hybrid release staging
         shell: pwsh
         run: |
