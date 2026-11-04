@@ -3605,7 +3605,11 @@ fn handle_fleet_machine_policy(verb: &str, args: serde_json::Value, peer: Option
         },
         "svc.fleet.get_hybrid_trust" | "svc.fleet.read_hybrid_trust" => {
             if args != serde_json::json!({}) { return Err(VerbError::new("bad_request", "unexpected arguments")); }
-            let snapshot = store.hybrid_trust_snapshot().map_err(|kind| VerbError::new("fleet_policy_unavailable", kind))?;
+            let snapshot = if verb == "svc.fleet.read_hybrid_trust" {
+                store.hybrid_trust_for_helper()
+            } else {
+                store.hybrid_trust_snapshot()
+            }.map_err(|kind| VerbError::new("fleet_policy_unavailable", kind))?;
             match snapshot {
                 Some((binding, hybrid)) => Ok(serde_json::json!({"trust": binding, "hybrid_trust": hybrid})),
                 None => Ok(serde_json::json!({"trust": null, "hybrid_trust": null})),

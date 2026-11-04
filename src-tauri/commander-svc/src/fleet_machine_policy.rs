@@ -581,6 +581,16 @@ impl FleetMachinePolicy {
             .map(|hybrid| (record.trust.clone(), hybrid.clone()))))
     }
 
+    /// A trust pin alone does not authorize a connection. The helper-facing
+    /// enrollment path remains closed while the machine service is disabled.
+    pub fn hybrid_trust_for_helper(&self) -> Result<Option<(FleetTrust, FleetHybridTrust)>, &'static str> {
+        let guard = self.state.lock().map_err(|_| "store_unavailable")?;
+        let Some(record) = guard.record.as_ref() else { return Ok(None); };
+        if record.hybrid_unconfirmed { return Err("store_unavailable"); }
+        if !record.service_enabled { return Err("service_disabled"); }
+        Ok(record.hybrid_trust.as_ref().map(|hybrid| (record.trust.clone(), hybrid.clone())))
+    }
+
     /// Explicit administrator-authorized re-enrollment. Comparing the full
     /// previous binding prevents a delayed confirmation replacing a newer one.
     pub fn replace_trust(
@@ -1271,6 +1281,7 @@ mod tests {
         assert_eq!(store.provision_hybrid_trust(trust(), hybrid(), "bad"), Err("invalid_actor"));
         assert_eq!(store.provision_hybrid_trust(trust(), hybrid(), "S-1-5-18"), Ok(()));
         assert!(!store.trust_with_origins().unwrap().unwrap().4);
+        assert_eq!(store.hybrid_trust_for_helper(), Err("service_disabled"));
         assert_eq!(store.snapshot().unwrap(), Some(policy(1)));
         assert_eq!(store.provision_hybrid_trust(trust(), hybrid(), "S-1-5-18"), Ok(()));
         let mut changed = hybrid(); changed.minimum_epoch = 8;
@@ -1282,6 +1293,7 @@ mod tests {
         let reopened = FleetMachinePolicy::open(Box::new(fs), PathBuf::from("test")).unwrap();
         assert_eq!(reopened.hybrid_trust_snapshot().unwrap(), Some((trust(), hybrid())));
         assert!(!reopened.trust_with_origins().unwrap().unwrap().4);
+        assert_eq!(reopened.hybrid_trust_for_helper(), Err("service_disabled"));
         assert_eq!(reopened.snapshot().unwrap(), Some(policy(1)));
     }
 
