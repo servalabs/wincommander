@@ -193,6 +193,20 @@ fn sign_refresh_wire(
     expires_at: u64,
     now: u64,
 ) -> Result<RefreshProof, &'static str> {
+    sign_device_wire(credential, body, credential_id, nonce, digest, expires_at, now,
+        wincmd_pq_experiment::licence_device_proof::Operation::Refresh)
+}
+
+fn sign_device_wire(
+    credential: &ConfirmedCredential,
+    body: Vec<u8>,
+    credential_id: &[u8; 32],
+    nonce: &[u8; 32],
+    digest: &[u8; 32],
+    expires_at: u64,
+    now: u64,
+    operation: wincmd_pq_experiment::licence_device_proof::Operation,
+) -> Result<RefreshProof, &'static str> {
     use subtle::ConstantTimeEq;
     if credential.id != *credential_id
         || expires_at <= now
@@ -208,7 +222,7 @@ fn sign_refresh_wire(
         return Err(INVALID);
     }
     let challenge = wincmd_pq_experiment::licence_device_proof::Challenge {
-        operation: wincmd_pq_experiment::licence_device_proof::Operation::Refresh,
+        operation,
         credential_id,
         nonce,
         request_digest: digest,
@@ -310,6 +324,27 @@ pub(crate) fn prepare_renewal_request(
     let credential = load_confirmed(binding, receipt_trust, now)?;
     let body = checked_refresh_wire(binding, licence)?;
     wire::renewal_request(&credential, body, challenge, now)
+}
+
+/// Prepare only from the current verified cache and confirmed device identity.
+/// The resulting release request must be persisted securely before it is sent.
+pub(crate) fn prepare_release_challenge_request(
+    binding: &Binding<'_>, receipt_trust: &wincmd_pq_experiment::jws::Trust<'_>,
+    licence: &RefreshLicence<'_>, now: u64,
+) -> Result<Vec<u8>, &'static str> {
+    let credential = load_confirmed(binding, receipt_trust, now)?;
+    let body = checked_refresh_wire(binding, licence)?;
+    wire::release_challenge_request(&credential, &body)
+}
+
+/// Check the cache and device identity again before constructing the release.
+pub(crate) fn prepare_release_request(
+    binding: &Binding<'_>, receipt_trust: &wincmd_pq_experiment::jws::Trust<'_>,
+    licence: &RefreshLicence<'_>, challenge: &[u8], now: u64,
+) -> Result<Vec<u8>, &'static str> {
+    let credential = load_confirmed(binding, receipt_trust, now)?;
+    let body = checked_refresh_wire(binding, licence)?;
+    wire::release_request(&credential, body, challenge, now)
 }
 
 /// Perform one bounded renewal exchange. The caller must authenticate the caller,
