@@ -217,6 +217,53 @@ fn sign_refresh_wire(
     Ok(RefreshProof { body, tag })
 }
 
+const LEGACY_DEVICE_ANCHOR: &str = r"SOFTWARE\ServaLabs\WinCommander\ExperimentalLicenceDevice";
+
+fn device_anchor_path(binding: &Binding<'_>) -> Result<String, &'static str> {
+    // A flat hashed leaf keeps identifiers out of registry names and permits
+    // independent credentials for different licences on the same machine.
+    use std::fmt::Write as _;
+    let digest = entropy(binding, &[0; 32])?;
+    let mut suffix = String::with_capacity(64);
+    for byte in digest { write!(&mut suffix, "{byte:02x}").map_err(|_| INVALID)?; }
+    Ok(format!(r"SOFTWARE\ServaLabs\WinCommander\ExperimentalLicenceDevice-{suffix}"))
+}
+
+/// Caller holds the credential and cross-process locks. Never replace or delete
+/// the legacy record: reuse it only when it verifies for this exact binding.
+fn select_legacy_anchor_locked(
+    legacy: &anchor::Anchor,
+    scoped: &anchor::Anchor,
+    protector: &dyn Protector,
+    binding: &Binding<'_>,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>,
+    now: u64,
+) -> Result<bool, &'static str> {
+    if scoped.read().map_err(|_| INVALID)?.is_some() { return Ok(false); }
+    let Some(bytes) = legacy.read().map_err(|_| INVALID)? else { return Ok(false); };
+    let record: Record = match serde_json::from_slice(&bytes) {
+        Ok(record) => record,
+        Err(_) => return Ok(false),
+    };
+    Ok(match record.phase.as_str() {
+        "pending" => decode(protector, binding, &bytes).is_ok(),
+        "confirmed" => decode_confirmed(protector, binding, trust, &bytes, now).is_ok(),
+        _ => false,
+    })
+}
+
+fn selected_machine_anchor_locked(
+    binding: &Binding<'_>, trust: &wincmd_pq_experiment::jws::Trust<'_>, now: u64,
+) -> Result<anchor::Anchor, &'static str> {
+    let legacy = anchor::Anchor::machine_named(LEGACY_DEVICE_ANCHOR);
+    let scoped = anchor::Anchor::machine_named(&device_anchor_path(binding)?);
+    if select_legacy_anchor_locked(&legacy, &scoped, &MachineDpapi, binding, trust, now)? {
+        Ok(legacy)
+    } else {
+        Ok(scoped)
+    }
+}
+
 /// Existing signed licence and cache evidence; callers cannot choose trust or paths through IPC.
 pub(crate) struct RefreshLicence<'a> {
     pub payload: &'a str,
@@ -629,10 +676,13 @@ async fn enrol_over_network(
         binding,
         license_key,
         || {
-            let anchor = anchor::Anchor::machine_named(
-                r"SOFTWARE\ServaLabs\WinCommander\ExperimentalLicenceDevice",
-            );
-            enrolment_state(&anchor, &MachineDpapi, binding, receipt_trust, now()?)
+            let time = now()?;
+            let anchor = {
+                let _guard = LOCK.lock().map_err(|_| INVALID)?;
+                let _process_lock = crate::licence_security_lock().map_err(|_| INVALID)?;
+                selected_machine_anchor_locked(binding, receipt_trust, time)?
+            };
+            enrolment_state(&anchor, &MachineDpapi, binding, receipt_trust, time)
         },
         wire::post_enrolment,
         |signed| {
@@ -642,10 +692,9 @@ async fn enrol_over_network(
             crate::license_cache::with_verified_refresh_wire(
                 licence.payload, licence.signature, licence.hybrid, licence.last_verified_at,
                 binding.licence_id, binding.device_hash, |_| {
-                    let anchor = anchor::Anchor::machine_named(
-                        r"SOFTWARE\ServaLabs\WinCommander\ExperimentalLicenceDevice",
-                    );
-                    confirm_locked(&anchor, &MachineDpapi, binding, receipt_trust, signed, now()?)?;
+                    let time = now()?;
+                    let anchor = selected_machine_anchor_locked(binding, receipt_trust, time)?;
+                    confirm_locked(&anchor, &MachineDpapi, binding, receipt_trust, signed, time)?;
                     Ok(())
                 },
             )
@@ -679,63 +728,6 @@ where
     }
 }
 
-/// Persist before contacting the issuer. This never establishes an active
-/// credential; a future confirmation path must verify a bound issuer receipt.
-pub(crate) fn get_or_create_pending(
-    binding: &Binding<'_>,
-) -> Result<PendingCredential, &'static str> {
-    get_or_create_with(
-        &anchor::Anchor::machine_named(
-            r"SOFTWARE\ServaLabs\WinCommander\ExperimentalLicenceDevice",
-        ),
-        &MachineDpapi,
-        binding,
-    )
-}
-
-/// The service must supply trusted time, trust, caller authorization and a
-/// hybrid-protected transport; no desktop-facing verb is provided here.
-pub(crate) fn enrol<F, C>(
-    binding: &Binding<'_>,
-    trust: &wincmd_pq_experiment::jws::Trust<'_>,
-    clock: C,
-    send: F,
-) -> Result<ConfirmedCredential, &'static str>
-where
-    F: FnOnce(&[u8; 32], &[u8; 32]) -> Result<String, &'static str>,
-    C: Fn() -> u64,
-{
-    enrol_with(
-        &anchor::Anchor::machine_named(
-            r"SOFTWARE\ServaLabs\WinCommander\ExperimentalLicenceDevice",
-        ),
-        &MachineDpapi,
-        binding,
-        trust,
-        clock,
-        send,
-    )
-}
-
-/// `now` and trust must come from the service's independent local policy.
-pub(crate) fn confirm_pending(
-    binding: &Binding<'_>,
-    trust: &wincmd_pq_experiment::jws::Trust<'_>,
-    signed_receipt: &str,
-    now: u64,
-) -> Result<ConfirmedCredential, &'static str> {
-    confirm_with(
-        &anchor::Anchor::machine_named(
-            r"SOFTWARE\ServaLabs\WinCommander\ExperimentalLicenceDevice",
-        ),
-        &MachineDpapi,
-        binding,
-        trust,
-        signed_receipt,
-        now,
-    )
-}
-
 pub(crate) fn load_confirmed(
     binding: &Binding<'_>,
     trust: &wincmd_pq_experiment::jws::Trust<'_>,
@@ -743,8 +735,7 @@ pub(crate) fn load_confirmed(
 ) -> Result<ConfirmedCredential, &'static str> {
     let _guard = LOCK.lock().map_err(|_| INVALID)?;
     let _process_lock = crate::licence_security_lock().map_err(|_| INVALID)?;
-    let store =
-        anchor::Anchor::machine_named(r"SOFTWARE\ServaLabs\WinCommander\ExperimentalLicenceDevice");
+    let store = selected_machine_anchor_locked(binding, trust, now)?;
     let bytes = store.read().map_err(|_| INVALID)?.ok_or(INVALID)?;
     decode_confirmed(&MachineDpapi, binding, trust, &bytes, now)
 }

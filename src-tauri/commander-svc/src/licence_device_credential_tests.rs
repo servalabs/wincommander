@@ -643,6 +643,20 @@ async fn authorized_worker_issuer_receipt_confirms_persisted_pending_credential(
     .is_err());
     let stored = anchor.read().unwrap().unwrap();
     assert!(decode_confirmed(&MachineDpapi, &binding, &trust, &stored, accepted_at + 1).is_ok());
+    // Keep a pre-upgrade identity for the same licence, while a different
+    // licence can create its own independent credential without overwriting it.
+    let scoped_path = format!(r"SOFTWARE\WinCommanderScopedTest-{}", uuid::Uuid::new_v4());
+    let scoped = anchor::Anchor::test_user(scoped_path.clone());
+    let other_binding = Binding { licence_id: "another-licence", ..binding };
+    assert_ne!(device_anchor_path(&binding).unwrap(), device_anchor_path(&other_binding).unwrap());
+    assert!(select_legacy_anchor_locked(&anchor, &scoped, &MachineDpapi, &binding, &trust, accepted_at + 1).unwrap());
+    assert!(!select_legacy_anchor_locked(&anchor, &scoped, &MachineDpapi, &other_binding, &trust, accepted_at + 1).unwrap());
+    let other_credential = PendingCredential::generate().unwrap();
+    save_locked(&scoped, &MachineDpapi, &other_binding, &other_credential).unwrap();
+    assert!(!select_legacy_anchor_locked(&anchor, &scoped, &MachineDpapi, &other_binding, &trust, accepted_at + 1).unwrap());
+    assert_eq!(anchor.read().unwrap().unwrap(), stored);
+    assert_eq!(decode(&MachineDpapi, &other_binding, &scoped.read().unwrap().unwrap()).unwrap().id, other_credential.id);
+    anchor::remove_test_key(&scoped_path).unwrap();
     // A previously protected receipt remains usable after a planned rotation,
     // but old keys cannot authorize a new confirmation or exceed their bound.
     let new_ed = [0u8; 32];
