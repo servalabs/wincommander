@@ -130,6 +130,11 @@ impl Anchor {
         }
         Ok(Some(key))
     }
+    /// A present but empty or malformed key still blocks a classical downgrade.
+    #[allow(dead_code)] // Only the service's classical build uses this check.
+    pub(crate) fn exists(&self) -> Result<bool, String> {
+        Ok(self.open(false)?.is_some())
+    }
     pub(crate) fn read(&self) -> Result<Option<Vec<u8>>, String> {
         let Some(key) = self.open(false)? else {
             return Ok(None);

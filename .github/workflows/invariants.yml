@@ -297,6 +297,14 @@ jobs:
           if (($output -join "`n") -notmatch 'running 1 test') { throw 'The Free update registry ACL acceptance test did not run.' }
       - name: Test experimental service licence validation
         run: cargo test --locked -p commander-svc --features experimental-pq-licence license_cache
+      - name: Test classical service downgrade guard
+        shell: pwsh
+        run: |
+          $output = & cargo test --locked -p commander-svc license_cache::tests::classical_store_rejects_present_hybrid_security_record -- --exact 2>&1
+          $code = $LASTEXITCODE
+          $output | ForEach-Object { Write-Host $_ }
+          if ($code -ne 0) { exit $code }
+          if (($output -join "`n") -notmatch 'running 1 test') { throw 'The classical licence downgrade guard test did not run.' }
       - name: Test experimental device credential and transport
         run: cargo test --locked -p commander-svc --features experimental-pq-licence licence_device_credential
       - name: Test experimental cross-process licence coordination

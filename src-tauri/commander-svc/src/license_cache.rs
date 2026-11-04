@@ -26,6 +26,10 @@ mod hybrid_trust;
 mod rollback;
 #[cfg(feature = "experimental-pq-licence")]
 pub(crate) use rollback::anchor as licence_device_anchor;
+#[cfg(not(feature = "experimental-pq-licence"))]
+#[allow(dead_code)]
+#[path = "../../commander-free/src/updater/hybrid_free_anchor.rs"]
+mod classical_anchor;
 
 const DEFAULT_LICENSE_PUBLIC_KEY_B64: &str = "Z4ulYtrFLpOZYVLGpNo_PlegZsitTmJx2JwfyIqSJpY";
 const MAINLINE_APP_ID: &str = "com.servalabs.wincommander";
@@ -126,8 +130,24 @@ pub fn store(args: serde_json::Value) -> Result<(), &'static str> {
     }
     #[cfg(not(feature = "experimental-pq-licence"))]
     {
-        atomic_write(&path, &bytes).map_err(|_| "machine license cache is unavailable")
+        write_classical_with_anchor(&path, &bytes, &classical_anchor::Anchor::machine_named(
+            r"SOFTWARE\ServaLabs\WinCommander\HybridLicence"))
     }
+}
+
+#[cfg(not(feature = "experimental-pq-licence"))]
+fn write_classical_with_anchor(path: &Path, bytes: &[u8], anchor: &classical_anchor::Anchor) -> Result<(), &'static str> {
+    let _lock = crate::licence_security_lock()?;
+    require_classical_floor(anchor)?;
+    atomic_write(path, bytes).map_err(|_| "machine license cache is unavailable")
+}
+
+#[cfg(not(feature = "experimental-pq-licence"))]
+fn require_classical_floor(anchor: &classical_anchor::Anchor) -> Result<(), &'static str> {
+    if anchor.exists().map_err(|_| "license security record is unavailable")? {
+        return Err("hybrid license verification is required");
+    }
+    Ok(())
 }
 
 /// Read-only confirmation that the current signed cache matches protected history.
@@ -510,6 +530,32 @@ fn now_unix() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(feature = "experimental-pq-licence"))]
+    #[test]
+    fn classical_store_rejects_present_hybrid_security_record() {
+        let path = format!(r"SOFTWARE\WinCommanderLicenceFloorTest-{}", uuid::Uuid::new_v4().simple());
+        let anchor = classical_anchor::Anchor::test_user(path.clone());
+        let cache = std::env::temp_dir().join(format!("wincom-licence-floor-{}.json", uuid::Uuid::new_v4().simple()));
+        assert!(write_classical_with_anchor(&cache, b"classical", &anchor).is_ok());
+        assert_eq!(fs::read(&cache).unwrap(), b"classical");
+        anchor.write(b"malformed security record").unwrap();
+        assert_eq!(write_classical_with_anchor(&cache, b"downgrade", &anchor), Err("hybrid license verification is required"));
+        assert_eq!(fs::read(&cache).unwrap(), b"classical");
+        use windows_sys::Win32::System::Registry::{RegCloseKey, RegDeleteValueW, RegOpenKeyExW, HKEY_CURRENT_USER, KEY_SET_VALUE, KEY_WOW64_64KEY};
+        let wide_path: Vec<u16> = path.encode_utf16().chain(Some(0)).collect();
+        let value: Vec<u16> = "SignedFloor".encode_utf16().chain(Some(0)).collect();
+        let mut key = std::ptr::null_mut();
+        unsafe {
+            assert_eq!(RegOpenKeyExW(HKEY_CURRENT_USER, wide_path.as_ptr(), 0, KEY_SET_VALUE | KEY_WOW64_64KEY, &mut key), 0);
+            assert_eq!(RegDeleteValueW(key, value.as_ptr()), 0);
+            RegCloseKey(key);
+        }
+        assert_eq!(write_classical_with_anchor(&cache, b"downgrade", &anchor), Err("hybrid license verification is required"));
+        assert_eq!(fs::read(&cache).unwrap(), b"classical");
+        fs::remove_file(cache).unwrap();
+        classical_anchor::remove_test_key(&path).unwrap();
+    }
 
     #[cfg(feature = "experimental-pq-licence")]
     #[test]
