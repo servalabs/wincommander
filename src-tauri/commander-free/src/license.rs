@@ -232,6 +232,7 @@ struct WorkerActivateRequest<'a> {
     is_portable: bool,
 }
 
+#[cfg(not(feature = "experimental-pq-licence"))]
 #[derive(Debug, Serialize)]
 struct WorkerRefreshRequest<'a> {
     payload: &'a str,
@@ -1643,6 +1644,12 @@ pub async fn refresh_license_if_due() -> Result<serde_json::Value, String> {
     serde_json::to_value(status).map_err(|e| e.to_string())
 }
 
+#[cfg(feature = "experimental-pq-licence")]
+fn confirm_hybrid_renewal_reply(reply: &serde_json::Value) -> Result<(), String> {
+    if reply == &serde_json::json!({"renewed": true}) { Ok(()) }
+    else { Err("License renewal could not be confirmed.".into()) }
+}
+
 #[tauri::command]
 pub async fn refresh_license() -> Result<serde_json::Value, String> {
     let (api_base, public_key_b64) = get_config()?;
@@ -1657,11 +1664,6 @@ pub async fn refresh_license() -> Result<serde_json::Value, String> {
             "License token does not match this device. Reactivate this device.".to_string(),
         );
     }
-    // Reuse the signed claim's hash for refresh. This preserves a token
-    // created during a transient probe failure; the server requires the
-    // refresh request to carry the exact hash it originally issued.
-    let device_hash = cached_claims.device_hash.clone();
-
     // A trial is a fixed, worker-signed 16-day token. It does not consume a
     // paid licence seat and must never hit the paid refresh endpoint.
     if cached_claims.plan == "trial" {
@@ -1669,6 +1671,25 @@ pub async fn refresh_license() -> Result<serde_json::Value, String> {
         return serde_json::to_value(status).map_err(|e| e.to_string());
     }
 
+    #[cfg(feature = "experimental-pq-licence")]
+    {
+        let _ = api_base;
+        let reply = crate::svc_client::call(wincmd_shared::svc::RENEW_HYBRID_LICENSE_VERB, serde_json::json!({})).await?;
+        confirm_hybrid_renewal_reply(&reply)?;
+        let updated = load_cached_license()?.ok_or("Renewed license is unavailable.")?;
+        let claims = verify_token_claims(&updated.token, &public_key_b64)?;
+        if claims.license_id != cached_claims.license_id || claims.device_hash != cached_claims.device_hash
+            || !device_hash_matches(&claims.device_hash) || !cache_history_verified_async(&updated).await {
+            return Err("Renewed license does not match this device.".into());
+        }
+        let status = status_from_cached(&updated, &claims, Some("License refreshed.".to_string()));
+        return serde_json::to_value(status).map_err(|e| e.to_string());
+    }
+
+    #[cfg(not(feature = "experimental-pq-licence"))]
+    {
+    // Preserve the signed device binding for legacy deployed clients.
+    let device_hash = cached_claims.device_hash.clone();
     let client = crate::net::licence_http_client()?;
 
     let response = client
@@ -1733,6 +1754,7 @@ pub async fn refresh_license() -> Result<serde_json::Value, String> {
 
     let status = status_from_cached(&updated, &claims, Some("License refreshed.".to_string()));
     serde_json::to_value(status).map_err(|e| e.to_string())
+    }
 }
 
 #[tauri::command]
@@ -2287,6 +2309,17 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "experimental-pq-licence")]
+    #[test]
+    fn hybrid_refresh_requires_an_exact_service_confirmation() {
+        assert!(confirm_hybrid_renewal_reply(&serde_json::json!({"renewed": true})).is_ok());
+        for reply in [serde_json::json!({}), serde_json::json!({"renewed": false}),
+            serde_json::json!({"renewed": true, "extra": true})] {
+            assert!(confirm_hybrid_renewal_reply(&reply).is_err());
+        }
+    }
+
+    #[cfg(not(feature = "experimental-pq-licence"))]
     #[test]
     fn paid_refresh_payload_never_requests_a_seat_write() {
         let refresh = WorkerRefreshRequest {
@@ -2311,24 +2344,6 @@ mod tests {
             refresh_json.get("seatHeartbeat").is_none(),
             "routine paid refreshes must never request a seat write"
         );
-    }
-
-    #[cfg(feature = "experimental-pq-licence")]
-    #[test]
-    fn hybrid_licence_refresh_preserves_the_exact_proof() {
-        let proof = "{\"payload\":\"exact\",\"signatures\":[]}";
-        let request = WorkerRefreshRequest {
-            payload: "payload",
-            signature: "signature",
-            hybrid: Some(proof),
-            device_hash: "device-a",
-            app_id: APP_ID,
-            app_version: "test",
-            is_portable: false,
-        };
-        let serialized = serde_json::to_string(&request).expect("serialize refresh");
-        let parsed: serde_json::Value = serde_json::from_str(&serialized).expect("parse refresh");
-        assert_eq!(parsed["hybrid"], proof);
     }
 
     #[test]

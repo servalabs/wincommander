@@ -38,7 +38,7 @@ use wincmd_shared::fleet::{Action, ClipboardEventReport};
 use wincmd_shared::vault_access::VaultMountReason;
 use wincmd_shared::svc::{
     classify_verb, is_known_verb, ApplyMachineSettingRequest, CapabilityClass,
-    APPLY_MACHINE_SETTING_VERB, STORE_LICENSE_CACHE_VERB, VERIFY_LICENSE_CACHE_VERB, SVC_PIPE_NAME, SVC_PROTOCOL_VERSION,
+    APPLY_MACHINE_SETTING_VERB, STORE_LICENSE_CACHE_VERB, VERIFY_LICENSE_CACHE_VERB, RENEW_HYBRID_LICENSE_VERB, SVC_PIPE_NAME, SVC_PROTOCOL_VERSION,
 };
 use wincmd_shared::{Envelope, ErrorReply, Hello, Request, Response};
 
@@ -648,6 +648,8 @@ async fn dispatch_verb(
             .map(|_| serde_json::json!({ "verified": true }))
             .map_err(|message| VerbError::new("license_cache_rejected", message)),
 
+        RENEW_HYBRID_LICENSE_VERB => handle_hybrid_license_renewal(args, trust_origin).await,
+
         "svc.clipboard.get_policy" => fleet_machine_policy_store().and_then(|store|store.read_current(|bound,policy| {
             policy_store.bound_clipboard_response(bound,policy)
         }).map_err(|kind|VerbError::new("clipboard_policy_unavailable",kind))),
@@ -824,6 +826,24 @@ fn valid_diagnostic_operation_id(value: &str) -> bool {
 /// Returns the encrypted service store's deliberately small support view.
 /// The service writer owns decryption; the pipe never returns ciphertext,
 /// context, raw errors, paths, identities, or filesystem details.
+async fn handle_hybrid_license_renewal(
+    args: serde_json::Value,
+    trust_origin: Option<TrustOrigin>,
+) -> Result<serde_json::Value, VerbError> {
+    if trust_origin.is_none() {
+        return Err(VerbError::new("forbidden", "protected WinCommander session required"));
+    }
+    if !args.as_object().is_some_and(|object| object.is_empty()) {
+        return Err(VerbError::new("license_renewal_rejected", "license renewal accepts no parameters"));
+    }
+    #[cfg(feature = "experimental-pq-licence")]
+    { crate::licence_device_credential::renew_from_machine_cache().await
+        .map(|_| serde_json::json!({ "renewed": true }))
+        .map_err(|_| VerbError::new("license_renewal_rejected", "license renewal is unavailable")) }
+    #[cfg(not(feature = "experimental-pq-licence"))]
+    { Err(VerbError::new("license_renewal_rejected", "license renewal is unavailable")) }
+}
+
 fn handle_diagnostics_query(
     args: serde_json::Value,
     peer: Option<&AuthenticatedPipePeer>,
@@ -5511,10 +5531,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn hybrid_renewal_requires_pinned_peer_and_no_caller_parameters() {
+        let no_peer = handle_hybrid_license_renewal(serde_json::json!({}), None).await.unwrap_err();
+        assert_eq!(no_peer.kind, "forbidden");
+        let injected = handle_hybrid_license_renewal(serde_json::json!({"issuer": "attacker"}),
+            Some(TrustOrigin::SessionHelperPinned)).await.unwrap_err();
+        assert_eq!(injected.kind, "license_renewal_rejected");
+        let gate = gate_denying_with(PeerAuthError::PathNotAllowed);
+        assert!(authorize(RENEW_HYBRID_LICENSE_VERB, true, 1234, &gate).await.is_err());
+    }
+
+    #[tokio::test]
     async fn all_session_helper_verbs_allow_unsigned_path_pinned_peer() {
         let gate = passing_gate();
         for verb in [
             "svc.clipboard.report_event",
+            RENEW_HYBRID_LICENSE_VERB,
             "svc.policy.install_epoch",
             "svc.ink_receipt.reserve_ticket",
             "svc.ink_receipt.report_receipt",

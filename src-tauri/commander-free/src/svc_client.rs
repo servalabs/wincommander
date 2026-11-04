@@ -47,6 +47,8 @@ fn request_timeout_for(feature_id: &str) -> std::time::Duration {
         "svc.shared_shortcuts.set_claim" => std::time::Duration::from_secs(30),
         "svc.bluetooth.policy.set_blocked" => std::time::Duration::from_secs(90),
         "svc.bluetooth.policy.status" => std::time::Duration::from_secs(10),
+        // Two bounded network exchanges plus local verified cache persistence.
+        wincmd_shared::svc::RENEW_HYBRID_LICENSE_VERB => std::time::Duration::from_secs(90),
         // Policy saves resolve Windows principals and apply/read back permissions.
         // A short probe deadline does not cancel the exclusive mutation.
         "svc.vault.apply_policy"
@@ -505,6 +507,12 @@ mod tests {
         let expected = if cfg!(debug_assertions) { std::time::Duration::from_secs(30) } else { SVC_TRANSPORT_TIMEOUT };
         assert_eq!(request_timeout_for("svc.fleet.get_policy"), expected);
         assert_eq!(request_timeout_for("svc.vault.get_policy"), SVC_TRANSPORT_TIMEOUT);
+    }
+
+    #[test]
+    fn hybrid_licence_renewal_allows_two_network_exchanges() {
+        assert_eq!(request_timeout_for(wincmd_shared::svc::RENEW_HYBRID_LICENSE_VERB),
+            std::time::Duration::from_secs(90));
     }
 
     #[test]
