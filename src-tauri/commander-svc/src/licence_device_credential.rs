@@ -255,10 +255,20 @@ fn confirm_with(
     let original = anchor.read().map_err(|_| INVALID)?.ok_or(INVALID)?;
     let record: Record = serde_json::from_slice(&original).map_err(|_| INVALID)?;
     if record.phase == "confirmed" {
+        let confirmed = decode_confirmed(protector, binding, trust, &original, now)?;
         if record.receipt.as_deref() != Some(signed_receipt) {
-            return Err(INVALID);
+            // Concurrent exact enrolment retries can receive different valid
+            // signatures or issue times. They must bind the same secret and
+            // still be fresh; never replace the retained confirmation.
+            let mut secret = Zeroizing::new([0u8; 32]);
+            secret.copy_from_slice(confirmed.secret());
+            let pending = PendingCredential {
+                id: confirmed.id,
+                secret,
+            };
+            receipt::verify(signed_receipt, trust, binding, &pending, now)?;
         }
-        return decode_confirmed(protector, binding, trust, &original, now);
+        return Ok(confirmed);
     }
     let pending = decode(protector, binding, &original)?;
     receipt::verify(signed_receipt, trust, binding, &pending, now)?;
@@ -288,6 +298,58 @@ fn confirm_with(
     decode_confirmed(protector, binding, trust, &written, now)
 }
 
+enum EnrolmentState {
+    Pending(PendingCredential),
+    Confirmed(ConfirmedCredential),
+}
+
+fn enrol_with<F, C>(
+    anchor: &anchor::Anchor,
+    protector: &dyn Protector,
+    binding: &Binding<'_>,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>,
+    clock: C,
+    send: F,
+) -> Result<ConfirmedCredential, &'static str>
+where
+    F: FnOnce(&[u8; 32], &[u8; 32]) -> Result<String, &'static str>,
+    C: Fn() -> u64,
+{
+    let state = {
+        let _guard = LOCK.lock().map_err(|_| INVALID)?;
+        match anchor.read().map_err(|_| INVALID)? {
+            None => {
+                let pending = PendingCredential::generate()?;
+                save_locked(anchor, protector, binding, &pending)?;
+                EnrolmentState::Pending(pending)
+            }
+            Some(bytes) => {
+                let record: Record = serde_json::from_slice(&bytes).map_err(|_| INVALID)?;
+                match record.phase.as_str() {
+                    "pending" => EnrolmentState::Pending(decode(protector, binding, &bytes)?),
+                    "confirmed" => EnrolmentState::Confirmed(decode_confirmed(
+                        protector,
+                        binding,
+                        trust,
+                        &bytes,
+                        clock(),
+                    )?),
+                    _ => return Err(INVALID),
+                }
+            }
+        }
+    };
+    match state {
+        EnrolmentState::Confirmed(confirmed) => Ok(confirmed),
+        EnrolmentState::Pending(pending) => {
+            // The caller is responsible for an authenticated, hybrid-protected
+            // transport. Never log or expose this secret to a desktop caller.
+            let signed_receipt = send(&pending.id, pending.secret())?;
+            confirm_with(anchor, protector, binding, trust, &signed_receipt, clock())
+        }
+    }
+}
+
 /// Persist before contacting the issuer. This never establishes an active
 /// credential; a future confirmation path must verify a bound issuer receipt.
 pub(crate) fn get_or_create_pending(
@@ -299,6 +361,30 @@ pub(crate) fn get_or_create_pending(
         ),
         &MachineDpapi,
         binding,
+    )
+}
+
+/// The service must supply trusted time, trust, caller authorization and a
+/// hybrid-protected transport; no desktop-facing verb is provided here.
+pub(crate) fn enrol<F, C>(
+    binding: &Binding<'_>,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>,
+    clock: C,
+    send: F,
+) -> Result<ConfirmedCredential, &'static str>
+where
+    F: FnOnce(&[u8; 32], &[u8; 32]) -> Result<String, &'static str>,
+    C: Fn() -> u64,
+{
+    enrol_with(
+        &anchor::Anchor::machine_named(
+            r"SOFTWARE\ServaLabs\WinCommander\ExperimentalLicenceDevice",
+        ),
+        &MachineDpapi,
+        binding,
+        trust,
+        clock,
+        send,
     )
 }
 

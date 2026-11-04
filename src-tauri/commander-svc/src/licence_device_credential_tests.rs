@@ -181,6 +181,9 @@ fn pending_confirmation_requires_both_signatures_and_exact_bound_receipt() {
         String::from_utf8(bytes).unwrap()
     };
     let valid = sign(&claims, Purpose::LicenceEnrolment);
+    let mut later_claims = claims.clone();
+    later_claims["iat"] = 1001.into();
+    let later_receipt = sign(&later_claims, Purpose::LicenceEnrolment);
     let wrong_purpose = sign(&claims, Purpose::Licence);
     let mut wrong = claims.clone();
     wrong["credential_id"] = URL_SAFE_NO_PAD.encode([3u8; 32]).into();
@@ -222,6 +225,25 @@ fn pending_confirmation_requires_both_signatures_and_exact_bound_receipt() {
     assert_eq!(confirmed.secret(), pending.secret());
     assert!(get_or_create_with(&anchor, &MachineDpapi, &binding).is_err());
     let stored = anchor.read().unwrap().unwrap();
+    assert!(confirm_with(
+        &anchor,
+        &MachineDpapi,
+        &binding,
+        &trust,
+        &later_receipt,
+        1050
+    )
+    .is_ok());
+    assert_eq!(anchor.read().unwrap().unwrap(), stored);
+    assert!(confirm_with(
+        &anchor,
+        &MachineDpapi,
+        &binding,
+        &trust,
+        &later_receipt,
+        2000
+    )
+    .is_err());
     assert!(decode_confirmed(&MachineDpapi, &binding, &trust, &stored, 1049).is_err());
     let reopened = decode_confirmed(&MachineDpapi, &binding, &trust, &stored, 2000).unwrap();
     assert_eq!(reopened.secret(), pending.secret());
@@ -340,18 +362,56 @@ fn authorized_worker_issuer_receipt_confirms_persisted_pending_credential() {
     save_locked(&anchor, &MachineDpapi, &binding, &pending).unwrap();
     let receipt = fixture["receipt"].as_str().unwrap();
     let accepted_at = fixture["acceptedAt"].as_u64().unwrap();
-    let confirmed = confirm_with(
+    let before = anchor.read().unwrap().unwrap();
+    let lost = enrol_with(
         &anchor,
         &MachineDpapi,
         &binding,
         &trust,
-        receipt,
-        accepted_at,
+        || accepted_at,
+        |id, secret| {
+            assert_eq!(id, &pending.id);
+            assert_eq!(secret, pending.secret());
+            Err("response lost")
+        },
+    );
+    assert!(lost.is_err());
+    assert_eq!(anchor.read().unwrap().unwrap(), before);
+    let invalid = enrol_with(
+        &anchor,
+        &MachineDpapi,
+        &binding,
+        &trust,
+        || accepted_at,
+        |_, _| Ok("not a receipt".into()),
+    );
+    assert!(invalid.is_err());
+    assert_eq!(anchor.read().unwrap().unwrap(), before);
+    let confirmed = enrol_with(
+        &anchor,
+        &MachineDpapi,
+        &binding,
+        &trust,
+        || accepted_at,
+        |id, secret| {
+            assert_eq!(id, &pending.id);
+            assert_eq!(secret, pending.secret());
+            Ok(receipt.to_string())
+        },
     )
     .unwrap();
     assert_eq!(confirmed.id, pending.id);
     assert_eq!(confirmed.secret(), pending.secret());
     let stored = anchor.read().unwrap().unwrap();
     assert!(decode_confirmed(&MachineDpapi, &binding, &trust, &stored, accepted_at + 1).is_ok());
+    assert!(enrol_with(
+        &anchor,
+        &MachineDpapi,
+        &binding,
+        &trust,
+        || accepted_at + 1,
+        |_, _| panic!("confirmed credential must not be retransmitted")
+    )
+    .is_ok());
     anchor::remove_test_key(&path).unwrap();
 }
