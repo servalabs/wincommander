@@ -32,6 +32,22 @@ fn denied() -> io::Error {
     )
 }
 
+// Windows can briefly reject replacement of Tantivy's managed-file manifest
+// while another process opens it. Error 5 can also indicate a permanent denial,
+// so bound the retries and return the error if access does not recover.
+#[cfg(windows)]
+fn retry_manifest_write(mut write: impl FnMut() -> io::Result<()>) -> io::Result<()> {
+    for delay_ms in [2, 4, 8, 16, 32, 64, 128] {
+        match write() {
+            Err(error) if error.raw_os_error() == Some(5) => {
+                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+            }
+            result => return result,
+        }
+    }
+    write()
+}
+
 pub(crate) fn validate_ancestors(path: &Path) -> io::Result<()> {
     if path.components().any(|c| matches!(c, Component::ParentDir)) {
         return Err(denied());
@@ -160,6 +176,13 @@ impl Directory for CheckedDirectory {
     }
     fn atomic_write(&self, path: &Path, data: &[u8]) -> io::Result<()> {
         self.check(path, true)?;
+        #[cfg(windows)]
+        if path == Path::new(".managed.json") {
+            return retry_manifest_write(|| {
+                self.check(path, true)?;
+                self.inner.atomic_write(path, data)
+            });
+        }
         self.inner.atomic_write(path, data)
     }
     fn sync_directory(&self) -> io::Result<()> {
@@ -197,6 +220,57 @@ impl Directory for CheckedDirectory {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn manifest_write_retries_only_windows_access_denied() {
+        let mut attempts = 0;
+        retry_manifest_write(|| {
+            attempts += 1;
+            if attempts < 3 {
+                Err(io::Error::from_raw_os_error(5))
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap();
+        assert_eq!(attempts, 3);
+        let mut attempts = 0;
+        let error = retry_manifest_write(|| {
+            attempts += 1;
+            Err(io::Error::from_raw_os_error(2))
+        })
+        .unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(2));
+        assert_eq!(attempts, 1);
+        let mut attempts = 0;
+        assert!(retry_manifest_write(|| {
+            attempts += 1;
+            Err(io::Error::from_raw_os_error(5))
+        }).is_err());
+        assert_eq!(attempts, 8);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn locked_manifest_remains_intact_and_can_be_replaced_after_unlock() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let root = tempfile::TempDir::new().unwrap();
+        let directory = CheckedDirectory::open(root.path(), AccessMode::Writable).unwrap();
+        let manifest = Path::new(".managed.json");
+        directory.atomic_write(manifest, b"old").unwrap();
+        let locked = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(root.path().join(manifest))
+            .unwrap();
+        assert!(directory.atomic_write(manifest, b"new").is_err());
+        drop(locked);
+        assert_eq!(directory.atomic_read(manifest).unwrap(), b"old");
+        directory.atomic_write(manifest, b"new").unwrap();
+        assert_eq!(directory.atomic_read(manifest).unwrap(), b"new");
+    }
 
     #[test]
     fn directory_rejects_absolute_parent_nested_and_stream_paths() {
