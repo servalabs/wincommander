@@ -1,0 +1,18 @@
+{
+  "secret_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "vectors": [
+    {
+      "body": "",
+      "header": "v2.0z3g0onYLo1VdvHoTDAM3c/eukoBKI+gT92sq97TSvk="
+    },
+    {
+      "body": "{\"device_id\":\"Desk/λ\", \"ts\":1767225600,\"nonce\":\"0123456789abcdef\",\"telemetry\":{\"$serde_json::private::RawValue\":\"{\\\"x\\\":1}\",\"$serde_json::private::Number\":\"123\"},\"windows_v2\":{\"version\":2}}",
+      "header": "v2.Ng083NGn0m2ZGi5JCtgVfu+INXsyqt3KWq2OdugSc5Q="
+    },
+    {
+      "body": "{\"device_id\":\"Desk/λ\", \"ts\":1767225600,\"nonce\":\"0123456789abcdef\",\"telemetry\":{\"$serde_json::private::RawValue\":\"{\\\"x\\\":1}\",\"$serde_json::private::Number\":\"123\"},\"windows_v2\":{\"version\":2}}\n",
+      "header": "v2.QEGrFRn98jpMGOuS/ihWDRicE2j2mvqE97kkzSXzJiI="
+    }
+  ],
+  "large_header": "v2.H1tYGISPPu+Z8x5bs5B+I7E0NgUYd/KW142UtTiD1kQ="
+}

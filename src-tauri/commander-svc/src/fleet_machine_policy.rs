@@ -1029,6 +1029,9 @@ mod contact_tests;
 #[path = "fleet_contact_binding_tests.rs"]
 mod contact_binding_tests;
 #[cfg(test)]
+#[path = "fleet_contact_v2_tests.rs"]
+mod contact_v2_tests;
+#[cfg(test)]
 #[path = "fleet_contact_bridge_tests.rs"]
 mod contact_bridge_tests;
 #[cfg(test)]
