@@ -3,6 +3,7 @@
 use super::{sign_refresh_wire, Binding, ConfirmedCredential, PendingCredential, INVALID, RETRY_LATER};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 const RESPONSE_LIMIT: usize = 4096;
 const REQUEST_LIMIT: usize = 16 * 1024;
@@ -72,6 +73,7 @@ pub(super) fn enrolment_receipt(response: &[u8]) -> Result<String, &'static str>
 struct ChallengeRequest<'a> {
     old_request: String,
     credential_id: &'a str,
+    challenge_proof: String,
 }
 
 #[derive(Deserialize)]
@@ -116,9 +118,12 @@ pub(super) fn challenge_request(
         return Err(INVALID);
     }
     let id = URL_SAFE_NO_PAD.encode(credential.id);
+    let digest: [u8; 32] = Sha256::digest(body).into();
+    let proof = wincmd_pq_experiment::licence_device_proof::sign_challenge_request(credential.secret(), &credential.id, &digest);
     serde_json::to_vec(&ChallengeRequest {
         old_request: URL_SAFE_NO_PAD.encode(body),
         credential_id: &id,
+        challenge_proof: URL_SAFE_NO_PAD.encode(proof),
     })
     .map_err(|_| INVALID)
 }
@@ -271,6 +276,19 @@ async fn post_body(
 mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[test]
+    fn challenge_request_matches_worker_interop_fixture() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!("fixtures/rust-device-challenge.json")).unwrap();
+        let id: [u8; 32] = URL_SAFE_NO_PAD.decode(fixture["credentialId"].as_str().unwrap()).unwrap().try_into().unwrap();
+        let secret: [u8; 32] = URL_SAFE_NO_PAD.decode(fixture["testSecret"].as_str().unwrap()).unwrap().try_into().unwrap();
+        let body = URL_SAFE_NO_PAD.decode(fixture["oldRequest"].as_str().unwrap()).unwrap();
+        let credential = ConfirmedCredential { id, secret: zeroize::Zeroizing::new(secret) };
+        let request: serde_json::Value = serde_json::from_slice(&challenge_request(&credential, &body).unwrap()).unwrap();
+        for field in ["credentialId", "oldRequest", "challengeProof"] {
+            assert_eq!(request[field], fixture[field]);
+        }
+    }
 
     async fn serve(response: &'static [u8]) -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

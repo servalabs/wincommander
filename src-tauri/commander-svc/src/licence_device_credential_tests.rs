@@ -499,6 +499,8 @@ async fn authorized_worker_issuer_receipt_confirms_persisted_pending_credential(
         challenge_request["oldRequest"],
         URL_SAFE_NO_PAD.encode(&body)
     );
+    assert_eq!(challenge_request["challengeProof"], URL_SAFE_NO_PAD.encode(
+        wincmd_pq_experiment::licence_device_proof::sign_challenge_request(confirmed.secret(), &confirmed.id, &digest)));
     let challenge_response = serde_json::json!({ "ok": true, "credentialId": URL_SAFE_NO_PAD.encode(pending.id),
         "nonce": URL_SAFE_NO_PAD.encode(nonce), "requestDigest": URL_SAFE_NO_PAD.encode(digest), "expiresAt": expiry });
     let request = wire::renewal_request(

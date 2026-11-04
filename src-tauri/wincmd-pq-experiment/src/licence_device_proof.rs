@@ -8,6 +8,18 @@
 use aws_lc_rs::hmac;
 
 const DOMAIN: &[u8] = b"wincommander:licence-device-proof:v1\0";
+const REQUEST_DOMAIN: &[u8] = b"wincommander:licence-challenge-request:v1\0";
+
+/// Authenticate the request for a challenge; this tag is replayable and does
+/// not replace the one-use challenge or licence and device checks.
+pub fn sign_challenge_request(secret: &[u8; 32], credential_id: &[u8; 32], request_digest: &[u8; 32]) -> [u8; 32] {
+    let mut message = Vec::with_capacity(REQUEST_DOMAIN.len() + 64);
+    message.extend_from_slice(REQUEST_DOMAIN);
+    message.extend_from_slice(credential_id);
+    message.extend_from_slice(request_digest);
+    let key = hmac::Key::new(hmac::HMAC_SHA256, secret);
+    hmac::sign(&key, &message).as_ref().try_into().unwrap()
+}
 
 #[derive(Clone, Copy)]
 #[repr(u8)]
@@ -48,6 +60,19 @@ pub fn sign(secret: &[u8; 32], challenge: &Challenge<'_>) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn challenge_request_proof_binds_device_and_request() {
+        let id = std::array::from_fn(|i| i as u8);
+        let digest = std::array::from_fn(|i| (i + 64) as u8);
+        let secret = std::array::from_fn(|i| (i + 96) as u8);
+        let expected = [0xb6, 0xed, 0x81, 0x59, 0x09, 0x80, 0x84, 0x7a, 0xf6, 0x7b, 0x53, 0x08, 0xa8, 0x05, 0x7d, 0xa0,
+            0x65, 0xd5, 0xe1, 0x47, 0xc4, 0xf5, 0x10, 0xc2, 0xf8, 0x43, 0xec, 0x00, 0xc3, 0x38, 0xfa, 0xc2];
+        assert_eq!(sign_challenge_request(&secret, &id, &digest), expected);
+        let mut changed = digest;
+        changed[0] ^= 1;
+        assert_ne!(sign_challenge_request(&secret, &id, &changed), expected);
+    }
 
     #[test]
     fn fixture_binds_every_field() {
