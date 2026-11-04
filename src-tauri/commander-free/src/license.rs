@@ -1,5 +1,5 @@
 use base64::{engine::general_purpose, Engine as _};
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -1256,7 +1256,7 @@ fn parse_and_verify_claims(
     let signature = Signature::from_bytes(&sig_arr);
 
     verifying_key
-        .verify(payload.as_bytes(), &signature)
+        .verify_strict(payload.as_bytes(), &signature)
         .map_err(|e| format!("License signature validation failed: {}", e))?;
 
     serde_json::from_str(payload).map_err(|e| format!("Invalid signed payload: {}", e))
@@ -2566,6 +2566,34 @@ mod tests {
             result.is_err(),
             "a tampered payload must fail signature verification, not silently parse"
         );
+    }
+
+    #[test]
+    fn weak_licence_signing_key_cannot_authorize_claims() {
+        // The identity point admits a trivial signature for any message unless
+        // verification rejects small-order keys and R points.
+        let mut weak_key = [0u8; 32];
+        weak_key[0] = 1;
+        let mut forged_signature = [0u8; 64];
+        forged_signature[0] = 1;
+        let key = base64::engine::general_purpose::STANDARD.encode(weak_key);
+        let signature = base64::engine::general_purpose::STANDARD.encode(forged_signature);
+        assert!(parse_and_verify_claims(&claims_json("device-abc"), &signature, &key).is_err());
+    }
+
+    #[test]
+    fn worker_licence_classical_signature_remains_accepted() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../commander-svc/src/fixtures/workers-hybrid-licence.json"
+        ))
+        .unwrap();
+        let claims = parse_and_verify_claims(
+            fixture["payload"].as_str().unwrap(),
+            fixture["signature"].as_str().unwrap(),
+            fixture["publicClassical"].as_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(claims.device_hash, "device-test");
     }
 
     /// A signature altered after being produced (e.g. corrupted cache, or an
