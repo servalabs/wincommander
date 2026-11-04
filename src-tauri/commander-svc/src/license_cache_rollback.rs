@@ -278,6 +278,52 @@ fn read_cache(path: &Path) -> Result<Option<Vec<u8>>, &'static str> {
     })
 }
 
+/// Read, verify and copy the current cache under the same locks as writers.
+pub(super) fn load_snapshot(
+    path: &Path,
+    public_key: &str,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>,
+) -> Result<DeviceLicenceSnapshot, &'static str> {
+    let anchor = anchor::Anchor::machine_named(r"SOFTWARE\ServaLabs\WinCommander\HybridLicence");
+    load_snapshot_with_anchor(path, public_key, trust, &anchor)
+}
+
+fn load_snapshot_with_anchor(
+    path: &Path,
+    public_key: &str,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>,
+    anchor: &anchor::Anchor,
+) -> Result<DeviceLicenceSnapshot, &'static str> {
+    let old_trust = history::configured(trust)?;
+    let _lock = WRITE_LOCK.lock().map_err(|_| "license cache lock is unavailable")?;
+    let _process_lock = crate::licence_security_lock()?;
+    let bytes = read_cache(path)?.ok_or("license cache is unavailable")?;
+    let cached: ExistingCache = serde_json::from_slice(&bytes).map_err(|_| "license cache is invalid")?;
+    let last_verified_at = cached.last_verified_at.ok_or("license cache verification time is missing")?;
+    let hybrid = cached.token.hybrid.ok_or("hybrid license is required")?;
+    let request = StoreLicenseCacheRequest {
+        payload: cached.token.payload, signature: cached.token.signature,
+        hybrid: Some(hybrid), seats_used: cached.seats_used, seat_limit: cached.seat_limit,
+    };
+    let claims: RefreshClaims = serde_json::from_str(&request.payload).map_err(|_| "license cache is invalid")?;
+    if claims.license_id.is_empty() || claims.license_id.len() > 512
+        || claims.device_hash.is_empty() || claims.device_hash.len() > 512
+        || claims.device_hash.trim() != claims.device_hash {
+        return Err("license cache identity is invalid");
+    }
+    // This checks both signatures, issuer, application and exact identity.
+    build_refresh_wire(&request, public_key, trust, &claims.license_id, &claims.device_hash)?;
+    let retained = anchor.read().map_err(|_| "license security record is unavailable")?
+        .ok_or("license security record is unavailable")?;
+    ledger::verify_current(&retained, &request, last_verified_at, &bytes,
+        public_key, trust, old_trust.as_ref())?;
+    Ok(DeviceLicenceSnapshot {
+        payload: request.payload, signature: request.signature,
+        hybrid: request.hybrid.ok_or("hybrid license is required")?, last_verified_at,
+        licence_id: claims.license_id, device_hash: claims.device_hash,
+    })
+}
+
 pub(super) fn verify_current(
     path: &Path,
     candidate: &StoreLicenseCacheRequest,

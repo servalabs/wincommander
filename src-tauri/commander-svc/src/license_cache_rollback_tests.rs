@@ -617,17 +617,34 @@ fn worker_issued_licence_survives_history_reload_and_rejects_tampering() {
     drop(anchor);
     let reopened = anchor::Anchor::test_user(anchor_path.clone());
     verify_with_anchor(&path, &request, verified_at, public, &trust, &reopened).unwrap();
+    let snapshot = load_snapshot_with_anchor(&path, public, &trust, &reopened).unwrap();
+    assert_eq!(snapshot.licence_id, "licence-test");
+    assert_eq!(snapshot.device_hash, "device-test");
+    assert_eq!(snapshot.payload, request.payload);
+    assert_eq!(snapshot.signature, request.signature);
+    assert_eq!(Some(snapshot.hybrid), request.hybrid);
+    assert_eq!(snapshot.last_verified_at, verified_at);
     assert!(
         verify_with_anchor(&path, &request, verified_at + 1, public, &trust, &reopened).is_err()
     );
     let mut tampered: serde_json::Value = serde_json::from_slice(&cache).unwrap();
     tampered["last_verified_at"] = (verified_at + 1).into();
     fs::write(&path, serde_json::to_vec(&tampered).unwrap()).unwrap();
+    assert!(load_snapshot_with_anchor(&path, public, &trust, &reopened).is_err());
     assert!(
         verify_with_anchor(&path, &request, verified_at + 1, public, &trust, &reopened).is_err()
     );
+    let mut altered_identity: serde_json::Value = serde_json::from_slice(&cache).unwrap();
+    altered_identity["token"]["payload"] = request.payload.replace("device-test", "other-device").into();
+    fs::write(&path, serde_json::to_vec(&altered_identity).unwrap()).unwrap();
+    assert!(load_snapshot_with_anchor(&path, public, &trust, &reopened).is_err());
+    let mut missing_hybrid: serde_json::Value = serde_json::from_slice(&cache).unwrap();
+    missing_hybrid["token"].as_object_mut().unwrap().remove("hybrid");
+    fs::write(&path, serde_json::to_vec(&missing_hybrid).unwrap()).unwrap();
+    assert!(load_snapshot_with_anchor(&path, public, &trust, &reopened).is_err());
     fs::write(&path, &cache).unwrap();
     anchor::remove_test_key(&anchor_path).unwrap();
+    assert!(load_snapshot_with_anchor(&path, public, &trust, &reopened).is_err());
     assert!(verify_with_anchor(&path, &request, verified_at, public, &trust, &reopened).is_err());
     fs::remove_file(path).unwrap();
     fs::remove_dir(dir).unwrap();

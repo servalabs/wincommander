@@ -299,6 +299,21 @@ pub(crate) async fn request_renewal(
     )
 }
 
+/// A future authenticated service caller can renew without supplying cache,
+/// binding, issuer or trust data. This function is not exposed over IPC.
+pub(crate) async fn renew_from_machine_cache() -> Result<(), &'static str> {
+    crate::license_cache::recover_pending_device_renewal()?;
+    let cache = crate::license_cache::load_device_licence_snapshot()?;
+    let trust = crate::license_cache::configured_device_receipt_trust()?;
+    let mut receipt_policy = trust.policy();
+    receipt_policy.purpose = wincmd_pq_experiment::Purpose::LicenceEnrolment;
+    let binding = Binding { licence_id: &cache.licence_id, device_hash: &cache.device_hash,
+        issuer_origin: wire::LICENCE_ORIGIN };
+    let licence = RefreshLicence { payload: &cache.payload, signature: &cache.signature,
+        hybrid: &cache.hybrid, last_verified_at: cache.last_verified_at };
+    renew_and_save(&binding, &receipt_policy, &licence).await
+}
+
 /// Save only if the verified cache did not change while the request was in flight.
 pub(crate) async fn renew_and_save(
     binding: &Binding<'_>,

@@ -251,6 +251,25 @@ fn build_refresh_wire(
     Ok(wire)
 }
 
+/// A service-owned snapshot; every field is authenticated before it is returned.
+#[cfg(feature = "experimental-pq-licence")]
+pub(crate) struct DeviceLicenceSnapshot {
+    pub payload: String,
+    pub signature: String,
+    pub hybrid: String,
+    pub last_verified_at: u64,
+    pub licence_id: String,
+    pub device_hash: String,
+}
+
+/// Read the one machine-owned cache and authenticate it against protected history.
+#[cfg(feature = "experimental-pq-licence")]
+pub(crate) fn load_device_licence_snapshot() -> Result<DeviceLicenceSnapshot, &'static str> {
+    let public = service_public_key().ok_or("license verification is unavailable")?;
+    let trust = hybrid_trust::configured()?;
+    rollback::load_snapshot(&machine_license_cache_path()?, public, &trust.policy())
+}
+
 /// Receipt keys are supplied by the service build, never by a desktop caller.
 #[cfg(feature = "experimental-pq-licence")]
 pub(crate) fn configured_device_receipt_trust() -> Result<hybrid_trust::Trust, &'static str> {
