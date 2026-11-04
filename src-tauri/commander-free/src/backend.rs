@@ -5523,7 +5523,7 @@ pub(crate) const FLEET_FORENSIC_PROJECTION_REGISTRY: &[FleetForensicProjectionCa
     cleanup_category!("bits_queue", "BITS queue", "deep-dfir", "Get-BITSQueueInfo"),
     cleanup_category!(
         "cellular_history",
-        "Cellular history",
+        "Cellular profiles",
         "deep-dfir",
         "Get-CellularHistoryInfo"
     ),
