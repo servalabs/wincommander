@@ -37,11 +37,12 @@ pub mod autonomous_agent_test;
 #[cfg(all(feature = "autonomous-test", debug_assertions))]
 pub mod autonomous_test;
 mod bluetooth_control;
+mod calculator_handoff;
+mod camera_presence;
 mod canary_tokens;
 #[cfg(windows)]
 mod capture_protection;
-mod calculator_handoff;
-mod shared_shortcut_claim;
+mod content_detector_commands;
 mod context_menu_scrub;
 mod context_menu_shred;
 mod context_scrub_failure;
@@ -72,8 +73,8 @@ mod file_search;
 mod file_watch_trigger;
 mod firewall_audit;
 mod fleet_agent;
-mod fleet_local_arming;
 mod fleet_contact_relay;
+mod fleet_local_arming;
 mod flow_bridge;
 mod flow_bundle;
 mod flow_capabilities;
@@ -81,11 +82,19 @@ mod flow_engine;
 mod flow_health;
 mod glasses_detector;
 mod gpo_policy;
+#[cfg(all(
+    windows,
+    any(
+        feature = "experimental-pq-free-release",
+        feature = "experimental-pq-pro-release"
+    )
+))]
+#[path = "updater/hybrid_free_anchor.rs"]
+mod hybrid_update_anchor;
 mod inactivity_timer;
 mod investigator_install;
 mod license;
 mod local_clipboard_rules;
-mod content_detector_commands;
 mod log;
 mod machine_settings;
 mod malware_scan;
@@ -109,9 +118,6 @@ mod payments;
 mod port_monitor;
 mod print_log;
 mod pro_install;
-#[cfg(all(windows, any(feature = "experimental-pq-free-release", feature = "experimental-pq-pro-release")))]
-#[path = "updater/hybrid_free_anchor.rs"]
-mod hybrid_update_anchor;
 mod process_privileges;
 mod ransomware_monitor;
 #[cfg(windows)]
@@ -138,6 +144,7 @@ mod session_assurance;
 mod session_instance;
 mod settings;
 mod settings_transfer;
+mod shared_shortcut_claim;
 mod shield_quota;
 mod shortcut_actions;
 mod shortcut_cleaner;
@@ -152,7 +159,6 @@ mod startup_trace;
 #[cfg(windows)]
 mod startup_visibility;
 mod startup_window;
-mod camera_presence;
 mod storage_probe;
 mod svc_client;
 mod trust_store_audit;
@@ -307,7 +313,10 @@ fn update_panic_hotkey(app: tauri::AppHandle, hotkey: String) -> Result<(), Stri
         .ok_or_else(|| "PanicHotkeyState not initialised".to_string())?;
     let mut current = state.0.lock().map_err(|e| e.to_string())?;
     // Unregister the old shortcut
-    if !current.is_empty() && !(is_calculator_peek_hotkey(&current) && CALCULATOR_PEEK_REGISTERED.load(Ordering::Acquire)) {
+    if !current.is_empty()
+        && !(is_calculator_peek_hotkey(&current)
+            && CALCULATOR_PEEK_REGISTERED.load(Ordering::Acquire))
+    {
         let _ = app.global_shortcut().unregister(current.as_str());
     }
     // Register the new one
@@ -334,7 +343,10 @@ fn update_search_hotkey(app: tauri::AppHandle, hotkey: String) -> Result<(), Str
         .try_state::<SearchHotkeyState>()
         .ok_or_else(|| "SearchHotkeyState not initialised".to_string())?;
     let mut current = state.0.lock().map_err(|e| e.to_string())?;
-    if !current.is_empty() && !(is_calculator_peek_hotkey(&current) && CALCULATOR_PEEK_REGISTERED.load(Ordering::Acquire)) {
+    if !current.is_empty()
+        && !(is_calculator_peek_hotkey(&current)
+            && CALCULATOR_PEEK_REGISTERED.load(Ordering::Acquire))
+    {
         let _ = app.global_shortcut().unregister(current.as_str());
     }
     if !hotkey.is_empty() {
@@ -370,7 +382,10 @@ static CALCULATOR_PEEK_REGISTERED: AtomicBool = AtomicBool::new(false);
 fn is_calculator_peek_hotkey(hotkey: &str) -> bool {
     use std::str::FromStr;
     use tauri_plugin_global_shortcut::Shortcut;
-    match (Shortcut::from_str(hotkey), Shortcut::from_str(CALCULATOR_PEEK_HOTKEY)) {
+    match (
+        Shortcut::from_str(hotkey),
+        Shortcut::from_str(CALCULATOR_PEEK_HOTKEY),
+    ) {
         (Ok(left), Ok(right)) => left == right,
         _ => false,
     }
@@ -396,15 +411,28 @@ fn toggle_hide_peek(app: &tauri::AppHandle) {
 }
 
 fn register_calculator_peek_hotkey(app: &tauri::AppHandle) -> Result<(), String> {
-    let result = app.global_shortcut()
+    let result = app
+        .global_shortcut()
         .on_shortcut(CALCULATOR_PEEK_HOTKEY, |app, _shortcut, event| {
-            if event.state() != ShortcutState::Pressed { return; }
-            if calculator_peek_requires_gate(wincommander_is_hidden(), startup_auth::startup_pin_is_configured_sync()) {
+            if event.state() != ShortcutState::Pressed {
+                return;
+            }
+            if calculator_peek_requires_gate(
+                wincommander_is_hidden(),
+                startup_auth::startup_pin_is_configured_sync(),
+            ) {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = startup_auth::enter_calculator_mode_with(window, true);
                 }
-            } else if app.try_state::<HideHotkeyState>()
-                .and_then(|state| state.0.lock().ok().map(|key| is_calculator_peek_hotkey(&key)))
+            } else if app
+                .try_state::<HideHotkeyState>()
+                .and_then(|state| {
+                    state
+                        .0
+                        .lock()
+                        .ok()
+                        .map(|key| is_calculator_peek_hotkey(&key))
+                })
                 .unwrap_or(false)
             {
                 toggle_hide_peek(app);
@@ -418,16 +446,22 @@ fn register_calculator_peek_hotkey(app: &tauri::AppHandle) -> Result<(), String>
 #[tauri::command]
 fn require_calculator_peek_hotkey(app: tauri::AppHandle) -> Result<(), String> {
     if CALCULATOR_PEEK_REGISTERED.load(Ordering::Acquire)
-        && app.global_shortcut().is_registered(CALCULATOR_PEEK_HOTKEY) {
+        && app.global_shortcut().is_registered(CALCULATOR_PEEK_HOTKEY)
+    {
         Ok(())
     } else {
-        Err("Ctrl+Shift+G is unavailable. Release it in the other application and try again.".into())
+        Err(
+            "Ctrl+Shift+G is unavailable. Release it in the other application and try again."
+                .into(),
+        )
     }
 }
 
 #[cfg(test)]
 mod calculator_peek_hotkey_tests {
-    use super::{calculator_peek_requires_gate, is_calculator_peek_hotkey, is_custom_hide_peek_hotkey};
+    use super::{
+        calculator_peek_requires_gate, is_calculator_peek_hotkey, is_custom_hide_peek_hotkey,
+    };
 
     #[test]
     fn fixed_peek_remains_reserved_and_opens_gate_only_when_both_modes_are_on() {
@@ -467,7 +501,9 @@ fn update_hide_hotkey(app: tauri::AppHandle, hotkey: String) -> Result<(), Strin
     }
 
     if is_custom_hide_peek_hotkey(&old) {
-        app.global_shortcut().unregister(old.as_str()).map_err(|error| format!("Could not release the previous hide shortcut: {error}"))?;
+        app.global_shortcut()
+            .unregister(old.as_str())
+            .map_err(|error| format!("Could not release the previous hide shortcut: {error}"))?;
     }
     // Register whenever a hotkey is set so it works as an always-on hide/unhide
     // toggle — the handler hides a visible window and shows a hidden one. (It
@@ -476,18 +512,26 @@ fn update_hide_hotkey(app: tauri::AppHandle, hotkey: String) -> Result<(), Strin
     if is_custom_hide_peek_hotkey(&hotkey) {
         if let Err(error) = register_hide_peek_hotkey(&app, &hotkey) {
             if is_custom_hide_peek_hotkey(&old) {
-                register_hide_peek_hotkey(&app, &old).map_err(|restore| format!("{error}; previous shortcut could not be restored: {restore}"))?;
+                register_hide_peek_hotkey(&app, &old).map_err(|restore| {
+                    format!("{error}; previous shortcut could not be restored: {restore}")
+                })?;
             }
             return Err(error);
         }
     }
 
     if let Err(error) = hide_recovery::configure(&hotkey) {
-        if is_custom_hide_peek_hotkey(&hotkey) { let _ = app.global_shortcut().unregister(hotkey.as_str()); }
-        if is_custom_hide_peek_hotkey(&old) {
-            register_hide_peek_hotkey(&app, &old).map_err(|restore| format!("{error}; previous shortcut could not be restored: {restore}"))?;
+        if is_custom_hide_peek_hotkey(&hotkey) {
+            let _ = app.global_shortcut().unregister(hotkey.as_str());
         }
-        hide_recovery::configure(&old).map_err(|restore| format!("{error}; recovery shortcut could not be restored: {restore}"))?;
+        if is_custom_hide_peek_hotkey(&old) {
+            register_hide_peek_hotkey(&app, &old).map_err(|restore| {
+                format!("{error}; previous shortcut could not be restored: {restore}")
+            })?;
+        }
+        hide_recovery::configure(&old).map_err(|restore| {
+            format!("{error}; recovery shortcut could not be restored: {restore}")
+        })?;
         return Err(error);
     }
 
@@ -870,7 +914,8 @@ fn handle_search_hotkey(app: &tauri::AppHandle) {
     .inner_size(760.0, 520.0)
     .center()
     .build()
-    .is_ok() {
+    .is_ok()
+    {
         let app_for_timeout = app.clone();
         tauri::async_runtime::spawn(async move {
             // Never expose a blank or black emergency fallback. If a broken
@@ -1349,9 +1394,16 @@ fn apply_wincommander_hide_mode(app: tauri::AppHandle, hidden: bool) -> Result<(
         }
     }
 
-    let recovery_result = app.try_state::<HideHotkeyState>()
+    let recovery_result = app
+        .try_state::<HideHotkeyState>()
         .ok_or_else(|| "Hide shortcut state is unavailable".to_string())
-        .and_then(|state| state.0.lock().map_err(|e| e.to_string()).map(|value| value.clone()))
+        .and_then(|state| {
+            state
+                .0
+                .lock()
+                .map_err(|e| e.to_string())
+                .map(|value| value.clone())
+        })
         .and_then(|shortcut| hide_recovery::configure(&shortcut));
 
     // Write HiddenMode DWORD to HKLM\SOFTWARE\WinCommander (contract: read by R5/NSIS).
@@ -1670,7 +1722,9 @@ pub fn run() {
             };
             preloaded_startup_settings = Some(startup);
             if startup_elevation::should_offer_startup_elevation(
-                cli_mode, &cli_args, startup.calculator_lock_active,
+                cli_mode,
+                &cli_args,
+                startup.calculator_lock_active,
             ) && startup_elevation::offer_startup_elevation(&cli_args)
                 == startup_elevation::StartupElevationResult::ElevatedCopyStarted
             {

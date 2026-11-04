@@ -312,7 +312,13 @@ mod tests {
         keys.sort();
         assert_eq!(
             keys,
-            ["category", "match_count", "modified", "relative_path", "size"]
+            [
+                "category",
+                "match_count",
+                "modified",
+                "relative_path",
+                "size"
+            ]
         );
     }
 }

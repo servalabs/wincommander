@@ -27,21 +27,21 @@ fn main() {
 
 // ── Windows implementation ───────────────────────────────────────────────────
 
+#[cfg(any(windows, test))]
+mod managed_deployment;
+#[cfg(windows)]
+mod peer_auth_deployment_acl;
 #[cfg(windows)]
 mod personal_settings;
-#[cfg(windows)]
-mod shared_shortcuts_link;
-#[cfg(windows)]
-mod shared_shortcuts_file;
-#[cfg(windows)]
-mod shared_shortcuts_acl;
+mod settings_host;
 #[cfg(windows)]
 mod shared_shortcuts;
 #[cfg(windows)]
-mod peer_auth_deployment_acl;
-mod settings_host;
-#[cfg(any(windows, test))]
-mod managed_deployment;
+mod shared_shortcuts_acl;
+#[cfg(windows)]
+mod shared_shortcuts_file;
+#[cfg(windows)]
+mod shared_shortcuts_link;
 
 #[cfg(windows)]
 mod license_cache;
@@ -51,10 +51,10 @@ mod machine_settings;
 mod rdp_lock_query;
 
 #[cfg(windows)]
+mod bluetooth_control;
+#[cfg(windows)]
 #[path = "../../runtime-support/bluetooth_control.rs"]
 mod bluetooth_control_core;
-#[cfg(windows)]
-mod bluetooth_control;
 
 // G-1 ownership split: endpoint background loops live with their future
 // owners; this root remains process composition only.
@@ -72,25 +72,25 @@ mod reconciler;
 // only its internal `WindowsPolicyFs`/`windows_acl` submodule is
 // `#[cfg(windows)]`-gated. See `policy_store.rs`'s module doc.
 mod diagnostics;
-mod policy_store;
-mod fleet_machine_policy;
 mod fleet_credential;
+mod fleet_machine_policy;
 #[cfg(all(windows, feature = "experimental-pq-licence"))]
 #[allow(dead_code)]
 #[path = "../../commander-free/src/fleet_lifecycle_mutex.rs"]
 mod licence_coordination;
+mod policy_store;
 #[cfg(all(windows, feature = "experimental-pq-licence"))]
 fn licence_security_lock() -> Result<licence_coordination::Guard, &'static str> {
     licence_coordination::acquire_named(r"Global\WinCommander.Licence.Security.v1", 30_000)
         .map_err(|_| "license security coordination is unavailable")
 }
+#[cfg(windows)]
+mod fleet_contact_transfer;
+mod fleet_presence;
+mod fleet_runtime_env;
 #[cfg(all(windows, feature = "experimental-pq-licence"))]
 #[allow(dead_code)] // Not connected to enrolment or production licence decisions.
 mod licence_device_credential;
-mod fleet_runtime_env;
-mod fleet_presence;
-#[cfg(windows)]
-mod fleet_contact_transfer;
 mod shield_journal;
 mod vault_access;
 

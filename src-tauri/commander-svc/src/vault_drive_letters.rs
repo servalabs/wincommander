@@ -4,8 +4,8 @@
 #[path = "vault_logon_links.rs"]
 mod logon_links;
 pub(crate) use logon_links::{
-    cleanup_ended_logon_encrypted_link, ended_logon_encrypted_link_absent, logon_ended,
-    cleanup_owned_caller_link, cleanup_owned_logon_encrypted_link,
+    cleanup_ended_logon_encrypted_link, cleanup_owned_caller_link,
+    cleanup_owned_logon_encrypted_link, ended_logon_encrypted_link_absent, logon_ended,
 };
 
 use std::{collections::HashSet, ffi::c_void, mem::size_of};
@@ -234,16 +234,22 @@ pub(crate) fn global_drive_letter_absent(letter: char) -> Result<bool, ()> {
 }
 
 pub(crate) fn is_real_global_volume(letter: char) -> bool {
-    global_dos_device_target(letter).ok().flatten().is_some_and(|target| {
-        let target = target.to_ascii_lowercase();
-        target.starts_with(r"\device\harddiskvolume") || target.starts_with(r"\device\cdrom")
-    })
+    global_dos_device_target(letter)
+        .ok()
+        .flatten()
+        .is_some_and(|target| {
+            let target = target.to_ascii_lowercase();
+            target.starts_with(r"\device\harddiskvolume") || target.starts_with(r"\device\cdrom")
+        })
 }
 
 /// Confirm that one global encrypted-volume letter is absent, removing it
 /// only when Windows still reports the exact dead VeraCrypt/TrueCrypt target.
 /// A live/foreign mapping or an uncertain native-device check is retained.
-pub(crate) fn cleanup_global_encrypted_link(letter: char, slot: u8) -> Result<GlobalEncryptedLinkCleanup, ()> {
+pub(crate) fn cleanup_global_encrypted_link(
+    letter: char,
+    slot: u8,
+) -> Result<GlobalEncryptedLinkCleanup, ()> {
     logon_links::cleanup_global_link(letter, slot)
 }
 

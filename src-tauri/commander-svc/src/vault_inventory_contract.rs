@@ -154,12 +154,27 @@ mod tests {
     fn quick_mount_receipts_are_opt_in_and_do_not_break_installed_readers() {
         let mut mount = fixture();
         mount.quick_mount_receipt = Some(format!("qm1:{}", "a".repeat(64)));
-        let quick = parse_query(&json!({"personal":true,"inventory_version":2,"quick_mount_receipts":true})).unwrap();
+        let quick = parse_query(
+            &json!({"personal":true,"inventory_version":2,"quick_mount_receipts":true}),
+        )
+        .unwrap();
         assert_eq!(quick, InventoryVersion::QuickMountReceipts);
-        assert_eq!(reply(quick, &[mount.clone()]).unwrap()[0]["quick_mount_receipt"], mount.quick_mount_receipt.as_ref().unwrap().as_str());
-        for version in [InventoryVersion::Current, InventoryVersion::VerifyCleanup, InventoryVersion::Legacy] {
-            assert!(reply(version, &[mount.clone()]).unwrap()[0].get("quick_mount_receipt").is_none());
+        assert_eq!(
+            reply(quick, &[mount.clone()]).unwrap()[0]["quick_mount_receipt"],
+            mount.quick_mount_receipt.as_ref().unwrap().as_str()
+        );
+        for version in [
+            InventoryVersion::Current,
+            InventoryVersion::VerifyCleanup,
+            InventoryVersion::Legacy,
+        ] {
+            assert!(reply(version, &[mount.clone()]).unwrap()[0]
+                .get("quick_mount_receipt")
+                .is_none());
         }
-        assert!(parse_query(&json!({"personal":true,"inventory_version":2,"quick_mount_receipts":false})).is_none());
+        assert!(parse_query(
+            &json!({"personal":true,"inventory_version":2,"quick_mount_receipts":false})
+        )
+        .is_none());
     }
 }

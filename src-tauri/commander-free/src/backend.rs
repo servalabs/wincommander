@@ -18,10 +18,14 @@ mod receipt;
 mod shield_lifecycle;
 pub(crate) use shield_lifecycle::stop_privacy_shield_gracefully;
 
-fn inventory_persistence_receipt(submitted: &serde_json::Value, saved: Result<serde_json::Value, String>) -> serde_json::Value {
+fn inventory_persistence_receipt(
+    submitted: &serde_json::Value,
+    saved: Result<serde_json::Value, String>,
+) -> serde_json::Value {
     use sha2::{Digest, Sha256};
     let expected = serde_json::from_value::<settings::AppInventorySnapshot>(submitted.clone())
-        .ok().and_then(|value| serde_json::to_value(value).ok());
+        .ok()
+        .and_then(|value| serde_json::to_value(value).ok());
     match (expected, saved) {
         (Some(expected), Ok(actual)) if expected.is_object() && expected == actual => {
             let digest = hex::encode(Sha256::digest(actual.to_string().as_bytes()));
@@ -603,7 +607,8 @@ fn resolve_powershell_path() -> String {
 #[path = "backend_powershell_tests.rs"]
 mod powershell_host_tests;
 
-const POWERSHELL_UTF8_OUTPUT: &str = "[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)\n";
+const POWERSHELL_UTF8_OUTPUT: &str =
+    "[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)\n";
 
 fn build_powershell_command() -> (Command, String) {
     let exe = resolve_powershell_path();
@@ -1962,7 +1967,11 @@ mod command_tier_tests {
 
     #[test]
     fn managed_cleanup_schedule_commands_remain_paid_and_cleanup_gated() {
-        for command in ["Set-IndividualAutoEraseSchedule", "Set-ManagedAutoEraseSchedule", "Remove-ManagedAutoEraseSchedule"] {
+        for command in [
+            "Set-IndividualAutoEraseSchedule",
+            "Set-ManagedAutoEraseSchedule",
+            "Remove-ManagedAutoEraseSchedule",
+        ] {
             assert_eq!(get_command_tier(command), "paid");
             assert_eq!(get_required_frontend_module(command), Some("cleanup"));
             assert_eq!(get_module_for_command(command), Some("privacy/cleanup"));
@@ -1979,7 +1988,11 @@ mod command_tier_tests {
 
     #[test]
     fn ip_firewall_commands_stay_paid() {
-        for command in ["Get-IPFirewallRules", "Add-IPFirewallRule", "Remove-IPFirewallRule"] {
+        for command in [
+            "Get-IPFirewallRules",
+            "Add-IPFirewallRule",
+            "Remove-IPFirewallRule",
+        ] {
             assert_eq!(get_command_tier(command), "paid");
         }
     }
@@ -2792,7 +2805,9 @@ fn get_module_for_command(command: &str) -> Option<&'static str> {
         "Create-DualVolume" => Some("vault/volumes"),
         "Create-StegoMp4" => Some("vault/volumes"),
         "Extract-StegoMp4" => Some("vault/volumes"),
-        "backup_container_export" | "backup_container_verify" | "backup_generation_restore" => Some("vault/volumes"),
+        "backup_container_export" | "backup_container_verify" | "backup_generation_restore" => {
+            Some("vault/volumes")
+        }
         "Attach-StegoContainer" => Some("vault/volumes"),
         "Restore-StegoContainer" => Some("vault/volumes"),
         "Refresh-StegoContainer" => Some("vault/volumes"),
@@ -3125,7 +3140,10 @@ fn load_module(module_name: &str) -> Result<String, String> {
 fn privacy_shield_stop_succeeded(result: Option<&serde_json::Value>) -> bool {
     result.is_some_and(|value| {
         value.get("success").and_then(serde_json::Value::as_bool) == Some(true)
-            && matches!(value.get("error"), None | Some(serde_json::Value::Null) | Some(serde_json::Value::Bool(false)))
+            && matches!(
+                value.get("error"),
+                None | Some(serde_json::Value::Null) | Some(serde_json::Value::Bool(false))
+            )
     })
 }
 
@@ -3994,21 +4012,39 @@ mod settings_sync_patch_tests {
 
     #[test]
     fn inventory_receipt_matches_cross_language_canonical_fixture() {
-        let fixture: serde_json::Value = serde_json::from_str(include_str!("../../../src/lib/appInventoryHashFixture.json")).unwrap();
-        let normalized = serde_json::to_value(serde_json::from_value::<crate::settings::AppInventorySnapshot>(fixture.clone()).unwrap()).unwrap();
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../src/lib/appInventoryHashFixture.json"
+        ))
+        .unwrap();
+        let normalized = serde_json::to_value(
+            serde_json::from_value::<crate::settings::AppInventorySnapshot>(fixture.clone())
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(normalized, fixture);
         let receipt = super::inventory_persistence_receipt(&fixture, Ok(normalized));
-        assert_eq!(receipt["sha256"], "8517e4f77bd97442192d51b2f335a538fcc4f45419671963ce418c299902ce05");
+        assert_eq!(
+            receipt["sha256"],
+            "8517e4f77bd97442192d51b2f335a538fcc4f45419671963ce418c299902ce05"
+        );
     }
 
     #[test]
     fn inventory_receipt_binds_scan_to_canonical_saved_value() {
         let submitted = serde_json::json!({"lastScanAt":"2026-10-28T12:00:00Z"});
-        let normalized = serde_json::to_value(serde_json::from_value::<crate::settings::AppInventorySnapshot>(submitted.clone()).unwrap()).unwrap();
+        let normalized = serde_json::to_value(
+            serde_json::from_value::<crate::settings::AppInventorySnapshot>(submitted.clone())
+                .unwrap(),
+        )
+        .unwrap();
         let receipt = super::inventory_persistence_receipt(&submitted, Ok(normalized.clone()));
         assert_eq!(receipt["state"], "confirmed");
         assert_eq!(receipt["sha256"].as_str().unwrap().len(), 64);
-        for failure in [Err("sensitive error".to_string()), Ok(serde_json::Value::Null), Ok(serde_json::json!({"lastScanAt":"old"}))] {
+        for failure in [
+            Err("sensitive error".to_string()),
+            Ok(serde_json::Value::Null),
+            Ok(serde_json::json!({"lastScanAt":"old"})),
+        ] {
             let receipt = super::inventory_persistence_receipt(&submitted, failure);
             assert_eq!(receipt, serde_json::json!({"state":"unconfirmed"}));
             assert!(!receipt.to_string().contains("sensitive"));
@@ -4430,7 +4466,9 @@ mod fleet_forensic_projection_tests {
             .unwrap()
             .write_all(format!("{prefix}\n{fixture}\n").as_bytes())
             .unwrap();
-        let output = child.wait_with_output().expect("wait for PowerShell fixture");
+        let output = child
+            .wait_with_output()
+            .expect("wait for PowerShell fixture");
         assert!(output.status.success(), "PowerShell fixture failed");
         assert!(
             String::from_utf8_lossy(&output.stdout).contains("fixture_passed"),
@@ -4962,7 +5000,10 @@ fn set_shield_parameter(params: &mut HashMap<String, String>, name: &str, value:
 
 /// A verified Fleet detector setting overrides every spelling supplied by a
 /// local caller. No Fleet projection leaves the caller's choice untouched.
-fn enforce_shield_look_away_detection(params: &mut HashMap<String, String>, fleet_detection: Option<bool>) {
+fn enforce_shield_look_away_detection(
+    params: &mut HashMap<String, String>,
+    fleet_detection: Option<bool>,
+) {
     if let Some(enabled) = fleet_detection {
         set_shield_parameter(params, "CheckGaze", enabled.to_string());
     }
@@ -4982,7 +5023,10 @@ fn verified_fleet_look_away_overrides_native_callers_only_when_managed() {
     assert_eq!(supplied, before);
     supplied.insert("lookawaydelayseconds".into(), "999".into());
     set_shield_parameter(&mut supplied, "LookAwayDelaySeconds", "10".into());
-    assert_eq!(supplied.get("LookAwayDelaySeconds").map(String::as_str), Some("10"));
+    assert_eq!(
+        supplied.get("LookAwayDelaySeconds").map(String::as_str),
+        Some("10")
+    );
     assert!(!supplied.contains_key("lookawaydelayseconds"));
 }
 
@@ -5042,40 +5086,65 @@ pub(crate) async fn run_backend_script_unlocked(
 }
 
 pub(crate) async fn run_backend_script_unlocked_with_origin(
-    app: AppHandle, command: String, mut params: HashMap<String, String>, origin: Option<&'static str>,
+    app: AppHandle,
+    command: String,
+    mut params: HashMap<String, String>,
+    origin: Option<&'static str>,
 ) -> Result<serde_json::Value, String> {
     authorize_backend_script(&app, &command, &mut params).await?;
     let is_start = command == "Start-PrivacyShield";
     let result = run_backend_script_with_timeout(app, command, params, None).await;
-    if is_start { remember_shield_launch(result.as_ref().ok(), origin); }
+    if is_start {
+        remember_shield_launch(result.as_ref().ok(), origin);
+    }
     result
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct ShieldLaunchIdentity { pid: u64, start_ticks: String, origin: &'static str }
+struct ShieldLaunchIdentity {
+    pid: u64,
+    start_ticks: String,
+    origin: &'static str,
+}
 
 fn shield_launch_identity() -> &'static std::sync::Mutex<Option<ShieldLaunchIdentity>> {
-    static IDENTITY: std::sync::OnceLock<std::sync::Mutex<Option<ShieldLaunchIdentity>>> = std::sync::OnceLock::new();
+    static IDENTITY: std::sync::OnceLock<std::sync::Mutex<Option<ShieldLaunchIdentity>>> =
+        std::sync::OnceLock::new();
     IDENTITY.get_or_init(|| std::sync::Mutex::new(None))
 }
 
 fn remember_shield_launch(result: Option<&serde_json::Value>, origin: Option<&'static str>) {
     let identity = result.and_then(|value| {
-        if !value.get("success")?.as_bool()? { return None; }
+        if !value.get("success")?.as_bool()? {
+            return None;
+        }
         let pid = value.get("processId")?.as_u64()?;
         let ticks = value.get("processStartTicks")?.as_str()?;
-        if pid == 0 || ticks.is_empty() || !ticks.bytes().all(|ch| ch.is_ascii_digit()) { return None; }
-        Some(ShieldLaunchIdentity { pid, start_ticks: ticks.to_owned(), origin: origin? })
+        if pid == 0 || ticks.is_empty() || !ticks.bytes().all(|ch| ch.is_ascii_digit()) {
+            return None;
+        }
+        Some(ShieldLaunchIdentity {
+            pid,
+            start_ticks: ticks.to_owned(),
+            origin: origin?,
+        })
     });
-    if let Ok(mut current) = shield_launch_identity().lock() { *current = identity; }
+    if let Ok(mut current) = shield_launch_identity().lock() {
+        *current = identity;
+    }
 }
 
 pub(crate) fn shield_launch_origin(status: &serde_json::Value) -> Option<&'static str> {
-    if !status.get("running")?.as_bool()? { return None; }
+    if !status.get("running")?.as_bool()? {
+        return None;
+    }
     let pid = status.get("processId")?.as_u64()?;
     let ticks = status.get("processStartTicks")?.as_str()?;
     let current = shield_launch_identity().lock().ok()?;
-    current.as_ref().filter(|known| known.pid == pid && known.start_ticks == ticks).map(|known| known.origin)
+    current
+        .as_ref()
+        .filter(|known| known.pid == pid && known.start_ticks == ticks)
+        .map(|known| known.origin)
 }
 
 #[cfg(test)]
@@ -5083,13 +5152,44 @@ mod shield_launch_origin_tests {
     use serde_json::json;
     #[test]
     fn origin_requires_the_same_live_process_and_creation_time() {
-        super::remember_shield_launch(Some(&json!({"success": true, "processId": 51, "processStartTicks": "123"})), Some("local"));
-        assert_eq!(super::shield_launch_origin(&json!({"running": true, "processId": 51, "processStartTicks": "123"})), Some("local"));
-        assert_eq!(super::shield_launch_origin(&json!({"running": true, "processId": 51, "processStartTicks": "124"})), None);
-        assert_eq!(super::shield_launch_origin(&json!({"running": true, "processId": 52, "processStartTicks": "123"})), None);
-        assert_eq!(super::shield_launch_origin(&json!({"running": false, "processId": 51, "processStartTicks": "123"})), None);
-        super::remember_shield_launch(Some(&json!({"success": true, "processId": 51, "processStartTicks": "123"})), None);
-        assert_eq!(super::shield_launch_origin(&json!({"running": true, "processId": 51, "processStartTicks": "123"})), None);
+        super::remember_shield_launch(
+            Some(&json!({"success": true, "processId": 51, "processStartTicks": "123"})),
+            Some("local"),
+        );
+        assert_eq!(
+            super::shield_launch_origin(
+                &json!({"running": true, "processId": 51, "processStartTicks": "123"})
+            ),
+            Some("local")
+        );
+        assert_eq!(
+            super::shield_launch_origin(
+                &json!({"running": true, "processId": 51, "processStartTicks": "124"})
+            ),
+            None
+        );
+        assert_eq!(
+            super::shield_launch_origin(
+                &json!({"running": true, "processId": 52, "processStartTicks": "123"})
+            ),
+            None
+        );
+        assert_eq!(
+            super::shield_launch_origin(
+                &json!({"running": false, "processId": 51, "processStartTicks": "123"})
+            ),
+            None
+        );
+        super::remember_shield_launch(
+            Some(&json!({"success": true, "processId": 51, "processStartTicks": "123"})),
+            None,
+        );
+        assert_eq!(
+            super::shield_launch_origin(
+                &json!({"running": true, "processId": 51, "processStartTicks": "123"})
+            ),
+            None
+        );
     }
 }
 
@@ -5759,8 +5859,10 @@ pub(crate) async fn run_backend_script_with_timeout(
         .iter()
         .map(|(k, v)| {
             let kl = k.to_lowercase();
-            let is_secret = matches!(command.as_str(), "backup_container_export" | "backup_container_verify" | "backup_generation_restore")
-                || kl.contains("password")
+            let is_secret = matches!(
+                command.as_str(),
+                "backup_container_export" | "backup_container_verify" | "backup_generation_restore"
+            ) || kl.contains("password")
                 || kl.contains("keyfile")
                 || (command == "Get-ClipboardHistoryStatus"
                     && matches!(
@@ -5786,7 +5888,10 @@ pub(crate) async fn run_backend_script_with_timeout(
             || command.starts_with("Erase-")
             || command.starts_with("Remove-")
             || command.starts_with("Reset-")
-            || matches!(command.as_str(), "backup_container_export" | "backup_generation_restore")
+            || matches!(
+                command.as_str(),
+                "backup_container_export" | "backup_generation_restore"
+            )
             || command == "Provision-EncryptedBackupTarget"
             || command == "Invoke-AIControlOperation"
             || command == "Invoke-CleanupClearAllUsers";
@@ -5911,9 +6016,7 @@ pub(crate) async fn run_backend_script_with_timeout(
         // even if the Pro sidecar reports an error after it has already
         // stopped its Python process. Otherwise the next renderer-ready event
         // can replay the previous protection session.
-        if command == "Stop-PrivacyShield"
-            && privacy_shield_stop_succeeded(result.as_ref().ok())
-        {
+        if command == "Stop-PrivacyShield" && privacy_shield_stop_succeeded(result.as_ref().ok()) {
             SHIELD_READER_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
             crate::native_notify::clear_pending_notifications(&app);
         }
@@ -6131,10 +6234,18 @@ pub(crate) async fn run_backend_script_with_timeout(
     };
     let shield_debug_stage = if cfg!(debug_assertions) && command == "Start-PrivacyShield" {
         "Write-PrivacyShieldDebugStage 'router'\n"
-    } else { "" };
+    } else {
+        ""
+    };
     let full_script = format!(
         "{}{}\n\n{}{}\n\n{}\n\n{}{}Invoke-BackendCommand",
-        POWERSHELL_UTF8_OUTPUT, core_utils, additional_modules, command_module, core_router, machine_wide_assertion, shield_debug_stage
+        POWERSHELL_UTF8_OUTPUT,
+        core_utils,
+        additional_modules,
+        command_module,
+        core_router,
+        machine_wide_assertion,
+        shield_debug_stage
     );
 
     // Execute PowerShell via stdin (memory-only, never writes to disk)
@@ -6149,24 +6260,50 @@ pub(crate) async fn run_backend_script_with_timeout(
     let mut shield_capture_delivery_status = None;
     if command == "Start-PrivacyShield" {
         cmd.env("WINCMD_SHIELD_OWNER_PID", std::process::id().to_string());
-        if cfg!(debug_assertions) { cmd.env("WINCMD_SHIELD_DEBUG_TRACE", "1"); }
-        else { cmd.env_remove("WINCMD_SHIELD_DEBUG_TRACE"); }
+        if cfg!(debug_assertions) {
+            cmd.env("WINCMD_SHIELD_DEBUG_TRACE", "1");
+        } else {
+            cmd.env_remove("WINCMD_SHIELD_DEBUG_TRACE");
+        }
         // Media is separate from Shield enforcement. Missing enrollment or an
         // older/offline sidecar leaves captures local and never delays Start
         // indefinitely or inherits a caller-supplied upload binding.
         cmd.env("WINCMD_SHIELD_CAPTURE_BINDING", "");
         shield_capture_delivery_status = Some("local_only");
         if let Ok(settings) = crate::settings::read_settings() {
-            if settings.ideal.privacy.privacy_shield.send_incident_captures_to_fleet {
+            if settings
+                .ideal
+                .privacy
+                .privacy_shield
+                .send_incident_captures_to_fleet
+            {
                 shield_capture_delivery_status = Some("unavailable");
             }
-            if settings::capture_preferences::publish(&settings).is_ok() && settings.ideal.privacy.privacy_shield.send_incident_captures_to_fleet {
+            if settings::capture_preferences::publish(&settings).is_ok()
+                && settings
+                    .ideal
+                    .privacy
+                    .privacy_shield
+                    .send_incident_captures_to_fleet
+            {
                 if let Ok(Ok(prepared)) = tokio::time::timeout(
                     std::time::Duration::from_secs(2),
-                    crate::sidecar::dispatch_paid_command("fleet_agent_prepare_shield_capture_delivery", serde_json::Value::Null),
-                ).await {
-                    if let Some(binding) = prepared.get("binding").and_then(serde_json::Value::as_str)
-                        .filter(|value| value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+                    crate::sidecar::dispatch_paid_command(
+                        "fleet_agent_prepare_shield_capture_delivery",
+                        serde_json::Value::Null,
+                    ),
+                )
+                .await
+                {
+                    if let Some(binding) = prepared
+                        .get("binding")
+                        .and_then(serde_json::Value::as_str)
+                        .filter(|value| {
+                            value.len() == 64
+                                && value.bytes().all(|byte| {
+                                    byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)
+                                })
+                        })
                     {
                         cmd.env("WINCMD_SHIELD_CAPTURE_BINDING", binding);
                         shield_capture_delivery_status = Some("ready");
@@ -6200,9 +6337,14 @@ pub(crate) async fn run_backend_script_with_timeout(
     // These outputs can contain locally requested Wi-Fi keys, clipboard text, or command history.
     // Never forward or log raw output when the child fails or sends malformed
     // JSON; its contents must not escape through an error or raw-output path.
-    if matches!(command.as_str(), "Get-WlanProfiles" | "Get-ClipboardHistoryStatus" | "Get-CleanupSummaryAllUsers" | "Get-PSHistory")
-        && (!output.status.success()
-            || serde_json::from_str::<serde_json::Value>(trimmed).is_err())
+    if matches!(
+        command.as_str(),
+        "Get-WlanProfiles"
+            | "Get-ClipboardHistoryStatus"
+            | "Get-CleanupSummaryAllUsers"
+            | "Get-PSHistory"
+    ) && (!output.status.success()
+        || serde_json::from_str::<serde_json::Value>(trimmed).is_err())
     {
         crate::log_message("error", "[Backend] Sensitive cleanup inspection failed.");
         return Err("Cleanup inspection failed.".to_string());
@@ -6217,10 +6359,7 @@ pub(crate) async fn run_backend_script_with_timeout(
         Ok(json) => {
             crate::log_message(
                 "debug",
-                &format!(
-                    "[Backend] Command '{}' returned JSON.",
-                    command
-                ),
+                &format!("[Backend] Command '{}' returned JSON.", command),
             );
             Ok(json)
         }
@@ -6299,17 +6438,16 @@ pub(crate) async fn run_backend_script_with_timeout(
         }
     }
     // Any explicit stop of the shield clears the reader's run flag so it exits.
-    if command == "Stop-PrivacyShield"
-        && privacy_shield_stop_succeeded(result.as_ref().ok())
-    {
+    if command == "Stop-PrivacyShield" && privacy_shield_stop_succeeded(result.as_ref().ok()) {
         SHIELD_READER_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
         crate::native_notify::clear_pending_notifications(&app);
     }
 
     // A parsed receipt still isn't success when the process or receipt explicitly failed.
-    let successful_result = result.as_ref().ok().filter(|value| {
-        output.status.success() && !receipt::is_explicit_failure(value)
-    });
+    let successful_result = result
+        .as_ref()
+        .ok()
+        .filter(|value| output.status.success() && !receipt::is_explicit_failure(value));
     if let Some(res) = successful_result {
         if let Some(inner_patch) = get_settings_sync_patch(&command, &params, Some(res)) {
             // Write to BOTH ideal (user's intent) and current (OS actually changed)
@@ -6326,8 +6464,10 @@ pub(crate) async fn run_backend_script_with_timeout(
         // Also auto-persist after install/upgrade/uninstall actions so snapshot stays fresh.
         if command == "Get-AppInventory" {
             let inventory_patch = serde_json::json!({"current": {"apps": {"inventory": res}}});
-            let saved = settings::patch_settings(inventory_patch)
-                .and_then(|settings| serde_json::to_value(settings.current.apps.inventory).map_err(|_| "inventory serialization failed".to_string()));
+            let saved = settings::patch_settings(inventory_patch).and_then(|settings| {
+                serde_json::to_value(settings.current.apps.inventory)
+                    .map_err(|_| "inventory serialization failed".to_string())
+            });
             let receipt = inventory_persistence_receipt(res, saved);
             if let Ok(serde_json::Value::Object(ref mut value)) = result {
                 value.insert("__wcInventoryReceipt".to_string(), receipt);
@@ -7106,7 +7246,9 @@ fn find_running_privacy_shield_pid() -> Option<u32> {
     let (mut command, _) = build_powershell_command();
     let mut child = command.spawn().ok()?;
     if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(FIND_SESSION_PRIVACY_SHIELD_PID.as_bytes()).ok()?;
+        stdin
+            .write_all(FIND_SESSION_PRIVACY_SHIELD_PID.as_bytes())
+            .ok()?;
     }
     let output = child.wait_with_output().ok()?;
     if !output.status.success() {
@@ -7713,7 +7855,14 @@ fn queue_shield_transitions(
     classes: &[&'static str],
     timestamp: Option<f64>,
 ) {
-    queue_shield_transitions_with_capture_ids(sender, episodes, classes, timestamp, &serde_json::Value::Null, &mut std::collections::BTreeSet::new());
+    queue_shield_transitions_with_capture_ids(
+        sender,
+        episodes,
+        classes,
+        timestamp,
+        &serde_json::Value::Null,
+        &mut std::collections::BTreeSet::new(),
+    );
 }
 
 fn queue_shield_transitions_with_capture_ids(
@@ -7725,12 +7874,21 @@ fn queue_shield_transitions_with_capture_ids(
     seen: &mut std::collections::BTreeSet<String>,
 ) {
     let transitions = episodes.observe_with_ids(classes, timestamp, |class| {
-        let clip = matches!(class, "phone_detected" | "multiple_faces").then(|| capture_ids.get(class)).flatten().and_then(serde_json::Value::as_str)
-            .and_then(|value| uuid::Uuid::parse_str(value).ok().filter(|id| id.get_version_num() == 4 && id.to_string() == value))
+        let clip = matches!(class, "phone_detected" | "multiple_faces")
+            .then(|| capture_ids.get(class))
+            .flatten()
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| {
+                uuid::Uuid::parse_str(value)
+                    .ok()
+                    .filter(|id| id.get_version_num() == 4 && id.to_string() == value)
+            })
             .map(|id| id.to_string());
         // An old recording must never be attached to a subsequent episode.
         if let Some(id) = clip {
-            if seen.len() < 4096 && seen.insert(id.clone()) { return id; }
+            if seen.len() < 4096 && seen.insert(id.clone()) {
+                return id;
+            }
         }
         uuid::Uuid::new_v4().to_string()
     });
@@ -7745,8 +7903,7 @@ fn queue_shield_transitions_with_capture_ids(
 #[cfg(test)]
 mod shield_detection_bridge_tests {
     use super::{
-        queue_shield_transitions,
-        queue_shield_transitions_with_capture_ids,
+        queue_shield_transitions, queue_shield_transitions_with_capture_ids,
         shield_detection_episodes::{Episodes, Transition},
     };
 
@@ -7757,14 +7914,46 @@ mod shield_detection_bridge_tests {
         let mut seen = std::collections::BTreeSet::new();
         let id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
         let ids = serde_json::json!({"phone_detected": id});
-        queue_shield_transitions_with_capture_ids(&sender, &mut episodes, &["phone_detected"], Some(100.0), &ids, &mut seen);
-        assert!(matches!(&receiver.try_recv().unwrap()[0], Transition::Start { episode_id, .. } if episode_id == id));
-        queue_shield_transitions_with_capture_ids(&sender, &mut episodes, &[], Some(101.0), &ids, &mut seen);
+        queue_shield_transitions_with_capture_ids(
+            &sender,
+            &mut episodes,
+            &["phone_detected"],
+            Some(100.0),
+            &ids,
+            &mut seen,
+        );
+        assert!(
+            matches!(&receiver.try_recv().unwrap()[0], Transition::Start { episode_id, .. } if episode_id == id)
+        );
+        queue_shield_transitions_with_capture_ids(
+            &sender,
+            &mut episodes,
+            &[],
+            Some(101.0),
+            &ids,
+            &mut seen,
+        );
         receiver.try_recv().unwrap();
-        queue_shield_transitions_with_capture_ids(&sender, &mut episodes, &["phone_detected"], Some(102.0), &ids, &mut seen);
-        assert!(matches!(&receiver.try_recv().unwrap()[0], Transition::Start { episode_id, .. } if episode_id != id));
+        queue_shield_transitions_with_capture_ids(
+            &sender,
+            &mut episodes,
+            &["phone_detected"],
+            Some(102.0),
+            &ids,
+            &mut seen,
+        );
+        assert!(
+            matches!(&receiver.try_recv().unwrap()[0], Transition::Start { episode_id, .. } if episode_id != id)
+        );
         let injected = serde_json::json!({"look_away": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"});
-        queue_shield_transitions_with_capture_ids(&sender, &mut episodes, &["look_away"], Some(103.0), &injected, &mut seen);
+        queue_shield_transitions_with_capture_ids(
+            &sender,
+            &mut episodes,
+            &["look_away"],
+            Some(103.0),
+            &injected,
+            &mut seen,
+        );
         let transitions = receiver.try_recv().unwrap();
         assert!(transitions.iter().any(|transition| matches!(transition, Transition::Start { class: "look_away", episode_id, .. } if episode_id != "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")));
     }
@@ -8117,7 +8306,8 @@ mod shield_force_stop_safety_tests {
     use std::os::windows::process::CommandExt;
 
     fn run_fixture(include_local: bool, deny_stop: bool, cim_error: bool) -> std::process::Output {
-        let fixture = format!(r#"
+        let fixture = format!(
+            r#"
             $sid = [System.Diagnostics.Process]::GetCurrentProcess().SessionId
             $global:items = @(
               [pscustomobject]@{{ Name='python.exe'; SessionId=$sid; CommandLine='unrelated.py'; ProcessId=9001 }}
@@ -8149,7 +8339,8 @@ mod shield_force_stop_safety_tests {
         std::process::Command::new("powershell.exe")
             .args(["-NoProfile", "-NonInteractive", "-Command", &fixture])
             .creation_flags(0x08000000)
-            .output().expect("PowerShell fixture must run")
+            .output()
+            .expect("PowerShell fixture must run")
     }
 
     #[test]
@@ -8169,7 +8360,10 @@ mod shield_force_stop_safety_tests {
 
     #[test]
     fn force_stop_reports_process_or_status_errors() {
-        for result in [run_fixture(true, true, false), run_fixture(true, false, true)] {
+        for result in [
+            run_fixture(true, true, false),
+            run_fixture(true, false, true),
+        ] {
             assert!(!result.status.success());
             assert!(String::from_utf8_lossy(&result.stdout).contains("stop_unconfirmed"));
         }
@@ -8178,10 +8372,25 @@ mod shield_force_stop_safety_tests {
     #[test]
     fn failed_stop_does_not_write_stopped_settings() {
         use std::collections::HashMap;
-        for value in [serde_json::json!({"error":true}), serde_json::json!({"success":false}), serde_json::json!({"success":true,"error":true}), serde_json::Value::Null] {
-            assert!(super::get_settings_sync_patch("Stop-PrivacyShield", &HashMap::new(), Some(&value)).is_none());
+        for value in [
+            serde_json::json!({"error":true}),
+            serde_json::json!({"success":false}),
+            serde_json::json!({"success":true,"error":true}),
+            serde_json::Value::Null,
+        ] {
+            assert!(super::get_settings_sync_patch(
+                "Stop-PrivacyShield",
+                &HashMap::new(),
+                Some(&value)
+            )
+            .is_none());
         }
-        assert!(super::get_settings_sync_patch("Stop-PrivacyShield", &HashMap::new(), Some(&serde_json::json!({"success":true}))).is_some());
+        assert!(super::get_settings_sync_patch(
+            "Stop-PrivacyShield",
+            &HashMap::new(),
+            Some(&serde_json::json!({"success":true}))
+        )
+        .is_some());
     }
 }
 
@@ -8190,21 +8399,35 @@ async fn kill_privacy_shield_process_unlocked(app: AppHandle) -> Result<(), Stri
     // terminate an identified detector in this Windows session; never treat a
     // marker alone or an unreadable process list as proof of identity.
     let (mut cmd, ps_exe) = build_powershell_command();
-    let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn PowerShell ({ps_exe}): {e}"))?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("Failed to spawn PowerShell ({ps_exe}): {e}"))?;
     if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(FORCE_STOP_PRIVACY_SHIELD_SCRIPT.as_bytes()).map_err(|e| format!("Failed to write to stdin: {e}"))?;
+        stdin
+            .write_all(FORCE_STOP_PRIVACY_SHIELD_SCRIPT.as_bytes())
+            .map_err(|e| format!("Failed to write to stdin: {e}"))?;
     }
-    let output = child.wait_with_output().map_err(|e| format!("Failed to read output: {e}"))?;
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("Failed to read output: {e}"))?;
     let confirmed = output.status.success()
-        && String::from_utf8_lossy(&output.stdout).lines().any(|line| line.trim() == "confirmed_stopped");
+        && String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .any(|line| line.trim() == "confirmed_stopped");
     if !confirmed {
-        return Err("Privacy Shield stop could not be confirmed; check its status and try again".into());
+        return Err(
+            "Privacy Shield stop could not be confirmed; check its status and try again".into(),
+        );
     }
     SHIELD_READER_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
     crate::native_notify::clear_pending_notifications(&app);
-    shield_lifecycle::emit_verified_transition(&app, "Stop-PrivacyShield", &serde_json::json!({
-        "success": true, "running": false, "shieldLifecycle": "stopped"
-    }));
+    shield_lifecycle::emit_verified_transition(
+        &app,
+        "Stop-PrivacyShield",
+        &serde_json::json!({
+            "success": true, "running": false, "shieldLifecycle": "stopped"
+        }),
+    );
     Ok(())
 }
 

@@ -9,16 +9,27 @@ fn quick_mount_settings_refuse_new_duplicates_and_protected_letters_but_allow_re
     let current = create_default_settings();
     for letters in [vec!["Q", "q:"], vec!["C"], vec!["A"], vec!["QQ"]] {
         let mut candidate = current.clone();
-        candidate.app.vault.quick_mount_slots = letters.into_iter().map(|letter| super::super::QuickMountSlot {
-            file_path: "fixture.hc".into(), drive_letter: letter.into(), ..Default::default()
-        }).collect();
+        candidate.app.vault.quick_mount_slots = letters
+            .into_iter()
+            .map(|letter| super::super::QuickMountSlot {
+                file_path: "fixture.hc".into(),
+                drive_letter: letter.into(),
+                ..Default::default()
+            })
+            .collect();
         assert!(validate(&current, &candidate).is_err());
     }
     let mut legacy = current.clone();
-    legacy.app.vault.quick_mount_slots = vec![super::super::QuickMountSlot {
-        file_path: "fixture.hc".into(), drive_letter: "Q".into(), ..Default::default()
-    }; 2];
-    let mut repaired = legacy.clone(); repaired.app.vault.quick_mount_slots.pop();
+    legacy.app.vault.quick_mount_slots = vec![
+        super::super::QuickMountSlot {
+            file_path: "fixture.hc".into(),
+            drive_letter: "Q".into(),
+            ..Default::default()
+        };
+        2
+    ];
+    let mut repaired = legacy.clone();
+    repaired.app.vault.quick_mount_slots.pop();
     assert!(validate(&legacy, &repaired).is_ok());
     assert!(validate(&legacy, &current).is_ok());
 }
@@ -107,7 +118,13 @@ fn file_search_result_limit_renderer_patch_replace_and_import_accept_legacy_and_
 fn file_search_result_limit_legacy_and_canonical_locks_deny_all_renderer_mutations() {
     let fixture = Fixture::managed();
     for lock in ["app.fileSearch.result_limit", "app.fileSearch.resultLimit"] {
-        SETTINGS_CACHE.lock().unwrap().as_mut().unwrap().policy.locked_paths = vec![lock.into()];
+        SETTINGS_CACHE
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .policy
+            .locked_paths = vec![lock.into()];
         let before = fixture.current();
         for spelling in ["result_limit", "resultLimit"] {
             let patch = json!({"app": {"fileSearch": {(spelling): 50}}});
@@ -132,7 +149,13 @@ fn file_search_result_limit_legacy_and_canonical_locks_deny_all_renderer_mutatio
 fn file_search_result_limit_lock_queries_resolve_both_spellings_without_rewriting_policy() {
     let fixture = Fixture::managed();
     for lock in ["app.fileSearch.result_limit", "app.fileSearch.resultLimit"] {
-        SETTINGS_CACHE.lock().unwrap().as_mut().unwrap().policy.locked_paths = vec![lock.into()];
+        SETTINGS_CACHE
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .policy
+            .locked_paths = vec![lock.into()];
         for query in ["app.fileSearch.result_limit", "app.fileSearch.resultLimit"] {
             assert!(super::super::is_path_locked(query).unwrap());
         }
@@ -385,12 +408,25 @@ fn local_look_away_preference_is_outside_fleet_shield_lock_and_bounded() {
     assert!(validate(&current, &candidate).is_ok());
     candidate.app.local_privacy_shield_look_away_delay_seconds = Some(301);
     assert!(validate(&current, &candidate).is_err());
-    current.app.fleet.privacy_shield_policy_transaction = Some(crate::settings::ShieldPolicyTransaction {
-        epoch_version: 1, epoch_signature_hash: "a".repeat(64), resolution_revision: 1,
-        shield_revision: 1, attempt_id: "attempt".into(), was_running: true, was_fleet_owned: false,
-        owner_session_id: Some(1), pre_pause_mode: None, pre_pause_camera_index: None, pre_pause_native_options: None,
-        local_stop_requested: false, attempt_count: 1, retry_not_before_ms: 0, expected_hash: "hash".into(), last_stage: None,
-    });
+    current.app.fleet.privacy_shield_policy_transaction =
+        Some(crate::settings::ShieldPolicyTransaction {
+            epoch_version: 1,
+            epoch_signature_hash: "a".repeat(64),
+            resolution_revision: 1,
+            shield_revision: 1,
+            attempt_id: "attempt".into(),
+            was_running: true,
+            was_fleet_owned: false,
+            owner_session_id: Some(1),
+            pre_pause_mode: None,
+            pre_pause_camera_index: None,
+            pre_pause_native_options: None,
+            local_stop_requested: false,
+            attempt_count: 1,
+            retry_not_before_ms: 0,
+            expected_hash: "hash".into(),
+            last_stage: None,
+        });
     let mut changed = current.clone();
     changed.app.local_privacy_shield_look_away_delay_seconds = Some(7);
     assert!(validate(&current, &changed).is_err());

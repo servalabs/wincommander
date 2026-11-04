@@ -26,13 +26,18 @@ fn notification_preferences_accept_saved_records_without_opening_the_secret_enve
         assert_eq!(overlay["app"]["decoyMode"]["enabled"], true);
         assert!(!overlay.to_string().contains("private-ciphertext-canary"));
     }
-    assert!(notification_overlay_from_record(record(Some(json!({"app":{"theme":"light"}})))).is_ok());
+    assert!(
+        notification_overlay_from_record(record(Some(json!({"app":{"theme":"light"}})))).is_ok()
+    );
 }
 
 #[test]
 fn notification_record_uncertainty_and_invalid_envelopes_stay_closed() {
     for envelope in [json!(true), json!([]), json!({"private":"canary"})] {
-        let failure = notification_overlay_from_record(record(Some(json!({"app":{},"_personalSecrets":envelope})))).unwrap_err();
+        let failure = notification_overlay_from_record(record(Some(
+            json!({"app":{},"_personalSecrets":envelope}),
+        )))
+        .unwrap_err();
         assert_eq!(failure, "notification_preferences_record_unverified");
         assert!(!failure.contains("private"));
     }

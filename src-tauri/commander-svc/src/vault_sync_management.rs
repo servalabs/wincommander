@@ -239,13 +239,9 @@ mod tests {
         let original = mounted_personal("volume-a");
         let replacement = mounted_personal("volume-b");
         let receipt = mount_receipt("personal:original", &original);
-        assert!(require_mount_receipt(
-            Some(&receipt),
-            "personal:original",
-            &original,
-            true,
-        )
-        .is_ok());
+        assert!(
+            require_mount_receipt(Some(&receipt), "personal:original", &original, true,).is_ok()
+        );
         assert_eq!(
             require_mount_receipt(Some(&receipt), "personal:replacement", &replacement, true),
             Err(VaultMountReason::MountStateUnknown),
