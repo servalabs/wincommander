@@ -32,20 +32,20 @@ fn denied() -> io::Error {
     )
 }
 
-// Windows can briefly reject replacement of Tantivy's managed-file manifest
-// while another process opens it. Error 5 can also indicate a permanent denial,
-// so bound the retries and return the error if access does not recover.
+// Windows can briefly deny index inspection or manifest replacement while
+// another process changes files. Error 5 can also be permanent, so repeat the
+// full operation and return the error if access does not recover.
 #[cfg(windows)]
-fn retry_manifest_write(mut write: impl FnMut() -> io::Result<()>) -> io::Result<()> {
+fn retry_windows_access_denied(mut operation: impl FnMut() -> io::Result<()>) -> io::Result<()> {
     for delay_ms in [2, 4, 8, 16, 32, 64, 128] {
-        match write() {
+        match operation() {
             Err(error) if error.raw_os_error() == Some(5) => {
                 std::thread::sleep(std::time::Duration::from_millis(delay_ms));
             }
             result => return result,
         }
     }
-    write()
+    operation()
 }
 
 pub(crate) fn validate_ancestors(path: &Path) -> io::Result<()> {
@@ -74,15 +74,28 @@ pub(crate) fn validate_ancestors(path: &Path) -> io::Result<()> {
 }
 
 pub(crate) fn validate_storage(root: &Path) -> io::Result<()> {
+    #[cfg(windows)]
+    {
+        return retry_windows_access_denied(|| validate_storage_once(root));
+    }
+    #[cfg(not(windows))]
+    validate_storage_once(root)
+}
+
+fn validate_storage_once(root: &Path) -> io::Result<()> {
     validate_ancestors(root)?;
-    if root.is_dir() {
-        for entry in std::fs::read_dir(root)? {
-            let entry = entry?;
-            validate_ancestors(&entry.path())?;
-            // Tantivy storage is flat; reject subtrees before any schema rebuild.
-            if !entry.file_type()?.is_file() {
-                return Err(denied());
-            }
+    match std::fs::symlink_metadata(root) {
+        Ok(meta) if meta.is_dir() => {}
+        Ok(_) => return Err(denied()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    }
+    for entry in std::fs::read_dir(root)? {
+        let entry = entry?;
+        validate_ancestors(&entry.path())?;
+        // Tantivy storage is flat; reject subtrees before any schema rebuild.
+        if !entry.file_type()?.is_file() {
+            return Err(denied());
         }
     }
     Ok(())
@@ -178,7 +191,7 @@ impl Directory for CheckedDirectory {
         self.check(path, true)?;
         #[cfg(windows)]
         if path == Path::new(".managed.json") {
-            return retry_manifest_write(|| {
+            return retry_windows_access_denied(|| {
                 self.check(path, true)?;
                 self.inner.atomic_write(path, data)
             });
@@ -225,7 +238,7 @@ mod tests {
     #[test]
     fn manifest_write_retries_only_windows_access_denied() {
         let mut attempts = 0;
-        retry_manifest_write(|| {
+        retry_windows_access_denied(|| {
             attempts += 1;
             if attempts < 3 {
                 Err(io::Error::from_raw_os_error(5))
@@ -236,7 +249,7 @@ mod tests {
         .unwrap();
         assert_eq!(attempts, 3);
         let mut attempts = 0;
-        let error = retry_manifest_write(|| {
+        let error = retry_windows_access_denied(|| {
             attempts += 1;
             Err(io::Error::from_raw_os_error(2))
         })
@@ -244,7 +257,7 @@ mod tests {
         assert_eq!(error.raw_os_error(), Some(2));
         assert_eq!(attempts, 1);
         let mut attempts = 0;
-        assert!(retry_manifest_write(|| {
+        assert!(retry_windows_access_denied(|| {
             attempts += 1;
             Err(io::Error::from_raw_os_error(5))
         }).is_err());
@@ -272,6 +285,23 @@ mod tests {
         assert_eq!(directory.atomic_read(manifest).unwrap(), b"new");
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn storage_retry_rechecks_the_entire_directory() {
+        let root = tempfile::TempDir::new().unwrap();
+        let mut attempts = 0;
+        let result = retry_windows_access_denied(|| {
+            attempts += 1;
+            if attempts == 1 {
+                std::fs::create_dir(root.path().join("unsafe-subtree"))?;
+                return Err(io::Error::from_raw_os_error(5));
+            }
+            validate_storage_once(root.path())
+        });
+        assert_eq!(attempts, 2);
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+    }
+
     #[test]
     fn directory_rejects_absolute_parent_nested_and_stream_paths() {
         let root = tempfile::TempDir::new().unwrap();
@@ -295,5 +325,15 @@ mod tests {
             std::fs::read_to_string(root.path().join("unrelated/keep.txt")).unwrap(),
             "keep"
         );
+    }
+
+    #[test]
+    fn storage_validation_rejects_a_file_as_the_index_root() {
+        let parent = tempfile::TempDir::new().unwrap();
+        let root = parent.path().join("index");
+        assert!(validate_storage(&root).is_ok());
+        std::fs::write(&root, b"not a directory").unwrap();
+        assert_eq!(validate_storage(&root).unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(std::fs::read(&root).unwrap(), b"not a directory");
     }
 }
