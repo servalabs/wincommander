@@ -21,7 +21,11 @@ impl Drop for ConfirmedRecord {
     fn drop(&mut self) { use zeroize::Zeroize; self.request.zeroize(); }
 }
 
-pub(super) struct SavedRelease { pub request: Zeroizing<Vec<u8>>, pub confirmed: bool }
+pub(super) struct SavedRelease {
+    pub request: Zeroizing<Vec<u8>>,
+    pub confirmed: bool,
+    pub acknowledged: bool,
+}
 
 fn release_entropy(binding: &Binding<'_>, credential: &ConfirmedCredential, body: &[u8]) -> Result<[u8; 32], &'static str> {
     // Validate the identity fields using the credential store's existing rules.
@@ -51,15 +55,15 @@ fn load_locked(
     let sealed = URL_SAFE_NO_PAD.decode(&record.sealed).map_err(|_| INVALID)?;
     if URL_SAFE_NO_PAD.encode(&sealed) != record.sealed { return Err(INVALID); }
     let plaintext = protector.unprotect(&sealed, &release_entropy(binding, credential, body)?).map_err(|_| INVALID)?;
-    let (request, confirmed) = if record.version == 1 { (plaintext, false) } else {
+    let (request, confirmed, acknowledged) = if record.version == 1 { (plaintext, false, false) } else {
         let value: ConfirmedRecord = serde_json::from_slice(&plaintext).map_err(|_| INVALID)?;
-        if value.phase != "confirmed" || value.request.len() > LIMIT { return Err(INVALID); }
+        if !matches!(value.phase.as_str(), "confirmed" | "acknowledged") || value.request.len() > LIMIT { return Err(INVALID); }
         let decoded = Zeroizing::new(URL_SAFE_NO_PAD.decode(&value.request).map_err(|_| INVALID)?);
         if URL_SAFE_NO_PAD.encode(decoded.as_slice()) != value.request { return Err(INVALID); }
-        (decoded, true)
+        (decoded, true, value.phase == "acknowledged")
     };
     wire::verify_stored_release_request(credential, body, &request)?;
-    Ok(Some(SavedRelease { request, confirmed }))
+    Ok(Some(SavedRelease { request, confirmed, acknowledged }))
 }
 
 fn save_locked(
@@ -88,7 +92,15 @@ fn confirm_locked(
     let saved = load_locked(store, protector, binding, credential, body)?.ok_or(INVALID)?;
     if saved.request.as_slice() != request { return Err(INVALID); }
     if saved.confirmed { return Ok(()); }
-    let value = ConfirmedRecord { phase: "confirmed".into(), request: URL_SAFE_NO_PAD.encode(request) };
+    save_confirmed_phase(store, protector, binding, credential, body, request, "confirmed")
+}
+
+fn save_confirmed_phase(
+    store: &anchor::Anchor, protector: &dyn Protector, binding: &Binding<'_>, credential: &ConfirmedCredential,
+    body: &[u8], request: &[u8], phase: &str,
+) -> Result<(), &'static str> {
+    if !matches!(phase, "confirmed" | "acknowledged") { return Err(INVALID); }
+    let value = ConfirmedRecord { phase: phase.into(), request: URL_SAFE_NO_PAD.encode(request) };
     let plaintext = Zeroizing::new(serde_json::to_vec(&value).map_err(|_| INVALID)?);
     let sealed = protector.protect(&plaintext, &release_entropy(binding, credential, body)?).map_err(|_| INVALID)?;
     if sealed.is_empty() || sealed.len() > LIMIT / 2 { return Err(INVALID); }
@@ -96,8 +108,23 @@ fn confirm_locked(
     if bytes.len() > LIMIT { return Err(INVALID); }
     store.write(&bytes).map_err(|_| INVALID)?;
     let reopened = load_locked(store, protector, binding, credential, body)?.ok_or(INVALID)?;
-    if !reopened.confirmed || reopened.request.as_slice() != request { return Err(INVALID); }
+    if !reopened.confirmed || reopened.acknowledged != (phase == "acknowledged") || reopened.request.as_slice() != request { return Err(INVALID); }
     Ok(())
+}
+
+/// Persist the acknowledgement only after the confirmed request is reopened
+/// under the exact current credential/cache locks. A failed write retains the
+/// previous state or can be confirmed by reopening on a retry.
+fn acknowledge_locked(
+    store: &anchor::Anchor, protector: &dyn Protector, binding: &Binding<'_>, credential: &ConfirmedCredential,
+    body: &[u8], request: &[u8], confirmation: &wire::AcknowledgementConfirmation,
+) -> Result<(), &'static str> {
+    let saved = load_locked(store, protector, binding, credential, body)?.ok_or(INVALID)?;
+    if !saved.confirmed || saved.request.as_slice() != request { return Err(INVALID); }
+    let acknowledgement = wire::release_acknowledgement_request(credential, body, request)?;
+    if !confirmation.matches(&acknowledgement) { return Err(INVALID); }
+    if saved.acknowledged { return Ok(()); }
+    save_confirmed_phase(store, protector, binding, credential, body, request, "acknowledged")
 }
 
 fn with_current<T>(
@@ -149,6 +176,17 @@ pub(crate) fn prepare_acknowledgement(
         prepare_ack_locked(store, &MachineDpapi, binding, credential, body))
 }
 
+/// Retain the acknowledged phase before any future local finalization. The
+/// caller must have sent the acknowledgement for this same confirmed request.
+/// This does not delete the licence or authorize an IPC caller.
+pub(crate) fn record_acknowledgement(
+    binding: &Binding<'_>, trust: &wincmd_pq_experiment::jws::Trust<'_>, licence: &RefreshLicence<'_>, now: u64,
+    request: &[u8], confirmation: &wire::AcknowledgementConfirmation,
+) -> Result<(), &'static str> {
+    with_current(binding, trust, licence, now, |store, credential, body|
+        acknowledge_locked(store, &MachineDpapi, binding, credential, body, request, confirmation))
+}
+
 fn prepare_ack_locked(store: &anchor::Anchor, protector: &dyn Protector, binding: &Binding<'_>,
     credential: &ConfirmedCredential, body: &[u8]) -> Result<Zeroizing<Vec<u8>>, &'static str> {
     let saved = load_locked(store, protector, binding, credential, body)?.ok_or(INVALID)?;
@@ -171,6 +209,10 @@ mod tests {
         let response = serde_json::to_vec(&serde_json::json!({ "ok": true, "credentialId": URL_SAFE_NO_PAD.encode(credential.id),
             "nonce": URL_SAFE_NO_PAD.encode([8; 32]), "requestDigest": URL_SAFE_NO_PAD.encode(digest), "expiresAt": 1060 })).unwrap();
         let request = wire::release_request(&credential, body.to_vec(), &response, 1000).unwrap();
+        let expected_ack = wire::release_acknowledgement_request(&credential, body, &request).unwrap();
+        let ack_confirmation = wire::test_acknowledgement_confirmation(&expected_ack, br#"{"ok":true}"#).unwrap();
+        let release_confirmation = wire::test_acknowledgement_confirmation(&request, br#"{"ok":true}"#).unwrap();
+        assert!(wire::test_acknowledgement_confirmation(&expected_ack, br#"{"ok":false}"#).is_err());
         assert!(load_locked(&store, &MachineDpapi, &binding, &credential, body).unwrap().is_none());
         let mut forged: serde_json::Value = serde_json::from_slice(&request).unwrap();
         forged["proof"] = serde_json::json!(URL_SAFE_NO_PAD.encode([0; 32]));
@@ -181,8 +223,10 @@ mod tests {
         assert!(!sealed.windows(request.len()).any(|part| part == request));
         let reopened = load_locked(&anchor::Anchor::test_user(path.clone()), &MachineDpapi, &binding, &credential, body).unwrap().unwrap();
         assert!(!reopened.confirmed);
+        assert!(!reopened.acknowledged);
         assert_eq!(reopened.request.as_slice(), request);
         assert!(prepare_ack_locked(&store, &MachineDpapi, &binding, &credential, body).is_err());
+        assert!(acknowledge_locked(&store, &MachineDpapi, &binding, &credential, body, &request, &ack_confirmation).is_err());
         assert_eq!(save_locked(&store, &MachineDpapi, &binding, &credential, body, &request).unwrap().as_slice(), request);
         assert!(load_locked(&store, &MachineDpapi, &Binding { device_hash: "other", ..binding }, &credential, body).is_err());
         assert!(load_locked(&store, &MachineDpapi, &binding, &credential, b"different body").is_err());
@@ -199,13 +243,23 @@ mod tests {
         confirm_locked(&store, &MachineDpapi, &binding, &credential, body, &request, br#"{"ok":true}"#).unwrap();
         let confirmed = load_locked(&anchor::Anchor::test_user(path.clone()), &MachineDpapi, &binding, &credential, body).unwrap().unwrap();
         assert!(confirmed.confirmed);
+        assert!(!confirmed.acknowledged);
         assert_eq!(confirmed.request.as_slice(), request);
         let ack = prepare_ack_locked(&store, &MachineDpapi, &binding, &credential, body).unwrap();
         let ack_json: serde_json::Value = serde_json::from_slice(&ack).unwrap();
         let original: serde_json::Value = serde_json::from_slice(&request).unwrap();
         assert_eq!(ack_json["nonce"], original["nonce"]);
         assert_ne!(ack_json["proof"], original["proof"]);
+        assert!(acknowledge_locked(&store, &MachineDpapi, &binding, &credential, body, &alternate, &ack_confirmation).is_err());
+        assert!(acknowledge_locked(&store, &MachineDpapi, &binding, &credential, body, &request, &release_confirmation).is_err());
+        assert!(!load_locked(&store, &MachineDpapi, &binding, &credential, body).unwrap().unwrap().acknowledged);
+        acknowledge_locked(&store, &MachineDpapi, &binding, &credential, body, &request, &ack_confirmation).unwrap();
+        let acknowledged = load_locked(&anchor::Anchor::test_user(path.clone()), &MachineDpapi, &binding, &credential, body).unwrap().unwrap();
+        assert!(acknowledged.confirmed && acknowledged.acknowledged);
+        assert_eq!(acknowledged.request.as_slice(), request);
+        acknowledge_locked(&store, &MachineDpapi, &binding, &credential, body, &request, &ack_confirmation).unwrap();
         confirm_locked(&store, &MachineDpapi, &binding, &credential, body, &request, br#"{"ok":true}"#).unwrap();
+        assert!(load_locked(&store, &MachineDpapi, &binding, &credential, body).unwrap().unwrap().acknowledged);
         assert!(save_locked(&store, &MachineDpapi, &binding, &credential, body, &alternate).is_err());
         store.write(b"invalid").unwrap();
         assert!(load_locked(&store, &MachineDpapi, &binding, &credential, body).is_err());

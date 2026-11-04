@@ -367,7 +367,34 @@ pub(crate) async fn request_release(
         |request| release_pending::stage(binding, receipt_trust, licence, now()?, &request),
         wire::post_release,
         |request, response| release_pending::confirm(binding, receipt_trust, licence, now()?, &request, &response),
+    ).await?;
+    acknowledgement_exchange_with(
+        || release_pending::load(binding, receipt_trust, licence, now()?),
+        || release_pending::prepare_acknowledgement(binding, receipt_trust, licence, now()?),
+        wire::post_release_acknowledgement,
+        |request, confirmation| release_pending::record_acknowledgement(
+            binding, receipt_trust, licence, now()?, &request, &confirmation),
     ).await
+}
+
+/// Resume only a protected confirmed release. On an uncertain send or write,
+/// leave the saved request available for a later retry; never clear the cache.
+async fn acknowledgement_exchange_with<Load, Prepare, Send, SendFuture, Record>(
+    load: Load, prepare: Prepare, send: Send, record: Record,
+) -> Result<(), &'static str>
+where
+    Load: FnOnce() -> Result<Option<release_pending::SavedRelease>, &'static str>,
+    Prepare: FnOnce() -> Result<Zeroizing<Vec<u8>>, &'static str>,
+    Send: FnOnce(Zeroizing<Vec<u8>>) -> SendFuture,
+    SendFuture: std::future::Future<Output = Result<wire::AcknowledgementConfirmation, &'static str>>,
+    Record: FnOnce(Zeroizing<Vec<u8>>, wire::AcknowledgementConfirmation) -> Result<(), &'static str>,
+{
+    let saved = load()?.ok_or(INVALID)?;
+    if !saved.confirmed { return Err(INVALID); }
+    if saved.acknowledged { return Ok(()); }
+    let acknowledgement = prepare()?;
+    let confirmation = send(acknowledgement).await?;
+    record(saved.request, confirmation)
 }
 
 async fn release_exchange_with<Load, Begin, BeginFuture, Stage, Send, SendFuture, Confirm>(

@@ -2,11 +2,48 @@
 use super::*;
 
 #[tokio::test]
+async fn acknowledgement_retries_after_network_or_persistence_failure() {
+    use std::cell::RefCell;
+    let state = RefCell::new((false, false));
+    let load = || {
+        let (confirmed, acknowledged) = *state.borrow();
+        Ok(Some(release_pending::SavedRelease {
+            request: Zeroizing::new(b"original release".to_vec()), confirmed, acknowledged,
+        }))
+    };
+    let prepare = || Ok(Zeroizing::new(b"bound acknowledgement".to_vec()));
+    assert!(acknowledgement_exchange_with(load, prepare,
+        |_| async { panic!("unconfirmed release must not send") },
+        |_, _| panic!("unconfirmed release must not record")).await.is_err());
+    state.borrow_mut().0 = true;
+    assert!(acknowledgement_exchange_with(load, prepare,
+        |_| async { Err(INVALID) }, |_, _| panic!("failed send must not record")).await.is_err());
+    assert!(!state.borrow().1);
+    let send = |ack: Zeroizing<Vec<u8>>| async move {
+        assert_eq!(ack.as_slice(), b"bound acknowledgement");
+        wire::test_acknowledgement_confirmation(&ack, br#"{"ok":true}"#)
+    };
+    assert!(acknowledgement_exchange_with(load, prepare, send, |request, _| {
+        assert_eq!(request.as_slice(), b"original release");
+        Err(INVALID)
+    }).await.is_err());
+    assert!(!state.borrow().1);
+    acknowledgement_exchange_with(load, prepare, send, |request, _| {
+        assert_eq!(request.as_slice(), b"original release");
+        state.borrow_mut().1 = true;
+        Ok(())
+    }).await.unwrap();
+    acknowledgement_exchange_with(load, || panic!("acknowledged release must not prepare"),
+        |_| async { panic!("acknowledged release must not send") },
+        |_, _| panic!("acknowledged release must not record")).await.unwrap();
+}
+
+#[tokio::test]
 async fn release_exchange_saves_before_send_and_retries_identical_bytes() {
     use std::cell::RefCell;
     let pending = RefCell::new(None::<(Vec<u8>, bool)>);
     let load = || Ok(pending.borrow().as_ref().map(|(request, confirmed)| release_pending::SavedRelease {
-        request: Zeroizing::new(request.clone()), confirmed: *confirmed,
+        request: Zeroizing::new(request.clone()), confirmed: *confirmed, acknowledged: false,
     }));
     let first = release_exchange_with(
         load,
