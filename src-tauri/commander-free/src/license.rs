@@ -1713,7 +1713,7 @@ pub async fn refresh_license() -> Result<serde_json::Value, String> {
             return Err("Renewed license does not match this device.".into());
         }
         let status = status_from_cached(&updated, &claims, Some("License refreshed.".to_string()));
-        return serde_json::to_value(status).map_err(|e| e.to_string());
+        serde_json::to_value(status).map_err(|e| e.to_string())
     }
 
     #[cfg(not(feature = "experimental-pq-licence"))]
