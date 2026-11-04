@@ -44,7 +44,7 @@ async fn read_license_response<T: serde::de::DeserializeOwned>(
     }
     let mut bytes = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(|_| "Could not read license response.")? {
-        if bytes.len().checked_add(chunk.len()).map_or(true, |size| size > LICENSE_RESPONSE_LIMIT) {
+        if bytes.len().checked_add(chunk.len()).is_none_or(|size| size > LICENSE_RESPONSE_LIMIT) {
             return Err("License response is too large.".into());
         }
         bytes.extend_from_slice(&chunk);
