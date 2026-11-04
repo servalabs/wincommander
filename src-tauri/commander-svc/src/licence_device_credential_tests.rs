@@ -406,6 +406,66 @@ fn authorized_worker_issuer_receipt_confirms_persisted_pending_credential() {
     let digest: [u8; 32] = Sha256::digest(&body).into();
     let nonce = [7u8; 32];
     let expiry = accepted_at + 120;
+    let challenge_request: serde_json::Value =
+        serde_json::from_slice(&wire::challenge_request(&confirmed, &body).unwrap()).unwrap();
+    assert_eq!(
+        challenge_request["credentialId"],
+        URL_SAFE_NO_PAD.encode(pending.id)
+    );
+    assert_eq!(
+        challenge_request["oldRequest"],
+        URL_SAFE_NO_PAD.encode(&body)
+    );
+    let challenge_response = serde_json::json!({ "ok": true, "credentialId": URL_SAFE_NO_PAD.encode(pending.id),
+        "nonce": URL_SAFE_NO_PAD.encode(nonce), "requestDigest": URL_SAFE_NO_PAD.encode(digest), "expiresAt": expiry });
+    let request = wire::renewal_request(
+        &confirmed,
+        body.clone(),
+        challenge_response.to_string().as_bytes(),
+        accepted_at,
+    )
+    .unwrap();
+    let decoded: serde_json::Value = serde_json::from_slice(&request).unwrap();
+    assert_eq!(decoded["oldRequest"], URL_SAFE_NO_PAD.encode(&body));
+    assert_eq!(decoded["credentialId"], challenge_response["credentialId"]);
+    assert_eq!(decoded["nonce"], challenge_response["nonce"]);
+    let mut invalid = challenge_response.clone();
+    invalid["requestDigest"] = URL_SAFE_NO_PAD.encode([0u8; 32]).into();
+    assert!(wire::renewal_request(
+        &confirmed,
+        body.clone(),
+        invalid.to_string().as_bytes(),
+        accepted_at
+    )
+    .is_err());
+    invalid = challenge_response.clone();
+    invalid["credentialId"] = URL_SAFE_NO_PAD.encode([0u8; 32]).into();
+    assert!(wire::renewal_request(
+        &confirmed,
+        body.clone(),
+        invalid.to_string().as_bytes(),
+        accepted_at
+    )
+    .is_err());
+    invalid = challenge_response.clone();
+    invalid["expiresAt"] = accepted_at.into();
+    assert!(wire::renewal_request(
+        &confirmed,
+        body.clone(),
+        invalid.to_string().as_bytes(),
+        accepted_at
+    )
+    .is_err());
+    invalid = challenge_response.clone();
+    invalid["unexpected"] = true.into();
+    assert!(wire::renewal_request(
+        &confirmed,
+        body.clone(),
+        invalid.to_string().as_bytes(),
+        accepted_at
+    )
+    .is_err());
+    assert!(wire::renewal_request(&confirmed, body.clone(), &[b' '; 4097], accepted_at).is_err());
     let proof = sign_refresh_wire(
         &confirmed,
         body.clone(),

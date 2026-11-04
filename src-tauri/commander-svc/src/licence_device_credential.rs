@@ -11,6 +11,8 @@ use zeroize::Zeroizing;
 
 #[path = "licence_device_receipt.rs"]
 mod receipt;
+#[path = "licence_device_wire.rs"]
+mod wire;
 
 const INVALID: &str = "device credential is invalid or unavailable";
 const LIMIT: usize = 64 * 1024;
@@ -212,6 +214,88 @@ fn sign_refresh_wire(
     };
     let tag = wincmd_pq_experiment::licence_device_proof::sign(credential.secret(), &challenge);
     Ok(RefreshProof { body, tag })
+}
+
+/// Existing signed licence and cache evidence; callers cannot choose trust or paths through IPC.
+pub(crate) struct RefreshLicence<'a> {
+    pub payload: &'a str,
+    pub signature: &'a str,
+    pub hybrid: &'a str,
+    pub last_verified_at: u64,
+}
+
+fn checked_refresh_wire(
+    binding: &Binding<'_>,
+    licence: &RefreshLicence<'_>,
+) -> Result<Vec<u8>, &'static str> {
+    crate::license_cache::verified_refresh_wire(
+        licence.payload,
+        licence.signature,
+        licence.hybrid,
+        licence.last_verified_at,
+        binding.licence_id,
+        binding.device_hash,
+    )
+}
+
+/// Prepare a challenge request from the service's verified cache and confirmed identity.
+pub(crate) fn prepare_challenge_request(
+    binding: &Binding<'_>,
+    receipt_trust: &wincmd_pq_experiment::jws::Trust<'_>,
+    licence: &RefreshLicence<'_>,
+    now: u64,
+) -> Result<Vec<u8>, &'static str> {
+    let credential = load_confirmed(binding, receipt_trust, now)?;
+    let body = checked_refresh_wire(binding, licence)?;
+    wire::challenge_request(&credential, &body)
+}
+
+/// Revalidate the cache before using a device secret for a received challenge.
+pub(crate) fn prepare_renewal_request(
+    binding: &Binding<'_>,
+    receipt_trust: &wincmd_pq_experiment::jws::Trust<'_>,
+    licence: &RefreshLicence<'_>,
+    challenge: &[u8],
+    now: u64,
+) -> Result<Vec<u8>, &'static str> {
+    let credential = load_confirmed(binding, receipt_trust, now)?;
+    let body = checked_refresh_wire(binding, licence)?;
+    wire::renewal_request(&credential, body, challenge, now)
+}
+
+/// Perform one bounded renewal exchange. The caller must authenticate the caller,
+/// independently provision trust, and recheck protected cache state before saving.
+pub(crate) async fn request_renewal(
+    binding: &Binding<'_>,
+    receipt_trust: &wincmd_pq_experiment::jws::Trust<'_>,
+    licence: &RefreshLicence<'_>,
+) -> Result<serde_json::Value, &'static str> {
+    if binding.issuer_origin != wire::LICENCE_ORIGIN {
+        return Err(INVALID);
+    }
+    let current_time = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .map_err(|_| INVALID)
+    };
+    let body = checked_refresh_wire(binding, licence)?;
+    let old: serde_json::Value = serde_json::from_slice(&body).map_err(|_| INVALID)?;
+    let portable = old
+        .get("isPortable")
+        .and_then(serde_json::Value::as_bool)
+        .ok_or(INVALID)?;
+    let request = prepare_challenge_request(binding, receipt_trust, licence, current_time()?)?;
+    let challenge = wire::post(wire::Endpoint::Challenge, request).await?;
+    let request =
+        prepare_renewal_request(binding, receipt_trust, licence, &challenge, current_time()?)?;
+    let response = wire::post(wire::Endpoint::Renewal, request).await?;
+    crate::license_cache::validate_device_renewal(
+        &response,
+        binding.licence_id,
+        binding.device_hash,
+        portable,
+    )
 }
 
 /// No IPC verb is exposed. Any future caller must authenticate the user and

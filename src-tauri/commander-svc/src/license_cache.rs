@@ -267,6 +267,43 @@ pub(crate) fn verified_refresh_wire(
     Ok(wire)
 }
 
+#[cfg(feature = "experimental-pq-licence")]
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeviceRenewalResponse {
+    ok: bool,
+    payload: String,
+    signature: String,
+    hybrid: String,
+}
+
+#[cfg(feature = "experimental-pq-licence")]
+fn validate_device_renewal_with(
+    bytes: &[u8], public: &str, trust: &wincmd_pq_experiment::jws::Trust<'_>,
+    licence_id: &str, device_hash: &str, portable: bool,
+) -> Result<serde_json::Value, &'static str> {
+    if bytes.is_empty() || bytes.len() > 64 * 1024 { return Err("license renewal is invalid"); }
+    let response: DeviceRenewalResponse = serde_json::from_slice(bytes).map_err(|_| "license renewal is invalid")?;
+    if !response.ok { return Err("license renewal is invalid"); }
+    let request = StoreLicenseCacheRequest { payload: response.payload, signature: response.signature,
+        hybrid: Some(response.hybrid), seats_used: None, seat_limit: None };
+    validate_dual_request(&request, public, trust)?;
+    let claims: RefreshClaims = serde_json::from_str(&request.payload).map_err(|_| "license renewal is invalid")?;
+    if claims.license_id != licence_id || claims.device_hash != device_hash || claims.is_portable != portable
+        || claims.iss != "wincommander-license-worker" || claims.sub != MAINLINE_APP_ID {
+        return Err("license renewal does not match device");
+    }
+    Ok(serde_json::json!({ "payload": request.payload, "signature": request.signature, "hybrid": request.hybrid }))
+}
+
+#[cfg(feature = "experimental-pq-licence")]
+pub(crate) fn validate_device_renewal(bytes: &[u8], licence_id: &str, device_hash: &str, portable: bool)
+    -> Result<serde_json::Value, &'static str> {
+    let public = service_public_key().ok_or("license verification is unavailable")?;
+    let trust = hybrid_trust::configured()?;
+    validate_device_renewal_with(bytes, public, &trust.policy(), licence_id, device_hash, portable)
+}
+
 /// Validate the experimental hybrid proof before the service persists it.
 /// Rollback protection and every licence reader must be implemented before use.
 #[cfg(feature = "experimental-pq-licence")]
@@ -462,6 +499,12 @@ mod tests {
             seats_used: None, seat_limit: None,
         };
         assert!(validate_dual_request(&request, public, &trust).is_ok());
+        let response = serde_json::json!({ "ok": true, "payload": request.payload,
+            "signature": request.signature, "hybrid": request.hybrid });
+        let encoded = serde_json::to_vec(&response).unwrap();
+        assert!(validate_device_renewal_with(&encoded, public, &trust, "license-test", "device-test", false).is_ok());
+        assert!(validate_device_renewal_with(&encoded, public, &trust, "license-test", "other", false).is_err());
+        assert!(validate_device_renewal_with(&encoded, public, &trust, "license-test", "device-test", true).is_err());
         let claims: SignedClaims = serde_json::from_str(&request.payload).unwrap();
         assert_eq!(claims.device_hash, "device-test");
         request.signature = general_purpose::URL_SAFE_NO_PAD.encode([0u8; 64]);
