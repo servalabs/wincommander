@@ -377,6 +377,12 @@ async fn authorized_worker_issuer_receipt_confirms_persisted_pending_credential(
     );
     assert!(wire::enrolment_request(&binding, &pending, " ").is_err());
     assert!(wire::enrolment_request(&binding, &pending, &"x".repeat(513)).is_err());
+    // Public cross-runtime vector uses synthetic credentials only. The Worker
+    // consumes these exact Rust-produced bytes in its local runtime test.
+    let vector_binding = Binding { device_hash: "enrol-device", ..binding };
+    let vector_credential = PendingCredential { id: [31; 32], secret: Zeroizing::new([32; 32]) };
+    let vector = wire::enrolment_request(&vector_binding, &vector_credential, "test-licence-key").unwrap();
+    assert_eq!(vector.as_slice(), include_str!("fixtures/rust-device-enrolment.json").trim_end().as_bytes());
     let good_response = serde_json::json!({"ok": true, "receipt": receipt});
     assert_eq!(
         wire::enrolment_receipt(good_response.to_string().as_bytes()).unwrap(),
