@@ -151,7 +151,7 @@ confirmationWaiter = null;
 hook = render();
 
 confirmationWaiter = new Promise(resolve => { releaseConfirmation = resolve; });
-const pendingClear = hook.handleOtherUserClear({ id: 'browserFootprints', label: 'Browser' } as never);
+const pendingClear = hook.handleOtherUserClear({ id: 'browserFootprints', label: 'Browser', clearDataKey: 'clearBrowserFootprints' } as never);
 hook = render();
 hook.handleSwitchUser(current);
 hook = render();

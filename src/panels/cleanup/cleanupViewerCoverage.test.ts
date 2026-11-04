@@ -56,7 +56,7 @@ describe("complete cleanup forensic viewer coverage", () => {
       "previousWindowsInstall",
     ]);
     expect(VIEW_ONLY_CATEGORIES.map((category) => category.id)).toEqual(["processIntel"]);
-    expect(ALL_CATEGORIES.filter((category) => category.getDataKey && !category.clearDataKey).map((category) => category.id)).toEqual(["processIntel"]);
+    expect(ALL_CATEGORIES.filter((category) => category.getDataKey && !category.clearDataKey).map((category) => category.id)).toEqual(["credentialManager", "gitActivity", "processIntel"]);
   });
 
   test("describes Process Review as the full running-process inventory", () => {

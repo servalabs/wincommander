@@ -11,7 +11,8 @@ test('protected categories offer read-only scans for one selected account', () =
     expect(category).not.toBe(undefined);
     expect(isOtherAccountScheduleOnly(category, 'S-1-5-21-100-200-300-1002', false)).toBe(false);
     const html = renderToStaticMarkup(<CleanupTraceCard category={category} count={-1} preview={[]} loading={false} clearing={false} scheduleState="verified" onSetSchedule={() => true} onLoad={() => {}} />);
-    expect(html).toContain(`Schedule a wipe for ${category.label}`);
+    if (category.schedulable) expect(html).toContain(`Schedule a wipe for ${category.label}`);
+    else expect(html).not.toContain(`Schedule a wipe for ${category.label}`);
     expect(html).toContain(`Scan ${category.label}`);
     expect(html).not.toContain(`Clear ${category.label}`);
   }
@@ -23,4 +24,15 @@ test('protected categories offer read-only scans for one selected account', () =
   expect(OTHER_ACCOUNT_READ_ONLY_IDS.has('dockerDesktopData')).toBe(true);
   expect(OTHER_ACCOUNT_READ_ONLY_IDS.has('virtualMachineArtifacts')).toBe(true);
   expect(OTHER_ACCOUNT_READ_ONLY_IDS.has('credentialManager')).toBe(true);
+});
+
+test('credential and Git inventory never expose clearing or scheduling', () => {
+  for (const id of ['credentialManager', 'gitActivity']) {
+    const category = ALL_CATEGORIES.find(item => item.id === id)!;
+    expect(category.clearDataKey).toBe('');
+    expect(category.schedulable).toBe(false);
+    const html = renderToStaticMarkup(<CleanupTraceCard category={category} count={1} preview={[]} loading={false} clearing={false} scheduleState="verified" onClear={() => {}} onSetSchedule={() => true} onLoad={() => {}} />);
+    expect(html).not.toContain(`Clear ${category.label}`);
+    expect(html).not.toContain(`Schedule a wipe for ${category.label}`);
+  }
 });

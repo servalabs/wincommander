@@ -259,10 +259,11 @@ describe("System Cleanup panel reconstruction contracts", () => {
   test("scan failure, empty, loading, and populated cards remain visibly distinct", async () => {
     const traceCard = await read("src/components/cleanup/CleanupTraceCard.tsx");
 
-    expect(traceCard).toContain('type BandState = "has" | "clean" | "scanning" | "error"');
-    expect(traceCard).toMatch(/: loading[\s\S]{0,100}\? "scanning"[\s\S]{0,100}\? "incomplete"[\s\S]{0,100}\? "error"/);
+    const bandStates = traceCard.match(/type BandState = ([^;]+);/)?.[1] ?? "";
+    for (const state of ['"has"', '"clean"', '"scanning"', '"error"']) expect(bandStates).toContain(state);
+    expect(traceCard).toMatch(/: loading[\s\S]{0,100}\? "scanning"[\s\S]{0,250}\? "incomplete"[\s\S]{0,100}\? "error"/);
     expect(traceCard).toContain('label: "Scan failed"');
-    expect(traceCard).toContain('role={incomplete ? "status" : "alert"}');
+    expect(traceCard).toContain('role={incomplete || bandState === "unavailable" ? "status" : "alert"}');
     expect(traceCard).toContain('safePreview.length === 0');
     expect(traceCard).toContain('open details to inspect');
   });
