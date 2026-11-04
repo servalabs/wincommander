@@ -1,27 +1,11 @@
 import { copyFileSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { assertSharedAssets } from "./check-shared-assets";
-import { desktopBuildCommand, normalizedPqReleaseEnvironment, serviceBuildCommand, validatePqReleaseTrust } from "./pq-release-profile";
+import { desktopBuildCommand, normalizedPqReleaseEnvironment, serviceBuildCommand } from "./pq-release-profile";
+import { validateReleaseTrust, verifyReleaseTrustProofs } from "./pq-release-preflight";
 
 const root = resolve(import.meta.dirname, "..");
-const disposableTrustFiles = [
-  "src-tauri/commander-free/tests/fixtures/hybrid-pro-disposable.json",
-  "src-tauri/commander-svc/src/fixtures/hybrid-licence-test.json",
-  "src-tauri/commander-svc/src/fixtures/hybrid-licence-invalid-test.json",
-  "src-tauri/commander-svc/src/fixtures/workers-hybrid-licence.json",
-  "src-tauri/commander-svc/src/fixtures/workers-enrolment-issuer.json",
-  "src-tauri/commander-svc/src/fixtures/workers-enrolment-receipt.json",
-  "src-tauri/commander-svc/src/fixtures/workers-device-renewal.json",
-  "src-tauri/wincmd-pq-experiment/tests/cloudflare-jws-v1.json",
-  "src-tauri/wincmd-pq-experiment/tests/cloudflare-jws-signer-v1.json",
-];
-const disposableKeys = new Set<string>();
-for (const file of disposableTrustFiles) {
-  const fixture = JSON.parse(readFileSync(resolve(root, file), "utf8")) as Record<string, unknown>;
-  for (const key of [fixture.publicEd, fixture.publicPq]) if (typeof key === "string") disposableKeys.add(key);
-}
-const approval = JSON.parse(readFileSync(resolve(root, "tools/pq-release-approval.json"), "utf8"));
-validatePqReleaseTrust(process.env, disposableKeys, approval);
+validateReleaseTrust(root, process.env);
 assertSharedAssets(root);
 const configPath = resolve(root, "src-tauri", "commander-free", "tauri.conf.json");
 const generatedConfigPath = resolve(root, "src-tauri", "commander-free", "tauri.release.generated.json");
@@ -73,9 +57,7 @@ function run(command: string[], label: string, env = releaseBuildEnv) {
   if (result.exitCode !== 0) throw new Error(`${label} failed with exit code ${result.exitCode}`);
 }
 
-run(["cargo", "run", "--locked", "--manifest-path", "src-tauri/Cargo.toml", "-p", "wincmd-pq-experiment", "--bin", "wincmd-pq-trust-check"],
-  "Independent release trust proof verification", { ...releaseBuildEnv,
-    AWS_LC_SYS_PREBUILT_NASM: releaseBuildEnv.AWS_LC_SYS_PREBUILT_NASM ?? "1" });
+verifyReleaseTrustProofs(root, releaseBuildEnv);
 
 run(
   ["cargo", "build", "--manifest-path", "src-tauri/Cargo.toml", "-p", "commander-context-shred", "--release"],

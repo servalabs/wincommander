@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { DESKTOP_PQ_FEATURES, SERVICE_PQ_FEATURES, desktopBuildCommand, normalizedPqReleaseEnvironment, serviceBuildCommand, trustProofMessage, validatePqReleaseTrust } from "./pq-release-profile";
 
 async function trust(): Promise<Record<string, string>> {
@@ -76,9 +78,25 @@ describe("paired post-quantum release configuration", () => {
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr.toString()).toMatch(/Release trust approval is not configured|Invalid or missing WINCMD_PQ_LIC_ED_KEY/);
     const wrapper = readFileSync("tools/build-tauri-release.ts", "utf8");
-    expect(wrapper.indexOf("validatePqReleaseTrust(process.env")).toBeLessThan(wrapper.indexOf("assertSharedAssets(root)"));
+    expect(wrapper.indexOf("validateReleaseTrust(root, process.env)")).toBeLessThan(wrapper.indexOf("assertSharedAssets(root)"));
     expect(wrapper).toContain("serviceBuildCommand()");
     expect(wrapper).toContain("desktopBuildCommand(generatedConfigPath)");
+  });
+  test("Pro release build refuses missing approval before invoking Cargo", () => {
+    const env = { ...process.env };
+    for (const key of Object.keys(env)) if (key.startsWith("WINCMD_PQ_")) delete env[key];
+    const fakePro = mkdtempSync(join(tmpdir(), "wincmd-pq-test-"));
+    try {
+      writeFileSync(join(fakePro, "Cargo.toml"), "");
+      env.WINCOMMANDER_PRO_WORKSPACE = fakePro;
+      const result = Bun.spawnSync([process.execPath, "run", "tools/build-pro.ts", "--release"], {
+        cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe",
+      });
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr.toString()).toMatch(/Release trust approval is not configured|Invalid or missing WINCMD_PQ_LIC_ED_KEY/);
+    } finally {
+      rmSync(fakePro, { recursive: true, force: true });
+    }
   });
   test("requires every approved historical key and rejects an incomplete rotation", async () => {
     const current = await trust();
