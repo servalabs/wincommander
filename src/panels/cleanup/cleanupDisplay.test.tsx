@@ -9,6 +9,31 @@ const category = ALL_CATEGORIES.find(item => item.id === "amcache")!;
 const base = { id: "amcache", count: 15, items: [], raw: { total: 15, entries: [{ category: "InventoryApplication", count: 15, sample: [] }] } };
 
 describe("System Cleanup display projection", () => {
+  test("reports verified empty selected log locations without hiding scope or failures", () => {
+    for (const id of ["remoteAccessLogs", "gameLauncherLogs"]) {
+      const raw = { total: 0, files: [], status: "complete", coverage: "limited" };
+      const result = summarizeCleanupResult({ id, count: 0, raw });
+      expect(result.state).toBe("empty");
+      expect(result.message).toBe("No logs found in selected locations");
+      expect(result.nextStep).toContain("not checked");
+      expect(summarizeCleanupResult({ id, count: 0, raw: { ...raw, partial: true } }).state).toBe("partial");
+      expect(summarizeCleanupGroups(0, [{ count: 0, items: [], rawData: raw }], id).state).toBe("empty");
+      const item = ALL_CATEGORIES.find(entry => entry.id === id)!;
+      const html = renderToStaticMarkup(<CleanupDisplayDetails category={item} mode="simple" count={0} items={[]} rawData={raw} clearing={false} clearLabel="Clear" onClose={() => {}} />);
+      expect(html).toContain(id === "remoteAccessLogs" ? "TeamViewer" : "Steam");
+      expect(html).toContain("custom");
+    }
+  });
+
+  test("distinguishes no current cellular adapter from verified empty profiles", () => {
+    const raw = { total: 0, files: [], noHardware: true, status: "not_applicable", coverage: "limited" };
+    const result = summarizeCleanupResult({ id: "cellularHistory", count: 0, raw });
+    expect(result.state).toBe("empty");
+    expect(result.message).toContain("adapter");
+    expect(result.nextStep).toContain("disconnected");
+    expect(summarizeCleanupResult({ id: "cellularHistory", count: 0, raw: { ...raw, partial: true } }).state).toBe("partial");
+  });
+
   test("uses the existing persona for presentation", () => {
     expect(cleanupModeForPersona("casual")).toBe("simple");
     expect(cleanupModeForPersona("secure")).toBe("advanced");

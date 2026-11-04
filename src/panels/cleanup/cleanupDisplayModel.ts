@@ -164,7 +164,7 @@ export interface CleanupDisplaySummary {
   previewLimit: number | null;
 }
 
-export function summarizeCleanupGroups(count: number, groups: Array<{ count: number; items: string[]; rawData?: unknown }>): CleanupDisplaySummary {
+export function summarizeCleanupGroups(count: number, groups: Array<{ count: number; items: string[]; rawData?: unknown }>, id?: string): CleanupDisplaySummary {
   const groupRecords = groups.map(group => object(group.rawData) && Array.isArray(group.rawData.records) ? group.rawData.records : null);
   const sampleCount = groupRecords.length > 0 && groupRecords.every(records => records !== null)
     ? groupRecords.reduce<number>((sum, records) => sum + (records?.length ?? 0), 0) : null;
@@ -174,7 +174,11 @@ export function summarizeCleanupGroups(count: number, groups: Array<{ count: num
   }
   if (!groups.length) return { ...base, state: "unavailable", message: "Account details unavailable", nextStep: "Scan again to verify the result." };
   if (groups.reduce((sum, group) => sum + group.count, 0) !== count) return { ...base, state: "inconsistent", message: "Counts do not agree", nextStep: "Scan again before clearing." };
-  if (count === 0 && groups.some(group => object(group.rawData) && group.rawData.coverage === "limited")) return { ...base, count, state: "limited", message: "No items found in checked locations", nextStep: "This scan covers selected locations only." };
+  if (count === 0 && groups.some(group => object(group.rawData) && group.rawData.coverage === "limited")) {
+    if (id === "remoteAccessLogs" || id === "gameLauncherLogs") return { ...base, count, state: "empty", message: "No logs found in selected locations", nextStep: "Other products and custom locations were not checked." };
+    if (["credentialManager", "gitActivity", "wslData"].includes(id ?? "")) return { ...base, count, state: "empty", message: "No records found in checked sources", nextStep: "Review Scan scope for the sources included." };
+    return { ...base, count, state: "limited", message: "No items found in checked locations", nextStep: "This scan covers selected locations only." };
+  }
   if (count === 0) return { ...base, count, state: "empty", message: "No items found", nextStep: "No action is needed from this scan." };
   return { ...base, count, state: "found", message: `${count} ${count === 1 ? "item" : "items"} reported`, nextStep: "Review the account breakdown before clearing." };
 }
@@ -218,6 +222,9 @@ export function summarizeCleanupResult(input: { id: string; count: number; items
   if (input.error) return { ...base, state: "error", count: null, message: "Scan failed", nextStep: "Try scanning again or check access." };
   if (input.count < 0 || !Number.isFinite(input.count)) return { ...base, state: "not-scanned", count: null, message: "Not scanned", nextStep: "Select Scan to check this item." };
   if (!raw) return { ...base, state: "unavailable", count: null, message: "Scan details unavailable", nextStep: "Scan again to verify the result." };
+  if (input.id === "cellularHistory" && raw.noHardware === true && raw.status === "not_applicable" && input.count === 0 && Array.isArray(raw.files) && raw.files.length === 0) {
+    return { ...base, state: "empty", message: "No mobile broadband adapter detected", nextStep: "Profiles for disconnected devices were not checked." };
+  }
   if (groupedKey && (!accountActivity || Array.isArray(groupedValue))) {
     // Only compare counts that the producer defines in the same units.
     // An absent or malformed breakdown is unknown, not evidence of zero.
@@ -231,7 +238,11 @@ export function summarizeCleanupResult(input: { id: string; count: number; items
   if (input.count > 0 && !Object.values(raw).some(Array.isArray) && raw.previewLimit !== 0 && raw.sampleCount !== 0) return { ...base, state: "unavailable", count: null, message: "Scan details unavailable", nextStep: "Scan again to verify the result." };
   if (input.count > 0 && datasets.length && datasets.every(dataset => dataset.rows === 0) && raw.truncated !== true && raw.previewLimit !== 0 && raw.sampleCount !== 0) return { ...base, state: "unavailable", count: null, message: "Scan details unavailable", nextStep: "Scan again to verify the result." };
   if (input.count === 0 && !Object.values(raw).some(Array.isArray) && raw.fileExists !== false && raw.hveFileExists !== false) return { ...base, state: "unavailable", count: null, message: "Scan details unavailable", nextStep: "Scan again to verify the result." };
-  if (input.count === 0 && hasLimitedCleanupCoverage(input.id, raw)) return { ...base, state: "limited", message: "No items found in checked locations", nextStep: "This scan covers selected locations only." };
+  if (input.count === 0 && hasLimitedCleanupCoverage(input.id, raw)) {
+    if (input.id === "remoteAccessLogs" || input.id === "gameLauncherLogs") return { ...base, state: "empty", message: "No logs found in selected locations", nextStep: "Other products and custom locations were not checked." };
+    if (["credentialManager", "gitActivity", "wslData"].includes(input.id)) return { ...base, state: "empty", message: "No records found in checked sources", nextStep: "Review Scan scope for the sources included." };
+    return { ...base, state: "limited", message: "No items found in checked locations", nextStep: "This scan covers selected locations only." };
+  }
   if (input.count === 0) return { ...base, state: "empty", message: "No items found", nextStep: "No action is needed from this scan." };
   return { ...base, state: "found", message: `${input.count} ${cleanupCountUnit(input.id, input.count)} found`, nextStep: "Review details before clearing." };
 }

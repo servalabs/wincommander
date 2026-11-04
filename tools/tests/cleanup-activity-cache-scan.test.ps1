@@ -25,7 +25,7 @@ function Get-ChildItem {
     [pscustomobject]@{ Name='one'; FullName="$LiteralPath\one"; Length=1024; LastWriteTime=[datetime]'2026-01-01' }
     if ($Include) { throw [UnauthorizedAccessException]::new('Synthetic partial failure') }
 }
-foreach ($fn in @('Get-ActivitiesTimelineInfo','Get-RdpBitmapCacheInfo','Get-EmbeddedWebCacheInfo')) {
+foreach ($fn in @('Get-ActivitiesTimelineInfo','Get-RdpBitmapCacheInfo')) {
     $script:scenario = 'empty'; $result = & $fn
     if ($result.partial -or $result.total -ne 0) { throw "$fn failed empty inventory" }
     $script:scenario = 'denied'; $result = & $fn

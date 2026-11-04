@@ -356,7 +356,7 @@ export default function SystemCleanupPanel() {
                     scheduleDisabled={scan.otherScheduleState === "verified" && !!scan.otherScheduleSnapshot?.disabledSchedules[otherDetail.catId]}
                     clearing={otherUserDataMap[otherDetail.catId]?.clearing ?? false}
                     onClose={() => setOtherDetail(null)}
-                    onClear={!isInvestigator && canSwitchUsers && !OTHER_ACCOUNT_READ_ONLY_IDS.has(otherDetail.catId)
+                    onClear={!!otherDetailCategory.clearDataKey && !isInvestigator && canSwitchUsers && !OTHER_ACCOUNT_READ_ONLY_IDS.has(otherDetail.catId)
                         ? () => {
                             const cat = allTraceCategories.find(c => c.id === otherDetail.catId);
                             setOtherDetail(null);
@@ -397,7 +397,7 @@ export default function SystemCleanupPanel() {
                         scopeLabel="Detected Windows profiles"
                         clearing={false}
                         onClose={() => setCombinedDetail(null)}
-                        onClear={!isInvestigator && canSwitchUsers && !OTHER_ACCOUNT_READ_ONLY_IDS.has(cat.id)
+                        onClear={!!cat.clearDataKey && !isInvestigator && canSwitchUsers && !OTHER_ACCOUNT_READ_ONLY_IDS.has(cat.id)
                             ? () => { setCombinedDetail(null); void handleCardClearAllUsers(cat); }
                             : undefined}
                         clearDisabled={(d?.count ?? 0) <= 0}
@@ -530,7 +530,7 @@ function CleanupSummaryStats({ scan }: { scan: ReturnType<typeof useCleanupScan>
     const states = orderedScanCategories.map(cat => {
         const data = !cat.scopeAware || isViewingCurrentUser ? cardDataMap[cat.id] : isViewingAllUsers ? combinedDataMap[cat.id] : otherUserDataMap[cat.id];
         if (cat.scopeAware && isViewingAllUsers && allUsersRaw.length) {
-            return summarizeCleanupGroups(data?.count ?? -1, allUsersRaw.map(user => ({ count: user.categories[cat.id]?.count ?? -1, items: user.categories[cat.id]?.items ?? [], rawData: user.categories[cat.id]?.raw }))).state;
+            return summarizeCleanupGroups(data?.count ?? -1, allUsersRaw.map(user => ({ count: user.categories[cat.id]?.count ?? -1, items: user.categories[cat.id]?.items ?? [], rawData: user.categories[cat.id]?.raw })), cat.id).state;
         }
         return summarizeCleanupResult({ id: cat.id, count: data?.count ?? -1, items: data?.items, raw: data?.raw, error: data?.error, loading: data?.loading }).state;
     });

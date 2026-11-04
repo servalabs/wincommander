@@ -1507,9 +1507,9 @@ function Get-FleetForensicProjection {
             'editor_history' { $result = Get-EditorHistoryInfo; if ($result.error) { return (& $empty 'System Cleanup could not read editor-history summaries.') }; return (& $metadataProjection 'editor_history' 'Editor history' $result 'Editor history metadata') }
             'git_activity' { $result = Get-GitActivityInfo; if ($result.error) { return (& $empty 'System Cleanup could not read Git-activity summaries.') }; return (& $metadataProjection 'git_activity' 'Git activity' $result 'Git activity metadata') }
             'ssh_state' { $result = Get-SSHStateInfo; if ($result.error) { return (& $empty 'System Cleanup could not read SSH-state summaries.') }; return (& $metadataProjection 'ssh_state' 'SSH state' $result 'SSH metadata') }
-            'remote_access_logs' { $result = Get-RemoteAccessLogsInfo; if ($result.error) { return (& $empty 'System Cleanup could not read remote-access summaries.') }; return (& $metadataProjection 'remote_access_logs' 'Remote access logs' $result 'Remote access metadata') }
+            'remote_access_logs' { $result = Get-RemoteAccessLogsInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read all selected remote-access log locations.') }; return (& $metadataProjection 'remote_access_logs' 'Remote access logs' $result 'Remote access metadata') }
             'password_manager_caches' { $result = Get-PasswordManagerCachesInfo; if ($result.error) { return (& $empty 'System Cleanup could not read password-manager summaries.') }; return (& $metadataProjection 'password_manager_caches' 'Password-manager caches' $result 'Password-manager metadata') }
-            'game_launcher_logs' { $result = Get-GameLauncherLogsInfo; if ($result.error) { return (& $empty 'System Cleanup could not read game-launcher summaries.') }; return (& $metadataProjection 'game_launcher_logs' 'Game launcher logs' $result 'Game launcher log') }
+            'game_launcher_logs' { $result = Get-GameLauncherLogsInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read all selected game-launcher log locations.') }; return (& $metadataProjection 'game_launcher_logs' 'Game launcher logs' $result 'Game launcher log') }
             'adobe_recent' { $result = Get-AdobeRecentInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read Adobe-recent summaries.') }; return (& $metadataProjection 'adobe_recent' 'Adobe recent items' $result 'Adobe recent metadata') }
             'office_temp_files' { $result = Get-OfficeTempFilesInfo; if ($result.error) { return (& $empty 'System Cleanup could not read Office-temporary-file summaries.') }; return (& $metadataProjection 'office_temp_files' 'Office temporary files' $result 'Office temporary metadata') }
             'firewall_log' { $result = Get-FirewallLogInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read firewall-log summaries.') }; return (& $metadataProjection 'firewall_log' 'Firewall log' $result 'Firewall log metadata') }
@@ -1520,7 +1520,7 @@ function Get-FleetForensicProjection {
             'proxy_cache' { $result = Get-ProxyCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read proxy-cache summaries.') }; return (& $metadataProjection 'proxy_cache' 'Proxy cache' $result 'Proxy metadata') }
             'cloud_placeholders' { $result = Get-CloudPlaceholdersInfo; if ($result.error) { return (& $empty 'System Cleanup could not read cloud-placeholder summaries.') }; return (& $metadataProjection 'cloud_placeholders' 'Cloud placeholders' $result 'Cloud placeholder metadata') }
             'bits_queue' { $result = Get-BITSQueueInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read complete BITS-queue summaries.') }; return (& $metadataProjection 'bits_queue' 'BITS queue' $result 'BITS metadata') }
-            'cellular_history' { $result = Get-CellularHistoryInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read cellular-history summaries.') }; return (& $metadataProjection 'cellular_history' 'Cellular history' $result 'Cellular metadata') }
+            'cellular_history' { $result = Get-CellularHistoryInfo; if ($result.noHardware) { return (& $empty 'No mobile broadband adapter is currently reported; profiles for disconnected devices could not be checked.') }; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read cellular-profile summaries.') }; return (& $metadataProjection 'cellular_history' 'Cellular profiles' $result 'Cellular profile metadata') }
             'app_launch_history' { $result = Get-AppLaunchHistoryInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read complete app-launch-history summaries.') }; return (& $metadataProjection 'app_launch_history' 'App launch history' $result 'App launch metadata') }
             'office_mru' { $result = Get-OfficeMruInfo; if ($result.error) { return (& $empty 'System Cleanup could not read Office-MRU summaries.') }; return (& $metadataProjection 'office_mru' 'Office MRU' $result 'Office MRU metadata') }
             'embedded_web_cache' { $result = Get-EmbeddedWebCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read embedded-web-cache summaries.') }; return (& $metadataProjection 'embedded_web_cache' 'Embedded web cache' $result 'Embedded web metadata') }
@@ -2981,8 +2981,17 @@ function Get-AmcacheEntries {
             $hveSize = [math]::Round($hveItem.Length / 1MB, 2)
             $hveExists = $true
         } catch [System.Management.Automation.ItemNotFoundException] {
-            $hveSize = 0
-            $hveExists = $false
+            # A denied parent can make a direct lookup look like a missing file.
+            try {
+                $parentItems = @(Get-ChildItem -LiteralPath (Split-Path $hveFile -Parent) -Force -ErrorAction Stop)
+                if (@($parentItems | Where-Object { $_.Name -ieq 'Amcache.hve' }).Count) { throw 'The Amcache file could not be inspected.' }
+                $hveSize = 0
+                $hveExists = $false
+            } catch {
+                $hveSize = $null
+                $hveExists = $null
+                $hveReadError = $_.Exception.Message
+            }
         } catch {
             $hveSize = $null
             $hveExists = $null
@@ -3019,7 +3028,7 @@ function Get-AmcacheEntries {
                 $null = Get-Item -Path $cat.path -ErrorAction Stop
                 $children = @(Get-ChildItem -Path $cat.path -ErrorAction Stop)
                 $count = ($children | Measure-Object).Count
-                $sample = $children | ForEach-Object {
+                $sample = @($children | ForEach-Object {
                     $child = $_
                     $props = Get-ItemProperty $child.PSPath -ErrorAction Stop
                     $name = @($props.Name, $props.ProductName, $props.BinFileVersion) | Where-Object { $_ -is [string] -and $_.Trim() } | Select-Object -First 1
@@ -3039,7 +3048,7 @@ function Get-AmcacheEntries {
                         if ($registryValues.Count) { $entry.registryValues = $registryValues }
                     }
                     $entry
-                }
+                })
             } catch [System.Management.Automation.ItemNotFoundException] {
                 # This registry category is absent on this Windows build.
             }
@@ -3051,10 +3060,10 @@ function Get-AmcacheEntries {
         foreach ($entry in $entries) { $totalCount += [int]$entry['count'] }
         $partial = -not $mountAvailable -and ($hveExists -or $hveReadError -or $mountErrors.Count -gt 0)
         $message = if ($partial) {
-            if ($hveReadError -or $mountErrors.Count) { 'Windows denied access to the application inventory. Open WinCommander as administrator and scan again. No complete inventory was available.' }
-            else { 'The Amcache file exists, but Windows has not exposed a readable registry inventory. No complete inventory was available.' }
+            if ($hveReadError -or $mountErrors.Count) { 'App Launch Cache inventory is unavailable. Windows could not verify access to its file or registry locations. Open WinCommander as administrator and scan again.' }
+            else { 'App Launch Cache inventory is unavailable. The Amcache file exists, but no readable registry inventory is mounted. The offline hive is not read by this scan.' }
         } else { $null }
-        @{ entries = $entries; hveFileSizeMb = $hveSize; hveFileExists = $hveExists; inventoryRoot = $inventoryRoot; total = $totalCount; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = $message }
+        @{ entries = $entries; hveFileSizeMb = $hveSize; hveFileExists = $hveExists; inventoryRoot = $inventoryRoot; total = if ($partial) { $null } else { $totalCount }; partial = $partial; status = if ($partial) { 'unavailable' } else { 'complete' }; message = $message }
     }
     catch { @{ error = $true; message = $_.Exception.Message } }
 }
@@ -3334,20 +3343,23 @@ function Get-CrashDumpList {
 }
 
 function Get-CleanupBoundedFileInventory {
-    param([string[]]$Roots, [string[]]$Patterns, [int]$Depth = 5)
+    param([string[]]$Roots, [string[]]$Patterns, [int]$Depth = 5, [int]$MaxMilliseconds = 30000)
     $files = [Collections.Generic.List[object]]::new()
     $errors = [Collections.Generic.List[string]]::new()
     $skippedLinks = 0
+    $timer = [Diagnostics.Stopwatch]::StartNew()
     $pending = [Collections.Generic.Queue[object]]::new()
     foreach ($root in $Roots) {
         try {
             $item = Get-Item -LiteralPath $root -Force -ErrorAction Stop
-            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { $skippedLinks++; continue }
+            if (-not $item.PSIsContainer) { throw 'Application data root is not a directory.' }
+            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { $skippedLinks++; throw 'Application data root is a link or junction and was not scanned.' }
             $pending.Enqueue(@{ path = $root; depth = 0 })
         } catch [System.Management.Automation.ItemNotFoundException] { }
         catch { $errors.Add($_.Exception.Message) }
     }
     while ($pending.Count) {
+        if ($timer.ElapsedMilliseconds -ge $MaxMilliseconds) { $errors.Add('The scan reached its time limit before all application-data locations were checked.'); break }
         $directory = $pending.Dequeue()
         try {
             # Skip compatibility junctions before they redirect traversal into an already scanned profile.
@@ -3384,7 +3396,7 @@ function Get-SQLiteWALList {
         }
         @{
             files = @($found.ToArray()); total = $found.Count
-            totalSizeMB = [math]::Round(($found | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2)
+            totalSizeMB = if ($inventory.partial) { $null } else { [math]::Round(($found | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2) }
             coverage = 'limited'; coverageNote = 'Scans two app-data roots to depth 5, excluding directory links and junctions.'
             skippedLinks = $inventory.skippedLinks; errors = $inventory.errors
             partial = $inventory.partial; truncated = $false; error = $inventory.partial -and $found.Count -eq 0
@@ -3507,6 +3519,31 @@ function Get-PrintSpoolerInfo {
     catch { @{ error = $true; message = $_.Exception.Message } }
 }
 
+function Get-CleanupWslExecutable {
+    try {
+        $systemDirectory = [Environment]::SystemDirectory
+        if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess) {
+            $systemDirectory = Join-Path ([Environment]::GetFolderPath('Windows')) 'Sysnative'
+        }
+        if ([string]::IsNullOrWhiteSpace($systemDirectory)) { throw 'Windows system directory is unavailable.' }
+        $path = Join-Path $systemDirectory 'wsl.exe'
+        try { $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop }
+        catch [System.Management.Automation.ItemNotFoundException] { return @{ available = $false; verifiedAbsent = $true } }
+        if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'WSL executable is not a regular system file.' }
+        return @{ available = $true; verifiedAbsent = $false; path = $path }
+    } catch { return @{ available = $false; verifiedAbsent = $false } }
+}
+
+function Test-CleanupWslUnavailable {
+    try {
+        $feature = @(Get-CimInstance -ClassName Win32_OptionalFeature -Filter "Name = 'Microsoft-Windows-Subsystem-Linux'" -ErrorAction Stop)
+        if ($feature.Count -ne 1 -or [int]$feature[0].InstallState -notin @(2, 3)) { return $false }
+        if (@(Get-AppxPackage -Name 'MicrosoftCorporationII.WindowsSubsystemForLinux' -ErrorAction Stop).Count -gt 0) { return $false }
+        if (@(Get-CimInstance -ClassName Win32_Service -Filter "Name = 'WslService' OR Name = 'LxssManager'" -ErrorAction Stop).Count -gt 0) { return $false }
+        return $true
+    } catch { return $false }
+}
+
 function Get-WSLDataInfo {
     # Store WSL distributions retain their virtual disks below the package LocalState directory.
     # Registered distro names are included without opening the distributions or their disks.
@@ -3515,6 +3552,7 @@ function Get-WSLDataInfo {
         $totalBytes = [int64]0
         $partial = $false
         $wslFailure = $null
+        $registrationCount = 0
         $registeredDistros = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
         $distrosWithDisk = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
         $seenVhdx = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
@@ -3543,18 +3581,27 @@ function Get-WSLDataInfo {
         try {
         if (Test-Path $lxssRoot -ErrorAction Stop) {
             Get-ChildItem -Path $lxssRoot -ErrorAction Stop | ForEach-Object {
+                $registrationCount++
+                $name = ''
                 try {
                 $distro = Get-ItemProperty -Path $_.PSPath -ErrorAction Stop
                 $name = ([string]$distro.DistributionName).Trim()
                 $basePath = ([string]$distro.BasePath).Trim()
+                if ($name) { $null = $registeredDistros.Add($name) } else { $partial = $true }
                 if ($basePath.StartsWith('\\?\')) { $basePath = $basePath.Substring(4) }
-                if (-not $basePath) { return }
+                if (-not $basePath) {
+                    $partial = $true
+                    if ($name) { $files += @{ name = "Registered WSL distro: $name"; sizeKB = 0; modified = '' } }
+                    return
+                }
                 $vhdx = Join-Path $basePath 'ext4.vhdx'
-                if (-not (Test-Path $vhdx -PathType Leaf -ErrorAction Stop)) { return }
+                if (-not (Test-Path $vhdx -PathType Leaf -ErrorAction Stop)) {
+                    if ($name) { $files += @{ name = "Registered WSL distro: $name"; sizeKB = 0; modified = '' } }
+                    return
+                }
                 $item = Get-Item -LiteralPath $vhdx -Force -ErrorAction Stop
                 if (-not $item) { return }
                 if ($name) {
-                    $null = $registeredDistros.Add($name)
                     $null = $distrosWithDisk.Add($name)
                 }
                 if ($seenVhdx.Add($item.FullName)) {
@@ -3562,19 +3609,24 @@ function Get-WSLDataInfo {
                     $files += @{ name = $label; path = $item.FullName; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
                     $totalBytes += $item.Length
                 }
-                } catch { $partial = $true }
+                } catch {
+                    $partial = $true
+                    if ($name) { $files += @{ name = "Registered WSL distro: $name"; sizeKB = 0; modified = '' } }
+                }
             }
         }
         } catch { $partial = $true }
-        $wsl = Get-Command wsl.exe -ErrorAction SilentlyContinue
-        if ($wsl) {
+        $storageVerified = -not $partial
+        $wsl = Get-CleanupWslExecutable
+        if ($wsl.available) {
             try {
             # `--list --quiet` reports imported distros as well as Store-backed
             # ones. They can live outside LocalAppData, so treating the VHDX
             # walk as the only source incorrectly reports a real WSL setup as
             # empty. This query is read-only and does not start a distro.
-            $quietResult = @(& $wsl.Source -l -q 2>$null)
-            if ($LASTEXITCODE -ne 0) {
+            $quietResult = @(& $wsl.path -l -q 2>$null)
+            $quietSucceeded = $LASTEXITCODE -eq 0
+            if (-not $quietSucceeded) {
                 $partial = $true
                 $wslFailure = 'Windows could not list WSL distributions; some WSL data may be unavailable.'
                 $quietResult = @()
@@ -3590,16 +3642,19 @@ function Get-WSLDataInfo {
             # Some older WSL builds don't support the quiet listing reliably
             # in a non-interactive PowerShell host. Parse the verbose listing
             # as a read-only fallback so the card does not show a false zero.
-            if ($registeredDistros.Count -eq 0) {
-                $verboseResult = @(& $wsl.Source -l -v 2>$null)
+            if (-not $quietSucceeded -and $registeredDistros.Count -eq 0) {
+                $verboseResult = @(& $wsl.path -l -v 2>$null)
                 if ($LASTEXITCODE -ne 0) {
                     $partial = $true
                     $wslFailure = 'Windows could not list WSL distributions; some WSL data may be unavailable.'
                     $verboseResult = @()
                 }
+                $hasHeader = @($verboseResult | Where-Object { ([string]$_).Replace([string][char]0, '').Trim() -match '(?i)^\*?\s*NAME\s+STATE\s+VERSION\s*$' }).Count -eq 1
+                if (-not $hasHeader) { $verboseResult = @() }
                 foreach ($line in $verboseResult) {
-                    $name = ([string]$line).Replace([string][char]0, '').Trim() -replace '^\*\s*', '' -replace '\s{2,}.*$', ''
-                    if ($name -and $name -notmatch '^(NAME|There are no installed distributions)') {
+                    $text = ([string]$line).Replace([string][char]0, '').Trim()
+                    if ($text -match '^\*?\s*(.+?)\s{2,}\S.*\s+\d+\s*$') {
+                        $name = $Matches[1].Trim()
                         if ($registeredDistros.Add($name) -and -not $distrosWithDisk.Contains($name)) {
                             $files += @{ name = "Registered WSL distro: $name"; sizeKB = 0; modified = '' }
                         }
@@ -3607,8 +3662,14 @@ function Get-WSLDataInfo {
                 }
             }
             } catch { $partial = $true; $wslFailure = 'Windows could not list WSL distributions; some WSL data may be unavailable.' }
-        } else { $partial = $true; $wslFailure = 'The Windows WSL command is unavailable; distributions could not be checked.' }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($wslFailure) { $wslFailure } elseif ($partial) { 'Some WSL sources could not be checked.' } else { $null } }
+        } else { $partial = $true; $wslFailure = if ($wsl.verifiedAbsent) { 'The Windows WSL command is unavailable; distributions could not be checked.' } else { 'The Windows WSL command could not be verified; distributions could not be checked.' } }
+        $confirmedAbsent = $false
+        if ($wslFailure -and ($wsl.available -or $wsl.verifiedAbsent) -and $storageVerified -and $registrationCount -eq 0 -and $files.Count -eq 0 -and (Test-CleanupWslUnavailable)) {
+            $partial = $false
+            $wslFailure = $null
+            $confirmedAbsent = $true
+        }
+        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; coverage = if ($confirmedAbsent) { 'limited' } else { $null }; coverageNote = if ($confirmedAbsent) { 'The WSL feature, Store runtime, WSL services, registrations and selected disk locations were not present or were disabled.' } else { $null }; message = if ($wslFailure) { $wslFailure } elseif ($partial) { 'Some WSL sources could not be checked.' } else { $null } }
     }
     catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
 }
@@ -3824,7 +3885,7 @@ function Get-CredentialManagerInfo {
             $files += @{ name = "Saved credential target: $($credential.Name)"; target = [string]$credential.Name; credentialType = [uint32]$credential.Type; username = $credential.UserName; sizeKB = 0; modified = '' }
         }
         # CredEnumerate does not enumerate every application's Windows Vault.
-        @{ files = @($files); total = @($files).Count; totalSizeMB = 0; partial = $true; status = 'partial'; coverage = 'Windows credential identities only'; message = 'Windows Vault entries from other applications were not inspected.' }
+        @{ files = @($files); total = @($files).Count; totalSizeMB = 0; partial = $false; status = 'complete'; coverage = 'limited'; coverageNote = 'Checks Windows Credential Manager identities only; credential values and other applications'' Windows Vault entries are not inspected.' }
     }
     catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
 }
@@ -4170,8 +4231,9 @@ function Get-GitActivityInfo {
             }
         } catch { $configVerified = $false }
         # Credential enumeration does not include other applications' Vaults.
-        $message = if (-not $credentialVerified -and -not $configVerified) { 'Git credential identities and configuration could not be checked; other Vault entries are not inspected.' } elseif (-not $credentialVerified) { 'Git credential identities could not be checked; other Vault entries are not inspected.' } elseif (-not $configVerified) { 'Git configuration could not be checked; other Vault entries are not inspected.' } else { 'Other applications'' Windows Vault entries were not inspected.' }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = 0; partial = $true; status = 'partial'; coverage = 'Windows credential identities and global Git safe directories only'; message = $message }
+        $message = if (-not $credentialVerified -and -not $configVerified) { 'Git credential identities and configuration could not be checked.' } elseif (-not $credentialVerified) { 'Git credential identities could not be checked.' } elseif (-not $configVerified) { 'Git configuration could not be checked.' } else { $null }
+        $partial = -not ($credentialVerified -and $configVerified)
+        @{ files = @($files); total = @($files).Count; totalSizeMB = 0; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; coverage = 'limited'; coverageNote = 'Checks Git-prefixed Windows credential identities and global safe.directory entries only; other credential stores and repository activity are not inspected.'; message = $message }
     }
     catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
 }
@@ -4203,13 +4265,19 @@ function Get-SSHStateInfo {
 
 function Get-RemoteAccessLogsInfo {
     try {
-        Get-CleanupArtifactInventory -CoverageNote 'Checks selected TeamViewer, AnyDesk, VNC and Chrome Remote Desktop log locations only.' -Sources @(
+        $teamViewerProgramRoots = @($env:ProgramFiles, ${env:ProgramFiles(x86)} | Where-Object { $_ } | Select-Object -Unique)
+        $sources = @(
             @{ label = 'TeamViewer'; path = (Join-Path $env:APPDATA 'TeamViewer'); patterns = @('Connections*.txt','*.trace','*.log') },
-            @{ label = 'AnyDesk'; path = (Join-Path $env:APPDATA 'AnyDesk'); patterns = @('Connections*.txt','*.trace','*.log') },
-            @{ label = 'AnyDesk'; path = (Join-Path $env:ProgramData 'AnyDesk'); patterns = @('Connections*.txt','*.trace','*.log') },
+            @{ label = 'TeamViewer'; path = (Join-Path $env:ProgramData 'TeamViewer'); patterns = @('Connections*.txt','*.trace','*.log') },
+            @{ label = 'AnyDesk'; path = (Join-Path $env:APPDATA 'AnyDesk'); patterns = @('Connections*.txt','connection_trace*.txt','*.trace','*.log') },
+            @{ label = 'AnyDesk'; path = (Join-Path $env:ProgramData 'AnyDesk'); patterns = @('Connections*.txt','connection_trace*.txt','*.trace','*.log') },
             @{ label = 'VNC'; path = (Join-Path $env:APPDATA 'RealVNC'); patterns = @('Connections*.txt','*.trace','*.log') },
             @{ label = 'Chrome Remote Desktop'; path = (Join-Path $env:LOCALAPPDATA 'Google\\Chrome Remote Desktop'); patterns = @('Connections*.txt','*.trace','*.log') }
         )
+        foreach ($root in $teamViewerProgramRoots) {
+            $sources += @{ label = 'TeamViewer'; path = (Join-Path $root 'TeamViewer'); patterns = @('Connections*.txt','*.trace','*.log'); recurse = $false }
+        }
+        Get-CleanupArtifactInventory -CoverageNote 'Checks selected TeamViewer, AnyDesk, RealVNC and Chrome Remote Desktop locations, including machine-wide TeamViewer and AnyDesk logs. Other products and custom locations are not included.' -Sources $sources
     }
     catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
 }
@@ -4239,8 +4307,10 @@ function Get-PasswordManagerCachesInfo {
 
 function Get-GameLauncherLogsInfo {
     try {
-        Get-CleanupArtifactInventory -CoverageNote 'Checks selected Steam, Epic Games and Battle.net log locations only.' -Sources @(
-            @{ label = 'Steam log'; path = (Join-Path ${env:ProgramFiles(x86)} 'Steam\\logs'); patterns = @('*') },
+        $steamRoot = ${env:ProgramFiles(x86)}
+        if (-not $steamRoot) { $steamRoot = $env:ProgramFiles }
+        Get-CleanupArtifactInventory -CoverageNote 'Checks the default Steam, Epic Games Launcher and Battle.net log locations. Other launchers and custom installations are not included.' -Sources @(
+            @{ label = 'Steam log'; path = (Join-Path $steamRoot 'Steam\\logs'); patterns = @('*') },
             @{ label = 'Epic Games Launcher'; path = (Join-Path $env:LOCALAPPDATA 'EpicGamesLauncher\\Saved\\Logs'); patterns = @('*') },
             @{ label = 'Battle.net'; path = (Join-Path $env:APPDATA 'Battle.net\\Logs'); patterns = @('*') },
             @{ label = 'Battle.net'; path = (Join-Path $env:ProgramData 'Battle.net\\Logs'); patterns = @('*') }
@@ -4536,6 +4606,19 @@ function Get-CellularHistoryInfo {
     try {
         $interfaces = @(& netsh.exe mbn show interfaces 2>$null)
         if ($LASTEXITCODE -ne 0) {
+            $adapterInventoryComplete = $false
+            $mobileAdapters = @()
+            try {
+                $adapters = @(Get-NetAdapter -IncludeHidden -ErrorAction Stop)
+                foreach ($adapter in $adapters) {
+                    if ($null -eq $adapter.InterfaceType -or $null -eq $adapter.NdisPhysicalMedium) { throw 'Network adapter type is unavailable.' }
+                }
+                $mobileAdapters = @($adapters | Where-Object { [int]$_.InterfaceType -in @(243, 244) -or [int]$_.NdisPhysicalMedium -eq 8 })
+                $adapterInventoryComplete = $true
+            } catch { $adapterInventoryComplete = $false }
+            if ($adapterInventoryComplete -and $mobileAdapters.Count -eq 0) {
+                return @{ files = @(); total = 0; totalSizeMB = 0; interfaceCount = 0; noHardware = $true; partial = $false; status = 'not_applicable'; coverage = 'limited'; coverageNote = 'Windows reports no mobile broadband adapter. Saved profiles for disconnected devices could not be checked.'; message = 'No mobile broadband adapter is currently reported.' }
+            }
             $service = Get-Service -Name 'WwanSvc' -ErrorAction SilentlyContinue
             if (-not $service) { throw 'Windows Mobile Broadband service is unavailable; cellular profiles could not be checked.' }
             if ($service.Status -ne 'Running') { throw 'Windows Mobile Broadband service is stopped; cellular profiles could not be checked.' }
@@ -4556,15 +4639,17 @@ function Get-CellularHistoryInfo {
                 $profiles = @(& netsh.exe mbn show profiles interface="$interface" 2>$null)
                 if ($LASTEXITCODE -ne 0) { throw 'Cellular profiles could not be read.' }
                 $recognizedProfiles = 0
+                $verifiedEmpty = $false
                 foreach ($line in $profiles) {
                     $text = ([string]$line).Trim()
+                    if ($text -match '(?i)^(There (are|is) no profiles? (on|for) (the )?interface\b.*|No profiles (were )?found\.?|No profiles? (is|are) configured\.?)$') { $verifiedEmpty = $true }
                     if ($text -match '(?i)^(All User Profile|Profile|Profile Name)\s*:\s*(.+)$') {
                         $profileName = $Matches[2].Trim()
                         $files.Add(@{ name = "Cellular profile ($interface): $profileName"; profileName = $profileName; interface = $interface; source = 'Cellular profile'; sizeKB = 0; modified = '' })
                         $recognizedProfiles++
                     }
                 }
-                if ($recognizedProfiles -eq 0) { $partial = $true }
+                if ($recognizedProfiles -eq 0 -and -not $verifiedEmpty) { $partial = $true }
             } catch { $partial = $true }
         }
         @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = 0; interfaceCount = $interfaceNames.Count; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some cellular profiles could not be checked.' } else { $null } }
@@ -4838,29 +4923,56 @@ function Get-OfficeMruInfo {
 }
 
 function Get-EmbeddedWebCacheInfo {
-    # Returns WebView2 (EBWebView) cache-folder sizes — many modern Win32 apps
-    # embed a Chromium WebView2 runtime whose per-app profile cache lives under
-    # a nested "EBWebView" folder somewhere below LOCALAPPDATA. -Depth 4 caps
-    # the walk so this stays a bounded scan, not a slow full-profile crawl.
+    param([int]$MaxMilliseconds = 30000)
     $files = [Collections.Generic.List[object]]::new()
     $partial = $false
+    $skippedLinks = 0
+    $visited = 0
+    $maxDirectories = 50000
+    $limitReached = $false
+    $timer = [Diagnostics.Stopwatch]::StartNew()
     try {
         try { $root = Get-Item -LiteralPath $env:LOCALAPPDATA -Force -ErrorAction Stop }
         catch [System.Management.Automation.ItemNotFoundException] { $root = $null }
         if ($root) {
-            if (-not $root.PSIsContainer) { throw 'Application data location is not a directory.' }
-            Get-ChildItem -LiteralPath $env:LOCALAPPDATA -Recurse -Directory -Filter 'EBWebView' -Force -Depth 4 -ErrorAction Stop | ForEach-Object {
-                $directory = $_
-                $sizeBytes = [long]0
-                try {
-                    Get-ChildItem -LiteralPath $directory.FullName -Recurse -File -Force -ErrorAction Stop | ForEach-Object { $sizeBytes += $_.Length }
-                } catch { $partial = $true }
-                $files.Add(@{ source=(Split-Path (Split-Path $directory.FullName -Parent) -Leaf); name='EBWebView'; path=$directory.FullName; sizeKB=[math]::Round($sizeBytes / 1KB, 1); modified=$directory.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
+            if (-not $root.PSIsContainer -or ($root.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Application data location cannot be verified.' }
+            $pending = [Collections.Generic.Queue[object]]::new()
+            $pending.Enqueue(@{ path=$env:LOCALAPPDATA; depth=0 })
+            while ($pending.Count -gt 0) {
+                if (++$visited -gt $maxDirectories -or $timer.ElapsedMilliseconds -ge $MaxMilliseconds) { $partial = $true; $limitReached = $true; break }
+                $current = $pending.Dequeue()
+                try { $children = @(Get-ChildItem -LiteralPath $current.path -Force -ErrorAction Stop) }
+                catch { $partial = $true; continue }
+                foreach ($directory in $children) {
+                    if ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint) { $skippedLinks++; continue }
+                    if (-not $directory.PSIsContainer) { continue }
+                    if ($directory.Name -ne 'EBWebView') {
+                        if ($current.depth -lt 4) { $pending.Enqueue(@{ path=$directory.FullName; depth=$current.depth + 1 }) }
+                        continue
+                    }
+                    $sizeBytes = [long]0; $sizeIncomplete = $false
+                    $cachePending = [Collections.Generic.Queue[object]]::new()
+                    $cachePending.Enqueue(@{ path=$directory.FullName; depth=0 })
+                    while ($cachePending.Count -gt 0) {
+                        if (++$visited -gt $maxDirectories -or $timer.ElapsedMilliseconds -ge $MaxMilliseconds) { $partial = $true; $sizeIncomplete = $true; $limitReached = $true; break }
+                        $cacheDir = $cachePending.Dequeue()
+                        try { $cacheChildren = @(Get-ChildItem -LiteralPath $cacheDir.path -Force -ErrorAction Stop) }
+                        catch { $partial = $true; $sizeIncomplete = $true; continue }
+                        foreach ($child in $cacheChildren) {
+                            if ($child.Attributes -band [IO.FileAttributes]::ReparsePoint) { $skippedLinks++; continue }
+                            if ($child.PSIsContainer) {
+                                if ($cacheDir.depth -lt 16) { $cachePending.Enqueue(@{ path=$child.FullName; depth=$cacheDir.depth + 1 }) }
+                                else { $partial = $true; $sizeIncomplete = $true }
+                            } else { $sizeBytes += $child.Length }
+                        }
+                    }
+                    $files.Add(@{ source=(Split-Path (Split-Path $directory.FullName -Parent) -Leaf); name='EBWebView'; path=$directory.FullName; sizeKB=if ($sizeIncomplete) { $null } else { [math]::Round($sizeBytes / 1KB, 1) }; sizeIncomplete=$sizeIncomplete; modified=$directory.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
+                }
             }
         }
     } catch { $partial = $true }
-    $size = ($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum
-    @{ files=@($files.ToArray()); total=$files.Count; totalSizeMB=[math]::Round($size / 1KB, 2); coverage='limited'; coverageNote='Checks application data to depth 4 for WebView folders.'; partial=$partial; status=if ($partial) { 'partial' } else { 'complete' }; message=if ($partial) { 'Some WebView cache locations could not be checked.' } else { $null } }
+    $size = ($files | Where-Object { -not $_.sizeIncomplete } | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum
+    @{ files=@($files.ToArray()); total=$files.Count; totalSizeMB=if ($partial) { $null } else { [math]::Round($size / 1KB, 2) }; skippedLinks=$skippedLinks; coverage='limited'; coverageNote='Checks application data to depth 4 for WebView folders, excluding links and junctions.'; partial=$partial; status=if ($partial) { 'partial' } else { 'complete' }; message=if ($limitReached) { 'The scan reached its limit; some WebView cache locations or sizes could not be checked.' } elseif ($partial) { 'Some WebView cache locations or sizes could not be checked.' } else { $null } }
 }
 
 function Get-CleanupRecursiveFileInventory {
@@ -5224,7 +5336,7 @@ function Invoke-CleanupClearForUser {
         foreach ($source in $Sources) {
             if (-not (Test-Path $source.path -ErrorAction SilentlyContinue)) { continue }
             foreach ($pattern in $source.patterns) {
-                $targets += @(Get-ChildItem -Path $source.path -Recurse -File -Filter $pattern -Force -ErrorAction SilentlyContinue |
+                $targets += @(Get-ChildItem -Path $source.path -Recurse:($source.recurse -ne $false) -File -Filter $pattern -Force -ErrorAction SilentlyContinue |
                     ForEach-Object { $_.FullName })
             }
         }
@@ -5912,13 +6024,18 @@ function Invoke-CleanupClearForUser {
                     $catResults[$cat] = if ($agentVerified -and -not (Test-Path -LiteralPath $knownHosts -PathType Leaf -ErrorAction Stop)) { 'cleaned' } else { 'failed' }
                 }
                 'remoteAccessLogs' {
-                    $targets = @(Get-CleanupTargetFiles @(
+                    $remoteSources = @(
                         @{ path = (Join-Path $appData 'TeamViewer'); patterns = @('Connections*.txt','*.trace','*.log') },
-                        @{ path = (Join-Path $appData 'AnyDesk'); patterns = @('Connections*.txt','*.trace','*.log') },
-                        @{ path = (Join-Path $env:ProgramData 'AnyDesk'); patterns = @('Connections*.txt','*.trace','*.log') },
+                        @{ path = (Join-Path $env:ProgramData 'TeamViewer'); patterns = @('Connections*.txt','*.trace','*.log') },
+                        @{ path = (Join-Path $appData 'AnyDesk'); patterns = @('Connections*.txt','connection_trace*.txt','*.trace','*.log') },
+                        @{ path = (Join-Path $env:ProgramData 'AnyDesk'); patterns = @('Connections*.txt','connection_trace*.txt','*.trace','*.log') },
                         @{ path = (Join-Path $appData 'RealVNC'); patterns = @('Connections*.txt','*.trace','*.log') },
                         @{ path = (Join-Path $localApp 'Google\\Chrome Remote Desktop'); patterns = @('Connections*.txt','*.trace','*.log') }
-                    ))
+                    )
+                    foreach ($root in @($env:ProgramFiles, ${env:ProgramFiles(x86)} | Where-Object { $_ } | Select-Object -Unique)) {
+                        $remoteSources += @{ path = (Join-Path $root 'TeamViewer'); patterns = @('Connections*.txt','*.trace','*.log'); recurse = $false }
+                    }
+                    $targets = @(Get-CleanupTargetFiles $remoteSources)
                     foreach ($target in $targets) { Erase-OneFile $target }
                     $leftover = @($targets | Where-Object { Test-Path $_ -PathType Leaf -ErrorAction SilentlyContinue }).Count
                     $catResults[$cat] = if ($leftover -eq 0) { 'cleaned' } else { 'failed' }

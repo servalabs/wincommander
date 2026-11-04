@@ -11,6 +11,46 @@ const category = ALL_CATEGORIES.find(item => item.id === "walFiles")!;
 const limited = { files: [], total: 0, coverage: "limited" };
 
 describe("cleanup coverage presentation", () => {
+  test("unavailable inventory explains its cause and cannot be cleared", () => {
+    const amcache = ALL_CATEGORIES.find(item => item.id === "amcache")!;
+    const message = "Windows has not exposed a readable application inventory.";
+    const result = readCleanupScanResult(amcache, { success: true, data: {
+      entries: [], total: null, status: "unavailable", partial: true, message,
+    } });
+    expect(result.count).toBe(-1);
+    const card = renderToStaticMarkup(<CleanupTraceCard category={amcache} count={result.count} preview={result.items} rawData={result.raw} error={result.error} loading={false} clearing={false} onViewDetails={() => {}} />);
+    expect(card).toContain('data-cleanup-state="unavailable"');
+    expect(card).toContain("Scan unavailable");
+    expect(card).not.toContain("Scan failed");
+    const html = renderToStaticMarkup(<CleanupDisplayDetails category={amcache} mode="advanced" count={result.count} items={result.items} rawData={result.raw} error={result.error} clearing={false} clearLabel="Clear" onClose={() => {}} onClear={() => {}} />);
+    expect(html).toContain("Scan unavailable");
+    expect(html).toContain(message);
+    expect(html).toContain("disabled");
+    expect(html).not.toContain("No items found");
+  });
+  test("verified credential and Git sources are visible but scan only", () => {
+    for (const id of ["credentialManager", "gitActivity"]) {
+      const item = ALL_CATEGORIES.find(category => category.id === id)!;
+      expect(item.clearDataKey).toBe("");
+      const raw = { files: [{ name: "Example identity" }], total: 1, partial: false, status: "complete", coverage: "limited", coverageNote: "Only the selected sources were inspected." };
+      const result = readCleanupScanResult(item, { success: true, data: raw });
+      expect(result.count).toBe(1);
+      expect(result.error).toBeUndefined();
+      const card = renderToStaticMarkup(<CleanupTraceCard category={item} count={result.count} preview={result.items} rawData={result.raw} loading={false} clearing={false} onClear={() => {}} onViewDetails={() => {}} />);
+      expect(card).toContain("Details");
+      expect(card).not.toContain(`aria-label="Clear ${item.label}`);
+      const details = renderToStaticMarkup(<CleanupDisplayDetails category={item} mode="advanced" count={result.count} items={result.items} rawData={result.raw} clearing={false} clearLabel="Clear" onClose={() => {}} />);
+      expect(details).toContain("Only the selected sources were inspected.");
+      const empty = readCleanupScanResult(item, { success: true, data: { ...raw, files: [], total: 0 } });
+      expect(empty.count).toBe(0);
+      expect(empty.error).toBeUndefined();
+      expect(summarizeCleanupResult({ id, count: empty.count, raw: empty.raw }).state).toBe("empty");
+      const emptyCard = renderToStaticMarkup(<CleanupTraceCard category={item} count={empty.count} preview={empty.items} rawData={empty.raw} loading={false} clearing={false} onViewDetails={() => {}} />);
+      expect(emptyCard).toContain('data-cleanup-state="empty"');
+      expect(emptyCard).not.toContain("Limited scan");
+      expect(summarizeCleanupResult({ id, count: -1, raw: { ...raw, partial: true } }).state).toBe("partial");
+    }
+  });
   test("partial credential metadata shows an observed count without revealing records on the card", () => {
     const credentials = ALL_CATEGORIES.find(item => item.id === "credentialManager")!;
     const raw = { partial: true, status: "partial", message: "Other vault entries were not inspected.", files: [

@@ -23,7 +23,7 @@ function Get-Item {
     param($Path, $LiteralPath, $ErrorAction)
     if ($script:coverageFixture) {
         if ($script:deniedRoot) { throw [System.UnauthorizedAccessException]::new('Synthetic access denied') }
-        return [pscustomobject]@{ Name = 'fixture-root' }
+        return [pscustomobject]@{ Name = 'fixture-root'; PSIsContainer = $true; Attributes = [IO.FileAttributes]::Directory }
     }
     if ($LiteralPath -or -not (Test-Path -Path $Path)) {
         throw [System.Management.Automation.ItemNotFoundException]::new('Synthetic item is absent')

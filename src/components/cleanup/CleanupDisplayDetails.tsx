@@ -43,7 +43,7 @@ export default function CleanupDisplayDetails({ category, mode, count, items, ra
     document.addEventListener("keydown", handleKey);
     return () => { document.removeEventListener("keydown", handleKey); previous?.focus(); };
   }, []);
-  const summary = groupedItems?.length ? summarizeCleanupGroups(error ? -1 : count, groupedItems) : summarizeCleanupResult({ id: category.id, count, items, raw: rawData, error });
+  const summary = groupedItems?.length ? summarizeCleanupGroups(error ? -1 : count, groupedItems, category.id) : summarizeCleanupResult({ id: category.id, count, items, raw: rawData, error });
   const previewData = useMemo(() => getSafeCleanupPreview(category.id, rawData).length || !items.length
     ? rawData : { records: items }, [category.id, rawData, items]);
   const name = cleanupDisplayName(category, mode);
@@ -55,7 +55,12 @@ export default function CleanupDisplayDetails({ category, mode, count, items, ra
     : category.id === "recallDb" ? "Checks four specified activity-data locations."
       : category.id === "dockerDesktopData" ? "Checks default Docker disk and log locations; custom disk locations are not included."
         : category.id === "srumData" ? "Checks database file metadata; historical usage records are not decoded."
-        : category.id === "searchIndex" ? "Checks selected Windows Search index and log files; other Search data is outside this scan." : "Checks selected locations only.") : null;
+        : category.id === "searchIndex" ? "Checks selected Windows Search index and log files; other Search data is outside this scan."
+          : category.id === "remoteAccessLogs" ? "Checks selected TeamViewer, AnyDesk, RealVNC and Chrome Remote Desktop locations, including machine-wide logs. Other products and custom locations are not included."
+            : category.id === "gameLauncherLogs" ? "Checks default Steam, Epic Games Launcher and Battle.net log locations. Other launchers and custom installations are not included."
+              : category.id === "cellularHistory" && raw?.noHardware === true ? "Windows reports no mobile broadband adapter. Profiles for disconnected devices were not checked."
+                : ["credentialManager", "gitActivity", "wslData"].includes(category.id) && typeof raw?.coverageNote === "string" && raw.coverageNote.trim() ? raw.coverageNote.trim()
+                  : "Checks selected locations only.") : null;
   const coverage = summary.state === "partial" ? "Incomplete" : limitedScope ? "Limited to selected locations" : raw?.coverage === "complete" ? "Reported complete" : typeof raw?.coverage === "string" && raw.coverage.trim() ? raw.coverage : "Not reported";
   const receipt = cleanupVerificationText(verification);
   const verifiedAt = verification?.verifiedAt && Number.isFinite(Date.parse(verification.verifiedAt)) ? new Date(verification.verifiedAt).toLocaleString() : null;
@@ -94,7 +99,7 @@ export default function CleanupDisplayDetails({ category, mode, count, items, ra
         <div className="cleanup-readable-detail__body">
           {summary.state === "inconsistent" ? <p>The total and category counts disagree. The result cannot be confirmed until a new scan succeeds.</p> : null}
           {summary.state === "partial" ? <p>{error?.trim() || "Some sources were not checked. The result is incomplete."}</p> : null}
-          {summary.state === "error" && error?.trim() ? <p>{error}</p> : null}
+          {["error", "unavailable"].includes(summary.state) && error?.trim() ? <p>{error}</p> : null}
           {limitedScope ? <p><strong>Scan scope:</strong> {limitedScope}</p> : null}
           {groupedItems?.length ? <p>Only profiles detected in the supported Windows user folders are shown. Other profiles may not appear.</p> : null}
           {!groupedItems?.length && scanFacts.length ? <section aria-label="Scan details"><h3>Scan details</h3><dl className="cleanup-readable-detail__facts">{scanFacts.map((fact, index) => <div key={`${fact.label}-${index}`}><dt>{fact.label}</dt><dd>{fact.value}</dd></div>)}</dl></section> : null}

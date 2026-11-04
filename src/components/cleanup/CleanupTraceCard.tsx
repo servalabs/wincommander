@@ -51,7 +51,7 @@ interface CleanupTraceCardProps {
 
 const TRACE_CARD_HEIGHT = "168px";
 
-type BandState = "has" | "clean" | "scanning" | "error" | "incomplete" | "limited" | "disabled" | "not-scanned" | "action-only" | "schedule-only";
+type BandState = "has" | "clean" | "empty" | "unavailable" | "scanning" | "error" | "incomplete" | "limited" | "disabled" | "not-scanned" | "action-only" | "schedule-only";
 interface BandDef {
   bg: string;
   borderColor: string;
@@ -61,6 +61,14 @@ interface BandDef {
 }
 
 const BAND: Record<BandState, BandDef> = {
+  empty: {
+    bg: "var(--color-bg-secondary)", borderColor: "var(--color-border)",
+    labelColor: "var(--color-text-muted)", icon: "info-sign", label: "No records found",
+  },
+  unavailable: {
+    bg: "var(--color-bg-secondary)", borderColor: "var(--color-border)",
+    labelColor: "var(--color-text-muted)", icon: "info-sign", label: "Scan unavailable",
+  },
   disabled: {
     bg: "var(--color-bg-secondary)", borderColor: "var(--color-border)",
     labelColor: "var(--color-text-muted)", icon: "info-sign", label: "Clipboard history is off",
@@ -160,6 +168,8 @@ export default function CleanupTraceCard({
   const observedRecords = observedPartialRows(category.id, rawData);
   const clipboardOff = isClipboardHistoryOff(category.id, rawData);
   const limited = hasLimitedCleanupCoverage(category.id, rawData) || !!groupedItems?.some(group => hasLimitedCleanupCoverage(category.id, group.rawData));
+  const resultSummary = summarizeCleanupResult({ id: category.id, count, raw: rawData, error });
+  const scopedEmpty = limited && resultSummary.state === "empty";
   const isEmpty = count === 0 && !limited;
   const isActionOnly = category.actionOnly;
   const hasData = count > 0;
@@ -178,12 +188,16 @@ export default function CleanupTraceCard({
       ? "scanning"
       : clipboardOff
         ? "disabled"
+      : scanFlags?.status === "unavailable"
+        ? "unavailable"
       : incomplete
         ? "incomplete"
       : error
         ? "error"
       : hasData
         ? "has"
+        : scopedEmpty
+          ? "empty"
         : limited
           ? "limited"
         : isEmpty
@@ -194,6 +208,7 @@ export default function CleanupTraceCard({
     ? `${observedProcesses} ${observedProcesses === 1 ? "process" : "processes"} observed; scan incomplete`
     : bandState === "incomplete" && observedRecords !== null
     ? `${observedRecords} ${observedRecords === 1 ? "record" : "records"} observed; scan incomplete`
+    : bandState === "empty" ? resultSummary.message
     : bandState === "has"
     ? `${count} ${countUnit} found`
     : band.label;
@@ -287,7 +302,7 @@ export default function CleanupTraceCard({
   const iconBg = `${category.color}1e`;
 
   // ── CLEAN STATE — scanned, zero traces, nothing to action. ──
-  if (bandState === "clean" || bandState === "disabled" || (bandState === "limited" && count === 0)) {
+  if (bandState === "clean" || bandState === "empty" || bandState === "disabled" || (bandState === "limited" && count === 0)) {
     return (
       <motion.div
         initial={{ opacity: 0, scale: 0.95 }}
@@ -566,7 +581,7 @@ export default function CleanupTraceCard({
           {(error || (incomplete && (observedProcesses !== null || observedRecords !== null))) && !loading && (
             <div
               className="font-mono line-clamp-2"
-              role={incomplete ? "status" : "alert"}
+              role={incomplete || bandState === "unavailable" ? "status" : "alert"}
               title={incomplete ? "The scan did not finish checking its sources." : "The scan could not be completed."}
               style={{
                 fontSize: 8.5,
@@ -576,7 +591,7 @@ export default function CleanupTraceCard({
                 color: incomplete ? "var(--color-warning)" : "var(--color-danger)",
               }}
             >
-              {incomplete ? observedProcesses !== null && typeof scanFlags?.coverageNote === "string" ? `${observedProcesses} ${observedProcesses === 1 ? "process" : "processes"} observed. ${scanFlags.coverageNote}` : observedProcesses !== null ? `${observedProcesses} ${observedProcesses === 1 ? "process" : "processes"} observed. Scan incomplete; open details.` : observedRecords !== null ? `${observedRecords} ${observedRecords === 1 ? "record" : "records"} observed. Scan incomplete; open details.` : "Scan incomplete. Open details to review coverage." : "Scan failed. Try again or check access."}
+              {bandState === "unavailable" ? "Inventory unavailable. Open details for the reason." : incomplete ? observedProcesses !== null && typeof scanFlags?.coverageNote === "string" ? `${observedProcesses} ${observedProcesses === 1 ? "process" : "processes"} observed. ${scanFlags.coverageNote}` : observedProcesses !== null ? `${observedProcesses} ${observedProcesses === 1 ? "process" : "processes"} observed. Scan incomplete; open details.` : observedRecords !== null ? `${observedRecords} ${observedRecords === 1 ? "record" : "records"} observed. Scan incomplete; open details.` : "Scan incomplete. Open details to review coverage." : "Scan failed. Try again or check access."}
             </div>
           )}
           {/* Owner: manual-only view-only cards (Process Review) were stuck at

@@ -12,7 +12,7 @@ function Get-Item {
     [CmdletBinding()] param($LiteralPath, [switch]$Force)
     if ($script:scenario -eq 'missing') { throw [Management.Automation.ItemNotFoundException]::new('Synthetic missing root') }
     if ($script:scenario -eq 'denied-root') { throw [UnauthorizedAccessException]::new('Synthetic denied root') }
-    [pscustomobject]@{ PSIsContainer = $true; Attributes = [IO.FileAttributes]::Directory }
+    [pscustomobject]@{ PSIsContainer = ($script:scenario -ne 'root-file'); Attributes = if ($script:scenario -eq 'root-link') { [IO.FileAttributes]::ReparsePoint } else { [IO.FileAttributes]::Directory } }
 }
 function Get-ChildItem {
     [CmdletBinding()] param($LiteralPath, [switch]$Force)
@@ -37,14 +37,20 @@ try {
     if ($script:visited -match 'Application Data') { throw 'A directory junction was opened.' }
     $shallow = Get-CleanupBoundedFileInventory -Roots @('C:\fixture') -Patterns @('*.wal') -Depth 0
     if ($shallow.files.Count -ne 1 -or $shallow.partial) { throw 'Depth limit was not preserved.' }
+    $timed = Get-CleanupBoundedFileInventory -Roots @('C:\fixture') -Patterns @('*.wal') -MaxMilliseconds 0
+    if (-not $timed.partial -or $timed.errors -notmatch 'time limit') { throw 'A time-limited scan must report incomplete coverage.' }
     $script:scenario='denied-child'
     $partial = Get-SQLiteWALList
-    if (-not $partial.partial -or $partial.error -or $partial.total -ne 10 -or $partial.message -notmatch 'Synthetic denied child') { throw 'A real denied directory lost its observations or was hidden.' }
+    if (-not $partial.partial -or $partial.error -or $partial.total -ne 10 -or $null -ne $partial.totalSizeMB -or $partial.message -notmatch 'Synthetic denied child') { throw 'A denied directory must retain observations without claiming a complete total size.' }
     $script:scenario='denied-root'
     $denied = Get-SQLiteWALList
     if (-not $denied.error -or -not $denied.partial -or $denied.total -ne 0) { throw 'Denied roots appeared empty and complete.' }
     $script:scenario='missing'
     $missing = Get-SQLiteWALList
     if ($missing.error -or $missing.partial -or $missing.total -ne 0) { throw 'Absent locations appeared denied.' }
+    foreach ($scenario in @('root-link','root-file')) {
+        $script:scenario=$scenario; $unsafe=Get-SQLiteWALList
+        if (-not $unsafe.error -or -not $unsafe.partial -or $unsafe.total -ne 0) { throw "Unscanned $scenario root appeared empty and complete." }
+    }
     'PASS: bounded WAL scans skip junctions, cover WAL/SHM names, and preserve genuine denied coverage.'
 } finally { $env:LOCALAPPDATA=$originalLocal; $env:APPDATA=$originalRoaming }
