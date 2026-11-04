@@ -150,6 +150,26 @@ pub(super) fn verify_stored_release_request(
     Ok(())
 }
 
+/// This is only called for a durably confirmed release, never on a network response alone.
+pub(super) fn release_acknowledgement_request(
+    credential: &ConfirmedCredential, expected_body: &[u8], request: &[u8],
+) -> Result<zeroize::Zeroizing<Vec<u8>>, &'static str> {
+    use zeroize::Zeroize;
+    verify_stored_release_request(credential, expected_body, request)?;
+    let mut value: StoredReleaseRequest = serde_json::from_slice(request).map_err(|_| INVALID)?;
+    let id = fixed(&value.credential_id)?;
+    let nonce = fixed(&value.nonce)?;
+    let digest = fixed(&value.request_digest)?;
+    let challenge = wincmd_pq_experiment::licence_device_proof::Challenge {
+        operation: wincmd_pq_experiment::licence_device_proof::Operation::Deactivate,
+        credential_id: &id, nonce: &nonce, request_digest: &digest, expires_at: value.expires_at,
+    };
+    let ack = wincmd_pq_experiment::licence_device_proof::sign_release_acknowledgement(credential.secret(), &challenge).map_err(|_| INVALID)?;
+    value.proof.zeroize();
+    value.proof = URL_SAFE_NO_PAD.encode(ack);
+    Ok(zeroize::Zeroizing::new(serde_json::to_vec(&value).map_err(|_| INVALID)?))
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ReleaseResponse { ok: bool }

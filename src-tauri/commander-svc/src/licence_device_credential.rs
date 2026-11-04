@@ -349,8 +349,8 @@ pub(crate) fn prepare_release_request(
     wire::release_request(&credential, body, challenge, now)
 }
 
-/// Experimental service-only exchange. It retains both the local licence and
-/// retry record after success; an authorized, crash-safe finalizer is required.
+/// Experimental service-only exchange. It records success, but retains the
+/// local licence; an authorized, crash-safe finalizer is still required.
 pub(crate) async fn request_release(
     binding: &Binding<'_>, receipt_trust: &wincmd_pq_experiment::jws::Trust<'_>, licence: &RefreshLicence<'_>,
 ) -> Result<(), &'static str> {
@@ -366,25 +366,31 @@ pub(crate) async fn request_release(
         },
         |request| release_pending::stage(binding, receipt_trust, licence, now()?, &request),
         wire::post_release,
+        |request, response| release_pending::confirm(binding, receipt_trust, licence, now()?, &request, &response),
     ).await
 }
 
-async fn release_exchange_with<Load, Begin, BeginFuture, Stage, Send, SendFuture>(
-    load: Load, begin: Begin, stage: Stage, send: Send,
+async fn release_exchange_with<Load, Begin, BeginFuture, Stage, Send, SendFuture, Confirm>(
+    load: Load, begin: Begin, stage: Stage, send: Send, confirm: Confirm,
 ) -> Result<(), &'static str>
 where
-    Load: FnOnce() -> Result<Option<Zeroizing<Vec<u8>>>, &'static str>,
+    Load: FnOnce() -> Result<Option<release_pending::SavedRelease>, &'static str>,
     Begin: FnOnce() -> BeginFuture,
     BeginFuture: std::future::Future<Output = Result<Zeroizing<Vec<u8>>, &'static str>>,
     Stage: FnOnce(Zeroizing<Vec<u8>>) -> Result<Zeroizing<Vec<u8>>, &'static str>,
     Send: FnOnce(Zeroizing<Vec<u8>>) -> SendFuture,
     SendFuture: std::future::Future<Output = Result<Vec<u8>, &'static str>>,
+    Confirm: FnOnce(Zeroizing<Vec<u8>>, Vec<u8>) -> Result<(), &'static str>,
 {
     let request = match load()? {
-        Some(existing) => existing,
+        Some(existing) if existing.confirmed => return Ok(()),
+        Some(existing) => existing.request,
         None => stage(begin().await?)?,
     };
-    wire::confirmed_release(&send(request).await?)
+    let saved = Zeroizing::new(request.to_vec());
+    let response = send(request).await?;
+    wire::confirmed_release(&response)?;
+    confirm(saved, response)
 }
 
 /// Perform one bounded renewal exchange. The caller must authenticate the caller,
