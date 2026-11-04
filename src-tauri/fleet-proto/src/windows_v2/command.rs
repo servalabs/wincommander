@@ -19,12 +19,18 @@ pub struct WindowsCommandV2 {
     #[serde(with = "super::decimal::epoch")]
     #[cfg_attr(feature = "ts-codegen", ts(type = "string"))]
     pub epoch_version: i64,
+    /// Server delivery expiry, bound by the response proof, not the offline
+    /// action signature. Consumers must enforce delivery freshness separately.
+    #[serde(with = "super::decimal::epoch")]
+    #[cfg_attr(feature = "ts-codegen", ts(type = "string"))]
+    pub delivery_expires_unix_ms: i64,
     pub signature: String,
     pub signer_key: String,
 }
 
 /// Offline signers know the idempotency key before a delivery ID is assigned.
-/// The separately verified response proof must bind the assigned command_id.
+/// The separately verified response proof must bind the assigned command_id
+/// and delivery_expires_unix_ms; neither is part of this offline preimage.
 pub struct WindowsCommandSigningInput<'a> {
     pub binding: &'a FleetEnrollmentBinding,
     pub idempotency_key: &'a str,

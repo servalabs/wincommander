@@ -63,6 +63,12 @@ mod tests {
                 serde_json::from_value(raw["windows_v2"].clone()).unwrap();
             assert_eq!(response.command_epoch_floor, command.epoch_version);
         }
+        for (vector, value) in fixture["delivery_boundaries"].as_array().unwrap().iter().zip([i64::MIN, i64::MAX]) {
+            let raw: Value = serde_json::from_str(vector["response_bytes"].as_str().unwrap()).unwrap();
+            let response: WindowsCheckinResponseV2 = serde_json::from_value(raw["windows_v2"].clone()).unwrap();
+            assert_eq!(response.delivery_issued_unix_ms, value);
+            assert_eq!(response.commands[0].delivery_expires_unix_ms, value);
+        }
         let text = r#"{"large":12345678901234567890123456789012345678901234567890,"exp":1e400,"private":{"$serde_json::private::Number":"123","$serde_json::private::RawValue":"42"}}"#;
         let raw = LosslessJson::new(text.into()).unwrap();
         assert_eq!(raw.as_str(), text);

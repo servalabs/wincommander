@@ -102,3 +102,27 @@ test("signed i64 epoch extremes survive JS roundtrip and bind floor authority", 
     assert.ok(!verify(null, altered, publicKey(proof.binding.authority_key_b64), Buffer.from(proof.signature, "base64")));
   }
 });
+
+test("delivery extremes survive JS roundtrip and require response authority", () => {
+  for (const [index, value] of ["-9223372036854775808", "9223372036854775807"].entries()) {
+    const vector = fixture.delivery_boundaries[index];
+    const response = JSON.parse(JSON.stringify(JSON.parse(vector.response_bytes)));
+    assert.equal(response.windows_v2.delivery_issued_unix_ms, value);
+    assert.equal(response.windows_v2.commands[0].delivery_expires_unix_ms, value);
+    assert.equal(BigInt(response.windows_v2.delivery_issued_unix_ms), BigInt(value));
+    const command = response.windows_v2.commands[0];
+    assert.equal(commandBytes(command).toString("utf8"), fixture.command_preimage);
+    assert.equal(command.signature, fixture.command.signature);
+    const proof = vector.proof;
+    const preimage = body => bytes(["fleet.windows.outcome-receipt.v2", proof.binding, proof.nonce, proof.request_sha256, proof.http_status, hash(body).toString("base64")]);
+    assert.equal(preimage(Buffer.from(vector.response_bytes)).toString("utf8"), vector.proof_preimage);
+    assert.equal(sign(null, preimage(Buffer.from(vector.response_bytes)), privateKey(11)).toString("base64"), proof.signature);
+    for (const field of ["delivery_issued_unix_ms", "delivery_expires_unix_ms"]) {
+      const altered = structuredClone(response);
+      const target = field === "delivery_issued_unix_ms" ? altered.windows_v2 : altered.windows_v2.commands[0];
+      target[field] = "0";
+      assert.ok(!verify(null, preimage(bytes(altered)), publicKey(proof.binding.authority_key_b64), Buffer.from(proof.signature, "base64")));
+      assert.equal(commandBytes(altered.windows_v2.commands[0]).toString("utf8"), fixture.command_preimage);
+    }
+  }
+});

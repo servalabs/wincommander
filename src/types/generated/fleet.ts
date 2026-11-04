@@ -1431,13 +1431,23 @@ export type WindowsCheckinResponseV2 = { version: number, binding: FleetEnrollme
  * policy revision. Compare every command against this same floor; several
  * commands may have the same epoch. Full i64 range, encoded losslessly.
  */
-command_epoch_floor: string, commands: Array<WindowsCommandV2>, ack_receipts: Array<WindowsAckReceiptV2>, outcome_receipts: Array<WindowsOutcomeReceiptV2>, head: WindowsOutcomeHeadV2, };
+command_epoch_floor: string,
+/**
+ * Server issuance time for this delivery, authenticated by the exact
+ * response proof. Required even when the response has no commands.
+ */
+delivery_issued_unix_ms: string, commands: Array<WindowsCommandV2>, ack_receipts: Array<WindowsAckReceiptV2>, outcome_receipts: Array<WindowsOutcomeReceiptV2>, head: WindowsOutcomeHeadV2, };
 
 export type WindowsCommandV2 = { version: number, binding: FleetEnrollmentBinding, command_id: string, idempotency_key: string, catalog_id: string, action_class: ActionClass, payload: LosslessJson,
 /**
  * Full signed i64 value; compare without clamping or unsigned conversion.
  */
-epoch_version: string, signature: string, signer_key: string, };
+epoch_version: string,
+/**
+ * Server delivery expiry, bound by the response proof, not the offline
+ * action signature. Consumers must enforce delivery freshness separately.
+ */
+delivery_expires_unix_ms: string, signature: string, signer_key: string, };
 
 /**
  * Accepted, Quarantined and Orphaned assert durable exact-record retention.

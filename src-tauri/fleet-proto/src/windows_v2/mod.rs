@@ -16,7 +16,12 @@
 //! buffers and current enrollment/lifecycle. Verify it before acting on any
 //! response field, including jobs or policy outside this block. The required
 //! command epoch floor is independent of policy revision and applies to each
-//! command in the response; equal epochs are permitted. Action signature
+//! command in the response; equal epochs are permitted. Required delivery
+//! issuance/expiry timestamps are full signed-i64 decimal strings bound only
+//! by the response proof, not the offline action signature. Consumers must
+//! validate the delivery interval and enforce a monotonic freshness deadline
+//! from request start before dispatch; decoding or action-signature validation
+//! alone does not authorize delivery. Action signature
 //! verification alone does not bind the server-assigned delivery ID.
 //!
 //! Accepted/duplicate ACK receipts settle only the matching report ID and hash.

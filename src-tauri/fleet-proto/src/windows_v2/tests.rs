@@ -236,3 +236,6 @@ mod summary_tests;
 
 #[path = "tests_epoch.rs"]
 mod epoch_tests;
+
+#[path = "tests_delivery.rs"]
+mod delivery_tests;

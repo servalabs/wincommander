@@ -138,6 +138,11 @@ pub struct WindowsCheckinResponseV2 {
     #[serde(with = "super::decimal::epoch")]
     #[cfg_attr(feature = "ts-codegen", ts(type = "string"))]
     pub command_epoch_floor: i64,
+    /// Server issuance time for this delivery, authenticated by the exact
+    /// response proof. Required even when the response has no commands.
+    #[serde(with = "super::decimal::epoch")]
+    #[cfg_attr(feature = "ts-codegen", ts(type = "string"))]
+    pub delivery_issued_unix_ms: i64,
     pub commands: Vec<WindowsCommandV2>,
     pub ack_receipts: Vec<WindowsAckReceiptV2>,
     pub outcome_receipts: Vec<WindowsOutcomeReceiptV2>,
