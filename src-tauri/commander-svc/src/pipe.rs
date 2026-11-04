@@ -38,7 +38,7 @@ use wincmd_shared::fleet::{Action, ClipboardEventReport};
 use wincmd_shared::vault_access::VaultMountReason;
 use wincmd_shared::svc::{
     classify_verb, is_known_verb, ApplyMachineSettingRequest, CapabilityClass,
-    APPLY_MACHINE_SETTING_VERB, STORE_LICENSE_CACHE_VERB, VERIFY_LICENSE_CACHE_VERB, RENEW_HYBRID_LICENSE_VERB, SVC_PIPE_NAME, SVC_PROTOCOL_VERSION,
+    APPLY_MACHINE_SETTING_VERB, STORE_LICENSE_CACHE_VERB, VERIFY_LICENSE_CACHE_VERB, RENEW_HYBRID_LICENSE_VERB, ENROL_HYBRID_LICENSE_VERB, SVC_PIPE_NAME, SVC_PROTOCOL_VERSION,
 };
 use wincmd_shared::{Envelope, ErrorReply, Hello, Request, Response};
 
@@ -327,7 +327,7 @@ pub(crate) async fn handle_connection(
         // the HMAC tag against this connection's session token. A bare
         // (unsigned) `Request` is still accepted too — today's Free/Pro
         // callers send `Signed`, but nothing about this loop requires it.
-        let req = match env {
+        let mut req = match env {
             Envelope::Bye => break,
             Envelope::Request(req) => req,
             Envelope::Signed(inner) => {
@@ -357,6 +357,7 @@ pub(crate) async fn handle_connection(
 
         let request_id = req.request_id;
         if !is_known_verb(&req.feature_id) {
+            wincmd_shared::zeroize_json(&mut req.args);
             let reply = Envelope::Error(ErrorReply {
                 request_id,
                 kind: "unknown_verb".to_string(),
@@ -431,6 +432,7 @@ pub(crate) async fn handle_connection(
         };
         match authorization {
             Err(reason) => {
+                wincmd_shared::zeroize_json(&mut req.args);
                 let reply = Envelope::Error(ErrorReply {
                     request_id,
                     kind: "forbidden".to_string(),
@@ -649,6 +651,7 @@ async fn dispatch_verb(
             .map_err(|message| VerbError::new("license_cache_rejected", message)),
 
         RENEW_HYBRID_LICENSE_VERB => handle_hybrid_license_renewal(args, trust_origin).await,
+        ENROL_HYBRID_LICENSE_VERB => handle_hybrid_license_enrolment(args, trust_origin).await,
 
         "svc.clipboard.get_policy" => fleet_machine_policy_store().and_then(|store|store.read_current(|bound,policy| {
             policy_store.bound_clipboard_response(bound,policy)
@@ -823,9 +826,6 @@ fn valid_diagnostic_operation_id(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
 }
 
-/// Returns the encrypted service store's deliberately small support view.
-/// The service writer owns decryption; the pipe never returns ciphertext,
-/// context, raw errors, paths, identities, or filesystem details.
 async fn handle_hybrid_license_renewal(
     args: serde_json::Value,
     trust_origin: Option<TrustOrigin>,
@@ -844,6 +844,38 @@ async fn handle_hybrid_license_renewal(
     { Err(VerbError::new("license_renewal_rejected", "license renewal is unavailable")) }
 }
 
+async fn handle_hybrid_license_enrolment(
+    mut args: serde_json::Value,
+    trust_origin: Option<TrustOrigin>,
+) -> Result<serde_json::Value, VerbError> {
+    let key = if trust_origin.is_some() {
+        args.as_object_mut().filter(|map| map.len() == 1)
+            .and_then(|map| map.remove("licenseKey"))
+    } else { None };
+    wincmd_shared::zeroize_json(&mut args);
+    if trust_origin.is_none() {
+        return Err(VerbError::new("forbidden", "protected WinCommander session required"));
+    }
+    let mut key = key.ok_or_else(|| VerbError::new("license_enrolment_rejected", "license registration is unavailable"))?;
+    let result = match &mut key {
+        serde_json::Value::String(value) if !value.trim().is_empty() && value.len() <= 512 => {
+            let key = zeroize::Zeroizing::new(std::mem::take(value));
+            #[cfg(feature = "experimental-pq-licence")]
+            { crate::licence_device_credential::enrol_from_machine_cache(&key).await
+                .map(|_| serde_json::json!({"enrolled": true}))
+                .map_err(|_| VerbError::new("license_enrolment_rejected", "license registration is unavailable")) }
+            #[cfg(not(feature = "experimental-pq-licence"))]
+            { let _ = key; Err(VerbError::new("license_enrolment_rejected", "license registration is unavailable")) }
+        }
+        _ => Err(VerbError::new("license_enrolment_rejected", "license registration is unavailable")),
+    };
+    wincmd_shared::zeroize_json(&mut key);
+    result
+}
+
+/// Returns the encrypted service store's deliberately small support view.
+/// The service writer owns decryption; the pipe never returns ciphertext,
+/// context, raw errors, paths, identities, or filesystem details.
 fn handle_diagnostics_query(
     args: serde_json::Value,
     peer: Option<&AuthenticatedPipePeer>,
@@ -5531,6 +5563,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn hybrid_enrolment_requires_pinned_peer_and_only_a_bounded_key() {
+        let denied = handle_hybrid_license_enrolment(serde_json::json!({"licenseKey":"test"}), None).await.unwrap_err();
+        assert_eq!(denied.kind, "forbidden");
+        for args in [serde_json::json!({}), serde_json::json!({"licenseKey":" "}),
+            serde_json::json!({"licenseKey":"x", "issuer":"attacker"}),
+            serde_json::json!({"licenseKey":"x".repeat(513)})] {
+            let err = handle_hybrid_license_enrolment(args, Some(TrustOrigin::SessionHelperPinned)).await.unwrap_err();
+            assert_eq!(err.kind, "license_enrolment_rejected");
+        }
+        let gate = gate_denying_with(PeerAuthError::PathNotAllowed);
+        assert!(authorize(ENROL_HYBRID_LICENSE_VERB, true, 1234, &gate).await.is_err());
+    }
+
+    #[tokio::test]
     async fn hybrid_renewal_requires_pinned_peer_and_no_caller_parameters() {
         let no_peer = handle_hybrid_license_renewal(serde_json::json!({}), None).await.unwrap_err();
         assert_eq!(no_peer.kind, "forbidden");
@@ -5547,6 +5593,7 @@ mod tests {
         for verb in [
             "svc.clipboard.report_event",
             RENEW_HYBRID_LICENSE_VERB,
+            ENROL_HYBRID_LICENSE_VERB,
             "svc.policy.install_epoch",
             "svc.ink_receipt.reserve_ticket",
             "svc.ink_receipt.report_receipt",

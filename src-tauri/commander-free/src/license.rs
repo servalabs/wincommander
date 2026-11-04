@@ -1534,6 +1534,7 @@ async fn get_license_status_inner() -> Result<serde_json::Value, String> {
 #[tauri::command]
 pub async fn activate_license(license_key: String) -> Result<serde_json::Value, String> {
     let (api_base, public_key_b64) = get_config()?;
+    let license_key = zeroize::Zeroizing::new(license_key);
     let trimmed = license_key.trim();
     if trimmed.is_empty() {
         return Err("License key is required.".to_string());
@@ -1603,6 +1604,17 @@ pub async fn activate_license(license_key: String) -> Result<serde_json::Value, 
         seat_limit: payload.seat_limit,
     };
     save_cached_license(&cached).await?;
+
+    #[cfg(feature = "experimental-pq-licence")]
+    {
+        let registered = crate::svc_client::call(wincmd_shared::svc::ENROL_HYBRID_LICENSE_VERB,
+            serde_json::json!({"licenseKey": trimmed})).await;
+        if !matches!(registered, Ok(value) if value == serde_json::json!({"enrolled": true})) {
+            // Activation is already saved. Retain it and the pending device
+            // identity so entering the same key again can safely retry.
+            return Err("License activated, but secure device registration could not be confirmed. Check the WinCommander service and retry activation with the same key.".into());
+        }
+    }
 
     let status = status_from_cached(&cached, &claims, Some("License activated.".to_string()));
     serde_json::to_value(status).map_err(|e| e.to_string())

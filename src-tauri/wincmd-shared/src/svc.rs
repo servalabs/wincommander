@@ -95,6 +95,8 @@ pub const STORE_LICENSE_CACHE_VERB: &str = "svc.license.store_cache";
 pub const VERIFY_LICENSE_CACHE_VERB: &str = "svc.license.verify_cache";
 /// Renew only the service-owned hybrid licence; caller supplies no identity or keys.
 pub const RENEW_HYBRID_LICENSE_VERB: &str = "svc.license.renew_hybrid";
+/// Register the service-owned device identity for the current protected licence.
+pub const ENROL_HYBRID_LICENSE_VERB: &str = "svc.license.enrol_hybrid";
 
 /// Exact verbs implemented by the current service dispatcher.
 ///
@@ -120,6 +122,7 @@ pub fn is_known_verb(feature_id: &str) -> bool {
             | STORE_LICENSE_CACHE_VERB
             | VERIFY_LICENSE_CACHE_VERB
             | RENEW_HYBRID_LICENSE_VERB
+            | ENROL_HYBRID_LICENSE_VERB
             | "svc.clipboard.get_policy"
             | "svc.clipboard.report_event"
             | "svc.clipboard.set_enabled"
@@ -329,7 +332,7 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         // fixed machine licence cache, so this is deliberately not a broad
         // ProgramData-write or administrator capability.
         STORE_LICENSE_CACHE_VERB | VERIFY_LICENSE_CACHE_VERB => CapabilityClass::InteractiveSession,
-        RENEW_HYBRID_LICENSE_VERB => CapabilityClass::SessionHelper,
+        RENEW_HYBRID_LICENSE_VERB | ENROL_HYBRID_LICENSE_VERB => CapabilityClass::SessionHelper,
         // ── Existing read-only verbs (unchanged) ──────────────────────────
         "svc.status" => CapabilityClass::ReadOnly,
         "svc.get_settings" => CapabilityClass::ReadOnly,
@@ -511,6 +514,8 @@ mod tests {
         assert!(is_known_verb(VERIFY_LICENSE_CACHE_VERB));
         assert_eq!(classify_verb(RENEW_HYBRID_LICENSE_VERB), CapabilityClass::SessionHelper);
         assert!(is_known_verb(RENEW_HYBRID_LICENSE_VERB));
+        assert_eq!(classify_verb(ENROL_HYBRID_LICENSE_VERB), CapabilityClass::SessionHelper);
+        assert!(is_known_verb(ENROL_HYBRID_LICENSE_VERB));
     }
 
     #[test]

@@ -583,8 +583,19 @@ where
     }
 }
 
-/// Use only service-build trust for registration. Authorization is still the
-/// responsibility of the service caller; no desktop-facing verb exists yet.
+/// Register against the service-owned cache; no caller may select identity,
+/// issuer, key policy or cache contents.
+pub(crate) async fn enrol_from_machine_cache(license_key: &str) -> Result<(), &'static str> {
+    let cache = crate::license_cache::load_device_licence_snapshot()?;
+    let binding = Binding { licence_id: &cache.licence_id, device_hash: &cache.device_hash,
+        issuer_origin: wire::LICENCE_ORIGIN };
+    let licence = RefreshLicence { payload: &cache.payload, signature: &cache.signature,
+        hybrid: &cache.hybrid, last_verified_at: cache.last_verified_at };
+    enrol_with_configured_trust(&binding, &licence, license_key).await
+}
+
+/// Use only service-build trust for registration. The service caller must
+/// separately authenticate the requesting desktop process.
 pub(crate) async fn enrol_with_configured_trust(
     binding: &Binding<'_>,
     licence: &RefreshLicence<'_>,
