@@ -178,6 +178,8 @@ struct LicenseStatus {
     trial_expires_at: Option<u64>,
     /// True when no trial has ever been started on this device (trial is still claimable).
     trial_available: bool,
+    /// A previously issued, unexpired trial can be recovered on this device.
+    trial_recoverable: bool,
     /// True when a trial was started but has since expired. Features still work (soft expiry).
     trial_expired: bool,
 }
@@ -203,6 +205,10 @@ struct WorkerTokenResponse {
 struct WorkerTrialStatusResponse {
     ok: bool,
     available: Option<bool>,
+    #[serde(default)]
+    recoverable: bool,
+    #[serde(default, rename = "hybridRequired")]
+    hybrid_required: bool,
     #[serde(rename = "cacheTtlSeconds", alias = "cache_ttl_seconds")]
     cache_ttl_seconds: Option<u64>,
 }
@@ -215,12 +221,17 @@ struct TrialEligibilityCache {
     checked_at: u64,
     ttl_seconds: u64,
     available: bool,
+    #[serde(default)]
+    recoverable: bool,
 }
 
 #[cfg_attr(feature = "portable", allow(dead_code))] // portable edition has no trial
 #[derive(Debug, Clone, Copy)]
 struct TrialAvailability {
     available: bool,
+    recoverable: bool,
+    #[cfg_attr(feature = "experimental-pq-licence", allow(dead_code))]
+    hybrid_required: bool,
     cache_ttl_seconds: u64,
 }
 
@@ -307,6 +318,8 @@ struct WorkerTrialRequest<'a> {
     app_version: &'a str,
     #[serde(rename = "isPortable")]
     is_portable: bool,
+    #[serde(rename = "hybridCapable")]
+    hybrid_capable: bool,
 }
 
 fn now_unix() -> u64 {
@@ -813,13 +826,23 @@ async fn trial_available_from_worker(
             app_id: APP_ID,
             app_version: env!("CARGO_PKG_VERSION"),
             is_portable: false,
+            hybrid_capable: cfg!(feature = "experimental-pq-licence"),
         })
         .send()
         .await
         .ok()?;
     let body = read_license_response::<WorkerTrialStatusResponse>(response).await.ok()?;
+    trial_availability_from_response(body)
+}
+
+#[cfg(not(feature = "portable"))]
+fn trial_availability_from_response(body: WorkerTrialStatusResponse) -> Option<TrialAvailability> {
+    if body.available.unwrap_or(false) && body.recoverable { return None; }
     body.ok.then_some(TrialAvailability {
-        available: body.available.unwrap_or(false),
+        available: body.available.unwrap_or(false) && (body.hybrid_required == cfg!(feature = "experimental-pq-licence")),
+        // A classical build cannot verify the hybrid proof on recovery.
+        recoverable: cfg!(feature = "experimental-pq-licence") && body.recoverable,
+        hybrid_required: body.hybrid_required,
         cache_ttl_seconds: bounded_trial_eligibility_cache_ttl(body.cache_ttl_seconds),
     })
 }
@@ -852,25 +875,29 @@ fn cached_trial_availability(
     cached: &TrialEligibilityCache,
     device_hash: &str,
     now: u64,
-) -> Option<bool> {
+) -> Option<(bool, bool)> {
     let ttl = (MIN_TRIAL_ELIGIBILITY_CACHE_TTL_SECONDS..=MAX_TRIAL_ELIGIBILITY_CACHE_TTL_SECONDS)
         .contains(&cached.ttl_seconds)
         .then_some(cached.ttl_seconds)?;
-    (cached.version == 1
+    (cached.version == 2
+        && !(cached.available && cached.recoverable)
         && cached.device_hash == device_hash
         && cached.checked_at <= now
         && now.saturating_sub(cached.checked_at) < ttl)
-        .then_some(cached.available)
+        .then_some((cached.available, cached.recoverable))
 }
 
 #[cfg_attr(feature = "portable", allow(dead_code))] // portable edition has no trial
-fn cached_trial_availability_from_json(raw: &str, device_hash: &str, now: u64) -> Option<bool> {
+fn cached_trial_availability_from_json(raw: &str, device_hash: &str, now: u64) -> Option<(bool, bool)> {
     let cached = serde_json::from_str::<TrialEligibilityCache>(raw).ok()?;
     cached_trial_availability(&cached, device_hash, now)
 }
 
 #[cfg_attr(feature = "portable", allow(dead_code))] // portable edition has no trial
-fn load_trial_eligibility_cache(device_hash: &str, now: u64) -> Option<bool> {
+fn load_trial_eligibility_cache(device_hash: &str, now: u64) -> Option<(bool, bool)> {
+    // Recovery and expiry can change while another Windows account is active.
+    // A hybrid client must ask the service rather than trust an advisory cache.
+    if cfg!(feature = "experimental-pq-licence") { return None; }
     let path = trial_eligibility_cache_path().ok()?;
     let raw = fs::read_to_string(path).ok()?;
     cached_trial_availability_from_json(&raw, device_hash, now)
@@ -879,11 +906,12 @@ fn load_trial_eligibility_cache(device_hash: &str, now: u64) -> Option<bool> {
 #[cfg_attr(feature = "portable", allow(dead_code))] // portable edition has no trial
 fn save_trial_eligibility_cache(device_hash: &str, availability: TrialAvailability) {
     let cached = TrialEligibilityCache {
-        version: 1,
+        version: 2,
         device_hash: device_hash.to_string(),
         checked_at: now_unix(),
         ttl_seconds: bounded_trial_eligibility_cache_ttl(Some(availability.cache_ttl_seconds)),
         available: availability.available,
+        recoverable: availability.recoverable,
     };
     let Ok(data) = serde_json::to_string(&cached) else {
         return;
@@ -1287,6 +1315,10 @@ fn parse_and_verify_hybrid_claims(
 }
 
 fn verify_token_claims(token: &SignedTokenEnvelope, public_key: &str) -> Result<LicenseClaims, String> {
+    #[cfg(not(feature = "experimental-pq-licence"))]
+    if token.hybrid.is_some() {
+        return Err("This licence requires an updated WinCommander version.".into());
+    }
     let claims = parse_and_verify_claims(&token.payload, &token.signature, public_key)?;
     #[cfg(feature = "experimental-pq-licence")]
     {
@@ -1393,6 +1425,7 @@ fn status_from_cached(
         trial_active: is_trial && valid,
         trial_expires_at: if is_trial { Some(display_exp) } else { None },
         trial_available: false,
+        trial_recoverable: false,
         trial_expired: is_trial && !valid,
     }
 }
@@ -1438,6 +1471,7 @@ async fn get_license_status_inner() -> Result<serde_json::Value, String> {
             trial_active: false,
             trial_expires_at: None,
             trial_available: false,
+            trial_recoverable: false,
             trial_expired: false,
         };
         return serde_json::to_value(status).map_err(|e| e.to_string());
@@ -1449,16 +1483,16 @@ async fn get_license_status_inner() -> Result<serde_json::Value, String> {
     let cached = load_cached_license()?;
     let Some(cached) = cached else {
         #[cfg(feature = "portable")]
-        let trial_available = false;
+        let (trial_available, trial_recoverable) = (false, false);
         #[cfg(not(feature = "portable"))]
-        let trial_available = match load_trial_eligibility_cache(&device_hash, now_unix()) {
-            Some(available) => available,
+        let (trial_available, trial_recoverable) = match load_trial_eligibility_cache(&device_hash, now_unix()) {
+            Some(state) => state,
             None => match trial_available_from_worker(&api_base, &device_hash).await {
                 Some(availability) => {
                     save_trial_eligibility_cache(&device_hash, availability);
-                    availability.available
+                    (availability.available, availability.recoverable)
                 }
-                None => false,
+                None => (false, false),
             },
         };
         let status = LicenseStatus {
@@ -1484,6 +1518,7 @@ async fn get_license_status_inner() -> Result<serde_json::Value, String> {
             trial_active: false,
             trial_expires_at: None,
             trial_available,
+            trial_recoverable,
             trial_expired: false,
         };
         return serde_json::to_value(status).map_err(|e| e.to_string());
@@ -1522,6 +1557,7 @@ async fn get_license_status_inner() -> Result<serde_json::Value, String> {
                 trial_active: false,
                 trial_expires_at: None,
                 trial_available: false,
+                trial_recoverable: false,
                 trial_expired: false,
             };
             return serde_json::to_value(status).map_err(|e| e.to_string());
@@ -1861,17 +1897,27 @@ pub async fn start_trial() -> Result<serde_json::Value, String> {
         let device_hash = current_device_hash();
         let client = crate::net::licence_http_client()?;
 
+        #[cfg(not(feature = "experimental-pq-licence"))]
+        {
+            let state = trial_available_from_worker(&api_base, &device_hash).await
+                .ok_or("The trial service is temporarily unavailable. Please try again.")?;
+            if state.hybrid_required {
+                return Err("This trial requires an updated WinCommander version.".into());
+            }
+        }
+
         // A prior advisory result must not outlive an actual trial request.
         // The worker remains the sole once-per-device authority.
         clear_trial_eligibility_cache();
 
         let response = client
-            .post(format!("{}/trial", api_base))
+            .post(format!("{}/trial/v2", api_base))
             .json(&WorkerTrialRequest {
                 device_hash: &device_hash,
                 app_id: APP_ID,
                 app_version: env!("CARGO_PKG_VERSION"),
                 is_portable: is_portable_os(),
+                hybrid_capable: cfg!(feature = "experimental-pq-licence"),
             })
             .send()
             .await
@@ -1904,17 +1950,6 @@ pub async fn start_trial() -> Result<serde_json::Value, String> {
             return Err("Trial token device hash mismatch.".to_string());
         }
 
-        // The worker has now accepted this device's one-time trial. Persist a
-        // negative advisory result before the local signed-token write so a
-        // disk error cannot cause repeated trial attempts.
-        save_trial_eligibility_cache(
-            &device_hash,
-            TrialAvailability {
-                available: false,
-                cache_ttl_seconds: DEFAULT_TRIAL_ELIGIBILITY_CACHE_TTL_SECONDS,
-            },
-        );
-
         let cached = CachedLicense {
             token: SignedTokenEnvelope {
                 payload: signed_payload,
@@ -1926,6 +1961,9 @@ pub async fn start_trial() -> Result<serde_json::Value, String> {
             seat_limit: None,
         };
         save_cached_license(&cached).await?;
+        // If the machine cache is later lost, ask the server whether the
+        // original trial can be recovered instead of hiding the action.
+        clear_trial_eligibility_cache();
 
         let status = status_from_cached(&cached, &claims, Some("Free trial started.".to_string()));
         serde_json::to_value(status).map_err(|e| e.to_string())
@@ -2304,17 +2342,18 @@ mod tests {
     fn fresh_trial_eligibility_cache_is_device_bound_and_uses_worker_ttl() {
         let now = 1_000_000;
         let cache = TrialEligibilityCache {
-            version: 1,
+            version: 2,
             device_hash: "device-a".to_string(),
             checked_at: now - 1,
             ttl_seconds: 43_200,
             available: true,
+            recoverable: false,
         };
         let raw = serde_json::to_string(&cache).expect("serialize trial cache");
 
         assert_eq!(
             cached_trial_availability_from_json(&raw, "device-a", now),
-            Some(true),
+            Some((true, false)),
             "a fresh cache for this device avoids another trial-status lookup"
         );
         assert_eq!(
@@ -2328,11 +2367,12 @@ mod tests {
     fn invalid_or_expired_trial_eligibility_cache_forces_a_normal_lookup() {
         let now = 1_000_000;
         let cache = TrialEligibilityCache {
-            version: 1,
+            version: 2,
             device_hash: "device-a".to_string(),
             checked_at: now - DEFAULT_TRIAL_ELIGIBILITY_CACHE_TTL_SECONDS,
             ttl_seconds: DEFAULT_TRIAL_ELIGIBILITY_CACHE_TTL_SECONDS,
             available: true,
+            recoverable: false,
         };
 
         assert_eq!(
@@ -2362,6 +2402,16 @@ mod tests {
             None,
             "a corrupt cache must fall back to the normal worker lookup"
         );
+        let mut legacy = cache.clone();
+        legacy.version = 1;
+        legacy.checked_at = now - 1;
+        legacy.available = false;
+        assert_eq!(cached_trial_availability(&legacy, "device-a", now), None,
+            "old negative cache entries cannot hide a recoverable trial");
+        let mut recovery = legacy;
+        recovery.version = 2;
+        recovery.recoverable = true;
+        assert_eq!(cached_trial_availability(&recovery, "device-a", now), Some((false, true)));
     }
 
     #[test]
@@ -2379,6 +2429,35 @@ mod tests {
             bounded_trial_eligibility_cache_ttl(Some(7 * 24 * 60 * 60)),
             DEFAULT_TRIAL_ELIGIBILITY_CACHE_TTL_SECONDS
         );
+    }
+
+    #[cfg(not(feature = "portable"))]
+    #[test]
+    fn trial_eligibility_recovery_requires_hybrid_verification() {
+        let response: WorkerTrialStatusResponse = serde_json::from_value(serde_json::json!({
+            "ok": true, "available": false, "recoverable": true, "cacheTtlSeconds": 43200
+        })).unwrap();
+        let state = trial_availability_from_response(response).unwrap();
+        assert!(!state.available);
+        assert_eq!(state.recoverable, cfg!(feature = "experimental-pq-licence"));
+        let invalid: WorkerTrialStatusResponse = serde_json::from_value(serde_json::json!({
+            "ok": true, "available": true, "recoverable": true
+        })).unwrap();
+        assert!(trial_availability_from_response(invalid).is_none());
+        let required: WorkerTrialStatusResponse = serde_json::from_value(serde_json::json!({
+            "ok": true, "available": true, "hybridRequired": true
+        })).unwrap();
+        let required = trial_availability_from_response(required).unwrap();
+        assert!(required.hybrid_required);
+        assert_eq!(required.available, cfg!(feature = "experimental-pq-licence"));
+        let classical: WorkerTrialStatusResponse = serde_json::from_value(serde_json::json!({
+            "ok": true, "available": true, "hybridRequired": false
+        })).unwrap();
+        assert_eq!(trial_availability_from_response(classical).unwrap().available,
+            !cfg!(feature = "experimental-pq-licence"));
+        let request = WorkerTrialRequest { device_hash: "device", app_id: APP_ID,
+            app_version: "test", is_portable: false, hybrid_capable: cfg!(feature = "experimental-pq-licence") };
+        assert_eq!(serde_json::to_value(request).unwrap()["hybridCapable"], cfg!(feature = "experimental-pq-licence"));
     }
 
     #[cfg(feature = "experimental-pq-licence")]
@@ -2655,6 +2734,15 @@ mod tests {
         assert_eq!(claims.device_hash, "device-abc");
         assert_eq!(claims.plan, "pro");
         assert_eq!(claims.features, vec!["paid".to_string()]);
+    }
+
+    #[cfg(not(feature = "experimental-pq-licence"))]
+    #[test]
+    fn classical_client_rejects_hybrid_response_instead_of_ignoring_its_proof() {
+        let (signing_key, public_key) = test_keypair();
+        let payload = claims_json("device-abc");
+        let token = SignedTokenEnvelope { signature: sign_payload(&signing_key, &payload), payload, hybrid: Some("unverified".into()) };
+        assert!(verify_token_claims(&token, &public_key).is_err());
     }
 
     /// A license bound to one device_hash must not validate for a different

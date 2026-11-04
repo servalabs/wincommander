@@ -972,6 +972,7 @@ export interface AppLicenseStatus {
   trial_expires_at?: number | null;
   /** True when no trial has ever been started on this device. */
   trial_available?: boolean;
+  trial_recoverable?: boolean;
   /** True when a trial was started but has since expired. Features still work (soft expiry). */
   trial_expired?: boolean;
 }
