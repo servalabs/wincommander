@@ -55,6 +55,7 @@ fn write_with_anchor(
     let _lock = WRITE_LOCK
         .lock()
         .map_err(|_| "license cache lock is unavailable")?;
+    let _process_lock = crate::licence_security_lock()?;
     let existing = read_cache(path)?;
     if let Some(existing) = existing.as_deref() {
         check_previous_with_history(existing, candidate, public_key, trust, old_trust.as_ref())?;
@@ -115,6 +116,7 @@ fn write_renewal_with_anchor(
     let _lock = WRITE_LOCK
         .lock()
         .map_err(|_| "license cache lock is unavailable")?;
+    let _process_lock = crate::licence_security_lock()?;
     let existing = read_cache(path)?.ok_or("license cache is unavailable")?;
     let retained = anchor
         .read()
@@ -299,6 +301,7 @@ fn verify_with_anchor(
     let _lock = WRITE_LOCK
         .lock()
         .map_err(|_| "license cache lock is unavailable")?;
+    let _process_lock = crate::licence_security_lock()?;
     let bytes = read_cache(path)?.ok_or("license cache is unavailable")?;
     let retained = anchor
         .read()

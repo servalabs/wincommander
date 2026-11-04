@@ -43,7 +43,7 @@ impl Drop for Descriptor {
 }
 
 #[cfg(windows)]
-fn acquire_named(name: &str, timeout_ms: u32) -> Result<Guard, String> {
+pub(super) fn acquire_named(name: &str, timeout_ms: u32) -> Result<Guard, String> {
     use windows_sys::Win32::{
         Foundation::{CloseHandle, WAIT_ABANDONED, WAIT_OBJECT_0, WAIT_TIMEOUT},
         Security::{

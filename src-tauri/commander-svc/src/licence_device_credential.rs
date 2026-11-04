@@ -159,6 +159,7 @@ fn get_or_create_with(
     binding: &Binding<'_>,
 ) -> Result<PendingCredential, &'static str> {
     let _guard = LOCK.lock().map_err(|_| INVALID)?;
+    let _process_lock = crate::licence_security_lock().map_err(|_| INVALID)?;
     if let Some(bytes) = anchor.read().map_err(|_| INVALID)? {
         return decode(protector, binding, &bytes);
     }
@@ -432,6 +433,7 @@ fn confirm_with(
     now: u64,
 ) -> Result<ConfirmedCredential, &'static str> {
     let _guard = LOCK.lock().map_err(|_| INVALID)?;
+    let _process_lock = crate::licence_security_lock().map_err(|_| INVALID)?;
     let original = anchor.read().map_err(|_| INVALID)?.ok_or(INVALID)?;
     let record: Record = serde_json::from_slice(&original).map_err(|_| INVALID)?;
     if record.phase == "confirmed" {
@@ -497,6 +499,7 @@ where
 {
     let state = {
         let _guard = LOCK.lock().map_err(|_| INVALID)?;
+        let _process_lock = crate::licence_security_lock().map_err(|_| INVALID)?;
         match anchor.read().map_err(|_| INVALID)? {
             None => {
                 let pending = PendingCredential::generate()?;
@@ -593,6 +596,7 @@ pub(crate) fn load_confirmed(
     now: u64,
 ) -> Result<ConfirmedCredential, &'static str> {
     let _guard = LOCK.lock().map_err(|_| INVALID)?;
+    let _process_lock = crate::licence_security_lock().map_err(|_| INVALID)?;
     let store =
         anchor::Anchor::machine_named(r"SOFTWARE\ServaLabs\WinCommander\ExperimentalLicenceDevice");
     let bytes = store.read().map_err(|_| INVALID)?.ok_or(INVALID)?;

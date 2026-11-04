@@ -286,6 +286,10 @@ jobs:
           if (($output -join "`n") -notmatch 'running 1 test') { throw 'The Free update registry ACL acceptance test did not run.' }
       - name: Test experimental service licence validation
         run: cargo test --locked -p commander-svc --features experimental-pq-licence license_cache
+      - name: Test experimental device credential and transport
+        run: cargo test --locked -p commander-svc --features experimental-pq-licence licence_device_credential
+      - name: Test experimental cross-process licence coordination
+        run: cargo test --locked -p commander-svc --features experimental-pq-licence licence_coordination
       - name: Test experimental desktop licence validation
         shell: pwsh
         run: |
