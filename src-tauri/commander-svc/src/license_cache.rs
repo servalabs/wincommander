@@ -251,6 +251,12 @@ fn build_refresh_wire(
     Ok(wire)
 }
 
+/// Receipt keys are supplied by the service build, never by a desktop caller.
+#[cfg(feature = "experimental-pq-licence")]
+pub(crate) fn configured_device_receipt_trust() -> Result<hybrid_trust::Trust, &'static str> {
+    hybrid_trust::configured()
+}
+
 /// Build proof input only for the exact signed cache retained by the service.
 #[cfg(feature = "experimental-pq-licence")]
 #[allow(dead_code)] // The service-side renewal path is not exposed yet.

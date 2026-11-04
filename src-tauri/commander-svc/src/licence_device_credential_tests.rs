@@ -322,6 +322,16 @@ fn worker_enrolment_receipt_interoperates_and_is_not_a_licence() {
 }
 
 #[tokio::test]
+async fn registration_requires_service_configured_trust() {
+    // Normal developer builds have no production trust and must fail closed
+    // before touching the network or persisting a device identity.
+    if option_env!("WINCMD_PQ_LIC_ED_KEY").is_some() { return; }
+    let binding = Binding { licence_id: "test", device_hash: "test", issuer_origin: wire::LICENCE_ORIGIN };
+    let licence = RefreshLicence { payload: "test", signature: "test", hybrid: "test", last_verified_at: 1 };
+    assert!(enrol_with_configured_trust(&binding, &licence, "test-key").await.is_err());
+}
+
+#[tokio::test]
 async fn authorized_worker_issuer_receipt_confirms_persisted_pending_credential() {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
     use wincmd_pq_experiment::{jws, Purpose, ML_DSA_65_PUBLIC_KEY_LEN};

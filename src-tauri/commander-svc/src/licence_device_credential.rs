@@ -552,9 +552,21 @@ where
     }
 }
 
-/// Register a pending identity over the fixed hybrid-only connection. The
-/// caller must independently authorize the request and supply receipt trust.
-pub(crate) async fn enrol_over_network(
+/// Use only service-build trust for registration. Authorization is still the
+/// responsibility of the service caller; no desktop-facing verb exists yet.
+pub(crate) async fn enrol_with_configured_trust(
+    binding: &Binding<'_>,
+    licence: &RefreshLicence<'_>,
+    license_key: &str,
+) -> Result<(), &'static str> {
+    let trust = crate::license_cache::configured_device_receipt_trust()?;
+    let mut receipt_policy = trust.policy();
+    receipt_policy.purpose = wincmd_pq_experiment::Purpose::LicenceEnrolment;
+    enrol_over_network(binding, &receipt_policy, licence, license_key).await
+}
+
+/// Register over the fixed hybrid-only connection using the service policy.
+async fn enrol_over_network(
     binding: &Binding<'_>,
     receipt_trust: &wincmd_pq_experiment::jws::Trust<'_>,
     licence: &RefreshLicence<'_>,

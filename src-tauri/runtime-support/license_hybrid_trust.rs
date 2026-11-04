@@ -3,7 +3,7 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use wincmd_pq_experiment::{jws, Purpose, ML_DSA_65_PUBLIC_KEY_LEN};
 
-pub(super) struct Trust {
+pub(crate) struct Trust {
     ed: [u8; 32],
     pq: [u8; ML_DSA_65_PUBLIC_KEY_LEN],
     ed_id: &'static str,
@@ -11,7 +11,7 @@ pub(super) struct Trust {
     minimum_epoch: u64,
 }
 impl Trust {
-    pub(super) fn policy(&self) -> jws::Trust<'_> {
+    pub(crate) fn policy(&self) -> jws::Trust<'_> {
         jws::Trust {
             purpose: Purpose::Licence,
             minimum_epoch: self.minimum_epoch,
