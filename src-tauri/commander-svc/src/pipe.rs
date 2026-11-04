@@ -401,6 +401,15 @@ pub(crate) async fn handle_connection(
                 crate::diagnostics::record_shared_shortcut_stage("auth_end", shortcut_started);
                 result
             }
+        } else if matches!(req.feature_id.as_str(), ENROL_HYBRID_LICENSE_VERB | RENEW_HYBRID_LICENSE_VERB) {
+            let gate = Arc::clone(&session_helper_gate);
+            let verb = req.feature_id.clone();
+            let session = peer.as_deref().map(AuthenticatedPipePeer::session_id).unwrap_or(0);
+            let active = peer.as_deref().is_some_and(peer_has_active_interactive_session);
+            match tokio::task::spawn_blocking(move || gate.authorize_licence_relay(client_pid, &verb, session, active)).await {
+                Ok(result) => result.map(Some).map_err(|error| error.to_string()),
+                Err(_) => Err("licence peer authorization unavailable".into()),
+            }
         } else if matches!(req.feature_id.as_str(), "svc.fleet.install_policy" | "svc.fleet.get_policy") {
             #[cfg(debug_assertions)]
             let policy_trace_started = if req.feature_id == "svc.fleet.get_policy" {
