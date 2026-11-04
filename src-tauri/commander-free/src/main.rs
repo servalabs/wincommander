@@ -6,6 +6,13 @@
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.as_slice() == ["--hide-recovery-listener"] {
+        wincommander_lib::run_hide_recovery_listener();
+        return;
+    }
+    if args.len() == 2 && args[0] == "--hide-recovery-update" {
+        std::process::exit(wincommander_lib::update_hide_recovery_listener(&args[1]));
+    }
     // A limited desktop session asks Windows for this one narrow UAC helper
     // when it needs to replace the machine-wide Pro sidecar.  Handle it before
     // CLI/Tauri startup so the elevated child never creates a second window,

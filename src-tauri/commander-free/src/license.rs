@@ -13,6 +13,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 #[cfg(feature = "experimental-pq-licence")]
 #[path = "../../runtime-support/license_hybrid_trust.rs"]
 mod hybrid_trust;
+#[cfg(all(windows, feature = "experimental-pq-licence"))]
+#[path = "license_history.rs"]
+mod hybrid_history;
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -29,6 +32,25 @@ const MAX_TRIAL_ELIGIBILITY_CACHE_TTL_SECONDS: u64 = 24 * 60 * 60;
 /// lifecycle change such as a new activation or an explicit deactivation.
 const LICENSE_SERVICE_REFRESH_INTERVAL_SECONDS: u64 = 4 * 60 * 60;
 const LICENSE_NETWORK_HINT: &str = "Check your connection or try another network; the licence service requires a quantum-resistant secure connection.";
+// Allow ample room for a hybrid proof and legacy fields while bounding both
+// declared-length and streaming/chunked server responses.
+const LICENSE_RESPONSE_LIMIT: usize = 256 * 1024;
+
+async fn read_license_response<T: serde::de::DeserializeOwned>(
+    mut response: reqwest::Response,
+) -> Result<T, String> {
+    if response.content_length().is_some_and(|size| size > LICENSE_RESPONSE_LIMIT as u64) {
+        return Err("License response is too large.".into());
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| "Could not read license response.")? {
+        if bytes.len().checked_add(chunk.len()).is_none_or(|size| size > LICENSE_RESPONSE_LIMIT) {
+            return Err("License response is too large.".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&bytes).map_err(|_| "License response is malformed.".into())
+}
 #[cfg_attr(feature = "portable", allow(dead_code))] // portable edition has no trial
 #[cfg(test)]
 const TRIAL_DURATION_SECONDS: u64 = 16 * 24 * 60 * 60; // 16 days
@@ -124,7 +146,7 @@ struct LicenseClaims {
     sub: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Default, Serialize)]
 struct LicenseStatus {
     configured: bool,
     licensed: bool,
@@ -229,6 +251,7 @@ struct WorkerActivateRequest<'a> {
     is_portable: bool,
 }
 
+#[cfg(not(feature = "experimental-pq-licence"))]
 #[derive(Debug, Serialize)]
 struct WorkerRefreshRequest<'a> {
     payload: &'a str,
@@ -404,6 +427,9 @@ pub fn has_update_entitlement() -> bool {
     let Ok(claims) = verify_token_claims(&cached.token, &public_key_b64) else {
         return false;
     };
+    if !cache_history_verified(&cached) {
+        return false;
+    }
     device_hash_matches(&claims.device_hash)
         && features_from_verified_claims(&claims, cached.last_verified_at, now_unix())
             .iter()
@@ -456,6 +482,9 @@ fn current_features_raw() -> Vec<String> {
     let Ok(claims) = verify_token_claims(&cached.token, &public_key_b64) else {
         return Vec::new();
     };
+    if !cache_history_verified(&cached) {
+        return Vec::new();
+    }
 
     if !device_hash_matches(&claims.device_hash) {
         return Vec::new();
@@ -788,7 +817,7 @@ async fn trial_available_from_worker(
         .send()
         .await
         .ok()?;
-    let body = response.json::<WorkerTrialStatusResponse>().await.ok()?;
+    let body = read_license_response::<WorkerTrialStatusResponse>(response).await.ok()?;
     body.ok.then_some(TrialAvailability {
         available: body.available.unwrap_or(false),
         cache_ttl_seconds: bounded_trial_eligibility_cache_ttl(body.cache_ttl_seconds),
@@ -903,6 +932,48 @@ fn load_cached_license() -> Result<Option<CachedLicense>, String> {
     let parsed: CachedLicense =
         serde_json::from_str(&raw).map_err(|e| format!("Invalid cached license format: {}", e))?;
     Ok(Some(parsed))
+}
+
+#[cfg(all(windows, feature = "experimental-pq-licence"))]
+fn cache_history_request(cached: &CachedLicense) -> Option<serde_json::Value> {
+    let hybrid = cached.token.hybrid.as_deref()?;
+    Some(serde_json::json!({
+        "payload": cached.token.payload,
+        "signature": cached.token.signature,
+        "hybrid": hybrid,
+        "lastVerifiedAt": cached.last_verified_at,
+    }))
+}
+
+#[cfg(all(windows, feature = "experimental-pq-licence"))]
+fn cache_history_verified(cached: &CachedLicense) -> bool {
+    cache_history_request(cached).is_some_and(hybrid_history::verify)
+}
+
+#[cfg(all(not(windows), feature = "experimental-pq-licence"))]
+fn cache_history_verified(_cached: &CachedLicense) -> bool { false }
+
+#[cfg(not(feature = "experimental-pq-licence"))]
+fn cache_history_verified(_cached: &CachedLicense) -> bool { true }
+
+#[cfg(feature = "experimental-pq-licence")]
+async fn cache_history_verified_async(cached: &CachedLicense) -> bool {
+    let cached = cached.clone();
+    tokio::task::spawn_blocking(move || cache_history_verified(&cached))
+        .await.unwrap_or(false)
+}
+
+#[cfg(not(feature = "experimental-pq-licence"))]
+async fn cache_history_verified_async(_cached: &CachedLicense) -> bool { true }
+
+fn deny_unconfirmed_history(status: &mut LicenseStatus) {
+    status.valid = false;
+    status.features.clear();
+    status.base_features.clear();
+    status.active_service_features.clear();
+    status.update_entitled = false;
+    status.trial_active = false;
+    status.reason = Some("The local licence security check could not confirm this licence. Start the WinCommander service or reactivate your licence.".into());
 }
 
 fn save_cached_license_direct(cached: &CachedLicense) -> Result<(), String> {
@@ -1458,6 +1529,10 @@ async fn get_license_status_inner() -> Result<serde_json::Value, String> {
     };
     let mut status = status_from_cached(&cached, &claims, None);
     status.device_hash = device_hash;
+    if !cache_history_verified_async(&cached).await {
+        deny_unconfirmed_history(&mut status);
+        return serde_json::to_value(status).map_err(|e| e.to_string());
+    }
 
     let now = now_unix();
     if !status.valid {
@@ -1478,6 +1553,7 @@ async fn get_license_status_inner() -> Result<serde_json::Value, String> {
 #[tauri::command]
 pub async fn activate_license(license_key: String) -> Result<serde_json::Value, String> {
     let (api_base, public_key_b64) = get_config()?;
+    let license_key = zeroize::Zeroizing::new(license_key);
     let trimmed = license_key.trim();
     if trimmed.is_empty() {
         return Err("License key is required.".to_string());
@@ -1508,8 +1584,7 @@ pub async fn activate_license(license_key: String) -> Result<serde_json::Value, 
             format!("License server request failed: {}. {}", e, LICENSE_NETWORK_HINT)
         })?;
 
-    let payload: WorkerTokenResponse = response
-        .json()
+    let payload: WorkerTokenResponse = read_license_response(response)
         .await
         .map_err(|e| format!("Invalid license server response: {}", e))?;
 
@@ -1548,6 +1623,17 @@ pub async fn activate_license(license_key: String) -> Result<serde_json::Value, 
     };
     save_cached_license(&cached).await?;
 
+    #[cfg(feature = "experimental-pq-licence")]
+    {
+        let registered = crate::svc_client::call(wincmd_shared::svc::ENROL_HYBRID_LICENSE_VERB,
+            serde_json::json!({"licenseKey": trimmed})).await;
+        if !matches!(registered, Ok(value) if value == serde_json::json!({"enrolled": true})) {
+            // Activation is already saved. Retain it and the pending device
+            // identity so entering the same key again can safely retry.
+            return Err("License activated, but secure device registration could not be confirmed. Check the WinCommander service and retry activation with the same key.".into());
+        }
+    }
+
     let status = status_from_cached(&cached, &claims, Some("License activated.".to_string()));
     serde_json::to_value(status).map_err(|e| e.to_string())
 }
@@ -1566,6 +1652,9 @@ pub async fn refresh_license_if_due() -> Result<serde_json::Value, String> {
         return get_license_status_inner().await;
     };
     let claims = verify_token_claims(&cached.token, &public_key_b64)?;
+    if !cache_history_verified_async(&cached).await {
+        return Err("The local licence security check could not confirm this licence. Start the WinCommander service or reactivate your licence.".into());
+    }
     if !device_hash_matches(&claims.device_hash) {
         return Err(
             "License token does not match this device. Reactivate this device.".to_string(),
@@ -1585,22 +1674,26 @@ pub async fn refresh_license_if_due() -> Result<serde_json::Value, String> {
     serde_json::to_value(status).map_err(|e| e.to_string())
 }
 
+#[cfg(feature = "experimental-pq-licence")]
+fn confirm_hybrid_renewal_reply(reply: &serde_json::Value) -> Result<(), String> {
+    if reply == &serde_json::json!({"renewed": true}) { Ok(()) }
+    else { Err("License renewal could not be confirmed.".into()) }
+}
+
 #[tauri::command]
 pub async fn refresh_license() -> Result<serde_json::Value, String> {
     let (api_base, public_key_b64) = get_config()?;
     let cached =
         load_cached_license()?.ok_or_else(|| "No license token to refresh.".to_string())?;
     let cached_claims = verify_token_claims(&cached.token, &public_key_b64)?;
+    if !cache_history_verified_async(&cached).await {
+        return Err("The local licence security check could not confirm this licence. Start the WinCommander service or reactivate your licence.".into());
+    }
     if !device_hash_matches(&cached_claims.device_hash) {
         return Err(
             "License token does not match this device. Reactivate this device.".to_string(),
         );
     }
-    // Reuse the signed claim's hash for refresh. This preserves a token
-    // created during a transient probe failure; the server requires the
-    // refresh request to carry the exact hash it originally issued.
-    let device_hash = cached_claims.device_hash.clone();
-
     // A trial is a fixed, worker-signed 16-day token. It does not consume a
     // paid licence seat and must never hit the paid refresh endpoint.
     if cached_claims.plan == "trial" {
@@ -1608,6 +1701,25 @@ pub async fn refresh_license() -> Result<serde_json::Value, String> {
         return serde_json::to_value(status).map_err(|e| e.to_string());
     }
 
+    #[cfg(feature = "experimental-pq-licence")]
+    {
+        let _ = api_base;
+        let reply = crate::svc_client::call(wincmd_shared::svc::RENEW_HYBRID_LICENSE_VERB, serde_json::json!({})).await?;
+        confirm_hybrid_renewal_reply(&reply)?;
+        let updated = load_cached_license()?.ok_or("Renewed license is unavailable.")?;
+        let claims = verify_token_claims(&updated.token, &public_key_b64)?;
+        if claims.license_id != cached_claims.license_id || claims.device_hash != cached_claims.device_hash
+            || !device_hash_matches(&claims.device_hash) || !cache_history_verified_async(&updated).await {
+            return Err("Renewed license does not match this device.".into());
+        }
+        let status = status_from_cached(&updated, &claims, Some("License refreshed.".to_string()));
+        serde_json::to_value(status).map_err(|e| e.to_string())
+    }
+
+    #[cfg(not(feature = "experimental-pq-licence"))]
+    {
+    // Preserve the signed device binding for legacy deployed clients.
+    let device_hash = cached_claims.device_hash.clone();
     let client = crate::net::licence_http_client()?;
 
     let response = client
@@ -1626,8 +1738,7 @@ pub async fn refresh_license() -> Result<serde_json::Value, String> {
         .await
         .map_err(|e| format!("License refresh request failed: {}. {}", e, LICENSE_NETWORK_HINT))?;
 
-    let payload: WorkerTokenResponse = response
-        .json()
+    let payload: WorkerTokenResponse = read_license_response(response)
         .await
         .map_err(|e| format!("Invalid refresh response: {}", e))?;
 
@@ -1672,6 +1783,7 @@ pub async fn refresh_license() -> Result<serde_json::Value, String> {
 
     let status = status_from_cached(&updated, &claims, Some("License refreshed.".to_string()));
     serde_json::to_value(status).map_err(|e| e.to_string())
+    }
 }
 
 #[tauri::command]
@@ -1768,8 +1880,7 @@ pub async fn start_trial() -> Result<serde_json::Value, String> {
                 format!("Trial server request failed: {}. {}", e, LICENSE_NETWORK_HINT)
             })?;
 
-        let payload: WorkerTokenResponse = response
-            .json()
+        let payload: WorkerTokenResponse = read_license_response(response)
             .await
             .map_err(|e| format!("Invalid trial server response: {}", e))?;
 
@@ -1857,7 +1968,7 @@ pub async fn deactivate_license_internal() -> Result<(), String> {
             )
         })?;
 
-    let payload: WorkerTokenResponse = response.json().await.map_err(|e| {
+    let payload: WorkerTokenResponse = read_license_response(response).await.map_err(|e| {
         format!(
             "Invalid deactivation response; the licence was kept so you can retry: {}",
             e
@@ -1894,6 +2005,83 @@ pub async fn deactivate_license() -> Result<(), String> {
 mod tests {
     use super::*;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+
+    #[tokio::test]
+    async fn license_response_is_bounded_for_fixed_and_chunked_bodies() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        async fn response(body: Vec<u8>, chunked: bool) -> reqwest::Response {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0; 1024];
+                let _ = socket.read(&mut request).await;
+                let header = if chunked {
+                    "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n".to_string()
+                } else {
+                    format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len())
+                };
+                if socket.write_all(header.as_bytes()).await.is_err() { return; }
+                if chunked {
+                    if socket.write_all(format!("{:x}\r\n", body.len()).as_bytes()).await.is_err() { return; }
+                    let _ = socket.write_all(&body).await;
+                    let _ = socket.write_all(b"\r\n0\r\n\r\n").await;
+                } else {
+                    let _ = socket.write_all(&body).await;
+                }
+            });
+            reqwest::Client::builder().no_proxy().build().unwrap()
+                .get(format!("http://{addr}/")).send().await.unwrap()
+        }
+
+        let prefix = b"{\"data\":\"";
+        let suffix = b"\"}";
+        let mut exact = prefix.to_vec();
+        exact.resize(LICENSE_RESPONSE_LIMIT - suffix.len(), b'x');
+        exact.extend_from_slice(suffix);
+        for chunked in [false, true] {
+            let parsed: serde_json::Value = read_license_response(response(exact.clone(), chunked).await).await.unwrap();
+            assert_eq!(parsed["data"].as_str().unwrap().len(), LICENSE_RESPONSE_LIMIT - prefix.len() - suffix.len());
+            let mut oversized = exact.clone();
+            oversized.push(b' ');
+            assert!(read_license_response::<serde_json::Value>(response(oversized, chunked).await).await.is_err());
+        }
+        assert!(read_license_response::<serde_json::Value>(response(b"{".to_vec(), false).await).await.is_err());
+    }
+
+    #[cfg(all(windows, feature = "experimental-pq-licence"))]
+    #[test]
+    fn hybrid_licence_history_request_binds_observed_verification_time() {
+        let mut cached = CachedLicense {
+            token: SignedTokenEnvelope { payload: "p".into(), signature: "s".into(), hybrid: Some("h".into()) },
+            last_verified_at: 99,
+            seats_used: None,
+            seat_limit: None,
+        };
+        assert_eq!(cache_history_request(&cached).unwrap()["lastVerifiedAt"], 99);
+        cached.token.hybrid = None;
+        assert!(cache_history_request(&cached).is_none());
+    }
+
+    #[test]
+    fn hybrid_licence_unconfirmed_history_never_grants_features_or_updates() {
+        let mut status = LicenseStatus {
+            licensed: true,
+            valid: true,
+            features: vec!["paid".into()],
+            base_features: vec!["paid".into()],
+            active_service_features: vec!["advanced".into()],
+            update_entitled: true,
+            trial_active: true,
+            ..LicenseStatus::default()
+        };
+        deny_unconfirmed_history(&mut status);
+        assert!(status.licensed);
+        assert!(!status.valid && !status.update_entitled && !status.trial_active);
+        assert!(status.features.is_empty() && status.base_features.is_empty() && status.active_service_features.is_empty());
+        assert!(status.reason.is_some());
+    }
 
     #[cfg(windows)]
     #[test]
@@ -2193,6 +2381,17 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "experimental-pq-licence")]
+    #[test]
+    fn hybrid_refresh_requires_an_exact_service_confirmation() {
+        assert!(confirm_hybrid_renewal_reply(&serde_json::json!({"renewed": true})).is_ok());
+        for reply in [serde_json::json!({}), serde_json::json!({"renewed": false}),
+            serde_json::json!({"renewed": true, "extra": true})] {
+            assert!(confirm_hybrid_renewal_reply(&reply).is_err());
+        }
+    }
+
+    #[cfg(not(feature = "experimental-pq-licence"))]
     #[test]
     fn paid_refresh_payload_never_requests_a_seat_write() {
         let refresh = WorkerRefreshRequest {
@@ -2217,24 +2416,6 @@ mod tests {
             refresh_json.get("seatHeartbeat").is_none(),
             "routine paid refreshes must never request a seat write"
         );
-    }
-
-    #[cfg(feature = "experimental-pq-licence")]
-    #[test]
-    fn hybrid_licence_refresh_preserves_the_exact_proof() {
-        let proof = "{\"payload\":\"exact\",\"signatures\":[]}";
-        let request = WorkerRefreshRequest {
-            payload: "payload",
-            signature: "signature",
-            hybrid: Some(proof),
-            device_hash: "device-a",
-            app_id: APP_ID,
-            app_version: "test",
-            is_portable: false,
-        };
-        let serialized = serde_json::to_string(&request).expect("serialize refresh");
-        let parsed: serde_json::Value = serde_json::from_str(&serialized).expect("parse refresh");
-        assert_eq!(parsed["hybrid"], proof);
     }
 
     #[test]

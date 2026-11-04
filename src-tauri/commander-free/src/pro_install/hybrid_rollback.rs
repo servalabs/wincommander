@@ -44,7 +44,7 @@ pub(super) fn check_and_record_floor(
     super::hybrid_history::configured(&trust)?;
     check_and_record_with_anchor(
         metadata_path,
-        &crate::hybrid_update_anchor::Anchor::machine_pro(),
+        &crate::hybrid_update_anchor::Anchor::machine_named(r"SOFTWARE\ServaLabs\WinCommander\HybridProUpdate"),
         candidate,
         version,
         sha256,

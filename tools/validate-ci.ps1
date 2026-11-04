@@ -8,7 +8,7 @@ $required = @(
     'push:',
     'branches: [main]',
     'concurrency:',
-    'cancel-in-progress: true',
+    'cancel-in-progress: ${{ github.event_name == ''pull_request'' }}',
     'rust-toolchain.toml',
     '.githooks/**',
     'tsconfig*.json',

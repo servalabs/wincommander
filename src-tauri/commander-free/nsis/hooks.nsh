@@ -464,6 +464,10 @@ ${Using:StrFunc} UnStrStr
     Goto wc_uninstall_cleanup_done
   ${EndIf}
 
+  ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "WinCommander Hide Recovery"
+  StrCmp $0 '$"$INSTDIR\wincommander-free.exe$" --hide-recovery-listener' 0 +2
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "WinCommander Hide Recovery"
+
   !insertmacro WC_RELEASE_LICENSE_SEAT_OR_ABORT
 
   ; An explicit product uninstall removes machine-owned WinCommander components,

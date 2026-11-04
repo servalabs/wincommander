@@ -106,6 +106,41 @@ impl SessionHelperGate {
         Ok(TrustOrigin::SessionHelperPinned)
     }
 
+    /// Permit licence operations from the captured active session, including
+    /// RDP, only for a protected installed Free or Pro executable.
+    pub(crate) fn authorize_licence_relay(
+        &self, pid: u32, verb: &str, captured_session: u32, active: bool,
+    ) -> Result<TrustOrigin, PeerAuthError> {
+        let identity = self.probe.identity(pid)?;
+        self.authorize_licence_observation(&identity, verb, captured_session, active,
+            || acl::verify_path(&identity.canonical_image_path))
+    }
+
+    fn authorize_licence_observation(
+        &self, identity: &PeerIdentitySnapshot, verb: &str, captured_session: u32,
+        active: bool, verify: impl FnOnce() -> Result<(), PeerAuthError>,
+    ) -> Result<TrustOrigin, PeerAuthError> {
+        use wincmd_shared::svc::{ENROL_HYBRID_LICENSE_VERB, RENEW_HYBRID_LICENSE_VERB};
+        if !matches!(verb, ENROL_HYBRID_LICENSE_VERB | RENEW_HYBRID_LICENSE_VERB) {
+            return Err(PeerAuthError::PathNotAllowed);
+        }
+        if !active || captured_session == 0 || identity.session_id != captured_session {
+            return Err(PeerAuthError::WrongSession);
+        }
+        let name = identity.canonical_image_path.file_name().and_then(|n| n.to_str());
+        let allowed_name = name.is_some_and(|name| name.eq_ignore_ascii_case("wincommander-free.exe")
+            || name.eq_ignore_ascii_case("wincommander-pro.exe"));
+        let installed_pro = name.is_some_and(|name| name.eq_ignore_ascii_case("wincommander-pro.exe"))
+            && std::fs::canonicalize(crate::pro_broker::fixed_pro_path()).ok()
+                .is_some_and(|expected| paths_equal(&identity.canonical_image_path, &expected));
+        if !allowed_name || (!self.is_allowed_helper_path(&identity.canonical_image_path) && !installed_pro) {
+            return Err(PeerAuthError::PathNotAllowed);
+        }
+        verify()?;
+        self.check_rate_limit(identity, verb, Instant::now())?;
+        Ok(TrustOrigin::SessionHelperPinned)
+    }
+
     /// Fleet policy only: admit a protected Free/Pro helper from its actual
     /// active Windows session, including RDP, while retaining path and ACL
     /// checks. The session comes from the captured pipe token, never the UI.

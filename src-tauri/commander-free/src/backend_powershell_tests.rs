@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-use super::build_powershell_command;
+use super::{build_powershell_command, POWERSHELL_UTF8_OUTPUT};
 use std::os::windows::process::CommandExt;
 use std::{
     io::Write,
@@ -8,6 +8,24 @@ use std::{
 };
 
 #[test]
+fn hidden_backend_preserves_unicode_json_on_redirected_stdout() {
+    let (mut command, _) = build_powershell_command();
+    let mut child = command.spawn().expect("start backend host");
+    let script = format!("{POWERSHELL_UTF8_OUTPUT}@{{ value = ([string][char]0x201c + [char]0x0905 + [char]0x201d) }} | ConvertTo-Json -Compress\n");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(script.as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid UTF-8 JSON");
+    assert_eq!(json["value"], "“अ”");
+}
+
+#[test]
+#[ignore = "run separately in CI to avoid parallel PowerShell process contention"]
 fn hidden_backend_reads_acls_without_foreign_parent_modules() {
     let fixture = tempfile::tempdir().expect("create disposable ACL fixture");
     let file = fixture.path().join("sentinel.txt");

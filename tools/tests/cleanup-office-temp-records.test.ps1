@@ -18,11 +18,12 @@ try {
         [pscustomobject]@{ PSIsContainer = $true; Attributes = [IO.FileAttributes]::Directory }
     }
     function Get-ChildItem {
-        param($Path, [switch]$Recurse, [int]$Depth, [switch]$File, $Filter, $Include, [switch]$Force, $ErrorAction)
+        param($LiteralPath, [switch]$Force, $ErrorAction)
         if ($script:deny) { throw [UnauthorizedAccessException]::new('Synthetic access denied.') }
-        if ($Path -ne 'C:\Fixture\Temp' -or $Filter -ne '*.tmp') { throw 'Unexpected scanner source.' }
+        if ($LiteralPath -ne 'C:\Fixture\Temp') { throw 'Scanner followed an unexpected directory.' }
+        [pscustomobject]@{ Name='My Music'; FullName='C:\Fixture\Temp\My Music'; PSIsContainer=$true; Attributes=[IO.FileAttributes]::ReparsePoint }
         for ($i = 0; $i -lt 501; $i++) {
-            [pscustomobject]@{ FullName = "C:\Fixture\Temp\file-$i.tmp"; Length = 1024; LastWriteTime = [datetime]'2026-01-01' }
+            [pscustomobject]@{ Name="file-$i.tmp"; FullName = "C:\Fixture\Temp\file-$i.tmp"; PSIsContainer=$false; Attributes=[IO.FileAttributes]::Normal; Length = 1024; LastWriteTime = [datetime]'2026-01-01' }
         }
     }
     $result = Get-OfficeTempFilesInfo

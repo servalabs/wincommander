@@ -55,7 +55,9 @@ on:
 
 concurrency:
   group: invariants-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # Keep main's running checks when a newer commit arrives; obsolete PR heads
+  # can still be cancelled. GitHub may replace an older pending main run.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   ts-schema:
@@ -233,6 +235,24 @@ jobs:
       - name: Generate encrypted backend modules
         run: bun run encrypt-backend
         working-directory: .
+      - name: Test failed Shield start with a live descendant
+        shell: pwsh
+        run: |
+          $test = 'backend::process::tests::failed_shield_runner_returns_without_waiting_for_descendant'
+          $output = & cargo test --locked -p commander-free --lib $test -- --ignored --exact --nocapture 2>&1
+          $code = $LASTEXITCODE
+          $output | ForEach-Object { Write-Host $_ }
+          if ($code -ne 0) { exit $code }
+          if (($output -join "`n") -notmatch 'running 1 test') { throw 'The isolated Shield process test did not run.' }
+      - name: Test isolated PowerShell ACL probe
+        shell: pwsh
+        run: |
+          $test = 'backend::powershell_host_tests::hidden_backend_reads_acls_without_foreign_parent_modules'
+          $output = & cargo test --locked -p commander-free --lib $test -- --ignored --exact --nocapture 2>&1
+          $code = $LASTEXITCODE
+          $output | ForEach-Object { Write-Host $_ }
+          if ($code -ne 0) { exit $code }
+          if (($output -join "`n") -notmatch 'running 1 test') { throw 'The PowerShell ACL test did not run.' }
       - run: cargo test --workspace --no-fail-fast
       - name: Test elevated-to-standard Fleet mutex access when available
         shell: pwsh
@@ -277,6 +297,10 @@ jobs:
           if (($output -join "`n") -notmatch 'running 1 test') { throw 'The Free update registry ACL acceptance test did not run.' }
       - name: Test experimental service licence validation
         run: cargo test --locked -p commander-svc --features experimental-pq-licence license_cache
+      - name: Test experimental device credential and transport
+        run: cargo test --locked -p commander-svc --features experimental-pq-licence licence_device_credential
+      - name: Test experimental cross-process licence coordination
+        run: cargo test --locked -p commander-svc --features experimental-pq-licence licence_coordination
       - name: Test experimental desktop licence validation
         shell: pwsh
         run: |
@@ -562,6 +586,9 @@ jobs:
       - name: cargo llvm-cov (summary only)
         env:
           RUST_MIN_STACK: "16777216"
+          # Instrumented process tests can exhaust Windows runner capacity when
+          # the default test harness launches all available threads at once.
+          RUST_TEST_THREADS: "4"
         run: |
           cargo llvm-cov --workspace --summary-only
 

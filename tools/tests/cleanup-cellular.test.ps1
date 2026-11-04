@@ -14,9 +14,16 @@ $populated = Get-CellularHistoryInfo
 if ($populated.error -or $populated.total -ne 1 -or $populated.interfaceCount -ne 1) { throw 'Cellular profile count is incorrect.' }
 $script:hasProfile = $false
 $empty = Get-CellularHistoryInfo
-if ($empty.error -or $empty.total -ne 0 -or $empty.interfaceCount -ne 1) { throw 'A live cellular interface was counted as history.' }
+if ($empty.error -or -not $empty.partial -or $empty.total -ne 0 -or $empty.interfaceCount -ne 1) { throw 'Unrecognized profile output must not be treated as a verified empty inventory.' }
 $script:failCommand = $true
-if (-not (Get-CellularHistoryInfo).error) { throw 'A failed cellular command was reported as empty.' }
+$script:serviceStatus = 'Stopped'
+function Get-Service { [CmdletBinding()] param([string]$Name) if ($script:serviceStatus) { [pscustomobject]@{ Status = $script:serviceStatus } } }
+$stopped = Get-CellularHistoryInfo
+if (-not $stopped.error -or $stopped.message -notmatch 'service is stopped') { throw 'A stopped broadband service must be reported as unavailable, not empty.' }
+$script:serviceStatus = $null
+if ((Get-CellularHistoryInfo).message -notmatch 'service is unavailable') { throw 'An unavailable broadband service must be identified.' }
+$script:serviceStatus = 'Running'
+if ((Get-CellularHistoryInfo).message -notmatch 'interfaces could not be read') { throw 'A running service with a failed query must remain an error.' }
 $script:failCommand = $false
 function netsh.exe {
     $global:LASTEXITCODE = 0
@@ -26,4 +33,17 @@ function netsh.exe {
 }
 $partial = Get-CellularHistoryInfo
 if (-not $partial.partial -or $partial.status -ne 'partial' -or $partial.total -ne 1 -or $partial.files[0].profileName -ne 'observed' -or $partial.files[0].interface -ne 'first') { throw 'A later adapter failure discarded observed cellular details or appeared complete.' }
+function netsh.exe {
+    $global:LASTEXITCODE = 0
+    if (($args -join ' ') -like '*show interfaces*') { 'Nom : interface mobile' }
+}
+$unrecognized = Get-CellularHistoryInfo
+if ($unrecognized.error -or -not $unrecognized.partial -or $unrecognized.status -ne 'partial') { throw 'Unrecognized interface output must not be reported as a verified empty inventory.' }
+function netsh.exe {
+    $global:LASTEXITCODE = 0
+    if (($args -join ' ') -like '*show interfaces*') { 'Name : cellular' }
+    else { 'Nom du profil : exemple' }
+}
+$unrecognizedProfile = Get-CellularHistoryInfo
+if ($unrecognizedProfile.error -or -not $unrecognizedProfile.partial -or $unrecognizedProfile.status -ne 'partial') { throw 'Unrecognized profile output must not be reported as a verified empty inventory.' }
 Write-Output 'Passed: cellular profiles counted; interfaces remain metadata; command failure is explicit.'

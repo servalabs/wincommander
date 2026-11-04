@@ -25,7 +25,7 @@
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -62,7 +62,8 @@ fn print_usage() {
     eprintln!("wci-verify — WinCommander Investigator case-bundle verifier");
     eprintln!();
     eprintln!("USAGE:");
-    eprintln!("    wci-verify <BUNDLE.case.zip>");
+    eprintln!("    wci-verify <BUNDLE.case.zip> --trusted-key <ed25519-public-key-hex>");
+    eprintln!("For current Investigator bundles, use the Investigator verifier with its root fingerprint.");
     eprintln!();
     eprintln!(
         "Exit codes: 0=ok, 1=hash mismatch, 2=bad signature, 3=broken chain, 10=usage/IO error."
@@ -94,10 +95,17 @@ fn sha256_hex(data: &[u8]) -> String {
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
-    if args.len() != 2 {
+    if args.len() != 4 || args[2] != "--trusted-key" {
         print_usage();
         return ExitCode::from(10);
     }
+    let trusted_key = match hex::decode(&args[3]) {
+        Ok(bytes) if bytes.len() == 32 => bytes,
+        _ => {
+            eprintln!("error: trusted public key must be 32 bytes in hexadecimal");
+            return ExitCode::from(10);
+        }
+    };
     let bundle = PathBuf::from(&args[1]);
     if !bundle.exists() {
         eprintln!("error: bundle not found: {}", bundle.display());
@@ -147,12 +155,20 @@ fn main() -> ExitCode {
     }
 
     let expected: HashMap<String, String> = manifest.file_hashes.iter().cloned().collect();
+    if expected.len() != manifest.file_hashes.len() {
+        eprintln!("FAIL: duplicate manifest file names");
+        return ExitCode::from(1);
+    }
+    let mut seen = HashSet::new();
     let mut mismatches = 0usize;
     let mut total_checked = 0usize;
     for i in 0..z.len() {
         let mut entry = match z.by_index(i) {
             Ok(e) => e,
-            Err(_) => continue,
+            Err(e) => {
+                eprintln!("error: unreadable ZIP entry: {e}");
+                return ExitCode::from(10);
+            }
         };
         let name = match entry.name() {
             Ok(name) => name.into_owned(),
@@ -174,8 +190,10 @@ fn main() -> ExitCode {
         }
         let mut buf = Vec::new();
         if entry.read_to_end(&mut buf).is_err() {
-            continue;
+            eprintln!("error: unable to read ZIP entry: {name}");
+            return ExitCode::from(10);
         }
+        seen.insert(name.clone());
         let got = sha256_hex(&buf);
         match expected.get(&name) {
             Some(want) if want == &got => {
@@ -188,12 +206,17 @@ fn main() -> ExitCode {
                 mismatches += 1;
             }
             None => {
-                eprintln!("  ⚠ extra file (not in manifest): {}", name);
+                eprintln!("  ✗ extra file (not in manifest): {}", name);
+                mismatches += 1;
             }
         }
     }
+    mismatches += expected.keys().filter(|name| !seen.contains(*name)).count();
     if mismatches > 0 {
-        eprintln!("FAIL: {} files mismatched manifest hashes", mismatches);
+        eprintln!(
+            "FAIL: {} files mismatched or missing from the manifest",
+            mismatches
+        );
         return ExitCode::from(1);
     }
     println!("  ✓ {} files matched manifest hashes", total_checked);
@@ -231,6 +254,17 @@ fn main() -> ExitCode {
         eprintln!("error: pubkey wrong length: {}", pk_bytes.len());
         return ExitCode::from(10);
     }
+    if pk_bytes != trusted_key {
+        eprintln!("FAIL: bundle public key does not match the independently supplied key");
+        return ExitCode::from(2);
+    }
+    if !manifest
+        .session_key_public_hex
+        .eq_ignore_ascii_case(&pk_hex)
+    {
+        eprintln!("FAIL: manifest and bundle public keys differ");
+        return ExitCode::from(2);
+    }
     let mut pk_arr = [0u8; 32];
     pk_arr.copy_from_slice(&pk_bytes);
     let verifying = match VerifyingKey::from_bytes(&pk_arr) {
@@ -258,19 +292,18 @@ fn main() -> ExitCode {
         eprintln!("FAIL: signature over hashes.txt does NOT verify against bundle pubkey");
         return ExitCode::from(2);
     }
-    println!("  ✓ Ed25519 signature over hashes.txt verifies");
+    if !signed_manifest_matches(&hashes_txt, manifest_text.as_bytes()) {
+        eprintln!("FAIL: signed hash list does not uniquely bind case-manifest.json; unsupported legacy format");
+        return ExitCode::from(2);
+    }
+    println!("  ✓ Ed25519 signature and signed manifest hash verify (classical only)");
 
     // ── 4. Audit chain ────────────────────────────────────────────
     let audit = match read_zip_text(&bundle, "audit-chain.jsonl") {
         Ok(t) => t,
         Err(_) => {
-            println!("  (no audit-chain.jsonl in bundle — skipping chain verification)");
-            println!();
-            println!(
-                "VERIFIED: case {} (audit chain not present)",
-                manifest.case_no
-            );
-            return ExitCode::SUCCESS;
+            eprintln!("FAIL: audit-chain.jsonl is missing or unreadable");
+            return ExitCode::from(3);
         }
     };
     let mut prev = "0".repeat(64);
@@ -286,6 +319,10 @@ fn main() -> ExitCode {
                 return ExitCode::from(3);
             }
         };
+        if entry.case_no != manifest.case_no || entry.examiner_id != manifest.examiner_id {
+            eprintln!("FAIL: audit chain line {}: identity mismatch", i + 1);
+            return ExitCode::from(3);
+        }
         if entry.prev_hash != prev {
             eprintln!("FAIL: audit chain line {}: prev_hash mismatch", i + 1);
             return ExitCode::from(3);
@@ -345,13 +382,17 @@ fn main() -> ExitCode {
         prev = sha256_hex(line.as_bytes());
         count += 1;
     }
+    if count == 0 || prev != manifest.audit_chain_head_hash {
+        eprintln!("FAIL: audit chain is empty or does not match the signed manifest head");
+        return ExitCode::from(3);
+    }
     println!(
         "  ✓ audit chain: {} entries, all signatures + links valid",
         count
     );
     println!();
     println!(
-        "VERIFIED: case {} (examiner {}, agency {})",
+        "CLASSICAL SIGNATURES VERIFIED: case {} (examiner {}, agency {})",
         manifest.case_no, manifest.examiner_id, manifest.agency
     );
     ExitCode::SUCCESS
@@ -367,5 +408,55 @@ fn compact_nulls(v: serde_json::Value) -> serde_json::Value {
         serde_json::Value::Object(out)
     } else {
         v
+    }
+}
+
+// Accept only a unique conventional sha256sum entry for the exact manifest.
+// Unknown historical hash-list formats fail closed instead of claiming trust.
+fn signed_manifest_matches(hashes: &[u8], manifest: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(hashes) else {
+        return false;
+    };
+    let mut matches = 0;
+    for line in text.lines() {
+        if line.len() < 66 || !line.is_char_boundary(64) || !line.is_char_boundary(66) {
+            continue;
+        }
+        let (digest, rest) = line.split_at(64);
+        let name = if let Some(value) = rest.strip_prefix("  ") {
+            value
+        } else if let Some(value) = rest.strip_prefix(" *") {
+            value
+        } else {
+            continue;
+        };
+        if name == "case-manifest.json" {
+            if !digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+                || !digest.eq_ignore_ascii_case(&sha256_hex(manifest))
+            {
+                return false;
+            }
+            matches += 1;
+        }
+    }
+    matches == 1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn signed_list_must_bind_exact_manifest_once() {
+        let manifest = br#"{"case_no":"A"}"#;
+        let valid = format!("{}  case-manifest.json\n", sha256_hex(manifest));
+        assert!(signed_manifest_matches(valid.as_bytes(), manifest));
+        assert!(!signed_manifest_matches(valid.as_bytes(), b"changed"));
+        assert!(!signed_manifest_matches(
+            format!("{valid}{valid}").as_bytes(),
+            manifest
+        ));
+        assert!(!signed_manifest_matches(b"unrecognized format", manifest));
+        assert!(!signed_manifest_matches(&[0xff], manifest));
     }
 }

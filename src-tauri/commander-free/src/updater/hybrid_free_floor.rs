@@ -137,7 +137,7 @@ pub(super) fn record(
         candidate,
         trust,
         "hybrid-free-update",
-        &anchor::Anchor::machine(),
+        &anchor::Anchor::machine_named(r"SOFTWARE\ServaLabs\WinCommander\HybridFreeUpdate"),
     )
 }
 

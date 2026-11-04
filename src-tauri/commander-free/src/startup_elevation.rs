@@ -45,7 +45,7 @@ fn is_helper_launch(args: &[String]) -> bool {
     args.iter().any(|arg| {
         matches!(
             arg.as_str(),
-            "--safe-copy" | "--context-shred" | "--scrub" | "--safe-paste"
+            "--safe-copy" | "--context-shred" | "--scrub" | "--safe-paste" | "--recovery-reveal"
         )
     })
 }
@@ -320,7 +320,7 @@ mod tests {
 
     #[test]
     fn helpers_and_automatic_launches_never_request_elevation() {
-        for flag in ["--safe-copy", "--context-shred", "--scrub", "--safe-paste"] {
+        for flag in ["--safe-copy", "--context-shred", "--scrub", "--safe-paste", "--recovery-reveal"] {
             assert!(!should_offer_startup_elevation(
                 false,
                 &["app.exe".into(), flag.into()], false

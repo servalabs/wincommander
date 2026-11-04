@@ -112,6 +112,14 @@ export function observedProcessRows(id: string, raw: unknown): number | null {
   return seen.size;
 }
 
+/** Count returned metadata rows without presenting them as a complete inventory. */
+export function observedPartialRows(id: string, raw: unknown): number | null {
+  if (!['wslData', 'credentialManager', 'gitActivity'].includes(id) || !object(raw) || raw.error || raw.status !== 'partial' || raw.partial !== true) return null;
+  const rows = Array.isArray(raw.files) ? raw.files : raw.records;
+  if (!Array.isArray(rows) || !rows.length || rows.some(row => !object(row))) return null;
+  return rows.length;
+}
+
 export function cleanupVerificationText(receipt?: CleanupVerification): string {
   switch (receipt?.status) {
     case "cleared": return "A fresh scan found no remaining items.";
@@ -204,7 +212,8 @@ export function summarizeCleanupResult(input: { id: string; count: number; items
   if (isClipboardHistoryOff(input.id, raw)) return { ...base, state: "disabled", count: null, message: "Clipboard history is off", nextStep: "Previously stored items cannot be checked while history is off." };
   if (raw?.partial === true || raw?.complete === false || raw?.status === "partial" || raw?.coverage === "partial" || raw?.accessDenied === true) {
     const observed = observedProcessRows(input.id, raw);
-    return { ...base, state: "partial", count: null, message: observed === null ? "Scan incomplete" : `${observed} ${observed === 1 ? "process" : "processes"} observed`, nextStep: observed === null ? "Review coverage and scan again." : "Some process details or processes could not be checked." };
+    const records = observedPartialRows(input.id, raw);
+    return { ...base, state: "partial", count: null, message: observed !== null ? `${observed} ${observed === 1 ? "process" : "processes"} observed` : records !== null ? `${records} ${records === 1 ? "record" : "records"} observed` : "Scan incomplete", nextStep: observed === null ? "Review coverage and scan again." : "Some process details or processes could not be checked." };
   }
   if (input.error) return { ...base, state: "error", count: null, message: "Scan failed", nextStep: "Try scanning again or check access." };
   if (input.count < 0 || !Number.isFinite(input.count)) return { ...base, state: "not-scanned", count: null, message: "Not scanned", nextStep: "Select Scan to check this item." };

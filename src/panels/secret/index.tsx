@@ -359,9 +359,20 @@ function LockDisguiseSection() {
         parts.push(e.key === " " ? "Space" : e.key.length === 1 ? e.key.toUpperCase() : e.key);
         const combo = parts.join("+");
         setRecordingHotkey(false);
-        patchAppSettings({ ideal: { identity: { hideWinCommanderHotkey: combo } } }).catch(reportSettingsWriteFailure);
-        invoke("update_hide_hotkey", { hotkey: combo }).catch(() => {});
-    }, [patchAppSettings]);
+        void (async () => {
+            try {
+                await invoke("update_hide_hotkey", { hotkey: combo });
+                try {
+                    await patchAppSettings({ ideal: { identity: { hideWinCommanderHotkey: combo } } });
+                } catch (error) {
+                    await invoke("update_hide_hotkey", { hotkey: hotkeyValue });
+                    reportSettingsWriteFailure(error);
+                }
+            } catch (error) {
+                showWarning(`Hide shortcut recovery needs attention: ${String(error)}`);
+            }
+        })();
+    }, [patchAppSettings, hotkeyValue]);
 
     useEffect(() => {
         if (appSettings?.ideal?.identity?.hideWinCommander) {
@@ -472,7 +483,7 @@ function LockDisguiseSection() {
                     if (warning) showWarning(`Calculator shortcuts need attention: ${warning}`);
                 }
                 await restartExplorer().catch(() => {});
-                await invoke("apply_wincommander_hide_mode", { hidden }).catch(() => {});
+                await invoke("apply_wincommander_hide_mode", { hidden }).catch((error) => showWarning(`Hide shortcut recovery needs attention: ${String(error)}`));
                 await invoke("update_autostart_task_identity", { covered: hidden || lockArmed }).catch(() => {});
                 patchAppSettings({ ideal: { identity: { hideWinCommander: hidden } } }).catch(reportSettingsWriteFailure);
                 await refreshHardening();
@@ -575,6 +586,7 @@ function LockDisguiseSection() {
                     </div>
                     <div className="sec-divider" />
                     <div className="dgz-field-label">Peek hotkey</div>
+                    <p className="dgz-hint">When Hide is on, press the shortcut twice within two seconds to reopen WinCommander after it has been ended.</p>
                     <div className="sec-hotkey-row">
                         <Icon icon="eye-open" size={13} />
                         <span className="sec-hotkey-label">Show WinCommander while hidden</span>
