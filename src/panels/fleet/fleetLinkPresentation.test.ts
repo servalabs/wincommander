@@ -27,7 +27,22 @@ describe("Fleet link presentation", () => {
     expect(fleetLinkState(status({ lastError: "agent session unavailable" }))).toBe("error");
   });
 
+  test("active retry takes precedence over its last transient error, but not a confirmed connection", () => {
+    const retry = status({ retrying: true, lastError: "server temporarily unavailable" });
+    expect(fleetLinkState(retry)).toBe("reconnecting");
+    expect(fleetLinkState({ ...retry, retrying: false })).toBe("error");
+    expect(fleetLinkState({ ...retry, connected: true })).toBe("linked");
+    expect(fleetLinkState({ ...retry, deviceId: "" })).toBe("error");
+    expect(fleetLinkState({ ...retry, serverUrl: " " })).toBe("error");
+  });
+
   test("only calls a device unlinked when the status bridge has no device identity", () => {
     expect(fleetLinkState(status({ deviceId: "", serverUrl: "", lastError: null }))).toBe("not_linked");
+  });
+
+  test("does not turn a historical signed contact into connection health", () => {
+    const lastSignedContactAt = "2026-11-03T12:00:00Z";
+    expect(fleetLinkState(status({ lastSignedContactAt }))).toBe("offline");
+    expect(fleetLinkState(status({ connected: true, lastSignedContactAt: null }))).toBe("linked");
   });
 });

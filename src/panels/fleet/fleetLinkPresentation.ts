@@ -11,6 +11,7 @@ export interface FleetLinkStatus {
   lastError: string | null;
   retrying: boolean;
   pendingApproval?: boolean;
+  lastSignedContactAt?: string | null;
 }
 
 export type FleetLinkState = "linked" | "pending" | "reconnecting" | "offline" | "error" | "not_linked";
@@ -22,8 +23,9 @@ export function fleetLinkState(status: FleetLinkStatus | null): FleetLinkState {
   if (status.connected) return status.pendingApproval ? "pending" : "linked";
 
   const hasDeviceIdentity = status.deviceId.trim().length > 0 && status.serverUrl.trim().length > 0;
-  if (status.lastError) return "error";
+  // A transient failure remains useful context while the agent is still retrying.
   if (status.retrying && hasDeviceIdentity) return "reconnecting";
+  if (status.lastError) return "error";
   return hasDeviceIdentity ? "offline" : "not_linked";
 }
 

@@ -256,7 +256,7 @@ impl Envelope {
     /// Wrap `self` in a `Signed` variant with an HMAC tag computed from
     /// `session_token`. No-op if `self` is already `Signed` — guards
     /// against accidental double-signing during refactors.
-    pub fn sign(self, session_token: &str) -> Envelope {
+    pub fn sign(mut self, session_token: &str) -> Envelope {
         if matches!(self, Envelope::Signed(_)) {
             return self;
         }
@@ -268,6 +268,11 @@ impl Envelope {
         let inner_json = serde_json::to_string(&self)
             .expect("Envelope serialises with serde_json infallibly for our types");
         let tag = sign_body(session_token, inner_json.as_bytes());
+        // Signing consumes the original request, which may contain a one-use
+        // password or licence key. Clear its owned JSON strings before drop.
+        if let Envelope::Request(request) = &mut self {
+            zeroize_json(&mut request.args);
+        }
         Envelope::Signed(SignedEnvelope {
             tag,
             inner: inner_json,
@@ -430,7 +435,17 @@ pub fn hello_from_free(session_token: impl Into<String>) -> Hello {
 
 use std::io;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
+
+/// Clear owned JSON string values after handling a sensitive request.
+pub fn zeroize_json(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::String(text) => text.zeroize(),
+        serde_json::Value::Array(values) => values.iter_mut().for_each(zeroize_json),
+        serde_json::Value::Object(values) => values.values_mut().for_each(zeroize_json),
+        _ => {}
+    }
+}
 
 /// Hard cap on a single inbound frame's payload (16 MiB). Larger frames
 /// are refused with InvalidData. Tunable per-deployment if a future
@@ -901,6 +916,7 @@ pub mod personal_settings;
 /// protocol version, capability-class enum, and `classify_verb` — the shared
 /// contract that both the desktop UI and `commander-svc` import. See `svc.rs`.
 pub mod svc;
+pub mod fleet_transport_profile;
 pub mod vault_access;
 pub mod vault_display_path;
 pub mod vault_inventory;

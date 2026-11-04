@@ -1,11 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { Button } from '@/components/ui/bp';
-import type { PortGuardHit } from '@/lib/portGuard';
+import type { PortGuardHit, PortGuardStatus } from '@/lib/portGuard';
 import { groupPortGuardObservations } from '@/lib/portGuardHistory';
+import { formatPortGuardReport } from '@/lib/portGuardReport';
+import { showError, showSuccess } from '@/utils/toast';
 import { InfoPopover } from './InfoTip';
 
-export default function PortGuardHistory({ hits, busy, onClear }: { hits: PortGuardHit[]; busy: boolean; onClear: () => void }) {
+export default function PortGuardHistory({ hits, status, stale, readError, busy, onClear }: { hits: PortGuardHit[]; status: PortGuardStatus | null; stale: boolean; readError: string | null; busy: boolean; onClear: () => void }) {
   const groups = groupPortGuardObservations(hits);
+  const copyReport = async () => {
+    try { await navigator.clipboard.writeText(formatPortGuardReport(hits, status, stale, readError, new Date())); showSuccess('Observation history copied.'); }
+    catch { showError('Could not copy the observation history.'); }
+  };
   return <section aria-label="Recent inbound observations" style={{ marginTop: 16 }}>
     <div className="port-guard-heading">
       <strong>Recent inbound observations</strong>
@@ -15,6 +21,7 @@ export default function PortGuardHistory({ hits, busy, onClear }: { hits: PortGu
         <p>Allowed means Windows permitted network activity, not that someone logged in. Blocked means Windows dropped that traffic, not that every route used by the app is blocked.</p>
         <p>The latest 256 metadata records remain encrypted for your Windows account. Grouping only changes this display. Notifications are grouped separately; the most recent second may be lost if the app crashes.</p>
       </InfoPopover>
+      <Button minimal disabled={busy || !hits.length} onClick={() => void copyReport()}>Copy history report</Button>
       <Button minimal disabled={busy || !hits.length} onClick={onClear}>Clear history</Button>
     </div>
     {groups.length > 0 ? <div className="port-guard-table-scroll" style={{ maxHeight: 360 }}>

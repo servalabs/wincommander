@@ -177,7 +177,11 @@ pub fn decode_verifying_key(b64: &str) -> Result<VerifyingKey, String> {
     let arr: [u8; 32] = bytes
         .try_into()
         .map_err(|_| "fleet pubkey is not 32 bytes".to_string())?;
-    VerifyingKey::from_bytes(&arr).map_err(|e| format!("fleet pubkey invalid: {e}"))
+    let key = VerifyingKey::from_bytes(&arr).map_err(|e| format!("fleet pubkey invalid: {e}"))?;
+    if key.is_weak() {
+        return Err("fleet pubkey is weak".to_string());
+    }
+    Ok(key)
 }
 
 /// Verify a [`SignedCommand`] against the pinned verifying key.
@@ -411,8 +415,20 @@ mod tests {
     use super::*;
     use ed25519_dalek::{Signature, Signer, SigningKey};
 
+    #[test]
+    fn enrollment_key_decoder_rejects_identity_key_and_accepts_generated_key() {
+        let mut identity = [0u8; 32];
+        identity[0] = 1;
+        assert!(decode_verifying_key(&B64.encode(identity)).is_err());
+        let normal = test_signing_key();
+        assert_eq!(
+            decode_verifying_key(&B64.encode(normal.verifying_key().as_bytes())).unwrap(),
+            normal.verifying_key()
+        );
+    }
+
     fn test_signing_key() -> SigningKey {
-        SigningKey::generate(&mut rand::rngs::OsRng)
+        SigningKey::generate(&mut rand10::rng())
     }
 
     /// Builds a `SignedCommand` the way the REAL system does: the signer signs

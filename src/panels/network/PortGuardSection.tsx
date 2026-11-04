@@ -86,7 +86,7 @@ export default function PortGuardSection(_props: { expanded?: boolean; onExpande
       </tr>)}</tbody>
     </table></div>
     {!guard.ports.length && !guard.stale && <p>No watches configured. Add a port or range above.</p>}
-    <PortGuardHistory hits={guard.recent} busy={guard.busy} onClear={() => { void guard.run('clear_network_honeypot_recent'); }} />
+    <PortGuardHistory hits={guard.recent} status={guard.status} stale={guard.stale} readError={guard.error} busy={guard.busy} onClear={() => { void guard.run('clear_network_honeypot_recent'); }} />
     <PortGuardFirewall />
   </SectionCard>;
 }

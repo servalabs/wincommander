@@ -28,6 +28,61 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_updater::UpdaterExt;
 
+#[cfg(feature = "experimental-pq-free-release")]
+#[path = "updater/hybrid_free.rs"]
+mod hybrid_free;
+
+/// In the experimental build every installation goes through this one gate.
+pub(crate) async fn install_update(
+    update: &tauri_plugin_updater::Update,
+    channel: crate::settings::UpdateChannel,
+    staged: Option<Vec<u8>>,
+) -> Result<(), String> {
+    #[cfg(feature = "experimental-pq-free-release")]
+    {
+        let verified = hybrid_free::verified_bytes(update, channel, staged).await?;
+        require_selected_channel(channel)?;
+        let _floor_lock = hybrid_free::record_before_install(&verified)?;
+        require_selected_channel(channel)?;
+        update
+            .install(verified.bytes)
+            .map_err(|e| format!("Install failed: {e}"))
+    }
+    #[cfg(not(feature = "experimental-pq-free-release"))]
+    {
+        let _ = channel;
+        match staged {
+            Some(bytes) => update
+                .install(bytes)
+                .map_err(|e| format!("Install failed: {e}")),
+            None => update
+                .download_and_install(|_, _| {}, || {})
+                .await
+                .map_err(|e| format!("Install failed: {e}")),
+        }
+    }
+}
+
+async fn download_for_staging(
+    update: &tauri_plugin_updater::Update,
+    channel: crate::settings::UpdateChannel,
+) -> Result<Vec<u8>, String> {
+    #[cfg(feature = "experimental-pq-free-release")]
+    {
+        hybrid_free::verified_bytes(update, channel, None)
+            .await
+            .map(|verified| verified.bytes)
+    }
+    #[cfg(not(feature = "experimental-pq-free-release"))]
+    {
+        let _ = channel;
+        update
+            .download(|_, _| {}, || {})
+            .await
+            .map_err(|e| e.to_string())
+    }
+}
+
 const INITIAL_DELAY: Duration = Duration::from_secs(30);
 const NORMAL_INTERVAL: Duration = Duration::from_secs(7 * 24 * 60 * 60); // 7 days
 const RETRY_INTERVAL: Duration = Duration::from_secs(5 * 60); // ~5min when offline
@@ -204,10 +259,11 @@ pub(crate) fn build_updater_for_channel(
     app: &AppHandle,
     channel: crate::settings::UpdateChannel,
 ) -> Result<tauri_plugin_updater::Updater, String> {
+    let tls = crate::net::required_hybrid_tls_config()?;
     preserve_app_until_installer_launch(app.updater_builder())
         .endpoints(crate::cache_busted_endpoints(app, channel)?)
         .map_err(|e| format!("Updater endpoints failed: {}", e))?
-        .configure_client(|cb| cb.dns_resolver(crate::net::doh_resolver()))
+        .configure_client(move |cb| crate::net::configure_required_hybrid_client(cb, tls.clone()))
         .build()
         .map_err(|e| format!("Updater build failed: {}", e))
 }
@@ -376,7 +432,7 @@ async fn run_cycle(app: &AppHandle) -> Duration {
         body.clone(),
         None,
     );
-    match update.download(|_, _| {}, || {}).await {
+    match download_for_staging(&update, channel).await {
         Ok(bytes) => {
             if require_selected_channel(channel).is_err() {
                 return RETRY_INTERVAL;
@@ -542,22 +598,9 @@ pub async fn app_install_staged_update(app: AppHandle) -> Result<(), String> {
             .and_then(|mut state| take_staged_for_version(&mut state, &target_version, channel))
     });
 
-    let result = match staged {
-        Some(bytes) => tokio::time::timeout(INSTALL_TIMEOUT, async {
-            update
-                .install(bytes)
-                .map_err(|e| format!("Install failed: {}", e))
-        })
+    let result = tokio::time::timeout(INSTALL_TIMEOUT, install_update(&update, channel, staged))
         .await
-        .unwrap_or_else(|_| Err("Update installation timed out".to_string())),
-        None => tokio::time::timeout(
-            INSTALL_TIMEOUT,
-            update.download_and_install(|_, _| {}, || {}),
-        )
-        .await
-        .map(|result| result.map_err(|e| format!("Install failed: {}", e)))
-        .unwrap_or_else(|_| Err("Update installation timed out".to_string())),
-    };
+        .unwrap_or_else(|_| Err("Update installation timed out".to_string()));
 
     if result.is_ok() {
         // Bytes are on disk; surface a persistent Restart affordance in case the

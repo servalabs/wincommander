@@ -2,11 +2,12 @@ use base64::{engine::general_purpose, Engine as _};
 use minisign_verify::{PublicKey, Signature};
 
 const MANIFEST_PATH: &str = "/investigator/latest.json";
-const MAX_ARTIFACT_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+pub(crate) const MAX_ARTIFACT_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+const MAX_MANIFEST_BYTES: usize = 64 * 1024;
 pub const INVESTIGATOR_BINARY_NAME: &str = "wincommander-investigator.exe";
 pub const PRO_SIDECAR_NAME: &str = "wincommander-pro.exe";
 
-#[derive(Clone, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SignedManifestEnvelope {
     pub payload: String,
@@ -27,6 +28,17 @@ pub struct InvestigatorArtifact {
 pub struct InvestigatorManifest {
     pub version: String,
     pub artifacts: Vec<InvestigatorArtifact>,
+}
+
+#[cfg(any(test, not(feature = "experimental-pq-pro-release")))]
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SignedProRelease {
+    pub format: String,
+    pub version: String,
+    pub url: String,
+    pub sha256: String,
+    pub size: u64,
 }
 
 fn manifest_url() -> String {
@@ -59,25 +71,74 @@ fn verify_manifest_with_key(
     envelope: SignedManifestEnvelope,
     public_key_b64: &str,
 ) -> Result<InvestigatorManifest, String> {
-    let key_text = String::from_utf8(decode_base64(public_key_b64)?)
-        .map_err(|_| "validation:WinCommander updater public key is not UTF-8".to_string())?;
-    let signature_text = String::from_utf8(decode_base64(&envelope.signature)?)
-        .map_err(|_| "validation:Investigator manifest signature is not UTF-8".to_string())?;
-    let public_key = PublicKey::decode(&key_text)
-        .map_err(|error| format!("validation:invalid WinCommander updater public key: {error}"))?;
-    let signature = Signature::decode(&signature_text)
-        .map_err(|error| format!("validation:invalid Investigator manifest signature: {error}"))?;
-    public_key
-        .verify(envelope.payload.as_bytes(), &signature, false)
-        .map_err(|_| "signature:Investigator manifest signature is invalid.".to_string())?;
+    verify_signature_with_key(&envelope, public_key_b64)?;
     let manifest = serde_json::from_str(&envelope.payload)
         .map_err(|e| format!("parse:invalid signed manifest payload: {}", e))?;
     validate_manifest(&manifest)?;
     Ok(manifest)
 }
 
+fn verify_signature_with_key(
+    envelope: &SignedManifestEnvelope,
+    public_key_b64: &str,
+) -> Result<(), String> {
+    let key_text = String::from_utf8(decode_base64(public_key_b64)?)
+        .map_err(|_| "validation:WinCommander updater public key is not UTF-8".to_string())?;
+    let signature_text = String::from_utf8(decode_base64(&envelope.signature)?)
+        .map_err(|_| "validation:release manifest signature is not UTF-8".to_string())?;
+    let public_key = PublicKey::decode(&key_text)
+        .map_err(|error| format!("validation:invalid WinCommander updater public key: {error}"))?;
+    let signature = Signature::decode(&signature_text)
+        .map_err(|error| format!("validation:invalid release manifest signature: {error}"))?;
+    public_key
+        .verify(envelope.payload.as_bytes(), &signature, false)
+        .map_err(|_| "signature:release manifest signature is invalid.".to_string())?;
+    Ok(())
+}
+
 pub fn verify_manifest(envelope: &SignedManifestEnvelope) -> Result<InvestigatorManifest, String> {
     verify_manifest_with_key(envelope.clone(), &manifest_public_key_b64()?)
+}
+
+#[cfg(any(test, not(feature = "experimental-pq-pro-release")))]
+pub(crate) fn verify_signed_pro(
+    envelope: &SignedManifestEnvelope,
+) -> Result<SignedProRelease, String> {
+    verify_signed_pro_with_key(envelope, &manifest_public_key_b64()?)
+}
+
+#[cfg(any(test, not(feature = "experimental-pq-pro-release")))]
+fn verify_signed_pro_with_key(
+    envelope: &SignedManifestEnvelope,
+    key: &str,
+) -> Result<SignedProRelease, String> {
+    verify_signature_with_key(envelope, key)?;
+    let release: SignedProRelease =
+        serde_json::from_str(&envelope.payload).map_err(|_| "parse:invalid signed Pro release")?;
+    validate_signed_pro(&release)?;
+    Ok(release)
+}
+
+#[cfg(any(test, not(feature = "experimental-pq-pro-release")))]
+pub(crate) fn validate_signed_pro(release: &SignedProRelease) -> Result<(), String> {
+    let canonical = canonical_version(&release.version)?;
+    let expected_url = format!(
+        "https://{}/pro/v{canonical}/wincommander-pro.exe",
+        crate::pro_install::ALLOWED_UPDATE_HOST
+    );
+    if release.format != "wincommander-pro-release-v1"
+        || release.url != expected_url
+        || release.size == 0
+        || release.size > MAX_ARTIFACT_BYTES
+        || release.sha256.len() != 64
+        || !release
+            .sha256
+            .bytes()
+            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+    {
+        return Err("validation:invalid signed Pro release".into());
+    }
+    Ok(())
 }
 
 pub fn validate_manifest(manifest: &InvestigatorManifest) -> Result<(), String> {
@@ -141,76 +202,129 @@ pub fn validate_manifest(manifest: &InvestigatorManifest) -> Result<(), String> 
 }
 
 pub async fn fetch_manifest() -> Result<(SignedManifestEnvelope, InvestigatorManifest), String> {
-    let client = crate::net::doh_http_client().map_err(|e| format!("network:{}", e))?;
+    fetch_verified_manifest(None).await
+}
+
+/// Fetch the matching version first. Older published releases only have a
+/// latest pointer, which is usable only after the caller checks its version.
+#[cfg(any(test, not(feature = "experimental-pq-pro-release")))]
+pub(crate) async fn fetch_manifest_for_pro(
+    version: &str,
+) -> Result<(SignedManifestEnvelope, InvestigatorManifest), String> {
+    let url = versioned_manifest_url(version)?;
+    fetch_verified_manifest(Some(url)).await
+}
+
+#[cfg(any(test, not(feature = "experimental-pq-pro-release")))]
+fn versioned_manifest_url(version: &str) -> Result<String, String> {
+    let canonical = canonical_version(version)?;
+    Ok(format!(
+        "https://{}/investigator/v{canonical}/latest.json",
+        crate::pro_install::ALLOWED_UPDATE_HOST
+    ))
+}
+
+pub(crate) fn canonical_version(version: &str) -> Result<String, String> {
+    let parts: Vec<_> = version.split('.').collect();
+    if !(parts.len() == 3 || parts.len() == 4)
+        || parts
+            .iter()
+            .any(|part| part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()))
+    {
+        return Err("validation:invalid Pro release version".into());
+    }
+    let numbers: Vec<u64> = parts
+        .iter()
+        .map(|part| part.parse())
+        .collect::<Result<_, _>>()
+        .map_err(|_| "validation:invalid Pro release version")?;
+    let mut canonical = format!("{}.{}.{}", numbers[0], numbers[1], numbers[2]);
+    if numbers.get(3).is_some_and(|revision| *revision != 0) {
+        canonical.push_str(&format!(".{}", numbers[3]));
+    }
+    Ok(canonical)
+}
+
+#[cfg(any(test, not(feature = "experimental-pq-pro-release")))]
+pub(crate) async fn fetch_signed_pro(
+    version: &str,
+) -> Result<Option<SignedManifestEnvelope>, String> {
+    let canonical = canonical_version(version)?;
+    let url = format!(
+        "https://{}/pro/v{canonical}/signed.json",
+        crate::pro_install::ALLOWED_UPDATE_HOST
+    );
+    let client = crate::net::required_hybrid_http_client(std::time::Duration::from_secs(15))?;
     let response = client
-        .get(manifest_url())
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("network:{e}"))?;
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    if !response.status().is_success() {
+        return Err(format!(
+            "network:signed Pro release returned HTTP {}",
+            response.status()
+        ));
+    }
+    let envelope = read_signed_envelope(response).await?;
+    verify_signed_pro(&envelope)?;
+    Ok(Some(envelope))
+}
+
+async fn fetch_verified_manifest(
+    versioned_url: Option<String>,
+) -> Result<(SignedManifestEnvelope, InvestigatorManifest), String> {
+    let client = crate::net::required_hybrid_http_client(std::time::Duration::from_secs(15))
+        .map_err(|e| format!("network:{}", e))?;
+    let url = versioned_url.clone().unwrap_or_else(manifest_url);
+    let response = client
+        .get(url)
         .send()
         .await
         .map_err(|e| format!("network:{}", e))?;
+    let response = if versioned_url.is_some() && response.status() == reqwest::StatusCode::NOT_FOUND
+    {
+        client
+            .get(manifest_url())
+            .send()
+            .await
+            .map_err(|e| format!("network:{}", e))?
+    } else {
+        response
+    };
     if !response.status().is_success() {
         return Err(format!(
             "network:manifest returned HTTP {}",
             response.status()
         ));
     }
-    let envelope = response
-        .json::<SignedManifestEnvelope>()
-        .await
-        .map_err(|e| format!("parse:invalid manifest envelope: {}", e))?;
+    let envelope = read_signed_envelope(response).await?;
     let manifest = verify_manifest(&envelope)?;
     Ok((envelope, manifest))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn wincommander_minisign_envelope_verifies_before_manifest_parsing() {
-        let public_key = "untrusted comment: minisign public key\nRWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3\n";
-        let signature = "untrusted comment: signature from minisign secret key\nRUQf6LRCGA9i559r3g7V1qNyJDApGip8MfqcadIgT9CuhV3EMhHoN1mGTkUidF/z7SrlQgXdy8ofjb7bNJJylDOocrCo8KLzZwo=\ntrusted comment: timestamp:1633700835\tfile:test\tprehashed\nwLMDjy9FLAuxZ3q4NlEvkgtyhrr0gtTu6KC4KBJdITbbOeAi1zBIYo0v4iTgt8jJpIidRJnp94ABQkJAgAooBQ==";
-        let envelope = SignedManifestEnvelope {
-            payload: "test".to_string(),
-            signature: general_purpose::STANDARD.encode(signature),
-        };
-        let encoded_key = general_purpose::STANDARD.encode(public_key);
-
-        let error = match verify_manifest_with_key(envelope, &encoded_key) {
-            Err(error) => error,
-            Ok(_) => panic!("non-JSON fixture unexpectedly parsed as a manifest"),
-        };
-        assert!(error.starts_with("parse:invalid signed manifest payload:"));
+async fn read_signed_envelope(
+    mut response: reqwest::Response,
+) -> Result<SignedManifestEnvelope, String> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_MANIFEST_BYTES as u64)
+    {
+        return Err("validation:signed manifest exceeds size limit".into());
     }
-
-    #[test]
-    fn manifest_requires_both_expected_artifacts() {
-        let manifest: InvestigatorManifest = serde_json::from_str(
-            r#"{"version":"1.0.0","artifacts":[{"name":"wincommander-investigator.exe","url":"https://winupdates.servalabs.com/investigator/wincommander-investigator.exe","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":1},{"name":"wincommander-pro.exe","url":"https://winupdates.servalabs.com/investigator/wincommander-pro.exe","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","size":1}]}"#,
-        )
-        .unwrap();
-        assert!(validate_manifest(&manifest).is_ok());
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|e| format!("network:{e}"))? {
+        if chunk.len() > MAX_MANIFEST_BYTES.saturating_sub(bytes.len()) {
+            return Err("validation:signed manifest exceeds size limit".into());
+        }
+        bytes.extend_from_slice(&chunk);
     }
-
-    #[test]
-    fn manifest_rejects_urls_outside_investigator_channel() {
-        let manifest: InvestigatorManifest = serde_json::from_str(
-            r#"{"version":"1.0.0","artifacts":[{"name":"wincommander-investigator.exe","url":"https://winupdates.servalabs.com/pro/wincommander-investigator.exe","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":1},{"name":"wincommander-pro.exe","url":"https://winupdates.servalabs.com/investigator/wincommander-pro.exe","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","size":1}]}"#,
-        )
-        .unwrap();
-        assert!(validate_manifest(&manifest).is_err());
-    }
-
-    #[test]
-    fn manifest_rejects_reordered_or_noncanonical_artifacts() {
-        let mut manifest: InvestigatorManifest = serde_json::from_str(
-            r#"{"version":"1.0.0","artifacts":[{"name":"wincommander-investigator.exe","url":"https://winupdates.servalabs.com/investigator/wincommander-investigator.exe","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":1},{"name":"wincommander-pro.exe","url":"https://winupdates.servalabs.com/investigator/wincommander-pro.exe","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","size":1}]}"#,
-        )
-        .unwrap();
-        manifest.artifacts.swap(0, 1);
-        assert!(validate_manifest(&manifest).is_err());
-
-        manifest.artifacts.swap(0, 1);
-        manifest.artifacts[0].sha256.replace_range(0..1, "A");
-        assert!(validate_manifest(&manifest).is_err());
-    }
+    serde_json::from_slice(&bytes).map_err(|e| format!("parse:invalid manifest envelope: {e}"))
 }
+
+#[cfg(test)]
+#[path = "manifest_tests.rs"]
+mod tests;

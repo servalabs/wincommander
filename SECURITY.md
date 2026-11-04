@@ -146,7 +146,22 @@ exclusive handle before removing that same file. Failed checks preserve it.
 After migration, an unavailable service produces a temporary read-only session
 rather than making the stale legacy copy authoritative again. Corrupt or denied
 service records fail closed. The inactivity watchdog pauses while personal
-settings are unavailable or recovery remains unresolved.
+settings are unavailable or recovery remains unresolved. It runs only while
+WinCommander is running, and launching the app resets its activity baseline,
+including on automatic startup. A recorded trigger marks an attempt, not proof
+that Lockdown completed; the self-destruct opt-in still governs whether it runs.
+
+When the existing Fleet machine trust and signed-contact receipt are available,
+the Windows service can independently verify and retain the local time of a
+contact observation. This historical record is not a current health check, a
+restart-safe silence timer, proof of storage, or authorization to run Lockdown.
+Missing trust, service or receipt leaves the observation unconfirmed; normal
+Fleet check-ins continue. The saved time uses the device clock and is not a
+rollback-resistant clock or a guarantee of crash durability.
+The signed receipt binds the request and response bytes, but not HTTP status;
+the service observation does not attest the status seen by the app.
+This is history for the service's enrolled machine trust, which may differ
+from the Fleet connection currently shown after re-enrollment.
 
 This boundary does not protect against an administrator/SYSTEM attacker,
 restore keys lost with Windows machine protection, or transfer ownership to a

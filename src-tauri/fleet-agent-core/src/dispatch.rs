@@ -353,7 +353,7 @@ pub(crate) mod tests {
     use std::sync::Mutex as StdMutex;
 
     fn test_signing_key() -> SigningKey {
-        SigningKey::generate(&mut rand::rngs::OsRng)
+        SigningKey::generate(&mut rand10::rng())
     }
 
     /// Signs over `idempotency_key`, not `command_id` — mirroring the real

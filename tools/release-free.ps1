@@ -24,6 +24,9 @@ param(
     # Build and validate local artifacts, but do not contact R2 or GitHub.
     [switch]$StageOnly,
 
+    # Optional local-only hybrid release preparation tool.
+    [string]$HybridPrepareTool,
+
     # Re-use an already-built, signed NSIS setup for the requested version.
     [switch]$SkipBuild
 )
@@ -45,6 +48,12 @@ $script:Root = [IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent))
 $script:Tag = "v$Version"
 $script:WorkRoot = Join-Path ([IO.Path]::GetTempPath()) ("wincommander-free-release-$Version-" + [guid]::NewGuid().ToString('N'))
 $script:RcloneExe = $null
+if ($HybridPrepareTool -and -not $StageOnly) {
+    throw '[FAIL] -HybridPrepareTool is available only with -StageOnly.'
+}
+if ($HybridPrepareTool -and $Version -notmatch '^\d+\.\d+\.\d+$') {
+    throw '[FAIL] Hybrid Free rehearsal requires a numeric X.Y.Z version.'
+}
 if ($Beta -and -not $StageOnly) {
     throw '[FAIL] Free beta publication requires the protected GitHub workflow. Use start-free-release.ps1 -Beta; this local script supports -Beta -StageOnly only.'
 }
@@ -320,6 +329,12 @@ try {
     }
     $assets = Get-ReleaseAssets
     if ($StageOnly) {
+        if ($HybridPrepareTool) {
+            $channel = if ($Beta) { 'beta' } else { 'stable' }
+            $hybridPayload = Join-Path $script:WorkRoot "hybrid-$channel-payload.json"
+            & (Join-Path $PSScriptRoot 'stage-hybrid-free.ps1') -ToolPath $HybridPrepareTool -ManifestPath $assets.Manifest -InstallerPath $assets.Setup -TauriConfigPath (Join-Path $script:Root 'src-tauri/commander-free/tauri.conf.json') -Version $Version -Channel $channel -OutputPath $hybridPayload
+            Write-Host "[staged] Experimental unsigned hybrid payload: $hybridPayload"
+        }
         Write-Host "[ok] v$Version passed local manual-release staging. No R2 or GitHub publication was attempted." -ForegroundColor Green
         exit 0
     }

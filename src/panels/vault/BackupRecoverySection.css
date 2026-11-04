@@ -1,0 +1,7 @@
+.backup-recovery-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 16px; margin-block: 16px; }
+.backup-recovery-grid fieldset { min-width: 0; padding: 16px; border: 1px solid var(--border-color, #697383); border-radius: 8px; }
+.backup-recovery-grid legend { padding-inline: 6px; font-weight: 600; }
+.backup-recovery-grid p, .backup-recovery-limits { font-size: 0.875rem; line-height: 1.5; }
+.backup-recovery-grid .stego-pick { margin-block: 10px; }
+.backup-recovery-status { padding-block: 12px; }
+.backup-recovery-path { overflow-wrap: anywhere; user-select: text; }

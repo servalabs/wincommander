@@ -1,6 +1,24 @@
 /* Active Ports — filter bar directly under the section heading, plus a
    consistent WCSwitch-based toggle row (2026-07 redesign). */
 
+.refresh-btn.active-ports-report-btn {
+    width: auto;
+    padding: 0 10px;
+    white-space: nowrap;
+}
+
+.active-ports-history {
+    padding: 8px 10px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    color: var(--color-text-secondary);
+    font-size: 12px;
+}
+
+.active-ports-history summary { cursor: pointer; font-weight: 700; }
+.active-ports-history__content { display: flex; flex-direction: column; gap: 7px; padding-top: 8px; }
+.active-ports-history__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
 .active-ports-filter-bar {
     display: flex;
     align-items: center;

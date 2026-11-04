@@ -3,6 +3,7 @@
 // the fleet; this card is for enrolling this device as an agent.
 
 import { useEffect, useRef, useState } from "react";
+import { FleetServiceContact } from "./FleetServiceContact";
 import { invoke } from "@tauri-apps/api/core";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,6 +13,7 @@ import { getSettingsOnce } from "@/hooks/useSettings";
 import { useLicenseQuery } from "@/hooks/queries/useLicenseQuery";
 import { fleetLinkLabel, fleetLinkState, type FleetLinkStatus } from "./fleetLinkPresentation";
 import { fleetShieldProfileStatus } from "../../lib/fleetShieldProfileStatus";
+import { FleetSignedContact } from "./FleetSignedContact";
 
 interface FleetStatus extends FleetLinkStatus {
   // True while Pro's check-in loop is alive and self-healing (connected or
@@ -25,24 +27,16 @@ interface FleetStatus extends FleetLinkStatus {
   // shows "Request submitted — waiting for admin approval" instead of
   // "Enrolled" while this holds.
   pendingApproval?: boolean;
+  cleanupPending?: boolean;
 }
 
 // Steady-state poll while enrolled (shows live connection health).
 const STEADY_POLL_MS = 4_000;
 // Aggressive poll run after clicking "Connect" — catches async enrollment.
 const ENROLL_POLL_MS = 1_000;
-// How long to keep polling aggressively before giving up and dropping back.
-// Must comfortably exceed Pro's own enroll self-retry envelope (fleet_push.rs:
-// ENROLL_MAX_ATTEMPTS=5, capped-exponential-with-full-jitter backoff up to a
-// 30s cap between attempts — worst case approaches ~60s before Pro itself
-// gives up). At the old 30_000 this timer routinely fired BEFORE Pro finished
-// retrying, so the UI fell back to the blank "Connect to Fleet" form while
-// enrollment was still in flight, then silently flipped to "Enrolled" a few
-// seconds later once the steady poll caught up — looked like the click failed.
+// Return to steady polling after this interval; live agent status still owns retry state.
 const ENROLL_TIMEOUT_MS = 75_000;
-// Refresh cadence while a managed-device unenroll request is awaiting admin
-// approval. Refreshes use the status endpoint: resubmitting after approval
-// would correctly receive 401 because the device credential is revoked.
+// Refresh cadence while a managed-device unenroll request is awaiting admin approval.
 const UNENROLL_POLL_MS = 5_000;
 
 interface UnenrollInfo {
@@ -56,15 +50,21 @@ type UnenrollResult = {
   status: string;
   approvals: number;
   required_approvals: number;
-  // Pro deliberately maps a post-revocation 401 to this value. The server
-  // cannot return the ordinary status body after it has invalidated the
-  // check-in secret, so status alone is not the authoritative approval bit.
   approved?: boolean;
 };
 
 function isUnenrollApproved(result: UnenrollResult) {
-  return result.approved === true || result.status === "approved" || result.status === "revoked";
+  return result.approved === true && result.status === "approved";
 }
+
+function pendingUnenroll(result: UnenrollResult): UnenrollInfo | null {
+  if (result.status !== "pending" || (result.approved !== undefined && result.approved !== false)
+      || !Number.isSafeInteger(result.approvals) || result.approvals < 0
+      || !Number.isSafeInteger(result.required_approvals) || result.required_approvals < 0) return null;
+  return { status: result.status, approvals: result.approvals, required: result.required_approvals };
+}
+
+const UNENROLL_UNCONFIRMED = "Could not verify Fleet removal status. Check the connection or contact an administrator, then retry.";
 
 export default function FleetConnectView() {
   const { data: license, isLoading: licenseLoading } = useLicenseQuery();
@@ -107,10 +107,16 @@ export default function FleetConnectView() {
   // Non-null while an unenroll request is outstanding (submitted, awaiting
   // the required admin approval(s) from the fleet console).
   const [unenrollInfo, setUnenrollInfo] = useState<UnenrollInfo | null>(null);
+  const [cleanupRetry, setCleanupRetry] = useState(false);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const enrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const unenrollPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const unenrollEpochRef = useRef(0);
+
+  useEffect(() => {
+    if (status?.cleanupPending) setCleanupRetry(true);
+  }, [status?.cleanupPending]);
 
   // Prefill form from persisted settings on mount.
   useEffect(() => {
@@ -133,6 +139,7 @@ export default function FleetConnectView() {
   }
 
   function stopUnenrollPoll() {
+    unenrollEpochRef.current += 1;
     if (unenrollPollRef.current !== null) { clearInterval(unenrollPollRef.current); unenrollPollRef.current = null; }
   }
 
@@ -236,6 +243,7 @@ export default function FleetConnectView() {
       return;
     }
     setError(null);
+    setCleanupRetry(false);
     setBusy(true);
     try {
       // fleet_connect: persists config to settings, then sends fleet_agent_configure
@@ -266,16 +274,28 @@ export default function FleetConnectView() {
 
   async function finalizeApprovedUnenroll() {
     stopUnenrollPoll();
+    const epoch = unenrollEpochRef.current;
+    let serviceStopped = false;
     try {
-      await invoke("fleet_disconnect");
-    } catch {
-      // Server already revoked this device's credentials once approved, so
-      // the local teardown call itself failing here is cosmetic — the next
-      // steady poll will see connected=false and settle the UI correctly.
+      const result = await invoke<{ ok?: boolean; serviceReachabilityStopped?: boolean; cleanupRetryable?: boolean }>("fleet_disconnect");
+      if (epoch !== unenrollEpochRef.current) return;
+      if (result?.ok !== true) throw new Error(UNENROLL_UNCONFIRMED);
+      serviceStopped = result?.serviceReachabilityStopped === true;
+      setCleanupRetry(result?.cleanupRetryable === true);
+    } catch (reason) {
+      if (epoch !== unenrollEpochRef.current) return;
+      setUnenrollInfo(null);
+      setCleanupRetry(true);
+      setError(typeof reason === "string" && (reason.startsWith("Fleet agent stopped,")
+        || reason.startsWith("Fleet connection coordination")
+        || reason.startsWith("A Fleet connection change"))
+        ? reason : UNENROLL_UNCONFIRMED);
+      return;
     }
     setStatus(null);
     setWasEnrolled(false);
     setUnenrollInfo(null);
+    if (!serviceStopped) setError("The device was removed from Fleet, but stopping local service reachability could not be confirmed. An administrator can stop the WinCommander service.");
   }
 
   // Submits (or, if one already exists, refreshes) the managed-device
@@ -283,31 +303,44 @@ export default function FleetConnectView() {
   // tearing the agent down immediately, which the server refuses for a
   // managed device anyway (see fleet_agent.rs::fleet_disconnect).
   async function requestOrPollUnenroll() {
-    const res = await invoke<UnenrollResult>("fleet_request_unenroll");
-    setUnenrollInfo({ status: res.status, approvals: res.approvals, required: res.required_approvals });
+    const epoch = ++unenrollEpochRef.current;
+    let res: UnenrollResult;
+    try { res = await invoke<UnenrollResult>("fleet_request_unenroll"); }
+    catch (error) { if (epoch !== unenrollEpochRef.current) return; throw error; }
+    if (epoch !== unenrollEpochRef.current) return;
     if (isUnenrollApproved(res)) {
       await finalizeApprovedUnenroll();
       return;
     }
+    const pending = pendingUnenroll(res);
+    if (!pending) throw new Error(UNENROLL_UNCONFIRMED);
+    setUnenrollInfo(pending);
     if (unenrollPollRef.current !== null) return; // already polling
+    let checking = false;
     let consecutiveFailures = 0;
     unenrollPollRef.current = setInterval(async () => {
+      if (checking) return;
+      checking = true;
       try {
         const r = await invoke<UnenrollResult>("fleet_unenroll_status");
-        consecutiveFailures = 0;
-        setUnenrollInfo({ status: r.status, approvals: r.approvals, required: r.required_approvals });
-        if (isUnenrollApproved(r)) await finalizeApprovedUnenroll();
-      } catch (err) {
-        // Transient hiccups (Pro mid-restart, network blip) are common on a
-        // multi-minute wait — tolerate a few before giving up so we don't
-        // drop a legitimate pending request over one bad poll.
-        consecutiveFailures += 1;
-        if (consecutiveFailures >= 3) {
-          stopUnenrollPoll();
-          setUnenrollInfo(null);
-          setError(typeof err === "string" ? err : "Lost contact while waiting for admin approval — click Disconnect to retry.");
+        if (epoch !== unenrollEpochRef.current) return;
+        if (isUnenrollApproved(r)) {
+          if (consecutiveFailures > 0) setError(null);
+          await finalizeApprovedUnenroll();
+          return;
         }
-      }
+        const pending = pendingUnenroll(r);
+        if (!pending) throw new Error(UNENROLL_UNCONFIRMED);
+        if (consecutiveFailures > 0) setError(null);
+        consecutiveFailures = 0;
+        setUnenrollInfo(pending);
+      } catch {
+        if (epoch !== unenrollEpochRef.current) return;
+        setUnenrollInfo(null);
+        setError(UNENROLL_UNCONFIRMED);
+        consecutiveFailures += 1;
+        if (consecutiveFailures >= 3) stopUnenrollPoll();
+      } finally { checking = false; }
     }, UNENROLL_POLL_MS);
   }
 
@@ -315,6 +348,7 @@ export default function FleetConnectView() {
     setError(null);
     setBusy(true);
     stopPoll();
+    stopUnenrollPoll();
     setEnrolling(false);
     try {
       // Every device must have its departure approved by an admin — see
@@ -322,12 +356,20 @@ export default function FleetConnectView() {
       // unenroll request and starts polling for approval.
       await requestOrPollUnenroll();
     } catch (err) {
-      setError(typeof err === "string" ? err : "Disconnect failed.");
+      setUnenrollInfo(null);
+      const message = typeof err === "string" ? err : err instanceof Error ? err.message : "";
+      setError(!message || /HTTP\s+401\b/i.test(message) ? UNENROLL_UNCONFIRMED : message);
     } finally {
       setBusy(false);
       // Resume steady poll so status reflects reality after disconnect.
       startSteadyPoll();
     }
+  }
+
+  async function checkRemoval() {
+    setBusy(true);
+    setError(null);
+    try { await finalizeApprovedUnenroll(); } finally { setBusy(false); }
   }
 
   // Purpose-built loading state: mirrors the real card's shape (header +
@@ -436,6 +478,15 @@ export default function FleetConnectView() {
         )}
       </div>
 
+      {cleanupRetry && <div className="fleet-connect-status">
+        <p className="fleet-connect-enrolling">Local Fleet cleanup is not fully confirmed. Retry while this app remains open, or contact your administrator.</p>
+        <Button variant="outline" size="sm" disabled={busy} onClick={async () => {
+          setBusy(true);
+          setError(null);
+          try { await finalizeApprovedUnenroll(); } finally { setBusy(false); }
+        }}>Retry local cleanup</Button>
+      </div>}
+
       {isConnected && status ? (
         <div className="fleet-connect-status">
           <dl className="fleet-connect-meta">
@@ -522,7 +573,7 @@ export default function FleetConnectView() {
             </div>
           </dl>
           <p className="fleet-connect-enrolling">
-            <Icon icon="refresh" size={13} /> Reconnecting to the fleet server — this device stays enrolled while it retries.
+            <Icon icon="refresh" size={13} /> Retrying contact with the fleet server. A current connection is not yet confirmed.
           </p>
           {agentError && (
             <p className="fleet-connect-error" role="alert">
@@ -542,7 +593,9 @@ export default function FleetConnectView() {
           <p className="fleet-connect-enrolling">
             <Icon icon="offline" size={13} /> This device is known to Fleet but is not currently checking in.
           </p>
+          {fleetEntitled && wasEnrolled && <Button variant="outline" size="sm" disabled={busy} onClick={checkRemoval}>Check removal status</Button>}
           {agentError && <p className="fleet-connect-error" role="alert"><Icon icon="warning-sign" size={13} intent="danger" /> {agentError}</p>}
+          {error && <p className="fleet-connect-error" role="alert"><Icon icon="warning-sign" size={13} intent="danger" /> {error}</p>}
           {!fleetEntitled && <p className="fleet-connect-enrolling">This is the device agent’s read-only link status.</p>}
         </div>
       ) : (
@@ -564,13 +617,13 @@ export default function FleetConnectView() {
             <Input
               value={signingKeyPub}
               onChange={(e) => setSigningKeyPub(e.target.value)}
-              placeholder="Base64 Ed25519 key (optional — required for dispatch)"
+              placeholder="Base64 Ed25519 key (optional)"
               spellCheck={false}
               className="mono"
               disabled={enrolling}
             />
             <span className="fleet-field-hint">
-              Pinned fleet key used to verify signed commands. Only needed when command dispatch is on.
+              Pin the Fleet signing key to verify commands and signed contact. Signed contact also requires a separate operator key configured in Fleet.
             </span>
           </label>
 
@@ -618,8 +671,12 @@ export default function FleetConnectView() {
           >
             {busy ? "Connecting…" : enrolling ? "Enrolling…" : "Connect to Fleet"}
           </Button>
+          {fleetEntitled && wasEnrolled && isRemoved && (
+            <Button variant="outline" size="sm" disabled={busy} onClick={checkRemoval}>Check removal status</Button>
+          )}
         </div>
       )}
+      {status?.deviceId && <><FleetSignedContact timestamp={status.lastSignedContactAt} /><FleetServiceContact deviceId={status.deviceId} /></>}
     </div>
   );
 }

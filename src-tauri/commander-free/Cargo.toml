@@ -32,6 +32,12 @@ test = false
 # nothing to farm) and packaging differences. Persistent state is already
 # machine-wide (%ProgramData%) regardless of this flag.
 portable = []
+# Isolated validation only; this does not enable licence issuance or caching.
+experimental-pq-licence = ["dep:wincmd-pq-experiment"]
+# Opt-in integration rehearsal only; requires separately provisioned trust keys.
+experimental-pq-pro-release = ["dep:wincmd-pq-experiment"]
+# Isolated Free updater rehearsal; requires independent release trust keys.
+experimental-pq-free-release = ["dep:wincmd-pq-experiment"]
 # Closed lab controls for debug artifacts only. This intentionally adds no
 # generic command dispatcher and never appears in a release artifact.
 autonomous-test = ["dep:fleet-proto", "fleet-proto/autonomous-test"]
@@ -77,21 +83,22 @@ tauri-plugin-opener = "2"
 # the time the watcher fires, so an in-app toast wouldn't be seen.
 tauri-plugin-notification = "2"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+# Prefer hybrid post-quantum key exchange when the server supports it.
+rustls = { version = "0.23", default-features = false, features = ["prefer-post-quantum"] }
+rustls-platform-verifier = "0.7"
 # Cloudflare DoH resolver to circumvent ISP-level DNS blocks of our update
 # host. Pinned to a major because tauri-plugin-updater pulls reqwest 0.13
 # transitively and we need binary-compatible TLS roots.
-hickory-resolver = { version = "0.26.1", default-features = false, features = ["https-ring", "tokio"] }
-ed25519-dalek = { version = "2", default-features = false, features = ["std", "rand_core"] }
-# `rand_core` feature on ed25519-dalek above pulls in the trait;
-# the OsRng implementation lives in `rand_core` with `getrandom`.
-# Used by `flow_bundle::generate_signing_key` to seed a per-bundle Ed25519
-# keypair on export.
-rand_core = { version = "0.6", features = ["getrandom"] }
+# AWS-LC enables hybrid TLS; webpki-roots supplies trust anchors for DoH.
+hickory-resolver = { version = "0.26.1", default-features = false, features = ["https-aws-lc-rs", "webpki-roots", "tokio"] }
+ed25519-dalek = { version = "3", default-features = false, features = ["alloc", "rand_core"] }
+# Generate new signing seeds directly from the operating system CSPRNG.
+getrandom = "0.4"
 base64 = "0.22"
 minisign-verify = "0.3.0"
 # Per-install key derivation for the app-data store (datastore.rs).
 # argon2id params: 64 MiB / 2 iterations / 1 lane — interactive tuning.
-argon2 = { version = "0.5", features = ["std"] }
+argon2 = "0.6"
 dotenvy = "0.15"
 # In-memory passphrase zeroization on lock — profile session lifecycle (P1).
 zeroize = { version = "1", features = ["alloc"] }
@@ -117,6 +124,7 @@ hmac = "0.13"
 # Tauri uses tokio internally but doesn't re-export time/rt features.
 tokio = { version = "1", features = ["time", "rt", "process", "io-util", "sync", "net", "macros"] }
 wincmd-shared = { path = "../wincmd-shared" }
+wincmd-pq-experiment = { path = "../wincmd-pq-experiment", optional = true }
 wincmd-service-auth = { path = "../wincmd-service-auth" }
 fleet-proto = { path = "../fleet-proto", optional = true }
 wincmd-search = { path = "../wincmd-search" }
@@ -148,7 +156,13 @@ once_cell = "1"
 url = "2"
 
 [dev-dependencies]
+wincmd-pq-experiment = { path = "../wincmd-pq-experiment", features = ["experimental-signer"] }
 tauri = { version = "^2.12", features = ["test"] }
+# Cross-version test oracle for keys written by released versions only.
+argon2-legacy = { package = "argon2", version = "=0.5.3" }
+rand10 = { package = "rand", version = "0.10" }
+rcgen = "0.14"
+aws-lc-rs = { version = "1.19", default-features = false, features = ["alloc", "aws-lc-sys"] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 
@@ -217,6 +231,7 @@ windows-sys = { version = "0.61", features = [
   # config it protects can't be read from a raw disk image. (LocalFree, used to
   # free the DPAPI output blob, lives in the already-enabled Win32_Foundation.)
   "Win32_Security_Cryptography",
+  "Win32_Security_Authorization",
   # storage_probe.rs — READ-ONLY drive capability detection. DeviceIoControl
   # (Win32_System_IO); IOCTL_STORAGE_QUERY_PROPERTY + STORAGE_DEVICE_DESCRIPTOR
   # + STORAGE_PROTOCOL_*_DATA (Win32_System_Ioctl); ATA_PASS_THROUGH_EX +

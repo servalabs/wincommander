@@ -61,6 +61,46 @@ fn shared_shortcuts_require_the_pinned_free_image_and_captured_session() {
 }
 
 #[test]
+fn licence_relay_accepts_active_remote_session_but_rejects_untrusted_peers() {
+    use wincmd_shared::svc::{ENROL_HYBRID_LICENSE_VERB, RENEW_HYBRID_LICENSE_VERB};
+    let gate = SessionHelperGate::with_allowed_root(Arc::new(Probe),
+        Some(PathBuf::from(r"C:\ProgramData\WinCommander\bin")));
+    let peer = identity(7); // The console session in this test is 1, not 7.
+    for verb in [ENROL_HYBRID_LICENSE_VERB, RENEW_HYBRID_LICENSE_VERB] {
+        assert_eq!(gate.authorize_licence_observation(&peer, verb, 7, true, || Ok(())),
+            Ok(TrustOrigin::SessionHelperPinned));
+        assert_eq!(gate.authorize_licence_observation(&peer, verb, 8, true, || Ok(())),
+            Err(PeerAuthError::WrongSession));
+        assert_eq!(gate.authorize_licence_observation(&peer, verb, 7, false, || Ok(())),
+            Err(PeerAuthError::WrongSession));
+        assert_eq!(gate.authorize_licence_observation(&peer, verb, 7, true,
+            || Err(PeerAuthError::IdentityUnavailable)), Err(PeerAuthError::IdentityUnavailable));
+    }
+    let mut wrong = peer.clone();
+    wrong.canonical_image_path = r"C:\ProgramData\WinCommander\bin\wincommander-clipboard-guard.exe".into();
+    assert_eq!(gate.authorize_licence_observation(&wrong, RENEW_HYBRID_LICENSE_VERB, 7, true,
+        || panic!("wrong helper must not be authorized")), Err(PeerAuthError::PathNotAllowed));
+    wrong.canonical_image_path = r"C:\Users\Public\wincommander-free.exe".into();
+    assert_eq!(gate.authorize_licence_observation(&wrong, RENEW_HYBRID_LICENSE_VERB, 7, true,
+        || panic!("untrusted path must not be authorized")), Err(PeerAuthError::PathNotAllowed));
+    assert_eq!(gate.authorize_licence_observation(&peer, "svc.unknown", 7, true,
+        || panic!("unexpected verb must not be authorized")), Err(PeerAuthError::PathNotAllowed));
+}
+
+#[test]
+fn licence_relay_rate_limits_each_verb_and_session() {
+    use wincmd_shared::svc::RENEW_HYBRID_LICENSE_VERB;
+    let gate = SessionHelperGate::with_allowed_root(Arc::new(Probe),
+        Some(PathBuf::from(r"C:\ProgramData\WinCommander\bin")));
+    for _ in 0..RATE_LIMIT_MAX_CALLS {
+        assert!(gate.authorize_licence_observation(&identity(7), RENEW_HYBRID_LICENSE_VERB,
+            7, true, || Ok(())).is_ok());
+    }
+    assert_eq!(gate.authorize_licence_observation(&identity(7), RENEW_HYBRID_LICENSE_VERB,
+        7, true, || Ok(())), Err(PeerAuthError::RateLimited));
+}
+
+#[test]
 fn fleet_policy_relay_requires_matching_active_session_and_protected_helper() {
     let gate = SessionHelperGate::with_allowed_root(
         Arc::new(Probe),

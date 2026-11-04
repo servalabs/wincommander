@@ -2072,6 +2072,12 @@ export function useBackend(retainCleanupScanErrors = false) {
         InputPath: params.inputPath,
         OutputPath: params.outputPath,
       }),
+    exportEncryptedBackup: (sourcePath: string, destinationParent: string) =>
+      execute("backup_container_export", { sourcePath, destinationParent }),
+    verifyEncryptedBackup: (copyPath: string) =>
+      execute("backup_container_verify", { copyPath }),
+    restoreBackupGeneration: (generationPath: string, destinationParent: string, allowLegacy: boolean) =>
+      execute("backup_generation_restore", { generationPath, destinationParent, allowLegacy }),
     attachStegoContainer: (params: AttachStegoContainerParams) =>
       execute("Attach-StegoContainer", {
         CarrierPath: params.carrierPath,

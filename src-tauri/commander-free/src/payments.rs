@@ -234,7 +234,7 @@ fn select_wincommander_catalog(mut offers: Vec<CatalogOffer>) -> Result<Vec<Cata
 #[tauri::command]
 pub async fn get_purchase_catalog() -> Result<Vec<CatalogOffer>, String> {
     let api_base = crate::license::license_api_base()?;
-    let client = crate::net::doh_http_client()?;
+    let client = crate::net::licence_http_client()?;
     let response = client
         .get(format!("{}/v1/catalog", api_base))
         .send()
@@ -287,7 +287,7 @@ pub async fn create_purchase(input: PurchaseInput) -> Result<PurchaseView, Strin
 
 async fn request_checkout(mut pending: PendingPurchase) -> Result<PendingPurchase, String> {
     let api_base = crate::license::license_api_base()?;
-    let client = crate::net::doh_http_client()?;
+    let client = crate::net::licence_http_client()?;
     let response = client
         .post(format!("{}/v1/purchases", api_base))
         .header("x-idempotency-key", &pending.idempotency_key)
@@ -371,7 +371,7 @@ async fn request_purchase_status(action: &str) -> Result<PurchaseStatus, String>
         .as_deref()
         .ok_or_else(|| "Purchase recovery is unavailable.".to_string())?;
 
-    let client = crate::net::doh_http_client()?;
+    let client = crate::net::licence_http_client()?;
     let response = client
         .post(format!(
             "{}/v1/purchases/{}/{}",
@@ -421,7 +421,7 @@ pub async fn resend_purchase_license() -> Result<(), String> {
         .recovery_token
         .as_deref()
         .ok_or_else(|| "Purchase recovery is unavailable.".to_string())?;
-    let client = crate::net::doh_http_client()?;
+    let client = crate::net::licence_http_client()?;
     let response = client
         .post(format!(
             "{}/v1/purchases/{}/resend",
@@ -454,7 +454,7 @@ pub async fn cancel_purchase_subscription() -> Result<Option<u64>, String> {
         .recovery_token
         .as_deref()
         .ok_or_else(|| "Purchase recovery is unavailable.".to_string())?;
-    let client = crate::net::doh_http_client()?;
+    let client = crate::net::licence_http_client()?;
     let response = client
         .post(format!(
             "{}/v1/purchases/{}/subscription/cancel",

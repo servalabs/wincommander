@@ -128,8 +128,319 @@ pub fn doh_http_client() -> Result<Client, String> {
         .map_err(|e| format!("Failed to build hybrid HTTP client: {}", e))
 }
 
-/// Returns an `Arc<dyn Resolve>` for callers that build their own
-/// reqwest client (Tauri updater plugin via its `configure_client` hook).
-pub fn doh_resolver() -> Arc<dyn Resolve> {
-    Arc::new(HybridResolver::new())
+/// Sensitive product traffic must not fall back to a classical-only key exchange.
+fn required_hybrid_tls_provider() -> rustls::crypto::CryptoProvider {
+    let mut provider = rustls::crypto::aws_lc_rs::default_provider();
+    provider.kx_groups = vec![rustls::crypto::aws_lc_rs::kx_group::X25519MLKEM768];
+    provider
+}
+
+pub(crate) fn required_hybrid_tls_config() -> Result<rustls::ClientConfig, String> {
+    use rustls_platform_verifier::BuilderVerifierExt;
+
+    rustls::ClientConfig::builder_with_provider(Arc::new(required_hybrid_tls_provider()))
+        .with_protocol_versions(&[&rustls::version::TLS13])
+        .map_err(|e| format!("Secure TLS configuration failed: {e}"))?
+        .with_platform_verifier()
+        .map_err(|e| format!("Certificate verifier unavailable: {e}"))
+        .map(|builder| builder.with_no_client_auth())
+}
+
+pub(crate) fn configure_required_hybrid_client(
+    builder: reqwest::ClientBuilder,
+    config: rustls::ClientConfig,
+) -> reqwest::ClientBuilder {
+    builder
+        .dns_resolver(Arc::new(HybridResolver::new()))
+        .https_only(true)
+        .redirect(reqwest::redirect::Policy::none())
+        .use_preconfigured_tls(config)
+}
+
+pub(crate) fn required_hybrid_http_client(timeout: Duration) -> Result<Client, String> {
+    configure_required_hybrid_client(Client::builder(), required_hybrid_tls_config()?)
+        .timeout(timeout)
+        .connect_timeout(CONNECT_TIMEOUT)
+        .build()
+        .map_err(|e| format!("Secure HTTP client failed: {e}"))
+}
+
+pub(crate) fn licence_http_client() -> Result<Client, String> {
+    required_hybrid_http_client(REQUEST_TIMEOUT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn licence_tls_requires_hybrid_and_rejects_untrusted_certificates() {
+        use rustls::pki_types::PrivatePkcs8KeyDer;
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let rcgen::CertifiedKey { cert, signing_key } =
+            rcgen::generate_simple_self_signed(vec!["127.0.0.1".into()]).unwrap();
+        let make_server = |group| {
+            let mut provider = rustls::crypto::aws_lc_rs::default_provider();
+            provider.kx_groups = vec![group];
+            Arc::new(
+                rustls::ServerConfig::builder_with_provider(Arc::new(provider))
+                    .with_protocol_versions(&[&rustls::version::TLS13])
+                    .unwrap()
+                    .with_no_client_auth()
+                    .with_single_cert(
+                        vec![cert.der().clone()],
+                        PrivatePkcs8KeyDer::from(signing_key.serialize_der()).into(),
+                    )
+                    .unwrap(),
+            )
+        };
+        let trusted_client = || {
+            let mut roots = rustls::RootCertStore::empty();
+            roots.add(cert.der().clone()).unwrap();
+            let config = rustls::ClientConfig::builder_with_provider(Arc::new(
+                required_hybrid_tls_provider(),
+            ))
+            .with_protocol_versions(&[&rustls::version::TLS13])
+            .unwrap()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+            Client::builder()
+                .no_proxy()
+                .use_preconfigured_tls(config)
+                .build()
+                .unwrap()
+        };
+        async fn attempt(server: Arc<rustls::ServerConfig>, client: Client) -> bool {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let address = listener.local_addr().unwrap();
+            let thread = std::thread::spawn(move || {
+                let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                let socket = loop {
+                    match listener.accept() {
+                        Ok((socket, _)) => break socket,
+                        Err(error)
+                            if error.kind() == std::io::ErrorKind::WouldBlock
+                                && std::time::Instant::now() < deadline =>
+                        {
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        Err(_) => return,
+                    }
+                };
+                socket.set_nonblocking(false).unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                socket
+                    .set_write_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut tls = rustls::StreamOwned::new(
+                    rustls::ServerConnection::new(server).unwrap(),
+                    socket,
+                );
+                let mut request = [0u8; 1024];
+                if tls.read(&mut request).is_ok() {
+                    let _ = tls.write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    );
+                    let _ = tls.flush();
+                }
+            });
+            let result = client
+                .get(format!("https://{address}/"))
+                .timeout(Duration::from_secs(5))
+                .send()
+                .await;
+            thread.join().unwrap();
+            result.is_ok_and(|response| response.status().is_success())
+        }
+        let hybrid = make_server(rustls::crypto::aws_lc_rs::kx_group::X25519MLKEM768);
+        let classical = make_server(rustls::crypto::aws_lc_rs::kx_group::X25519);
+        assert!(attempt(hybrid.clone(), trusted_client()).await);
+        assert!(!attempt(classical, trusted_client()).await);
+        assert!(!attempt(hybrid, licence_http_client().unwrap()).await);
+
+        let plain = TcpListener::bind("127.0.0.1:0").unwrap();
+        plain.set_nonblocking(true).unwrap();
+        let url = format!("http://{}/", plain.local_addr().unwrap());
+        assert!(licence_http_client()
+            .unwrap()
+            .get(url)
+            .send()
+            .await
+            .is_err());
+        assert_eq!(
+            plain.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires network access to the live licence service"]
+    async fn live_licence_service_accepts_hybrid_only_tls() {
+        let _response = licence_http_client()
+            .unwrap()
+            .get("https://wincommander-licensing.servalabs.com/trial/status")
+            .send()
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires network access to the live licence service"]
+    async fn live_commerce_catalog_accepts_hybrid_only_tls() {
+        let response = licence_http_client()
+            .unwrap()
+            .get("https://wincommander-licensing.servalabs.com/v1/catalog")
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires network access to the live update service"]
+    async fn live_update_manifests_and_artifacts_accept_hybrid_only_tls() {
+        let client = required_hybrid_http_client(Duration::from_secs(15)).unwrap();
+        for (path, artifact_pointer) in [
+            ("free/latest.json", "/platforms/windows-x86_64/url"),
+            ("pro/latest.json", "/url"),
+        ] {
+            let response = client
+                .get(format!("https://winupdates.servalabs.com/{path}"))
+                .send()
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap();
+            let manifest: serde_json::Value = response.json().await.unwrap();
+            let url = reqwest::Url::parse(
+                manifest
+                    .pointer(artifact_pointer)
+                    .unwrap()
+                    .as_str()
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(url.scheme(), "https");
+            assert_eq!(url.host_str(), Some("winupdates.servalabs.com"));
+            client
+                .head(url)
+                .send()
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn doh_provider_prefers_hybrid_key_exchange() {
+        let provider = hickory_resolver::net::tls::default_provider();
+        assert_eq!(
+            provider.kx_groups[0].name(),
+            rustls::NamedGroup::X25519MLKEM768
+        );
+        assert!(provider
+            .kx_groups
+            .iter()
+            .any(|group| group.name() == rustls::NamedGroup::X25519));
+    }
+
+    #[test]
+    fn doh_tls_rejects_an_untrusted_server() {
+        use rustls::pki_types::{PrivatePkcs8KeyDer, ServerName};
+        use std::net::{TcpListener, TcpStream};
+
+        let rcgen::CertifiedKey { cert, signing_key } =
+            rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+        let server = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::aws_lc_rs::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![cert.der().clone()],
+            PrivatePkcs8KeyDer::from(signing_key.serialize_der()).into(),
+        )
+        .unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let worker = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut conn = rustls::ServerConnection::new(Arc::new(server)).unwrap();
+            while conn.is_handshaking() && conn.complete_io(&mut socket).is_ok() {}
+        });
+        let config = hickory_resolver::net::tls::client_config().unwrap();
+        let name = ServerName::try_from("localhost").unwrap().to_owned();
+        let mut client = rustls::ClientConnection::new(Arc::new(config), name).unwrap();
+        let mut socket = TcpStream::connect(address).unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut result = Ok((0, 0));
+        while client.is_handshaking() && result.is_ok() {
+            result = client.complete_io(&mut socket);
+        }
+        let error = result.expect_err("an untrusted certificate must not be accepted");
+        assert!(matches!(
+            error
+                .get_ref()
+                .and_then(|e| e.downcast_ref::<rustls::Error>()),
+            Some(rustls::Error::InvalidCertificate(_))
+        ));
+        drop(socket);
+        worker.join().unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires network access to Cloudflare DNS"]
+    async fn cloudflare_doh_resolves_with_certificate_validation() {
+        let addresses = HybridResolver::new()
+            .lookup_doh("example.com")
+            .await
+            .unwrap();
+        assert!(!addresses.is_empty());
+    }
+
+    #[test]
+    #[ignore = "requires network access to Cloudflare DNS"]
+    fn cloudflare_doh_negotiates_hybrid_tls() {
+        use rustls::pki_types::ServerName;
+        use std::net::TcpStream;
+
+        let address = "1.1.1.1:443".parse().unwrap();
+        let mut socket = TcpStream::connect_timeout(&address, Duration::from_secs(5)).unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        socket
+            .set_write_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let name = ServerName::try_from("cloudflare-dns.com")
+            .unwrap()
+            .to_owned();
+        let mut config = hickory_resolver::net::tls::client_config().unwrap();
+        config.alpn_protocols = vec![b"h2".to_vec()];
+        let mut client = rustls::ClientConnection::new(Arc::new(config), name).unwrap();
+        while client.is_handshaking() {
+            client.complete_io(&mut socket).unwrap();
+        }
+        assert_eq!(
+            client
+                .negotiated_key_exchange_group()
+                .map(|group| group.name()),
+            Some(rustls::NamedGroup::X25519MLKEM768)
+        );
+        assert_eq!(client.alpn_protocol(), Some(b"h2".as_slice()));
+    }
 }

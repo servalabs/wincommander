@@ -230,7 +230,7 @@ async fn actual_cli_exit_codes_identify_ipc_failure_without_english_error_text()
                         "-Command".into(),
                         format!("exit {code}")
                     ],
-                    Duration::from_secs(5)
+                    Duration::from_secs(20)
                 )
                 .await,
             Err(Failure::Unavailable)

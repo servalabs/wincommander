@@ -74,6 +74,23 @@ mod reconciler;
 mod diagnostics;
 mod policy_store;
 mod fleet_machine_policy;
+mod fleet_credential;
+#[cfg(all(windows, feature = "experimental-pq-licence"))]
+#[allow(dead_code)]
+#[path = "../../commander-free/src/fleet_lifecycle_mutex.rs"]
+mod licence_coordination;
+#[cfg(all(windows, feature = "experimental-pq-licence"))]
+fn licence_security_lock() -> Result<licence_coordination::Guard, &'static str> {
+    licence_coordination::acquire_named(r"Global\WinCommander.Licence.Security.v1", 30_000)
+        .map_err(|_| "license security coordination is unavailable")
+}
+#[cfg(all(windows, feature = "experimental-pq-licence"))]
+#[allow(dead_code)] // Not connected to enrolment or production licence decisions.
+mod licence_device_credential;
+mod fleet_runtime_env;
+mod fleet_presence;
+#[cfg(windows)]
+mod fleet_contact_transfer;
 mod shield_journal;
 mod vault_access;
 

@@ -72,6 +72,8 @@ mod file_search;
 mod file_watch_trigger;
 mod firewall_audit;
 mod fleet_agent;
+mod fleet_local_arming;
+mod fleet_contact_relay;
 mod flow_bridge;
 mod flow_bundle;
 mod flow_capabilities;
@@ -107,6 +109,9 @@ mod payments;
 mod port_monitor;
 mod print_log;
 mod pro_install;
+#[cfg(all(windows, any(feature = "experimental-pq-free-release", feature = "experimental-pq-pro-release")))]
+#[path = "updater/hybrid_free_anchor.rs"]
+mod hybrid_update_anchor;
 mod process_privileges;
 mod ransomware_monitor;
 #[cfg(windows)]
@@ -1118,11 +1123,10 @@ async fn app_install_update_doh(app: tauri::AppHandle) -> Result<(), String> {
         let body = update.body.clone();
         tokio::time::timeout(
             crate::updater::INSTALL_TIMEOUT,
-            update.download_and_install(|_, _| {}, || {}),
+            updater::install_update(&update, channel, None),
         )
         .await
-        .map_err(|_| "Update installation timed out".to_string())?
-        .map_err(|e| format!("Install failed: {}", e))?;
+        .map_err(|_| "Update installation timed out".to_string())??;
         Ok((version, current, body))
     }
     .await;
@@ -2376,30 +2380,10 @@ pub fn run() {
                 // calls PowerShell on a cold boot (can take seconds) — gate it
                 // inside the spawned task so the setup thread is never blocked.
                 if s.app.fleet.enabled && !s.app.fleet.server_url.is_empty() {
-                    // Clone the cheap string fields needed inside the task.
-                    let fleet_server_url   = s.app.fleet.server_url.clone();
-                    let fleet_dispatch     = s.app.fleet.dispatch;
-                    let fleet_signing_key  = s.app.fleet.signing_key_pub.clone();
-                    let fleet_device_id    = s.device_id.clone();
                     tauri::async_runtime::spawn(async move {
-                        // Gate the startup path on the explicit Fleet service claim — the
-                        // command wrappers use the same central service gate, but this path
-                        // goes straight to the sidecar, so a lapsed-Fleet user with
-                        // fleet.enabled in settings
-                        // must NOT silently re-enroll. Checked off-thread so PowerShell
-                        // (current_device_hash) never runs on the setup thread.
+                        // Entitlement and lease acquisition stay off the setup thread.
                         if license::require_service_feature("fleet").is_err() { return; }
-                        let args = serde_json::json!({
-                            "serverUrl": fleet_server_url,
-                            "dispatch": fleet_dispatch,
-                            "signingKeyPub": fleet_signing_key,
-                            // Stable device id so the runtime auto-connect re-enrolls
-                            // the SAME fleet row (dedup — matches fleet_connect).
-                            "deviceId": fleet_device_id,
-                        });
-                        if let Err(e) =
-                            sidecar::dispatch_paid_command("fleet_agent_configure", args).await
-                        {
+                        if let Err(e) = fleet_agent::resume_from_settings().await {
                             log_message(
                                 "warn",
                                 &format!("[Fleet] startup auto-connect failed: {e}"),
@@ -3164,6 +3148,7 @@ pub fn run() {
             // Feature 5 — crypto-erase: delete TPM vault key (irreversible, paid)
             evidence_vault::delete_vault_tpm_key,
             inactivity_timer::get_dead_mans_switch_config,
+            inactivity_timer::get_dead_mans_switch_status,
             inactivity_timer::set_dead_mans_switch_config,
             inactivity_timer::reset_dead_mans_switch_timer,
             inactivity_timer::clear_dead_mans_switch_fired,
@@ -3185,6 +3170,7 @@ pub fn run() {
             fleet_agent::fleet_machine_trust_status,
             fleet_agent::fleet_disconnect,
             fleet_agent::fleet_status,
+            fleet_agent::fleet_service_contact_status,
             fleet_agent::fleet_apply_pending_epoch,
             fleet_agent::fleet_update_posture_snapshot,
             fleet_agent::fleet_report_privacy_shield_status,

@@ -231,12 +231,19 @@ pub fn build_client_without_redirects(pins: Option<SpkiPinSet>) -> Result<reqwes
     build_client_inner(pins, true)
 }
 
-fn build_client_inner(pins: Option<SpkiPinSet>, no_redirects: bool) -> Result<reqwest::Client, String> {
+fn build_client_inner(
+    pins: Option<SpkiPinSet>,
+    no_redirects: bool,
+) -> Result<reqwest::Client, String> {
     let builder = if no_redirects {
         reqwest::Client::builder().redirect(reqwest::redirect::Policy::none())
-    } else { reqwest::Client::builder() };
+    } else {
+        reqwest::Client::builder()
+    };
     let Some(pins) = pins else {
-        return builder.build().map_err(|e| format!("fleet client build failed: {e}"));
+        return builder
+            .build()
+            .map_err(|e| format!("fleet client build failed: {e}"));
     };
 
     let provider = Arc::new(aws_lc_rs::default_provider());
@@ -266,6 +273,138 @@ fn build_client_inner(pins: Option<SpkiPinSet>, no_redirects: bool) -> Result<re
 mod tests {
     use super::*;
     use rcgen::{generate_simple_self_signed, CertifiedKey};
+
+    #[tokio::test]
+    async fn live_tls_pin_accepts_matching_server_and_rejects_mismatch() {
+        use rustls::pki_types::PrivatePkcs8KeyDer;
+        use std::io::{Read, Write};
+        use std::net::{TcpListener, TcpStream};
+        use std::time::{Duration, Instant};
+
+        let CertifiedKey { cert, signing_key } =
+            generate_simple_self_signed(vec!["localhost".to_string(), "127.0.0.1".to_string()])
+                .unwrap();
+        let cert = CertificateDer::from(cert.der().to_vec());
+        let pin = spki_sha256(&cert).unwrap();
+        let make_server = |group| {
+            let mut provider = aws_lc_rs::default_provider();
+            provider.kx_groups = vec![group];
+            let key = PrivatePkcs8KeyDer::from(signing_key.serialize_der());
+            Arc::new(
+                rustls::ServerConfig::builder_with_provider(Arc::new(provider))
+                    .with_safe_default_protocol_versions()
+                    .unwrap()
+                    .with_no_client_auth()
+                    .with_single_cert(vec![cert.clone()], key.into())
+                    .unwrap(),
+            )
+        };
+        let hybrid = make_server(aws_lc_rs::kx_group::X25519MLKEM768);
+        let classical = make_server(aws_lc_rs::kx_group::X25519);
+        let both = Arc::new(
+            rustls::ServerConfig::builder_with_provider(Arc::new(aws_lc_rs::default_provider()))
+                .with_safe_default_protocol_versions()
+                .unwrap()
+                .with_no_client_auth()
+                .with_single_cert(
+                    vec![cert.clone()],
+                    PrivatePkcs8KeyDer::from(signing_key.serialize_der()).into(),
+                )
+                .unwrap(),
+        );
+
+        async fn attempt(
+            server: Arc<rustls::ServerConfig>,
+            client: reqwest::Client,
+        ) -> (bool, Option<rustls::NamedGroup>) {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let address = listener.local_addr().unwrap();
+            let thread = std::thread::spawn(move || {
+                let deadline = Instant::now() + Duration::from_secs(20);
+                let socket: TcpStream = loop {
+                    match listener.accept() {
+                        Ok((socket, _)) => break socket,
+                        Err(error)
+                            if error.kind() == std::io::ErrorKind::WouldBlock
+                                && Instant::now() < deadline =>
+                        {
+                            std::thread::sleep(Duration::from_millis(10))
+                        }
+                        Err(error) => panic!("local TLS test accept failed: {error}"),
+                    }
+                };
+                socket.set_nonblocking(false).unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(20)))
+                    .unwrap();
+                socket
+                    .set_write_timeout(Some(Duration::from_secs(20)))
+                    .unwrap();
+                let connection = rustls::ServerConnection::new(server).unwrap();
+                let mut tls = rustls::StreamOwned::new(connection, socket);
+                let mut request = [0u8; 4096];
+                if tls.read(&mut request).is_ok() {
+                    let _ = tls.write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK",
+                    );
+                    let _ = tls.flush();
+                }
+                tls.conn
+                    .negotiated_key_exchange_group()
+                    .map(|group| group.name())
+            });
+            let response = client
+                .get(format!("https://127.0.0.1:{}/", address.port()))
+                .timeout(Duration::from_secs(20))
+                .send()
+                .await;
+            let group = thread.join().unwrap();
+            (response.is_ok_and(|r| r.status().is_success()), group)
+        }
+
+        let pinned = || build_client(Some(SpkiPinSet::new(vec![SpkiPin(pin)]).unwrap())).unwrap();
+        assert_eq!(
+            attempt(hybrid.clone(), pinned()).await,
+            (true, Some(rustls::NamedGroup::X25519MLKEM768))
+        );
+        assert_eq!(
+            attempt(classical.clone(), pinned()).await,
+            (true, Some(rustls::NamedGroup::X25519))
+        );
+        // Exercise the regular reqwest TLS configuration as used by desktop clients too.
+        // The custom root is only for this local, self-signed test server.
+        let trusted = || {
+            reqwest::Client::builder()
+                .add_root_certificate(reqwest::Certificate::from_der(cert.as_ref()).unwrap())
+                .no_proxy()
+                .build()
+                .unwrap()
+        };
+        assert_eq!(
+            attempt(hybrid.clone(), trusted()).await,
+            (true, Some(rustls::NamedGroup::X25519MLKEM768))
+        );
+        assert_eq!(
+            attempt(both, trusted()).await,
+            (true, Some(rustls::NamedGroup::X25519MLKEM768))
+        );
+        assert_eq!(
+            attempt(classical, trusted()).await,
+            (true, Some(rustls::NamedGroup::X25519))
+        );
+        let mut wrong = pin;
+        wrong[0] ^= 1;
+        assert!(
+            !attempt(
+                hybrid.clone(),
+                build_client(Some(SpkiPinSet::new(vec![SpkiPin(wrong)]).unwrap())).unwrap()
+            )
+            .await
+            .0
+        );
+        assert!(!attempt(hybrid, build_client(None).unwrap()).await.0);
+    }
 
     /// Generate a self-signed cert for `name` and return (DER cert, SPKI SHA-256 hash).
     fn self_signed(name: &str) -> (CertificateDer<'static>, [u8; 32]) {

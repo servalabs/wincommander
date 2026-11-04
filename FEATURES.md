@@ -22,6 +22,12 @@ the backend and private component before execution.
 
 - Visible Windows privacy, telemetry, application, network, and security-posture
   controls where the public backend supports the operation.
+- Additional account and PC app-permission defaults for presence sensing,
+  passkeys and the passkey list, Bluetooth, human-interface devices, custom
+  sensors, serial ports, USB, Wi-Fi information and Wi-Fi Direct. Availability
+  depends on what Windows exposes.
+  Restoring a WinCommander change restores the prior default; individual app
+  exceptions and administrator policies can affect access.
 - Current-versus-intended state reporting so the UI can show whether Windows
   actually applied a requested setting.
 - Fix All keeps supported Explorer preferences in the current Windows account,
@@ -31,6 +37,17 @@ the backend and private component before execution.
   confirmed Windows hardware status, not just a saved policy preference.
 - Safety metadata for administrative, security-reducing, and destructive
   operations.
+- Optional policies to hide the Start recommended section and Settings Home
+  on supported Windows 11 editions. Existing Settings page restrictions are
+  retained, and WinCommander changes can be restored to their previous state.
+- Separate controls for the Include in library, Give access to and Share
+  right-click registrations when detected. They preserve other registry data
+  and offer restoration from the account that made the change; Windows menus
+  can vary by version and account.
+- Optional Windows Update policy to avoid scheduled update restarts while a
+  user is signed in. It requires Windows' scheduled-install setting; when no
+  schedule is configured, users can explicitly add and later restore one. It
+  does not prevent all restarts. Existing administrator policies are preserved.
 - Dashboard Bluetooth uses Windows machine policy, with administrator approval
   and the matching local service. It does not disable adapters. Policy control
   checks eligible Windows client editions and Server 2025 or later against the
@@ -42,6 +59,18 @@ the backend and private component before execution.
   paths.
 
 ### Local alerts and visibility
+
+- Active Ports can copy the currently visible connection snapshot as a text
+  report. It reflects the selected filters and scan cap; it is not packet
+  capture or a history of past connections.
+- An optional Active Ports session report samples local and remote endpoints
+  during refreshes, including rows hidden by filters. It can miss short-lived
+  connections and does not show traffic contents or establish direction. It is
+  memory-only, limited to 1,000 rows, and stops when the view closes.
+- Port Guard can copy its retained inbound observation history with coverage,
+  dropped-event and retention information. It covers watched ports rather than
+  all network traffic, and repeated observations are not necessarily separate
+  connections or logins.
 
 - Local ransomware-style mass-change alerting.
 - Basic USB attach/detach timeline, observed volume mounts/unmounts, and device
@@ -185,6 +214,9 @@ operational risk, or proprietary enforcement logic.
 - USB/HID policy, device intelligence, transfer metering, quarantine, and
   reactive unknown-keyboard approval.
 - Advanced automation rules and event-driven actions.
+- Local Windows Firewall rules for a specific remote IPv4/IPv6 address or
+  subnet, with separate inbound/outbound and allow/block choices. Rule status
+  is read back from Windows; other firewall policies can affect connections.
 - Encrypted-volume create, mount, dismount, recovery, and secure-erasure
   workflows. Personal and Quick Mount use the supplied password, PIM, and
   keyfile to select a standard, outer, or hidden volume automatically. Secure
@@ -196,6 +228,17 @@ operational risk, or proprietary enforcement logic.
   encrypted-container snapshots with explicit replacement confirmation; restoring
   a snapshot does not grant new Windows account permissions. Fleet-managed
   containers retain their separate selected-user and group permission checks.
+- Secure Storage offers explicit encrypted-container copy, copy checking, and
+  backed-up file recovery with local file/folder pickers. Normally dismount the
+  container before copying its backing file to existing local or network storage.
+  Restore checks the selected mounted generation and writes plaintext contents
+  to a new folder; legacy recovery requires an explicit choice. These checks do
+  not prove remote durability or retention. Requires a matching updated Pro;
+  availability starts with a future release containing this paired app change.
+  Copy-check results identify the submitted folder and when the app received
+  the result using this device's clock. They remain scoped to that check across
+  picker changes and panel navigation; they do not track later file changes or
+  establish the latest scheduled export. This result state clears on restart.
 - Personal Vault folder sync through Syncthing. Explicit setup installs a
   verified per-user engine if needed, retains existing sync identities, and
   follows the same container when its drive letter changes. After mounting,
@@ -253,9 +296,15 @@ a standard owner cannot transfer ownership. Group membership changes remain
 restricted to authorized administrators. Seeing a group does not grant access
 to its Vaults.
 
-Fleet enrollment is an administrative boundary. On an enrolled device, the
-organization's configured productivity collection can include application
-names, window titles, URLs/page titles, source-file paths, project/language
+Fleet enrollment is an administrative boundary. The device enrollment card
+shows active agent retries with the last reported error, including from another
+Windows account; terminal errors still allow explicit enrollment. Retrying does not
+confirm a current connection or completed enrollment. The card
+displays the last recorded signed Fleet contact when available. It is a
+historical device-clock observation, not current link health.
+
+On an enrolled device, the organization's configured productivity collection
+can include application names, window titles, URLs/page titles, source-file paths, project/language
 metadata, and the interactive username. Built-in ActivityWatch inputs use
 aggregate key/click/scroll counts rather than keystroke content and do not
 capture screenshots, webcam frames, or clipboard contents. A generic

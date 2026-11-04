@@ -6,28 +6,38 @@
 // When a paid feature is invoked and the Pro binary isn't installed (or
 // doesn't match the pinned hash), commander-free walks the user through:
 //
-//   1. Confirmation gatewall — "WinCommander Pro is signed by ServaLabs.
-//      Defender / SmartScreen will flag it because it contains
-//      Privacy Clean code. Add a folder exclusion?" — explicit consent
-//      required.
-//   2. Defender exclusion for "%ProgramData%\WinCommander\bin" via
-//      PowerShell, after explicit consent.
-//   3. Signed-URL fetch from the licence server — the worker returns a
-//      time-bound URL for the Pro binary version that matches the
-//      user's licence cohort.
-//   4. Download to %ProgramData%\WinCommander\bin\wincommander-pro.exe.tmp
+//   1. A user may explicitly opt in to a Defender exclusion for the managed
+//      Pro folder. The exclusion is not required for installation.
+//   2. Fetch the selected release metadata from the approved update host.
+//      Its hash is not an independent signature on the Pro artifact.
+//   3. Download to %ProgramData%\WinCommander\bin\wincommander-pro.exe.tmp
 //      with a SHA-256 checksum verification on the way in.
-//   5. Atomic rename to the final path; pin the verified hash so the
-//      sidecar handshake check can compare.
+//   4. Atomic rename to the final path and record the checked hash for the
+//      sidecar handshake.
 //
 // All of the above is implemented and live: `install_pro_binary` runs the
-// full host-pinned download + SHA-256 verify flow and calls
+// full host-pinned download + SHA-256 verify flow and may call
 // `add_defender_exclusion` after explicit consent.
 
 use std::{collections::BTreeMap, path::PathBuf};
 
+#[cfg(feature = "experimental-pq-pro-release")]
+#[path = "pro_install/hybrid_release.rs"]
+mod hybrid_release;
+#[cfg(feature = "experimental-pq-pro-release")]
+use hybrid_release::{fetch_hybrid_pro, hybrid_pro_trust, verify_hybrid_pro};
+#[cfg(feature = "experimental-pq-pro-release")]
+#[path = "pro_install/hybrid_rollback.rs"]
+mod hybrid_rollback;
+#[cfg(feature = "experimental-pq-pro-release")]
+#[path = "pro_install/hybrid_history.rs"]
+mod hybrid_history;
+
+
 #[path = "../../runtime-support/pro_update_guard.rs"]
 pub(crate) mod update_guard;
+#[path = "pro_download.rs"]
+mod pro_download;
 #[path = "pro_update_process.rs"]
 mod update_process;
 #[path = "pro_update_replace.rs"]
@@ -52,7 +62,7 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 // is shared by every interactive Windows user.  A standard token may read and
 // run that verified artifact, but it must never replace it.  The foreground
 // application therefore hands the narrow, validated update request to a
-// second copy of this signed executable through Windows UAC.
+// second copy of the foreground executable through Windows UAC.
 const MACHINE_PRO_UPDATE_FLAG: &str = "--machine-pro-update";
 const MACHINE_PRO_UPDATE_JOB_FLAG: &str = "--machine-pro-job";
 const MACHINE_PRO_UPDATE_URL_FLAG: &str = "--machine-pro-url";
@@ -271,22 +281,25 @@ pub struct ProInstallStatus {
 struct ProInstallMetadata {
     version: Option<String>,
     sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    signed_manifest: Option<crate::investigator_install::manifest::SignedManifestEnvelope>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    hybrid_manifest: Option<String>,
+}
+
+#[derive(Clone, Default)]
+struct ProReleaseProof {
+    signed_manifest: Option<crate::investigator_install::manifest::SignedManifestEnvelope>,
+    hybrid_manifest: Option<String>,
+    #[cfg(feature = "experimental-pq-pro-release")]
+    hybrid_signed_size: Option<u64>,
 }
 
 /// Hash the resolved Pro EXE on disk so the frontend can compare against
 /// the manifest's `sha256` and decide whether to auto-upgrade. Returns
 /// None if the binary isn't present or can't be read.
 fn compute_local_pro_sha256() -> Option<String> {
-    let path = pro_resolve_path()?;
-    let bytes = std::fs::read(&path).ok()?;
-    let mut h = Sha256::new();
-    h.update(&bytes);
-    Some(
-        h.finalize()
-            .iter()
-            .map(|b| format!("{:02x}", b))
-            .collect::<String>(),
-    )
+    compute_pro_sha256_at(&pro_resolve_path()?)
 }
 
 fn pro_install_metadata_path() -> Result<PathBuf, String> {
@@ -346,15 +359,24 @@ fn clear_disabled_markers() {
 }
 
 fn compute_pro_sha256_at(path: &std::path::Path) -> Option<String> {
-    let bytes = std::fs::read(path).ok()?;
+    use std::io::Read;
+    let mut file = std::fs::File::open(path).ok()?;
     let mut h = Sha256::new();
-    h.update(&bytes);
-    Some(
-        h.finalize()
-            .iter()
-            .map(|b| format!("{:02x}", b))
-            .collect::<String>(),
-    )
+    let mut buffer = [0_u8; 65536];
+    loop {
+        let count = file.read(&mut buffer).ok()?;
+        if count == 0 { break; }
+        h.update(&buffer[..count]);
+    }
+    Some(h.finalize().iter().map(|b| format!("{:02x}", b)).collect())
+}
+
+fn verify_installed_signed_size(path: &std::path::Path, expected: Option<u64>) -> Result<(), String> {
+    if let Some(expected) = expected {
+        let actual = std::fs::metadata(path).map_err(|_| "validation:Cannot inspect installed Pro size")?.len();
+        if actual != expected { return Err("validation:Installed Pro size does not match the signed release".into()); }
+    }
+    Ok(())
 }
 
 async fn remove_existing_pro_binary(path: &std::path::Path) -> Result<(), String> {
@@ -404,12 +426,55 @@ pub(crate) fn compute_install_path_sha256() -> Option<String> {
     compute_pro_sha256_at(&path)
 }
 
-/// Check whether `hash` appears in the official install metadata.
-/// Returns Some(metadata) only when wincommander-pro.json exists, parses correctly,
-/// and records `hash` as the expected sha256. Does NOT verify the on-disk binary —
-/// callers must pair this with `compute_install_path_sha256()` for a complete check.
+/// Require a signed manifest binding the recorded version and hash. Callers
+/// must still compare the managed binary's on-disk hash independently.
 pub(crate) fn install_metadata_has_hash(hash: &str) -> bool {
-    read_pro_install_metadata(Some(hash)).is_some()
+    let Some(metadata) = read_pro_install_metadata(Some(hash)) else {
+        return false;
+    };
+    #[cfg(feature = "experimental-pq-pro-release")]
+    {
+        pro_install_path().is_ok_and(|path| metadata_hybrid_matches_file(&metadata, hash, &path))
+    }
+    #[cfg(not(feature = "experimental-pq-pro-release"))]
+    metadata_has_signed_hash(&metadata, hash)
+}
+
+#[cfg(feature = "experimental-pq-pro-release")]
+fn metadata_hybrid_matches_file(metadata: &ProInstallMetadata, hash: &str, path: &std::path::Path) -> bool {
+    verified_metadata_hybrid(metadata, hash)
+        .and_then(|verified| verify_installed_signed_size(path, Some(verified.size)))
+        .is_ok()
+}
+
+#[cfg(feature = "experimental-pq-pro-release")]
+fn verified_metadata_hybrid(metadata: &ProInstallMetadata, hash: &str) -> Result<hybrid_release::VerifiedHybridPro, String> {
+    if !metadata.sha256.eq_ignore_ascii_case(hash) { return Err("validation:Pro hash mismatch".into()); }
+    let envelope = metadata.hybrid_manifest.as_deref().ok_or("validation:Hybrid Pro release is missing")?;
+    let trust = hybrid_pro_trust()?;
+    verify_hybrid_pro(envelope.as_bytes(), &trust, metadata.version.as_deref(), hash, None)
+}
+
+#[cfg(any(test, not(feature = "experimental-pq-pro-release")))]
+fn metadata_has_signed_hash(metadata: &ProInstallMetadata, hash: &str) -> bool {
+    if !metadata.sha256.eq_ignore_ascii_case(hash) {
+        return false;
+    }
+    #[cfg(feature = "experimental-pq-pro-release")]
+    {
+        verified_metadata_hybrid(metadata, hash).is_ok()
+    }
+    #[cfg(not(feature = "experimental-pq-pro-release"))]
+    {
+        let Some(envelope) = &metadata.signed_manifest else {
+            return false;
+        };
+        if let Ok(release) = crate::investigator_install::manifest::verify_signed_pro(envelope) {
+            return signed_pro_release_matches(&release, metadata.version.as_deref(), hash);
+        }
+        crate::investigator_install::manifest::verify_manifest(envelope)
+            .is_ok_and(|manifest| signed_pro_matches(&manifest, metadata.version.as_deref(), hash))
+    }
 }
 
 /// Replace the shared version/hash record without leaving a partially-written
@@ -463,11 +528,17 @@ fn atomic_replace_shared_file(path: &std::path::Path, bytes: &[u8]) -> Result<()
     Ok(())
 }
 
-fn write_pro_install_metadata(version: Option<String>, sha256: &str) -> Result<(), String> {
+fn write_pro_install_metadata(
+    version: Option<String>,
+    sha256: &str,
+    proof: ProReleaseProof,
+) -> Result<(), String> {
     let path = pro_install_metadata_path()?;
     let metadata = ProInstallMetadata {
         version,
         sha256: sha256.to_ascii_lowercase(),
+        signed_manifest: proof.signed_manifest,
+        hybrid_manifest: proof.hybrid_manifest,
     };
     let bytes =
         serde_json::to_vec_pretty(&metadata).map_err(|e| format!("disk:metadata encode: {}", e))?;
@@ -619,7 +690,8 @@ pub async fn fetch_pro_manifest(manifest_url: String) -> Result<serde_json::Valu
     // as the license/update hosts that were observed to be ISP-DNS-blocked,
     // so route through the same system-DNS-first/Cloudflare-DoH-fallback
     // resolver license.rs and updater.rs already use (see net.rs).
-    let client = crate::net::doh_http_client().map_err(|e| format!("network:{}", e))?;
+    let client = crate::net::required_hybrid_http_client(std::time::Duration::from_secs(15))
+        .map_err(|e| format!("network:{}", e))?;
     let resp = client
         .get(&manifest_url)
         .send()
@@ -655,6 +727,10 @@ pub async fn get_pro_install_status() -> Result<serde_json::Value, String> {
     let local_sha256 = managed_install
         .and_then(|p| compute_pro_sha256_at(p))
         .or_else(compute_local_pro_sha256);
+    // In the opt-in hybrid rehearsal, an old file without a hybrid proof
+    // must not look current to the install/recovery UI.
+    #[cfg(feature = "experimental-pq-pro-release")]
+    let local_sha256 = local_sha256.filter(|hash| install_metadata_has_hash(hash));
     let metadata = read_pro_install_metadata(local_sha256.as_deref());
     let local_version = metadata
         .and_then(|m| m.version)
@@ -873,7 +949,6 @@ pub async fn get_defender_status() -> Result<DefenderStatus, String> {
 //      try a handshake.
 
 use sha2::{Digest, Sha256};
-use tokio::io::AsyncWriteExt;
 
 const DOWNLOAD_TIMEOUT_SECS: u64 = 300; // 5 min
 
@@ -951,7 +1026,7 @@ async fn verify_published_pro_request(
     download_url: &str,
     expected_sha256: &str,
     pro_version: Option<&str>,
-) -> Result<(), String> {
+) -> Result<ProReleaseProof, String> {
     let channel = crate::updater::selected_update_channel()?;
     let pinned_url = format!(
         "https://{ALLOWED_UPDATE_HOST}/pro/v{}/latest.json",
@@ -967,7 +1042,68 @@ async fn verify_published_pro_request(
         }
         Err(error) => return Err(error),
     };
-    verify_pro_manifest_request(&manifest, download_url, expected_sha256, pro_version)
+    verify_pro_manifest_request(&manifest, download_url, expected_sha256, pro_version)?;
+    #[cfg(feature = "experimental-pq-pro-release")]
+    {
+        let trust = hybrid_pro_trust()?;
+        let version = pro_version.ok_or("validation:Pro release version is missing")?;
+        let envelope = fetch_hybrid_pro(version).await?;
+        let verified = verify_hybrid_pro(envelope.as_bytes(), &trust, pro_version, expected_sha256, Some(download_url))?;
+        Ok(ProReleaseProof { signed_manifest: None, hybrid_manifest: Some(envelope), hybrid_signed_size: Some(verified.size) })
+    }
+    #[cfg(not(feature = "experimental-pq-pro-release"))]
+    {
+    if crate::sidecar::pro_hash_is_accepted(expected_sha256) {
+        return Ok(ProReleaseProof::default());
+    }
+    let version = pro_version.ok_or("validation:Pro release version is missing")?;
+    if let Some(envelope) = crate::investigator_install::manifest::fetch_signed_pro(version)
+        .await
+        .map_err(|error| format!("validation:Unable to verify signed Pro release: {error}"))?
+    {
+        let release = crate::investigator_install::manifest::verify_signed_pro(&envelope)?;
+        if !signed_pro_release_matches(&release, pro_version, expected_sha256)
+            || release.url != download_url
+        {
+            return Err("validation:Pro release does not match its signed record.".into());
+        }
+        return Ok(ProReleaseProof { signed_manifest: Some(envelope), hybrid_manifest: None });
+    }
+    let (envelope, signed) = crate::investigator_install::manifest::fetch_manifest_for_pro(version)
+        .await
+        .map_err(|error| format!("validation:Unable to verify signed Pro release: {error}"))?;
+    if !signed_pro_matches(&signed, pro_version, expected_sha256) {
+        return Err("validation:Pro release does not match the independently signed manifest. Update Free or retry after the release is published.".to_string());
+    }
+    Ok(ProReleaseProof { signed_manifest: Some(envelope), hybrid_manifest: None })
+    }
+}
+
+#[cfg(any(test, not(feature = "experimental-pq-pro-release")))]
+fn signed_pro_release_matches(
+    release: &crate::investigator_install::manifest::SignedProRelease,
+    version: Option<&str>,
+    sha256: &str,
+) -> bool {
+    version.and_then(parse_semver).is_some_and(|expected| {
+        parse_semver(&release.version) == Some(expected)
+            && release.sha256.eq_ignore_ascii_case(sha256)
+    })
+}
+
+#[cfg(any(test, not(feature = "experimental-pq-pro-release")))]
+fn signed_pro_matches(
+    manifest: &crate::investigator_install::manifest::InvestigatorManifest,
+    version: Option<&str>,
+    sha256: &str,
+) -> bool {
+    use crate::investigator_install::manifest::PRO_SIDECAR_NAME;
+    version.and_then(parse_semver).is_some_and(|expected| {
+        parse_semver(&manifest.version) == Some(expected)
+            && manifest.artifacts.iter().any(|artifact| {
+                artifact.name == PRO_SIDECAR_NAME && artifact.sha256.eq_ignore_ascii_case(sha256)
+            })
+    })
 }
 
 fn verify_pro_package_version(
@@ -1367,7 +1503,8 @@ async fn install_pro_binary_machine(
 
     // The renderer cannot make an old artifact current by relabeling its version or hash.
     let channel = crate::updater::selected_update_channel()?;
-    verify_published_pro_request(&download_url, &expected_sha256, pro_version.as_deref()).await?;
+    let signed_manifest =
+        verify_published_pro_request(&download_url, &expected_sha256, pro_version.as_deref()).await?;
 
     #[cfg(windows)]
     let exclusion_already_set = defender_exclusion_already_set();
@@ -1380,14 +1517,23 @@ async fn install_pro_binary_machine(
         .ok_or_else(|| "validation:install path has no parent".to_string())?;
     std::fs::create_dir_all(parent).map_err(|e| format!("disk:create install dir: {}", e))?;
     let _install_reservation = update_guard::reserve_install(&install_path)?;
+    #[cfg(feature = "experimental-pq-pro-release")]
+    hybrid_rollback::check_and_record_floor(
+        &pro_install_metadata_path()?, &signed_manifest, pro_version.as_deref(), &expected_sha256,
+    )?;
+    #[cfg(feature = "experimental-pq-pro-release")]
+    let signed_size = Some(signed_manifest.hybrid_signed_size.ok_or("validation:Hybrid Pro release size is missing")?);
+    #[cfg(not(feature = "experimental-pq-pro-release"))]
+    let signed_size = None;
     if install_path.exists()
         && compute_pro_sha256_at(&install_path)
             .map(|sha| sha.eq_ignore_ascii_case(&expected_sha256))
             .unwrap_or(false)
     {
+        verify_installed_signed_size(&install_path, signed_size)?;
         verify_pro_package_version(&install_path, pro_version.as_deref())?;
         clear_disabled_markers();
-        write_pro_install_metadata(pro_version.clone(), &expected_sha256)?;
+        write_pro_install_metadata(pro_version.clone(), &expected_sha256, signed_manifest.clone())?;
         // KT: clean up legacy Roaming copy even on the already-installed fast-path.
         if let Ok(legacy) = crate::paths::legacy_pro_sidecar_path() {
             if legacy.exists() {
@@ -1410,7 +1556,7 @@ async fn install_pro_binary_machine(
 
     // 1. Defender exclusion is best-effort and only runs after explicit
     //    opt-in.  Tamper Protection or a managed Defender policy must never
-    //    block the signed Pro install itself.
+    //    block the Pro install itself.
     let mut defender_exclusion_warning = None;
     #[cfg(windows)]
     if !exclusion_already_set && consent_defender_exclusion {
@@ -1427,57 +1573,23 @@ async fn install_pro_binary_machine(
     let temporary = update_replace::StagedFile::new(&install_path);
     let tmp_path = &temporary.0;
 
-    // DoH-aware resolver (same ISP-DNS-block exposure as the manifest fetch
-    // above and the license/update hosts in license.rs/updater.rs). We build
-    // our own client rather than calling `doh_http_client()` directly because
-    // that helper hardcodes a request timeout sized for small JSON calls,
-    // not a multi-hundred-MB binary download that needs the full
-    // `DOWNLOAD_TIMEOUT_SECS` window.
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(DOWNLOAD_TIMEOUT_SECS))
-        .dns_resolver(crate::net::doh_resolver())
-        .build()
-        .map_err(|e| format!("download:http client: {}", e))?;
+    // Use the same hybrid-only transport as the manifest, with a longer
+    // timeout for a multi-hundred-MB binary download.
+    let client = crate::net::required_hybrid_http_client(std::time::Duration::from_secs(
+        DOWNLOAD_TIMEOUT_SECS,
+    ))
+    .map_err(|e| format!("download:http client: {}", e))?;
 
     let resp = client
         .get(&download_url)
         .send()
         .await
         .map_err(|e| format!("download:GET failed: {}", e))?;
-    if !resp.status().is_success() {
-        return Err(format!("download:HTTP {}", resp.status()));
-    }
-    let bytes = resp
-        .bytes()
-        .await
-        .map_err(|e| format!("download:body read failed: {}", e))?;
-
-    // 3. Verify SHA-256 before touching disk.
-    let mut h = Sha256::new();
-    h.update(&bytes);
-    let actual = h
-        .finalize()
-        .iter()
-        .map(|b| format!("{:02x}", b))
-        .collect::<String>();
-    if actual != expected_sha256.to_lowercase() {
-        return Err(format!(
-            "sha256_mismatch:expected {}, downloaded {}. Refusing to install.",
-            expected_sha256, actual
-        ));
-    }
-
-    // 4. Write to .tmp, fsync, rename atomically.
-    let mut f = tokio::fs::File::create(&tmp_path)
-        .await
-        .map_err(|e| format!("disk:tmp create: {}", e))?;
-    f.write_all(&bytes)
-        .await
-        .map_err(|e| format!("disk:tmp write: {}", e))?;
-    f.sync_all()
-        .await
-        .map_err(|e| format!("disk:tmp fsync: {}", e))?;
-    drop(f);
+    // Stream to a unique temporary file, checking the limit and digest before
+    // the existing atomic replacement can touch the installed image.
+    pro_download::download_verified(
+        resp, tmp_path, &expected_sha256, crate::investigator_install::manifest::MAX_ARTIFACT_BYTES, signed_size,
+    ).await?;
 
     if let Err(error) = verify_pro_package_version(tmp_path, pro_version.as_deref()) {
         let _ = std::fs::remove_file(tmp_path);
@@ -1494,7 +1606,7 @@ async fn install_pro_binary_machine(
     }
     crate::updater::require_selected_channel(channel)?;
     update_replace::replace_with_metadata(&install_path, tmp_path, || {
-        write_pro_install_metadata(pro_version.clone(), &expected_sha256)
+        write_pro_install_metadata(pro_version.clone(), &expected_sha256, signed_manifest.clone())
     })?;
     clear_disabled_markers();
 
@@ -1533,6 +1645,102 @@ async fn install_pro_binary_machine(
 
 #[cfg(test)]
 mod machine_update_tests {
+    #[tokio::test]
+    #[ignore = "requires network access to the live update service"]
+    async fn live_signed_manifest_binds_published_pro() {
+        let (_, signed) = crate::investigator_install::manifest::fetch_manifest()
+            .await
+            .unwrap();
+        let client =
+            crate::net::required_hybrid_http_client(std::time::Duration::from_secs(15)).unwrap();
+        let published: serde_json::Value = client
+            .get("https://winupdates.servalabs.com/pro/latest.json")
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let proof = crate::investigator_install::manifest::fetch_signed_pro(
+            published["version"].as_str().unwrap(),
+        )
+        .await
+        .unwrap();
+        if let Some(envelope) = proof {
+            let release = crate::investigator_install::manifest::verify_signed_pro(&envelope).unwrap();
+            assert!(super::signed_pro_release_matches(
+                &release,
+                published["version"].as_str(),
+                published["sha256"].as_str().unwrap(),
+            ));
+        }
+        let (_, versioned) = crate::investigator_install::manifest::fetch_manifest_for_pro(
+            published["version"].as_str().unwrap(),
+        )
+        .await
+        .unwrap();
+        assert!(super::signed_pro_matches(
+            &versioned,
+            published["version"].as_str(),
+            published["sha256"].as_str().unwrap(),
+        ));
+        assert!(super::signed_pro_matches(
+            &signed,
+            published["version"].as_str(),
+            published["sha256"].as_str().unwrap(),
+        ));
+    }
+
+    #[cfg(not(feature = "experimental-pq-pro-release"))]
+    #[test]
+    fn signed_pro_metadata_rejects_legacy_and_tampered_claims() {
+        use super::*;
+        let envelope: crate::investigator_install::manifest::SignedManifestEnvelope =
+            serde_json::from_str(include_str!(
+                "../tests/fixtures/pro-signed-release-3.6.7.json"
+            ))
+            .unwrap();
+        let hash = "1681e4a9005ef22b4bf011510ac7a7d1cc6a3f8f16ae57cb31dbb1153279c45e";
+        let mut metadata = ProInstallMetadata {
+            version: Some("3.6.7".into()),
+            sha256: hash.into(),
+            signed_manifest: Some(envelope.clone()),
+            hybrid_manifest: None,
+        };
+        assert!(metadata_has_signed_hash(&metadata, hash));
+        let encoded = serde_json::to_vec(&metadata).unwrap();
+        let persisted: ProInstallMetadata = serde_json::from_slice(&encoded).unwrap();
+        assert!(metadata_has_signed_hash(&persisted, hash));
+        assert!(!metadata_has_signed_hash(&metadata, &"a".repeat(64)));
+        metadata.version = Some("3.6.8".into());
+        assert!(!metadata_has_signed_hash(&metadata, hash));
+        metadata.version = Some("3.6.7".into());
+        let mut tampered = envelope.clone();
+        tampered.payload.push(' ');
+        metadata.signed_manifest = Some(tampered);
+        assert!(!metadata_has_signed_hash(&metadata, hash));
+        let mut invalid_signature = envelope;
+        invalid_signature.signature.clear();
+        metadata.signed_manifest = Some(invalid_signature);
+        assert!(!metadata_has_signed_hash(&metadata, hash));
+        metadata.signed_manifest = None;
+        assert!(!metadata_has_signed_hash(&metadata, hash));
+    }
+
+    #[test]
+    fn product_specific_pro_record_binds_version_and_hash() {
+        let envelope: crate::investigator_install::manifest::SignedManifestEnvelope =
+            serde_json::from_str(include_str!("../tests/fixtures/signed-pro-test.json")).unwrap();
+        let release: crate::investigator_install::manifest::SignedProRelease =
+            serde_json::from_str(&envelope.payload).unwrap();
+        assert!(super::signed_pro_release_matches(&release, Some("3.7.0"), &"a".repeat(64)));
+        assert!(!super::signed_pro_release_matches(&release, Some("3.7.1"), &"a".repeat(64)));
+        assert!(!super::signed_pro_release_matches(&release, Some("3.7.0"), &"b".repeat(64)));
+        assert!(!super::signed_pro_release_matches(&release, None, &"a".repeat(64)));
+    }
+
     #[cfg(windows)]
     #[test]
     fn failed_atomic_metadata_publication_keeps_previous_metadata() {

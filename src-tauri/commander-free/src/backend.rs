@@ -1688,6 +1688,7 @@ pub(crate) fn get_command_tier(command: &str) -> &'static str {
         | "malware_quarantine_list"
         | "security_threat_snapshot"
         | "security_cve_snapshot" => "paid",
+        "backup_container_export" | "backup_container_verify" | "backup_generation_restore" => "paid",
         // ── Stego backup (paid; VeraCrypt-in-MP4, Pro-Rust handler) ──
         "Create-StegoMp4"
         | "Extract-StegoMp4"
@@ -1832,6 +1833,9 @@ pub(crate) fn get_command_tier(command: &str) -> &'static str {
         | "Get-ProtocolBlocks"
         | "Block-Protocol"
         | "Unblock-Protocol"
+        | "Get-IPFirewallRules"
+        | "Add-IPFirewallRule"
+        | "Remove-IPFirewallRule"
 
         // ── #10 AI Security Advisor (paid · routes to Pro local Ollama) ──
         // These run through run_backend_script → dispatch_paid_command.
@@ -1974,6 +1978,13 @@ mod command_tier_tests {
     }
 
     #[test]
+    fn ip_firewall_commands_stay_paid() {
+        for command in ["Get-IPFirewallRules", "Add-IPFirewallRule", "Remove-IPFirewallRule"] {
+            assert_eq!(get_command_tier(command), "paid");
+        }
+    }
+
+    #[test]
     fn clear_encryption_keys_is_paid() {
         // Regression: documented Pro-only (Vault surface); was mis-tiered Free.
         assert_eq!(get_command_tier("Clear-EncryptionKeys"), "paid");
@@ -2079,6 +2090,7 @@ fn get_module_for_command(command: &str) -> Option<&'static str> {
         "Set-AppCapabilityAccess" => Some("privacy/telemetry"),
         "Get-AppCapabilityAccessStatus" => Some("privacy/telemetry"),
         "Get-AppPrivacyCapabilitiesStatus" => Some("privacy/telemetry"),
+        "Get-AdditionalAppPermissions" | "Set-AdditionalAppPermission" => Some("privacy/telemetry"),
 
         "Disable-LockScreenPrivacy" => Some("privacy/telemetry"),
         "Enable-LockScreenPrivacy" => Some("privacy/telemetry"),
@@ -2371,6 +2383,7 @@ fn get_module_for_command(command: &str) -> Option<&'static str> {
         "Disable-WindowsUpdate" => Some("tweaks/system"),
         "Enable-WindowsUpdate" => Some("tweaks/system"),
         "Get-UpdateStatus" => Some("tweaks/system"),
+        "Get-UpdateRestartPolicyStatus" | "Set-UpdateRestartPolicy" => Some("tweaks/system"),
         "Disable-Hibernation" => Some("tweaks/system"),
         "Enable-Hibernation" => Some("tweaks/system"),
         "Disable-FastStartup" => Some("tweaks/system"),
@@ -2590,6 +2603,8 @@ fn get_module_for_command(command: &str) -> Option<&'static str> {
         "Disable-Notifications" => Some("tweaks/ui"),
         "Enable-Notifications" => Some("tweaks/ui"),
         "Enable-ClassicContextMenu" => Some("tweaks/ui"),
+        "Get-ShellVisibilityStatus" | "Set-ShellVisibility" => Some("tweaks/ui"),
+        "Get-ContextItemVisibility" | "Set-ContextItemVisibility" => Some("tweaks/ui"),
         "Disable-ClassicContextMenu" => Some("tweaks/ui"),
         "Enable-EndTaskOnTaskbar" => Some("tweaks/ui"),
         "Disable-EndTaskOnTaskbar" => Some("tweaks/ui"),
@@ -2777,6 +2792,7 @@ fn get_module_for_command(command: &str) -> Option<&'static str> {
         "Create-DualVolume" => Some("vault/volumes"),
         "Create-StegoMp4" => Some("vault/volumes"),
         "Extract-StegoMp4" => Some("vault/volumes"),
+        "backup_container_export" | "backup_container_verify" | "backup_generation_restore" => Some("vault/volumes"),
         "Attach-StegoContainer" => Some("vault/volumes"),
         "Restore-StegoContainer" => Some("vault/volumes"),
         "Refresh-StegoContainer" => Some("vault/volumes"),
@@ -2977,6 +2993,9 @@ pub fn list_all_commands() -> Vec<String> {
         "Create-DualVolume",
         "Create-StegoMp4",
         "Extract-StegoMp4",
+        "backup_container_export",
+        "backup_container_verify",
+        "backup_generation_restore",
         "Attach-StegoContainer",
         "Restore-StegoContainer",
         "Refresh-StegoContainer",
@@ -4711,6 +4730,9 @@ const MACHINE_WIDE_FIX_COMMANDS: &[&str] = &[
     "Remove-BlocklistFromHosts",
     "Undo-HostsBlocklistChange",
     "Set-HostsRecommendedProtection",
+    "Set-UpdateRestartPolicy",
+    "Set-ShellVisibility",
+    "Set-ContextItemVisibility",
 ];
 
 fn take_machine_wide_param(params: &mut HashMap<String, String>) -> Result<bool, String> {
@@ -4854,6 +4876,8 @@ mod param_env_tests {
     fn machine_wide_scope_allowlist_excludes_user_profile_commands() {
         assert!(is_machine_wide_fix_command("Disable-ActivityHistory"));
         assert!(is_machine_wide_fix_command("Set-AppCapabilityAccess"));
+        assert!(is_machine_wide_fix_command("Set-UpdateRestartPolicy"));
+        assert!(local_admin_preflight("Set-UpdateRestartPolicy", false).is_some());
         for command in [
             "Disable-BitLockerAutoEncrypt",
             "Enable-BitLockerAutoEncrypt",
@@ -5735,7 +5759,8 @@ pub(crate) async fn run_backend_script_with_timeout(
         .iter()
         .map(|(k, v)| {
             let kl = k.to_lowercase();
-            let is_secret = kl.contains("password")
+            let is_secret = matches!(command.as_str(), "backup_container_export" | "backup_container_verify" | "backup_generation_restore")
+                || kl.contains("password")
                 || kl.contains("keyfile")
                 || (command == "Get-ClipboardHistoryStatus"
                     && matches!(
@@ -5761,6 +5786,7 @@ pub(crate) async fn run_backend_script_with_timeout(
             || command.starts_with("Erase-")
             || command.starts_with("Remove-")
             || command.starts_with("Reset-")
+            || matches!(command.as_str(), "backup_container_export" | "backup_generation_restore")
             || command == "Provision-EncryptedBackupTarget"
             || command == "Invoke-AIControlOperation"
             || command == "Invoke-CleanupClearAllUsers";
@@ -5770,6 +5796,12 @@ pub(crate) async fn run_backend_script_with_timeout(
                 "Add-BlocklistToHosts"
                     | "Set-HostsRecommendedProtection"
                     | "Undo-HostsBlocklistChange"
+                    | "Set-UpdateRestartPolicy"
+                    | "Add-IPFirewallRule"
+                    | "Remove-IPFirewallRule"
+                    | "Set-AdditionalAppPermission"
+                    | "Set-ShellVisibility"
+                    | "Set-ContextItemVisibility"
             );
         if mutating {
             let msg = format!(

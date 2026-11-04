@@ -138,6 +138,8 @@ fn is_vault_mount_mutation(feature_id: &str) -> bool {
 }
 
 fn request_timeout_for(feature_id: &str) -> Option<Duration> {
+    if backup::matches(feature_id) { return Some(STEGO_TRANSFER_TIMEOUT); }
+
     if is_vault_mount_mutation(feature_id) {
         return Some(VAULT_MUTATION_TIMEOUT);
     }
@@ -234,7 +236,7 @@ fn current_pro_spawn_cooldown_error() -> Option<String> {
 const ACCEPTED_PRO_SHA256_CURRENT: Option<&str> = option_env!("WINCMD_PRO_SHA256_CURRENT");
 const ACCEPTED_PRO_SHA256_PREVIOUS: Option<&str> = option_env!("WINCMD_PRO_SHA256_PREVIOUS");
 
-fn pro_hash_is_accepted(actual: &str) -> bool {
+pub(crate) fn pro_hash_is_accepted(actual: &str) -> bool {
     let matches = |expected: Option<&str>| -> bool {
         expected
             .map(|e| !e.trim().is_empty() && e.trim().eq_ignore_ascii_case(actual))
@@ -255,7 +257,7 @@ fn debug_pro_hash_bypass_message(actual: &str) -> String {
 
 fn verify_pro_binary_hash(actual: &str) -> Result<(), String> {
     // Debug builds skip hash pinning entirely — .pro_hash may be stale during local dev.
-    if cfg!(debug_assertions) {
+    if cfg!(debug_assertions) && !cfg!(feature = "experimental-pq-pro-release") {
         crate::log_message("info", &debug_pro_hash_bypass_message(actual));
         return Ok(());
     }
@@ -267,19 +269,12 @@ fn verify_pro_binary_hash(actual: &str) -> Result<(), String> {
     }
 
     // Path A: compile-time pinned hash (primary gate — set by tools/hash-pro.ts at build time).
-    if pro_hash_is_accepted(actual) {
+    if !cfg!(feature = "experimental-pq-pro-release") && pro_hash_is_accepted(actual) {
         return Ok(());
     }
 
-    // Path B: install-metadata acceptance. install_pro_binary() writes the SHA-256 it
-    // verified during download to wincommander-pro.json. Accept the reported hash if:
-    //   1. The install metadata records this exact hash (proves the install was official
-    //      and the hash was verified against the manifest at install time).
-    //   2. The managed install-path binary's current on-disk hash also equals `actual`
-    //      (proves the binary file hasn't been swapped on disk since install, closing
-    //      the metadata-spoof + binary-swap attack vector).
-    // This path bridges the gap between a user updating Pro via the UI and the older
-    // Free binary that was compiled before that Pro version's hash was known.
+    // Newer Pro releases may be accepted offline when the persisted metadata
+    // contains an independently signed manifest binding the exact binary hash.
     if crate::pro_install::install_metadata_has_hash(actual)
         && crate::pro_install::compute_install_path_sha256()
             .map(|h| h.eq_ignore_ascii_case(actual))
@@ -288,7 +283,7 @@ fn verify_pro_binary_hash(actual: &str) -> Result<(), String> {
         crate::log_message(
             "info",
             &format!(
-                "[Sidecar] Pro accepted via install metadata (hash {})",
+                "[Sidecar] Pro accepted via signed release metadata (hash {})",
                 actual
             ),
         );
@@ -306,8 +301,8 @@ fn verify_pro_binary_hash(actual: &str) -> Result<(), String> {
     if !configured {
         return Err(
             "Pro binary hash verification is not configured in this release build \
-             (WINCMD_PRO_SHA256_CURRENT missing) and no install metadata matched; \
-             run Install Pro from settings to register the binary."
+             (WINCMD_PRO_SHA256_CURRENT missing) and no signed install metadata matched; \
+             update Free and reinstall Pro from settings."
                 .to_string(),
         );
     }
@@ -321,7 +316,7 @@ fn verify_pro_binary_hash(actual: &str) -> Result<(), String> {
     }
     Err(format!(
         "Pro binary hash {} is not in the accepted set — refuse handshake. \
-         If you just updated Pro, reinstall it from Settings → Pro.",
+         Update Free, then reinstall Pro from Settings → Pro.",
         actual
     ))
 }
@@ -454,10 +449,11 @@ where
 /// without needing a Tauri context.
 type NotificationSink = Box<dyn Fn(String, serde_json::Value) + Send + Sync>;
 
-/// The only reverse request a verified Pro Fleet agent may make to Free.
+/// A fixed read-only reverse request a verified Pro Fleet agent may make to Free.
 /// Keeping this identifier and its category list closed prevents the sidecar
 /// pipe from becoming a general local-command RPC surface.
 const FREE_FORENSIC_PROJECTION_FEATURE: &str = "free.system_cleanup.forensic_projection";
+const FREE_FLEET_CONTACT_FEATURE: &str = "free.fleet.contact_observation";
 
 fn fleet_forensic_projection_category(args: &serde_json::Value) -> Result<&'static str, String> {
     let object = args
@@ -482,13 +478,37 @@ fn fleet_forensic_projection_category(args: &serde_json::Value) -> Result<&'stat
         .ok_or_else(|| "collector category is not allowed".to_string())
 }
 
-async fn respond_to_free_forensic_projection(
+async fn respond_to_free_request(
     request: Request,
     session_token: String,
     writer: Arc<Mutex<WriteHalf<NamedPipeServer>>>,
 ) -> bool {
     let request_id = request.request_id;
+    let error_kind = if request.feature_id == crate::fleet_local_arming::FEATURE_ID {
+        "local_arming_refused"
+    } else {
+        "free_collector_refused"
+    };
     let response = async {
+        if request.feature_id == FREE_FLEET_CONTACT_FEATURE {
+            crate::license::require_service_feature("fleet")?;
+            return crate::svc_client::call("svc.fleet.contact_observation", request.args).await;
+        }
+        if request.feature_id == crate::fleet_local_arming::FEATURE_ID {
+            crate::license::require_service_feature("fleet")?;
+            let settings = crate::settings::read_settings()
+                .map_err(|_| "local_arming_settings_unavailable".to_string())?;
+            return crate::fleet_local_arming::evaluate(
+                &request.args,
+                crate::fleet_local_arming::OwnerSettings {
+                    device_id: &settings.device_id,
+                    fleet_enabled: settings.app.fleet.enabled,
+                    dispatch_enabled: settings.app.fleet.dispatch,
+                    signing_key_pub: &settings.app.fleet.signing_key_pub,
+                    enabled: settings.ideal.privacy.self_destruct.enabled,
+                },
+            );
+        }
         if request.feature_id != FREE_FORENSIC_PROJECTION_FEATURE {
             return Err("reverse IPC feature is not allowed".to_string());
         }
@@ -502,7 +522,7 @@ async fn respond_to_free_forensic_projection(
         Ok(result) => Envelope::Response(Response { request_id, result }),
         Err(message) => Envelope::Error(ErrorReply {
             request_id,
-            kind: "free_collector_refused".to_string(),
+            kind: error_kind.to_string(),
             // The Free runner returns only its bounded category-level failure
             // vocabulary. Preserve it so Fleet can distinguish a disabled
             // module, timeout, malformed table, and collector refusal without
@@ -515,7 +535,7 @@ async fn respond_to_free_forensic_projection(
     if let Err(error) = deadlines::write_frame(&writer, &envelope, WRITE_TIMEOUT).await {
         crate::log_message(
             "warn",
-            &format!("[ProReader] failed to reply to Free forensic request: {error}"),
+            &format!("[ProReader] failed to reply to Free request: {error}"),
         );
         return false;
     }
@@ -544,6 +564,7 @@ async fn reader_loop<R>(
     session_token: String,
     on_notification: NotificationSink,
     free_forensic_writer: Option<Arc<Mutex<WriteHalf<NamedPipeServer>>>>,
+    fleet_contact_allowed: bool,
 ) where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
 {
@@ -626,7 +647,21 @@ async fn reader_loop<R>(
                     );
                     continue;
                 };
-                if request.feature_id != FREE_FORENSIC_PROJECTION_FEATURE {
+                if request.feature_id == FREE_FLEET_CONTACT_FEATURE && fleet_contact_allowed {
+                    // Never hold the reader while a service call or its disk I/O is pending.
+                    // Only one observation request per process may be in flight.
+                    let token = session_token.clone();
+                    let is_offer = request.args.get("operation").and_then(serde_json::Value::as_str) == Some("offer");
+                    let work = async move {
+                        let _ = respond_to_free_request(request, token, writer).await;
+                    };
+                    if is_offer { crate::fleet_contact_relay::try_spawn_offer(work); }
+                    else { crate::fleet_contact_relay::try_spawn(work); }
+                    continue;
+                }
+                if request.feature_id != FREE_FORENSIC_PROJECTION_FEATURE
+                    && request.feature_id != crate::fleet_local_arming::FEATURE_ID
+                {
                     crate::log_message(
                         "warn",
                         "[ProReader] rejected non-allowlisted reverse Request from Pro",
@@ -637,7 +672,7 @@ async fn reader_loop<R>(
                 // Box this arm because the local collector uses the backend
                 // runner, which also contains the ordinary Pro-dispatch path.
                 // The box breaks that otherwise-recursive async future type.
-                if !Box::pin(respond_to_free_forensic_projection(request, token, writer)).await {
+                if !Box::pin(respond_to_free_request(request, token, writer)).await {
                     break;
                 }
             }
@@ -1070,12 +1105,33 @@ async fn spawn_pro_session() -> Result<ProSession, String> {
 }
 
 async fn spawn_pro_session_with_role(role: SessionRole) -> Result<ProSession, String> {
-    deadlines::while_open(
-        shutdown_signal().subscribe(),
-        spawn_pro_session_with_role_open(role),
-    )
-    .await
-    .unwrap_or_else(|| Err("Pro session is closing".to_string()))
+    let operation = async move {
+        let mut session = deadlines::while_open(
+            shutdown_signal().subscribe(),
+            spawn_pro_session_with_role_open(role),
+        )
+        .await
+        .unwrap_or_else(|| Err("Pro session is closing".to_string()))?;
+        if role == SessionRole::FleetAgent {
+            // The Hello acknowledgement precedes Pro's optional Fleet startup.
+            // A normal request cannot be serviced until startup has run, so keep
+            // the lifecycle lease until that admission attempt is complete.
+            let request = Request {
+                request_id: next_request_id(),
+                feature_id: "fleet_agent_status".to_string(),
+                diagnostic_operation_id: None,
+                args: serde_json::Value::Null,
+            };
+            dispatch_request(&mut session, request).await
+                .map_err(|error| format!("Fleet agent startup could not be confirmed: {error}"))?;
+        }
+        Ok(session)
+    };
+    if role == SessionRole::FleetAgent {
+        crate::fleet_agent::lifecycle_lease::launch(operation).await
+    } else {
+        operation.await
+    }
 }
 
 async fn spawn_pro_session_with_role_open(role: SessionRole) -> Result<ProSession, String> {
@@ -1153,6 +1209,9 @@ async fn spawn_pro_session_unlocked(role: SessionRole) -> Result<ProSession, Str
     // collectors, keeping their in-process sample/signal queues co-located with
     // the loop that drains them.
     if role == SessionRole::FleetAgent {
+        // Other Windows sessions may have changed the machine enrollment.
+        // Launch is under the machine lifecycle lease; read fresh settings.
+        crate::settings::invalidate_cache();
         if let Ok(s) = crate::settings::read_settings() {
             let fleet = &s.app.fleet;
             if fleet.enabled && !fleet.server_url.is_empty() {
@@ -1384,6 +1443,7 @@ async fn spawn_pro_session_unlocked(role: SessionRole) -> Result<ProSession, Str
         token.clone(),
         on_notification,
         Some(write_half.clone()),
+        role == SessionRole::FleetAgent,
     ));
 
     Ok(ProSession {
@@ -1757,6 +1817,43 @@ async fn try_dispatch_via_agent(
     None
 }
 
+#[path = "sidecar_backup.rs"]
+mod backup;
+
+async fn dispatch_backup_command(
+    feature_id: &str,
+    args: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    backup::run(async {
+        // This child never enters the ordinary pool or the persistent agent session.
+        // The separate permit already bounds launch attempts. A stalled backup
+        // handshake must not hold protection's spawn gate or change its cooldown.
+        let mut session = deadlines::while_open(
+            shutdown_signal().subscribe(),
+            spawn_pro_session_unlocked(SessionRole::Worker),
+        )
+        .await
+        .unwrap_or_else(|| Err("Pro session is closing".into()))
+        .map_err(|error| format!("backup_not_started: {error}"))?;
+        let request = Request {
+            request_id: next_request_id(),
+            feature_id: feature_id.to_owned(),
+            diagnostic_operation_id: None,
+            args,
+        };
+        match dispatch_request(&mut session, request).await {
+            Ok(value) => Ok(value),
+            Err(DispatchFailure::Rejected(error)) => Err(format!("backup_rejected: {error}")),
+            Err(_) => Err(
+                "backup_outcome_unknown; request was not replayed; check retained files before use"
+                    .into(),
+            ),
+        }
+        // Dropping the owned session aborts its readers and kills its child, including on cancellation.
+    })
+    .await
+}
+
 pub async fn dispatch_paid_command(
     feature_id: &str,
     args: serde_json::Value,
@@ -1807,7 +1904,8 @@ pub async fn dispatch_paid_command(
             // P2: cascade dispatch — each step is irreversible; the
             // full_lockdown gate above already refuses, but belt-and-braces
             // here catches any direct sidecar calls.
-            || feature_id == "run_destruct_step";
+            || feature_id == "run_destruct_step"
+            || matches!(feature_id, "backup_container_export" | "backup_generation_restore");
         if mutating {
             let msg = format!(
                 "Refused: investigator mode does not run state-mutating Pro commands. \
@@ -1843,6 +1941,10 @@ pub async fn dispatch_paid_command(
             feature_id
         ),
     );
+
+    if backup::matches(feature_id) {
+        return dispatch_backup_command(feature_id, args).await;
+    }
 
     // Agent-affine commands (fleet, collectors, and stateful monitors) run on
     // the dedicated fleet-agent session so their in-process state stays
@@ -2108,6 +2210,11 @@ async fn close_pro_session_inner() {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "experimental-pq-pro-release")]
+    #[test]
+    fn hybrid_mode_does_not_apply_debug_hash_bypass() {
+        assert!(super::verify_pro_binary_hash("").is_err());
+    }
     use super::*;
 
     #[cfg(windows)]
@@ -2258,6 +2365,9 @@ mod tests {
             "Attach-StegoContainer",
             "Restore-StegoContainer",
             "Refresh-StegoContainer",
+            "backup_container_export",
+            "backup_container_verify",
+            "backup_generation_restore",
         ] {
             assert_eq!(
                 request_timeout_for(feature_id),
@@ -2404,7 +2514,7 @@ mod tests {
         let reader_inflight = inflight.clone();
         let reader_token = token.to_string();
         let reader_task = tokio::spawn(async move {
-            reader_loop(free_side, reader_inflight, reader_token, sink, None).await;
+            reader_loop(free_side, reader_inflight, reader_token, sink, None, false).await;
         });
 
         // Pro writes (in order):
@@ -2476,7 +2586,7 @@ mod tests {
         let reader_inflight = inflight.clone();
         let reader_token = token.to_string();
         let reader_task = tokio::spawn(async move {
-            reader_loop(free_side, reader_inflight, reader_token, sink, None).await;
+            reader_loop(free_side, reader_inflight, reader_token, sink, None, false).await;
         });
 
         // Close Pro's side → reader hits EOF and exits.
@@ -2509,7 +2619,7 @@ mod tests {
         let reader_inflight = inflight.clone();
         let reader_token = token.to_string();
         let reader_task = tokio::spawn(async move {
-            reader_loop(free_side, reader_inflight, reader_token, sink, None).await;
+            reader_loop(free_side, reader_inflight, reader_token, sink, None, false).await;
         });
 
         // First frame: unsigned Response — reader must drop and keep reading.

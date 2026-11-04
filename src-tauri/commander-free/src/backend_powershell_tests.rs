@@ -25,6 +25,7 @@ fn hidden_backend_preserves_unicode_json_on_redirected_stdout() {
 }
 
 #[test]
+#[ignore = "run separately in CI to avoid parallel PowerShell process contention"]
 fn hidden_backend_reads_acls_without_foreign_parent_modules() {
     let fixture = tempfile::tempdir().expect("create disposable ACL fixture");
     let file = fixture.path().join("sentinel.txt");

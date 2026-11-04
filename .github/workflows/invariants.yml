@@ -55,7 +55,9 @@ on:
 
 concurrency:
   group: invariants-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # Keep main's running checks when a newer commit arrives; obsolete PR heads
+  # can still be cancelled. GitHub may replace an older pending main run.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   ts-schema:
@@ -222,7 +224,102 @@ jobs:
       - name: Generate encrypted backend modules
         run: bun run encrypt-backend
         working-directory: .
+      - name: Test failed Shield start with a live descendant
+        shell: pwsh
+        run: |
+          $test = 'backend::process::tests::failed_shield_runner_returns_without_waiting_for_descendant'
+          $output = & cargo test --locked -p commander-free --lib $test -- --ignored --exact --nocapture 2>&1
+          $code = $LASTEXITCODE
+          $output | ForEach-Object { Write-Host $_ }
+          if ($code -ne 0) { exit $code }
+          if (($output -join "`n") -notmatch 'running 1 test') { throw 'The isolated Shield process test did not run.' }
+      - name: Test isolated PowerShell ACL probe
+        shell: pwsh
+        run: |
+          $test = 'backend::powershell_host_tests::hidden_backend_reads_acls_without_foreign_parent_modules'
+          $output = & cargo test --locked -p commander-free --lib $test -- --ignored --exact --nocapture 2>&1
+          $code = $LASTEXITCODE
+          $output | ForEach-Object { Write-Host $_ }
+          if ($code -ne 0) { exit $code }
+          if (($output -join "`n") -notmatch 'running 1 test') { throw 'The PowerShell ACL test did not run.' }
       - run: cargo test --workspace --no-fail-fast
+      - name: Test elevated-to-standard Fleet mutex access when available
+        shell: pwsh
+        run: |
+          $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+          $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+          if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+            Write-Host '::notice::Elevated Fleet mutex acceptance was not run: this runner is not elevated.'
+            exit 0
+          }
+          $test = 'fleet_agent::lifecycle_mutex::tests::security_tests::elevated_first_and_restricted_medium_second_share_the_same_mutex'
+          $output = & cargo test --locked -p commander-free --lib $test -- --ignored --exact --nocapture 2>&1
+          $code = $LASTEXITCODE
+          $output | ForEach-Object { Write-Host $_ }
+          if ($code -ne 0) { exit $code }
+          if (($output -join "`n") -notmatch 'running 1 test') { throw 'The Fleet mutex acceptance test did not run.' }
+      - name: Test experimental offline hybrid release verification
+        run: cargo test --locked -p wincmd-pq-experiment --features experimental-offline-verifier,experimental-signer
+      - name: Test experimental Free hybrid release staging
+        shell: pwsh
+        run: |
+          cargo build --locked -p wincmd-pq-experiment --features experimental-signer --bin wincmd-pq-free-release-prepare
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & pwsh -NoProfile -File ../tools/stage-hybrid-free.test.ps1 -ToolPath (Join-Path $PWD 'target/debug/wincmd-pq-free-release-prepare.exe')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Test experimental Free updater verification
+        run: 'cargo test --locked -p commander-free --lib --features experimental-pq-free-release updater::hybrid_free::'
+      - name: Test restricted access to Free update registry when elevated
+        shell: pwsh
+        run: |
+          $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+          $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+          if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+            Write-Host '::notice::Free update registry ACL acceptance was not run: this runner is not elevated.'
+            exit 0
+          }
+          $test = 'hybrid_update_anchor::tests::secured_anchor_accepts_its_acl_and_rejects_existing_untrusted_acl'
+          $output = & cargo test --locked -p commander-free --lib --features experimental-pq-free-release $test -- --ignored --exact --nocapture 2>&1
+          $code = $LASTEXITCODE
+          $output | ForEach-Object { Write-Host $_ }
+          if ($code -ne 0) { exit $code }
+          if (($output -join "`n") -notmatch 'running 1 test') { throw 'The Free update registry ACL acceptance test did not run.' }
+      - name: Test experimental service licence validation
+        run: cargo test --locked -p commander-svc --features experimental-pq-licence license_cache
+      - name: Test experimental device credential and transport
+        run: cargo test --locked -p commander-svc --features experimental-pq-licence licence_device_credential
+      - name: Test experimental cross-process licence coordination
+        run: cargo test --locked -p commander-svc --features experimental-pq-licence licence_coordination
+      - name: Test experimental desktop licence validation
+        shell: pwsh
+        run: |
+          $fixture = Get-Content commander-svc/src/fixtures/hybrid-licence-test.json -Raw | ConvertFrom-Json
+          $env:WINCMD_PQ_LIC_ED_KEY = $fixture.publicEd
+          $env:WINCMD_PQ_LIC_MLDSA_KEY = $fixture.publicPq
+          $env:WINCMD_PQ_LIC_ED_ID = "ed-key"
+          $env:WINCMD_PQ_LIC_MLDSA_ID = "pq-key"
+          $env:WINCMD_PQ_LIC_EPOCH = "7"
+          cargo test --locked -p commander-free --lib --features experimental-pq-licence hybrid_licence
+      - name: Test experimental hybrid Pro release validation
+        shell: pwsh
+        run: |
+          $fixture = Get-Content commander-free/tests/fixtures/hybrid-pro-disposable.json -Raw | ConvertFrom-Json
+          $env:WINCMD_PQ_PRO_ED_KEY = $fixture.publicEd
+          $env:WINCMD_PQ_PRO_MLDSA_KEY = $fixture.publicPq
+          $env:WINCMD_PQ_PRO_ED_ID = "ed-key"
+          $env:WINCMD_PQ_PRO_MLDSA_ID = "pq-key"
+          $env:WINCMD_PQ_PRO_EPOCH = "7"
+          cargo test --locked -p commander-free --lib --features experimental-pq-pro-release hybrid_
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p commander-free --lib --features experimental-pq-free-release,experimental-pq-pro-release hybrid_
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $licenseFixture = Get-Content commander-svc/src/fixtures/hybrid-licence-test.json -Raw | ConvertFrom-Json
+          $env:WINCMD_PQ_LIC_ED_KEY = $licenseFixture.publicEd
+          $env:WINCMD_PQ_LIC_MLDSA_KEY = $licenseFixture.publicPq
+          $env:WINCMD_PQ_LIC_ED_ID = "ed-key"
+          $env:WINCMD_PQ_LIC_MLDSA_ID = "pq-key"
+          $env:WINCMD_PQ_LIC_EPOCH = "7"
+          cargo test --locked -p commander-free --lib --features experimental-pq-free-release,experimental-pq-pro-release,experimental-pq-licence hybrid_
 
   # NOTE (L2): the Cloudflare licence worker lives in the commander-pro repo, so
   # its TypeScript check + dependency audit run in THAT repo's CI, not here. A
@@ -293,6 +390,10 @@ jobs:
         run: bun run encrypt-backend
         working-directory: .
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Lint combined experimental update verification
+        run: cargo clippy --locked -p commander-free --lib --tests --features experimental-pq-free-release,experimental-pq-pro-release -- -D warnings
+      - name: Lint combined experimental update and licence verification
+        run: cargo clippy --locked -p commander-free --lib --tests --features experimental-pq-free-release,experimental-pq-pro-release,experimental-pq-licence -- -D warnings
 
   # F-11 — dependency-CVE audit for both Rust workspaces and npm. This blocks
   # known vulnerabilities; cargo-audit's unmaintained-crate notices remain
@@ -474,6 +575,9 @@ jobs:
       - name: cargo llvm-cov (summary only)
         env:
           RUST_MIN_STACK: "16777216"
+          # Instrumented process tests can exhaust Windows runner capacity when
+          # the default test harness launches all available threads at once.
+          RUST_TEST_THREADS: "4"
         run: |
           cargo llvm-cov --workspace --summary-only
 

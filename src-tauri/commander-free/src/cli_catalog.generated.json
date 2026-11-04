@@ -25,6 +25,14 @@
       "frontendReferences": []
     },
     {
+      "id": "backend:Add\u002dIPFirewallRule",
+      "name": "Add\u002dIPFirewallRule",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": []
+    },
+    {
       "id": "backend:Allow\u002dAnonymousSamEnumeration",
       "name": "Allow\u002dAnonymousSamEnumeration",
       "transport": "backend\u002dscript",
@@ -4338,6 +4346,16 @@
       "frontendReferences": []
     },
     {
+      "id": "backend:Get\u002dAdditionalAppPermissions",
+      "name": "Get\u002dAdditionalAppPermissions",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/panels/privacy/AdditionalAppPermissions.tsx"
+      ]
+    },
+    {
       "id": "backend:Get\u002dAdobeRecentInfo",
       "name": "Get\u002dAdobeRecentInfo",
       "transport": "backend\u002dscript",
@@ -4602,6 +4620,16 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": []
+    },
+    {
+      "id": "backend:Get\u002dContextItemVisibility",
+      "name": "Get\u002dContextItemVisibility",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/components/tweaks/ContextItemVisibilityCard.tsx"
+      ]
     },
     {
       "id": "backend:Get\u002dCrashDumpList",
@@ -4935,6 +4963,16 @@
       "frontendReferences": [
         "src/hooks/useDashboardRadar.ts",
         "src/lib/onboardingExperience.ts"
+      ]
+    },
+    {
+      "id": "backend:Get\u002dIPFirewallRules",
+      "name": "Get\u002dIPFirewallRules",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/panels/network/IpFirewallCard.tsx"
       ]
     },
     {
@@ -5512,6 +5550,16 @@
       "frontendReferences": []
     },
     {
+      "id": "backend:Get\u002dShellVisibilityStatus",
+      "name": "Get\u002dShellVisibilityStatus",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/components/tweaks/ShellVisibilityCard.tsx"
+      ]
+    },
+    {
       "id": "backend:Get\u002dSpotlightCacheInfo",
       "name": "Get\u002dSpotlightCacheInfo",
       "transport": "backend\u002dscript",
@@ -5652,6 +5700,16 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": []
+    },
+    {
+      "id": "backend:Get\u002dUpdateRestartPolicyStatus",
+      "name": "Get\u002dUpdateRestartPolicyStatus",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/components/tweaks/UpdateRestartCard.tsx"
+      ]
     },
     {
       "id": "backend:Get\u002dUpdateStatus",
@@ -6461,6 +6519,14 @@
       "frontendReferences": []
     },
     {
+      "id": "backend:Remove\u002dIPFirewallRule",
+      "name": "Remove\u002dIPFirewallRule",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": []
+    },
+    {
       "id": "backend:Remove\u002dManagedAutoEraseSchedule",
       "name": "Remove\u002dManagedAutoEraseSchedule",
       "transport": "backend\u002dscript",
@@ -6713,6 +6779,16 @@
       "frontendReferences": []
     },
     {
+      "id": "backend:Set\u002dAdditionalAppPermission",
+      "name": "Set\u002dAdditionalAppPermission",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/panels/privacy/AdditionalAppPermissions.tsx"
+      ]
+    },
+    {
       "id": "backend:Set\u002dAppBranding",
       "name": "Set\u002dAppBranding",
       "transport": "backend\u002dscript",
@@ -6766,6 +6842,16 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/registry/tweaks.toggles.ts"
+      ]
+    },
+    {
+      "id": "backend:Set\u002dContextItemVisibility",
+      "name": "Set\u002dContextItemVisibility",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/components/tweaks/ContextItemVisibilityCard.tsx"
       ]
     },
     {
@@ -6935,6 +7021,16 @@
       "frontendReferences": []
     },
     {
+      "id": "backend:Set\u002dShellVisibility",
+      "name": "Set\u002dShellVisibility",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/components/tweaks/ShellVisibilityCard.tsx"
+      ]
+    },
+    {
       "id": "backend:Set\u002dShredPolicy",
       "name": "Set\u002dShredPolicy",
       "transport": "backend\u002dscript",
@@ -6971,6 +7067,16 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": []
+    },
+    {
+      "id": "backend:Set\u002dUpdateRestartPolicy",
+      "name": "Set\u002dUpdateRestartPolicy",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/components/tweaks/UpdateRestartCard.tsx"
+      ]
     },
     {
       "id": "backend:Set\u002dWin32PrioritySeparation",
@@ -8798,6 +8904,16 @@
       ]
     },
     {
+      "id": "tauri:fleet_service_contact_status",
+      "name": "fleet_service_contact_status",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useFleetServiceContact.ts"
+      ]
+    },
+    {
       "id": "tauri:fleet_status",
       "name": "fleet_status",
       "transport": "tauri",
@@ -8982,6 +9098,14 @@
     {
       "id": "tauri:get_dead_mans_switch_config",
       "name": "get_dead_mans_switch_config",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": []
+    },
+    {
+      "id": "tauri:get_dead_mans_switch_status",
+      "name": "get_dead_mans_switch_status",
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,

@@ -128,6 +128,9 @@ fn main() {
     println!("cargo:rerun-if-env-changed=WINCMD_LICENSE_API_BASE");
     println!("cargo:rerun-if-env-changed=LICENSE_API_BASE");
     println!("cargo:rerun-if-env-changed=WINCMD_LICENSE_PUBLIC_KEY");
+    for name in ["WINCMD_PQ_PRO_ED_KEY", "WINCMD_PQ_PRO_MLDSA_KEY", "WINCMD_PQ_PRO_ED_ID", "WINCMD_PQ_PRO_MLDSA_ID", "WINCMD_PQ_PRO_EPOCH"] {
+        println!("cargo:rerun-if-env-changed={name}");
+    }
     println!("cargo:rerun-if-env-changed=LICENSE_PUBLIC_KEY_B64");
     println!("cargo:rerun-if-env-changed=TAURI_SIGNING_PUBLIC_KEY");
     println!("cargo:rerun-if-env-changed=WINCMD_APP_ID");

@@ -38,7 +38,7 @@ use wincmd_shared::fleet::{Action, ClipboardEventReport};
 use wincmd_shared::vault_access::VaultMountReason;
 use wincmd_shared::svc::{
     classify_verb, is_known_verb, ApplyMachineSettingRequest, CapabilityClass,
-    APPLY_MACHINE_SETTING_VERB, STORE_LICENSE_CACHE_VERB, SVC_PIPE_NAME, SVC_PROTOCOL_VERSION,
+    APPLY_MACHINE_SETTING_VERB, STORE_LICENSE_CACHE_VERB, VERIFY_LICENSE_CACHE_VERB, RENEW_HYBRID_LICENSE_VERB, ENROL_HYBRID_LICENSE_VERB, SVC_PIPE_NAME, SVC_PROTOCOL_VERSION,
 };
 use wincmd_shared::{Envelope, ErrorReply, Hello, Request, Response};
 
@@ -327,7 +327,7 @@ pub(crate) async fn handle_connection(
         // the HMAC tag against this connection's session token. A bare
         // (unsigned) `Request` is still accepted too — today's Free/Pro
         // callers send `Signed`, but nothing about this loop requires it.
-        let req = match env {
+        let mut req = match env {
             Envelope::Bye => break,
             Envelope::Request(req) => req,
             Envelope::Signed(inner) => {
@@ -357,6 +357,7 @@ pub(crate) async fn handle_connection(
 
         let request_id = req.request_id;
         if !is_known_verb(&req.feature_id) {
+            wincmd_shared::zeroize_json(&mut req.args);
             let reply = Envelope::Error(ErrorReply {
                 request_id,
                 kind: "unknown_verb".to_string(),
@@ -400,6 +401,15 @@ pub(crate) async fn handle_connection(
                 crate::diagnostics::record_shared_shortcut_stage("auth_end", shortcut_started);
                 result
             }
+        } else if matches!(req.feature_id.as_str(), ENROL_HYBRID_LICENSE_VERB | RENEW_HYBRID_LICENSE_VERB) {
+            let gate = Arc::clone(&session_helper_gate);
+            let verb = req.feature_id.clone();
+            let session = peer.as_deref().map(AuthenticatedPipePeer::session_id).unwrap_or(0);
+            let active = peer.as_deref().is_some_and(peer_has_active_interactive_session);
+            match tokio::task::spawn_blocking(move || gate.authorize_licence_relay(client_pid, &verb, session, active)).await {
+                Ok(result) => result.map(Some).map_err(|error| error.to_string()),
+                Err(_) => Err("licence peer authorization unavailable".into()),
+            }
         } else if matches!(req.feature_id.as_str(), "svc.fleet.install_policy" | "svc.fleet.get_policy") {
             #[cfg(debug_assertions)]
             let policy_trace_started = if req.feature_id == "svc.fleet.get_policy" {
@@ -431,6 +441,7 @@ pub(crate) async fn handle_connection(
         };
         match authorization {
             Err(reason) => {
+                wincmd_shared::zeroize_json(&mut req.args);
                 let reply = Envelope::Error(ErrorReply {
                     request_id,
                     kind: "forbidden".to_string(),
@@ -644,6 +655,13 @@ async fn dispatch_verb(
             .map(|_| serde_json::json!({ "stored": true }))
             .map_err(|message| VerbError::new("license_cache_rejected", message)),
 
+        VERIFY_LICENSE_CACHE_VERB => crate::license_cache::verify_current(args)
+            .map(|_| serde_json::json!({ "verified": true }))
+            .map_err(|message| VerbError::new("license_cache_rejected", message)),
+
+        RENEW_HYBRID_LICENSE_VERB => handle_hybrid_license_renewal(args, trust_origin).await,
+        ENROL_HYBRID_LICENSE_VERB => handle_hybrid_license_enrolment(args, trust_origin).await,
+
         "svc.clipboard.get_policy" => fleet_machine_policy_store().and_then(|store|store.read_current(|bound,policy| {
             policy_store.bound_clipboard_response(bound,policy)
         }).map_err(|kind|VerbError::new("clipboard_policy_unavailable",kind))),
@@ -651,8 +669,12 @@ async fn dispatch_verb(
         "svc.policy.install_epoch" => handle_install_epoch(policy_store, args),
 
 
-        "svc.fleet.begin_enrollment" | "svc.fleet.provision_trust" | "svc.fleet.replace_trust" | "svc.fleet.get_trust" | "svc.fleet.install_policy" | "svc.fleet.get_policy" =>
+        "svc.fleet.begin_enrollment" | "svc.fleet.provision_trust" | "svc.fleet.replace_trust" | "svc.fleet.bind_origins" | "svc.fleet.get_trust" | "svc.fleet.install_policy" | "svc.fleet.get_policy" =>
             handle_fleet_machine_policy(&feature_id, args, peer),
+
+        "svc.fleet.contact_observation" => fleet_machine_policy_store().and_then(|store|
+            crate::fleet_contact_transfer::handle(store, args)
+                .map_err(|kind| VerbError::new("fleet_contact_unavailable", kind))),
 
         "svc.clipboard.report_event" => match trust_origin {
             Some(origin) => handle_report_event(clipboard_state, args, origin),
@@ -811,6 +833,61 @@ fn valid_diagnostic_operation_id(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
+#[cfg(feature = "experimental-pq-licence")]
+fn hybrid_renewal_error(error: &str) -> VerbError {
+    VerbError::new("license_renewal_rejected",
+        if error == crate::licence_device_credential::RETRY_LATER {
+            crate::licence_device_credential::RETRY_LATER
+        } else { "license renewal is unavailable" })
+}
+
+async fn handle_hybrid_license_renewal(
+    args: serde_json::Value,
+    trust_origin: Option<TrustOrigin>,
+) -> Result<serde_json::Value, VerbError> {
+    if trust_origin.is_none() {
+        return Err(VerbError::new("forbidden", "protected WinCommander session required"));
+    }
+    if !args.as_object().is_some_and(|object| object.is_empty()) {
+        return Err(VerbError::new("license_renewal_rejected", "license renewal accepts no parameters"));
+    }
+    #[cfg(feature = "experimental-pq-licence")]
+    { crate::licence_device_credential::renew_from_machine_cache().await
+        .map(|_| serde_json::json!({ "renewed": true }))
+        .map_err(hybrid_renewal_error) }
+    #[cfg(not(feature = "experimental-pq-licence"))]
+    { Err(VerbError::new("license_renewal_rejected", "license renewal is unavailable")) }
+}
+
+async fn handle_hybrid_license_enrolment(
+    mut args: serde_json::Value,
+    trust_origin: Option<TrustOrigin>,
+) -> Result<serde_json::Value, VerbError> {
+    let key = if trust_origin.is_some() {
+        args.as_object_mut().filter(|map| map.len() == 1)
+            .and_then(|map| map.remove("licenseKey"))
+    } else { None };
+    wincmd_shared::zeroize_json(&mut args);
+    if trust_origin.is_none() {
+        return Err(VerbError::new("forbidden", "protected WinCommander session required"));
+    }
+    let mut key = key.ok_or_else(|| VerbError::new("license_enrolment_rejected", "license registration is unavailable"))?;
+    let result = match &mut key {
+        serde_json::Value::String(value) if !value.trim().is_empty() && value.len() <= 512 => {
+            let key = zeroize::Zeroizing::new(std::mem::take(value));
+            #[cfg(feature = "experimental-pq-licence")]
+            { crate::licence_device_credential::enrol_from_machine_cache(&key).await
+                .map(|_| serde_json::json!({"enrolled": true}))
+                .map_err(|_| VerbError::new("license_enrolment_rejected", "license registration is unavailable")) }
+            #[cfg(not(feature = "experimental-pq-licence"))]
+            { let _ = key; Err(VerbError::new("license_enrolment_rejected", "license registration is unavailable")) }
+        }
+        _ => Err(VerbError::new("license_enrolment_rejected", "license registration is unavailable")),
+    };
+    wincmd_shared::zeroize_json(&mut key);
+    result
 }
 
 /// Returns the encrypted service store's deliberately small support view.
@@ -3502,34 +3579,28 @@ fn vault_group_update_error(error: crate::vault_access::VaultError) -> VerbError
 }
 
 fn fleet_machine_policy_store()->Result<&'static crate::fleet_machine_policy::FleetMachinePolicy,VerbError> {
-    use crate::fleet_machine_policy::{FleetMachinePolicy, WindowsFleetPolicyFs};
-    static STORE: std::sync::OnceLock<Result<FleetMachinePolicy, &'static str>> = std::sync::OnceLock::new();
-    STORE.get_or_init(|| {
-        let base = std::env::var_os("ProgramData").ok_or("store_unavailable")?;
-        let dir = std::path::PathBuf::from(base).join("WinCommander").join("fleet-machine");
-        FleetMachinePolicy::open(Box::new(WindowsFleetPolicyFs), dir)
-    }).as_ref().map_err(|kind| VerbError::new("fleet_policy_unavailable", *kind))
+    crate::fleet_machine_policy::system_store().map_err(|kind| VerbError::new("fleet_policy_unavailable", kind))
 }
 
 fn handle_fleet_machine_policy(verb: &str, args: serde_json::Value, peer: Option<&AuthenticatedPipePeer>) -> Result<serde_json::Value, VerbError> {
-    use crate::fleet_machine_policy::FleetTrust;
+    use crate::fleet_machine_policy::{FleetTrust, TransportProfile};
     let store=fleet_machine_policy_store()?;
     match verb {
         "svc.fleet.begin_enrollment" => {
             #[derive(serde::Deserialize)]
             #[serde(deny_unknown_fields)]
-            struct Request { device_id: String, signer_key: String }
+            struct Request { device_id: String, signer_key: String, #[serde(default)] origins: Vec<String>, #[serde(default)] transport_profile: Option<TransportProfile> }
             let request: Request = serde_json::from_value(args).map_err(|_| VerbError::new("bad_request", "invalid enrollment binding"))?;
-            let challenge = store.begin_enrollment(request.device_id, request.signer_key)
+            let challenge = store.begin_enrollment(request.device_id, request.signer_key, request.origins, request.transport_profile)
                 .map_err(|kind| VerbError::new("fleet_policy_rejected", kind))?;
             Ok(serde_json::json!({"challenge": challenge}))
         },
         "svc.fleet.get_trust" => {
             if args != serde_json::json!({}) { return Err(VerbError::new("bad_request", "unexpected arguments")); }
-            let binding = store.trust_snapshot().map_err(|kind| VerbError::new("fleet_policy_unavailable", kind))?;
+            let binding = store.trust_with_origins().map_err(|kind| VerbError::new("fleet_policy_unavailable", kind))?;
             match binding {
-                Some((trust, audit)) => Ok(serde_json::json!({"trust": trust, "audit": audit})),
-                None => Ok(serde_json::json!({"trust": null, "audit": []})),
+                Some((trust, audit, origins, transport_profile, service_enabled)) => Ok(serde_json::json!({"trust": trust, "audit": audit, "origins": origins, "transport_profile": transport_profile, "service_enabled": service_enabled})),
+                None => Ok(serde_json::json!({"trust": null, "audit": [], "origins": [], "transport_profile": null, "service_enabled": false})),
             }
         },
         "svc.fleet.provision_trust" => {
@@ -3549,6 +3620,15 @@ fn handle_fleet_machine_policy(verb: &str, args: serde_json::Value, peer: Option
             let actor = peer.ok_or_else(|| VerbError::new("forbidden", "authenticated caller required"))?.caller_sid();
             store.replace_trust(request.previous, request.replacement, &request.signature, actor).map_err(|kind| VerbError::new("fleet_policy_rejected", kind))?;
             Ok(serde_json::json!({"replaced": true}))
+        },
+        "svc.fleet.bind_origins" => {
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Request { trust: FleetTrust, signature: String }
+            let request: Request = serde_json::from_value(args).map_err(|_| VerbError::new("bad_request", "invalid trust binding"))?;
+            let actor = peer.ok_or_else(|| VerbError::new("forbidden", "authenticated caller required"))?.caller_sid();
+            store.bind_origins(request.trust, &request.signature, actor).map_err(|kind| VerbError::new("fleet_policy_rejected", kind))?;
+            Ok(serde_json::json!({"bound": true}))
         },
         "svc.fleet.install_policy" => {
             #[derive(serde::Deserialize)]
@@ -5455,7 +5535,7 @@ mod tests {
 
     #[tokio::test]
     async fn fleet_trust_mutations_require_admin_and_policy_requires_pinned_peer() {
-        for verb in ["svc.fleet.begin_enrollment", "svc.fleet.provision_trust", "svc.fleet.replace_trust", "svc.fleet.get_trust"] {
+        for verb in ["svc.fleet.begin_enrollment", "svc.fleet.provision_trust", "svc.fleet.replace_trust", "svc.fleet.bind_origins", "svc.fleet.get_trust"] {
             assert!(authorize(verb, false, 1234, &passing_gate()).await.is_err());
             assert_eq!(authorize(verb, true, 1234, &passing_gate()).await, Ok(None));
         }
@@ -5500,10 +5580,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn hybrid_enrolment_requires_pinned_peer_and_only_a_bounded_key() {
+        let denied = handle_hybrid_license_enrolment(serde_json::json!({"licenseKey":"test"}), None).await.unwrap_err();
+        assert_eq!(denied.kind, "forbidden");
+        for args in [serde_json::json!({}), serde_json::json!({"licenseKey":" "}),
+            serde_json::json!({"licenseKey":"x", "issuer":"attacker"}),
+            serde_json::json!({"licenseKey":"x".repeat(513)})] {
+            let err = handle_hybrid_license_enrolment(args, Some(TrustOrigin::SessionHelperPinned)).await.unwrap_err();
+            assert_eq!(err.kind, "license_enrolment_rejected");
+        }
+        let gate = gate_denying_with(PeerAuthError::PathNotAllowed);
+        assert!(authorize(ENROL_HYBRID_LICENSE_VERB, true, 1234, &gate).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn hybrid_renewal_requires_pinned_peer_and_no_caller_parameters() {
+        let no_peer = handle_hybrid_license_renewal(serde_json::json!({}), None).await.unwrap_err();
+        assert_eq!(no_peer.kind, "forbidden");
+        let injected = handle_hybrid_license_renewal(serde_json::json!({"issuer": "attacker"}),
+            Some(TrustOrigin::SessionHelperPinned)).await.unwrap_err();
+        assert_eq!(injected.kind, "license_renewal_rejected");
+        let gate = gate_denying_with(PeerAuthError::PathNotAllowed);
+        assert!(authorize(RENEW_HYBRID_LICENSE_VERB, true, 1234, &gate).await.is_err());
+    }
+
+    #[cfg(feature = "experimental-pq-licence")]
+    #[test]
+    fn hybrid_renewal_exposes_only_the_safe_retry_message() {
+        let limited = hybrid_renewal_error(crate::licence_device_credential::RETRY_LATER);
+        assert_eq!(limited.message, crate::licence_device_credential::RETRY_LATER);
+        let private = hybrid_renewal_error("sensitive server detail");
+        assert_eq!(private.message, "license renewal is unavailable");
+    }
+
+    #[tokio::test]
     async fn all_session_helper_verbs_allow_unsigned_path_pinned_peer() {
         let gate = passing_gate();
         for verb in [
             "svc.clipboard.report_event",
+            RENEW_HYBRID_LICENSE_VERB,
+            ENROL_HYBRID_LICENSE_VERB,
             "svc.policy.install_epoch",
             "svc.ink_receipt.reserve_ticket",
             "svc.ink_receipt.report_receipt",
@@ -5964,6 +6080,20 @@ mod integration {
                 assert_eq!(kind, "forbidden", "expected kind=forbidden, got {:?}", kind);
             }
             other => panic!("expected Envelope::Error, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn licence_history_check_rejects_noninteractive_callers() {
+        let reply = run_one_request(
+            "license-history-denied",
+            wincmd_shared::svc::VERIFY_LICENSE_CACHE_VERB,
+            false,
+            false,
+        ).await;
+        match reply {
+            Envelope::Error(ErrorReply { kind, .. }) => assert_eq!(kind, "forbidden"),
+            other => panic!("expected licence history permission denial, got {other:?}"),
         }
     }
 

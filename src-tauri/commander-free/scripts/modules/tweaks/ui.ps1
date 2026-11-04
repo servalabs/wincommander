@@ -3,6 +3,335 @@
 # Windows interface and personalization tweaks
 # ============================================================================
 
+function Get-ShellVisibilityValue {
+    param([string]$Hive, [string]$Key, [string]$Name)
+    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey($Hive, 'Registry64')
+    try {
+        $sub = $base.OpenSubKey($Key, $false)
+        if ($null -eq $sub) { return @{ exists = $false; value = $null; kind = $null } }
+        try {
+            if ($Name -notin $sub.GetValueNames()) { return @{ exists = $false; value = $null; kind = $null } }
+            return @{ exists = $true; value = $sub.GetValue($Name, $null, 'DoNotExpandEnvironmentNames'); kind = [string]$sub.GetValueKind($Name) }
+        } finally { $sub.Dispose() }
+    } finally { $base.Dispose() }
+}
+
+function Set-ShellVisibilityValue {
+    param([string]$Key, [string]$Name, $Value, [string]$Kind)
+    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey('LocalMachine', 'Registry64')
+    try {
+        $sub = $base.CreateSubKey($Key, $true)
+        if ($null -eq $sub) { throw 'Windows denied the policy write.' }
+        try { $sub.SetValue($Name, $Value, $Kind); $sub.Flush() } finally { $sub.Dispose() }
+    } finally { $base.Dispose() }
+}
+
+function Remove-ShellVisibilityValue {
+    param([string]$Key, [string]$Name)
+    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey('LocalMachine', 'Registry64')
+    try {
+        $sub = $base.OpenSubKey($Key, $true)
+        if ($null -ne $sub) { try { $sub.DeleteValue($Name, $false); $sub.Flush() } finally { $sub.Dispose() } }
+    } finally { $base.Dispose() }
+}
+
+function Invoke-WithShellVisibilityMutex {
+    param([scriptblock]$Action)
+    $mutex = [Threading.Mutex]::new($false, 'Global\WinCommander_ShellVisibility')
+    $acquired = $false
+    try {
+        try { $acquired = $mutex.WaitOne(15000) } catch [Threading.AbandonedMutexException] { $acquired = $true }
+        if (-not $acquired) { throw 'Timed out waiting for the Windows appearance lock.' }
+        & $Action
+    } finally { if ($acquired) { $mutex.ReleaseMutex() }; $mutex.Dispose() }
+}
+
+function Get-ShellVisibilityPlatform {
+    try {
+        $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
+        $edition = Get-ShellVisibilityValue 'LocalMachine' 'SOFTWARE\Microsoft\Windows NT\CurrentVersion' 'EditionID'
+        $eligibleEdition = $edition.exists -and $edition.kind -eq 'String' -and $edition.value -match '^(Professional|Enterprise|Education|IoTEnterprise)'
+        return [bool]($os.ProductType -eq 1 -and [int]$os.BuildNumber -ge 22621 -and $eligibleEdition)
+    } catch { return $false }
+}
+
+function Get-ShellVisibilitySpec {
+    param([string]$Item)
+    switch ($Item) {
+        'StartRecommended' { return @{ Key = 'SOFTWARE\Policies\Microsoft\Windows\Explorer'; Name = 'HideRecommendedSection'; Kind = 'DWord' } }
+        'SettingsHome' { return @{ Key = 'SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer'; Name = 'SettingsPageVisibility'; Kind = 'String' } }
+        default { throw 'Unknown appearance setting.' }
+    }
+}
+
+function Test-ShellVisibilityValue {
+    param($Actual, [string]$Kind, [string]$Value)
+    if ($Kind -eq 'Absent') { return -not $Actual.exists }
+    return $Actual.exists -and $Actual.kind -eq $Kind -and [string]$Actual.value -ceq $Value
+}
+
+function Get-ShellVisibilityState {
+    param([string]$Item, [bool]$Eligible)
+    $spec = Get-ShellVisibilitySpec $Item
+    $snapshot = "SOFTWARE\WinCommander\ShellVisibility\$Item"
+    $current = Get-ShellVisibilityValue 'LocalMachine' $spec.Key $spec.Name
+    $userPolicy = Get-ShellVisibilityValue 'CurrentUser' $spec.Key $spec.Name
+    $phase = Get-ShellVisibilityValue 'LocalMachine' $snapshot 'Phase'
+    $beforeKind = Get-ShellVisibilityValue 'LocalMachine' $snapshot 'BeforeKind'
+    $before = Get-ShellVisibilityValue 'LocalMachine' $snapshot 'BeforeValue'
+    $applied = Get-ShellVisibilityValue 'LocalMachine' $snapshot 'AppliedValue'
+    $valid = $phase.exists -and $phase.kind -eq 'DWord' -and $phase.value -in @(1,2) -and $beforeKind.exists -and $beforeKind.kind -eq 'String' -and $beforeKind.value -in @('Absent',$spec.Kind) -and $before.exists -and $before.kind -eq 'String' -and $applied.exists -and $applied.kind -eq 'String'
+    if ($valid) {
+        if ($beforeKind.value -eq 'Absent' -and $before.value -cne '') { $valid = $false }
+        if ($Item -eq 'StartRecommended' -and ($applied.value -cne '1' -or $beforeKind.value -ne 'Absent')) { $valid = $false }
+        if ($Item -eq 'SettingsHome') {
+            $appliedPages = if ($applied.value -match '^hide:') { @($applied.value.Substring(5) -split ';' | ForEach-Object { $_.Trim() }) } else { @() }
+            if ($appliedPages -notcontains 'home' -or ($beforeKind.value -eq 'String' -and $before.value -notmatch '^hide:')) { $valid = $false }
+        }
+    }
+    $owned = $valid -and $phase.value -eq 2
+    $pending = $valid -and $phase.value -eq 1
+    $conflict = (($phase.exists -or $beforeKind.exists -or $before.exists -or $applied.exists) -and -not $valid) -or ($owned -and -not (Test-ShellVisibilityValue $current $spec.Kind $applied.value)) -or ($pending -and -not (Test-ShellVisibilityValue $current $beforeKind.value $before.value))
+    $externalHidden = $false
+    $canApply = -not $current.exists
+    if ($current.exists -and $Item -eq 'StartRecommended') { $externalHidden = $current.kind -eq 'DWord' -and $current.value -eq 1 }
+    if ($current.exists -and $Item -eq 'SettingsHome' -and $current.kind -eq 'String' -and $current.value -match '^hide:') {
+        $pages = @($current.value.Substring(5) -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        $externalHidden = $pages -contains 'home'
+        $canApply = -not $externalHidden
+    }
+    return @{ item = $Item; eligible = $Eligible; owned = [bool]$owned; pending = [bool]$pending; conflict = [bool]$conflict; userPolicy = [bool]$userPolicy.exists; existing = [bool]$current.exists; externalHidden = [bool]($externalHidden -and -not $owned); canApply = [bool]($canApply -or $pending); beforeKind = if ($valid) { [string]$beforeKind.value } else { $null }; beforeValue = if ($valid) { [string]$before.value } else { $null }; appliedValue = if ($valid) { [string]$applied.value } else { $null } }
+}
+
+function Get-ShellVisibilityStatus {
+    return Invoke-WithShellVisibilityMutex {
+        $eligible = Get-ShellVisibilityPlatform
+        @{ isAdmin = [bool](Test-IsAdmin); items = @((Get-ShellVisibilityState 'StartRecommended' $eligible), (Get-ShellVisibilityState 'SettingsHome' $eligible)) }
+    }
+}
+
+function Set-ShellVisibility {
+    param([Parameter(Mandatory = $true)][ValidateSet('StartRecommended','SettingsHome')][string]$Item, [Parameter(Mandatory = $true)][ValidateSet('hide','restore')][string]$Mode)
+    Assert-IsAdmin
+    return Invoke-WithShellVisibilityMutex {
+        $spec = Get-ShellVisibilitySpec $Item
+        $snapshot = "SOFTWARE\WinCommander\ShellVisibility\$Item"
+        $state = Get-ShellVisibilityState $Item (Get-ShellVisibilityPlatform)
+        if ($state.conflict) { throw 'The setting or backup changed outside WinCommander. No policy was changed.' }
+        if ($state.userPolicy -and -not ($Mode -eq 'restore' -and $state.pending)) { throw 'A separate account policy controls this setting. No policy was changed.' }
+        if ($Mode -eq 'hide') {
+            if (-not $state.eligible) { throw 'This Windows edition or version is not supported for this policy.' }
+            if (-not $state.owned -and -not $state.canApply) { throw 'An existing policy controls this setting. No policy was changed.' }
+            if (-not $state.owned -and -not $state.pending) {
+                $current = Get-ShellVisibilityValue 'LocalMachine' $spec.Key $spec.Name
+                if ($Item -eq 'StartRecommended' -and $current.exists) { throw 'The policy changed before it could be saved.' }
+                if ($Item -eq 'SettingsHome' -and $current.exists) {
+                    if ($current.kind -ne 'String' -or $current.value -notmatch '^hide:') { throw 'The Settings policy changed before it could be saved.' }
+                    $pages = @($current.value.Substring(5) -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+                    if ($pages -contains 'home') { throw 'Settings Home was already hidden outside WinCommander.' }
+                }
+                $beforeKind = if ($current.exists) { $current.kind } else { 'Absent' }
+                $beforeValue = if ($current.exists) { [string]$current.value } else { '' }
+                $applied = if ($Item -eq 'StartRecommended') { '1' } elseif (-not $current.exists -or $beforeValue -match '^hide:\s*;*\s*$') { 'hide:home' } else { $beforeValue.TrimEnd(';') + ';home' }
+                Set-ShellVisibilityValue $snapshot 'BeforeKind' $beforeKind 'String'
+                Set-ShellVisibilityValue $snapshot 'BeforeValue' $beforeValue 'String'
+                Set-ShellVisibilityValue $snapshot 'AppliedValue' $applied 'String'
+                Set-ShellVisibilityValue $snapshot 'Phase' 1 'DWord'
+                $state = Get-ShellVisibilityState $Item $true
+                if (-not $state.pending -or $state.conflict) { throw 'Windows could not confirm the policy backup.' }
+            }
+            if (-not $state.owned) {
+                $value = if ($spec.Kind -eq 'DWord') { [int]$state.appliedValue } else { $state.appliedValue }
+                Set-ShellVisibilityValue $spec.Key $spec.Name $value $spec.Kind
+                if (-not (Test-ShellVisibilityValue (Get-ShellVisibilityValue 'LocalMachine' $spec.Key $spec.Name) $spec.Kind $state.appliedValue)) { throw 'Windows could not verify the policy write.' }
+                Set-ShellVisibilityValue $snapshot 'Phase' 2 'DWord'
+            }
+            $result = Get-ShellVisibilityState $Item $true
+            if (-not $result.owned -or $result.conflict) { throw 'Windows could not verify the policy change.' }
+        } else {
+            if (-not ($state.owned -or $state.pending)) { throw 'WinCommander has no change to restore.' }
+            if ($state.owned) {
+                if ($state.beforeKind -eq 'Absent') { Remove-ShellVisibilityValue $spec.Key $spec.Name }
+                else { $value = if ($state.beforeKind -eq 'DWord') { [int]$state.beforeValue } else { $state.beforeValue }; Set-ShellVisibilityValue $spec.Key $spec.Name $value $state.beforeKind }
+            }
+            if (-not (Test-ShellVisibilityValue (Get-ShellVisibilityValue 'LocalMachine' $spec.Key $spec.Name) $state.beforeKind $state.beforeValue)) { throw 'Windows could not verify restoration.' }
+            foreach ($name in @('Phase','BeforeKind','BeforeValue','AppliedValue')) { Remove-ShellVisibilityValue $snapshot $name }
+            $result = Get-ShellVisibilityState $Item (Get-ShellVisibilityPlatform)
+            if ($result.owned -or $result.pending -or $result.conflict) { throw 'The policy was restored, but its backup could not be cleared.' }
+        }
+        @{ status = 'updated'; verified = $true; item = $result; requiresSignOut = $true }
+    }
+}
+
+# These three Windows handlers are changed only at their exact registration
+# values. Their keys, other values, and globally shared COM classes are kept.
+function Get-ContextItemSpec {
+    param([string]$Item)
+    switch ($Item) {
+        'IncludeLibrary' { return @{ Id = '{3dad6c5d-2167-4cae-9914-f99e41c12cfa}'; Paths = @('SOFTWARE\Classes\Folder\ShellEx\ContextMenuHandlers\Library Location') } }
+        'GiveAccess' { return @{ Id = '{f81e9010-6ea4-11ce-a7ff-00aa003ca9f6}'; Paths = @('SOFTWARE\Classes\*\shellex\ContextMenuHandlers\Sharing', 'SOFTWARE\Classes\Directory\Background\shellex\ContextMenuHandlers\Sharing', 'SOFTWARE\Classes\Directory\shellex\ContextMenuHandlers\Sharing', 'SOFTWARE\Classes\Drive\shellex\ContextMenuHandlers\Sharing', 'SOFTWARE\Classes\LibraryFolder\background\shellex\ContextMenuHandlers\Sharing', 'SOFTWARE\Classes\UserLibraryFolder\shellex\ContextMenuHandlers\Sharing') } }
+        'Share' { return @{ Id = '{e2bf9676-5f8f-435c-97eb-11607a5bedf7}'; Paths = @('SOFTWARE\Classes\*\shellex\ContextMenuHandlers\ModernSharing') } }
+        default { throw 'Unknown right-click item.' }
+    }
+}
+
+function Get-ContextItemAccountSid { return [Security.Principal.WindowsIdentity]::GetCurrent().User.Value }
+
+function Get-ContextHandlerValue {
+    param([string]$Hive, [string]$Key)
+    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey($Hive, 'Registry64')
+    try {
+        $sub = $base.OpenSubKey($Key, $false)
+        if ($null -eq $sub) { return @{ keyExists = $false; exists = $false; value = $null; kind = $null } }
+        try {
+            if ('' -notin $sub.GetValueNames()) { return @{ keyExists = $true; exists = $false; value = $null; kind = $null } }
+            return @{ keyExists = $true; exists = $true; value = $sub.GetValue('', $null, 'DoNotExpandEnvironmentNames'); kind = [string]$sub.GetValueKind('') }
+        } finally { $sub.Dispose() }
+    } finally { $base.Dispose() }
+}
+
+function Set-ContextHandlerValue {
+    param([string]$Hive, [string]$Key, [string]$Value)
+    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey($Hive, 'Registry64')
+    try {
+        $sub = $base.OpenSubKey($Key, $true)
+        if ($null -eq $sub) { throw 'A right-click registration no longer exists.' }
+        try {
+            if ('' -in $sub.GetValueNames()) { throw 'A right-click registration appeared before restoration.' }
+            $sub.SetValue('', $Value, 'String'); $sub.Flush()
+        } finally { $sub.Dispose() }
+    } finally { $base.Dispose() }
+}
+
+function Remove-ContextHandlerValue {
+    param([string]$Hive, [string]$Key, [string]$Expected)
+    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey($Hive, 'Registry64')
+    try {
+        $sub = $base.OpenSubKey($Key, $true)
+        if ($null -eq $sub) { throw 'A right-click registration no longer exists.' }
+        try {
+            if ('' -notin $sub.GetValueNames() -or $sub.GetValueKind('') -ne 'String' -or [string]$sub.GetValue('') -ine $Expected) { throw 'A right-click registration changed before removal.' }
+            $sub.DeleteValue('', $false); $sub.Flush()
+        } finally { $sub.Dispose() }
+    } finally { $base.Dispose() }
+}
+
+function Get-ContextItemState {
+    param([string]$Item)
+    $spec = Get-ContextItemSpec $Item
+    $snapshot = "SOFTWARE\WinCommander\ContextItemVisibility\$Item"
+    $phase = Get-ShellVisibilityValue 'LocalMachine' $snapshot 'Phase'
+    $saved = Get-ShellVisibilityValue 'LocalMachine' $snapshot 'Snapshot'
+    $targets = @(
+        foreach ($path in $spec.Paths) {
+            foreach ($hive in @('LocalMachine','CurrentUser')) {
+                $current = Get-ContextHandlerValue $hive $path
+                [pscustomobject]@{ Hive = $hive; Path = $path; Current = $current }
+            }
+        }
+    )
+    $hasSnapshot = $phase.exists -or $saved.exists
+    $valid = $phase.exists -and $phase.kind -eq 'DWord' -and $phase.value -in @(1,2) -and $saved.exists -and $saved.kind -eq 'String' -and $saved.value.Length -le 16384
+    $records = @(); $sameAccount = $true
+    if ($valid) {
+        try {
+            $document = $saved.value | ConvertFrom-Json -ErrorAction Stop
+            $sameAccount = [string]$document.accountSid -ceq (Get-ContextItemAccountSid)
+            $records = @($document.records)
+            if ($records.Count -ne $targets.Count) { $valid = $false }
+            if (@($records | Where-Object { $_.present -eq $true }).Count -eq 0) { $valid = $false }
+            if ($valid) {
+                for ($i = 0; $i -lt $targets.Count; $i++) {
+                    $record = $records[$i]; $target = $targets[$i]
+                    if ($record.hive -cne $target.Hive -or $record.path -cne $target.Path -or $record.present -isnot [bool] -or ($record.present -and ($record.value -isnot [string] -or $record.value -ine $spec.Id)) -or (-not $record.present -and $null -ne $record.value)) { $valid = $false; break }
+                }
+            }
+        } catch { $valid = $false }
+    }
+    $conflict = $hasSnapshot -and (-not $valid -or -not $sameAccount)
+    $detected = 0
+    for ($i = 0; $i -lt $targets.Count; $i++) {
+        $current = $targets[$i].Current
+        if ($current.exists) { $detected++ }
+        if (-not $valid) {
+            if ($current.exists -and ($current.kind -ne 'String' -or [string]$current.value -ine $spec.Id)) { $conflict = $true }
+        } else {
+            $record = $records[$i]
+            if ($record.present -and -not $current.keyExists) { $conflict = $true }
+            if ($current.exists -and (-not $record.present -or $current.kind -ne 'String' -or [string]$current.value -cne [string]$record.value -or $phase.value -eq 2)) { $conflict = $true }
+        }
+    }
+    return @{ item = $Item; detected = $detected; owned = [bool]($valid -and $sameAccount -and $phase.value -eq 2); pending = [bool]($valid -and $sameAccount -and $phase.value -eq 1); conflict = [bool]$conflict; otherAccount = [bool]($valid -and -not $sameAccount); records = if ($valid -and $sameAccount) { $records } else { @() } }
+}
+
+function Get-ContextItemVisibility {
+    return Invoke-WithShellVisibilityMutex {
+        @{ isAdmin = [bool](Test-IsAdmin); items = @((Get-ContextItemState 'IncludeLibrary'), (Get-ContextItemState 'GiveAccess'), (Get-ContextItemState 'Share')) }
+    }
+}
+
+function Set-ContextItemVisibility {
+    param([Parameter(Mandatory = $true)][ValidateSet('IncludeLibrary','GiveAccess','Share')][string]$Item, [Parameter(Mandatory = $true)][ValidateSet('hide','restore')][string]$Mode)
+    Assert-IsAdmin
+    return Invoke-WithShellVisibilityMutex {
+        $spec = Get-ContextItemSpec $Item
+        $snapshot = "SOFTWARE\WinCommander\ContextItemVisibility\$Item"
+        $state = Get-ContextItemState $Item
+        if ($state.conflict) { throw 'A right-click registration or its backup changed outside WinCommander. No entry was changed.' }
+        if ($Mode -eq 'hide') {
+            if (-not $state.owned -and -not $state.pending) {
+                if ($state.detected -eq 0) { throw 'This right-click registration was not detected on this PC.' }
+                $records = @(
+                    foreach ($path in $spec.Paths) {
+                        foreach ($hive in @('LocalMachine','CurrentUser')) {
+                            $value = Get-ContextHandlerValue $hive $path
+                            if ($value.exists -and ($value.kind -ne 'String' -or [string]$value.value -ine $spec.Id)) { throw 'A right-click registration changed before it could be saved.' }
+                            [pscustomobject]@{ hive = $hive; path = $path; present = [bool]$value.exists; value = if ($value.exists) { [string]$value.value } else { $null } }
+                        }
+                    }
+                )
+                $json = ConvertTo-Json -InputObject @{ accountSid = Get-ContextItemAccountSid; records = $records } -Depth 5 -Compress
+                Set-ShellVisibilityValue $snapshot 'Snapshot' $json 'String'
+                Set-ShellVisibilityValue $snapshot 'Phase' 1 'DWord'
+                $state = Get-ContextItemState $Item
+                if (-not $state.pending -or $state.conflict) { throw 'Windows could not confirm the right-click backup.' }
+            }
+            if (-not $state.owned) {
+                foreach ($record in $state.records) {
+                    if ($record.present) {
+                        $current = Get-ContextHandlerValue $record.hive $record.path
+                        if ($current.exists) { Remove-ContextHandlerValue $record.hive $record.path $record.value }
+                    }
+                }
+                $state = Get-ContextItemState $Item
+                if ($state.conflict -or $state.detected -ne 0) { throw 'Windows could not verify that the selected registrations were hidden.' }
+                Set-ShellVisibilityValue $snapshot 'Phase' 2 'DWord'
+            }
+            $result = Get-ContextItemState $Item
+            if (-not $result.owned -or $result.conflict) { throw 'Windows could not verify the right-click change.' }
+        } else {
+            if (-not ($state.owned -or $state.pending)) { throw 'WinCommander has no right-click change to restore.' }
+            Set-ShellVisibilityValue $snapshot 'Phase' 1 'DWord'
+            foreach ($record in $state.records) {
+                if ($record.present) {
+                    $current = Get-ContextHandlerValue $record.hive $record.path
+                    if (-not $current.exists) { Set-ContextHandlerValue $record.hive $record.path $record.value }
+                }
+            }
+            $state = Get-ContextItemState $Item
+            if ($state.conflict) { throw 'Windows could not verify the restored registrations.' }
+            foreach ($record in $state.records) {
+                $current = Get-ContextHandlerValue $record.hive $record.path
+                if ($record.present -ne $current.exists -or ($record.present -and [string]$record.value -cne [string]$current.value)) { throw 'Windows could not verify the restored registrations.' }
+            }
+            foreach ($name in @('Phase','Snapshot')) { Remove-ShellVisibilityValue $snapshot $name }
+            $result = Get-ContextItemState $Item
+            if ($result.owned -or $result.pending -or $result.conflict) { throw 'The entries were restored, but their backup could not be cleared.' }
+        }
+        @{ status = 'updated'; verified = $true; item = $result; requiresSignOut = $true }
+    }
+}
+
 # --- BACKGROUND APPS ---
 
 function Disable-BackgroundApps {

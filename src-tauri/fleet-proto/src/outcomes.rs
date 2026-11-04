@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Signed action-outcome wire contract. B1 owns this module after G-1.
 
-use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -194,22 +192,7 @@ pub fn verify_action_outcome(outcome: &ActionOutcome, public_key_b64: &str) -> b
     let Ok(hash) = hex_to_32_bytes(&outcome.record_hash) else {
         return false;
     };
-    let Ok(key_bytes) = B64.decode(public_key_b64) else {
-        return false;
-    };
-    let Ok(key_array) = <[u8; 32]>::try_from(key_bytes.as_slice()) else {
-        return false;
-    };
-    let Ok(verifying_key) = VerifyingKey::from_bytes(&key_array) else {
-        return false;
-    };
-    let Ok(signature_bytes) = B64.decode(&outcome.signature) else {
-        return false;
-    };
-    let Ok(signature) = Signature::from_slice(&signature_bytes) else {
-        return false;
-    };
-    verifying_key.verify(&hash, &signature).is_ok()
+    crate::verify_signature_b64(public_key_b64, &hash, &outcome.signature)
 }
 
 pub(crate) fn hex_to_32_bytes(input: &str) -> Result<[u8; 32], ()> {
@@ -224,4 +207,37 @@ pub(crate) fn hex_to_32_bytes(input: &str) -> Result<[u8; 32], ()> {
             .ok_or(())?;
     }
     Ok(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+
+    #[test]
+    fn rejects_forged_action_outcome_with_identity_key() {
+        let mut outcome = ActionOutcome {
+            version: 1,
+            receipt_id: "receipt".into(),
+            device_id: DeviceId("device".into()),
+            sequence: 1,
+            previous_hash: None,
+            command_id: Some("command".into()),
+            catalog_id: "device.lock".into(),
+            action_class: ActionClass::Irreversible,
+            outcome: ActionOutcomeState::Pass,
+            failure_stage: None,
+            observed_at: "2026-08-19T00:00:00Z".into(),
+            result_digest: serde_json::json!({"status": "completed"}),
+            record_hash: String::new(),
+            signature: String::new(),
+        };
+        outcome.record_hash = action_outcome_hash(&outcome);
+        let mut identity_key = [0u8; 32];
+        identity_key[0] = 1;
+        let mut forged_signature = [0u8; 64];
+        forged_signature[0] = 1;
+        outcome.signature = B64.encode(forged_signature);
+        assert!(!verify_action_outcome(&outcome, &B64.encode(identity_key)));
+    }
 }

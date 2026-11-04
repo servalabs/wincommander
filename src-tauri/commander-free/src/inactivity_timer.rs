@@ -7,10 +7,9 @@
 //
 // A-4 module 4 evaluation: this file stays in Free.
 //
-// One-line spec: if WinCommander doesn't see the operator for N days,
-// fire the Lockdown / self-destruct cascade (same path as Destroy PIN).
-// Rationale: if the operator disappears (arrest, seizure, …), the
-// device should destroy/lock down, not run an export flow.
+// Local timer: while the app is running, request the configured Lockdown
+// after the saved activity baseline ages past the configured threshold.
+// Startup resets that baseline; a launch does not establish human presence.
 //
 // Architecture:
 //
@@ -32,7 +31,7 @@
 //   lastFiredAt.
 //
 //   Tap-out:
-//     - WinCommander startup → auto-reset (just being alive is enough)
+//     - WinCommander startup → auto-reset (including automatic startup)
 //     - Manual "I'm alive" button in Privacy panel
 //     - Could later wire to: panel switches, settings saves, etc.
 //
@@ -49,6 +48,9 @@ use once_cell::sync::Lazy;
 use tauri::{AppHandle, Emitter};
 
 use crate::settings::{read_settings, write_settings};
+
+#[path = "inactivity_status.rs"]
+mod status;
 
 const DEFAULT_THRESHOLD_DAYS: u32 = 14;
 const MIN_THRESHOLD_DAYS: u32 = 1;
@@ -94,14 +96,24 @@ fn default_threshold_days() -> u32 {
 
 // ── Watchdog lifecycle ─────────────────────────────────────────────────
 
-static WATCHDOG_STARTED: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
+#[derive(Default)]
+struct WatchdogRuntime {
+    task: Option<tauri::async_runtime::JoinHandle<()>>,
+    last_check: status::Check,
+    check_changed_at: Option<chrono::DateTime<chrono::Utc>>,
+    last_completed_at: Option<chrono::DateTime<chrono::Utc>>,
+    startup_reset_failed: bool,
+}
+
+static WATCHDOG: Lazy<Mutex<WatchdogRuntime>> =
+    Lazy::new(|| Mutex::new(WatchdogRuntime::default()));
 
 /// Bootstrap. Called from `lib.rs` on app startup. Idempotent.
 pub fn init(app: &AppHandle) {
-    // Mark startup as a tap-out: the operator booted WinCommander, so
-    // we know they're alive. Failures (no settings file yet, etc.) are
-    // logged but don't block startup.
-    if let Err(e) = reset_timer_internal() {
+    // Startup resets the local activity baseline, including automatic startup.
+    // Failures are logged but don't block startup.
+    let reset_result = reset_timer_internal();
+    if let Err(e) = &reset_result {
         crate::log_message(
             "warn",
             &format!("[DeadMansSwitch] startup reset failed: {}", e),
@@ -109,21 +121,33 @@ pub fn init(app: &AppHandle) {
     }
 
     // Spawn the watchdog exactly once.
-    {
-        let mut started = WATCHDOG_STARTED.lock().unwrap();
-        if *started {
-            return;
-        }
-        *started = true;
+    let mut runtime = WATCHDOG.lock().unwrap();
+    runtime.startup_reset_failed = reset_result.is_err();
+    if runtime.task.is_some() {
+        return;
     }
-
     let app = app.clone();
-    tauri::async_runtime::spawn(async move {
+    runtime.task = Some(tauri::async_runtime::spawn(async move {
         // First check is delayed by half the interval so we don't race
         // with `init`'s reset.
         tokio::time::sleep(WATCHDOG_INTERVAL / 2).await;
         loop {
-            if let Err(e) = tick(&app).await {
+            if let Ok(mut runtime) = WATCHDOG.lock() {
+                runtime.last_check = status::Check::InProgress;
+                runtime.check_changed_at = Some(chrono::Utc::now());
+            }
+            let checked = tick(&app).await;
+            if let Ok(mut runtime) = WATCHDOG.lock() {
+                runtime.last_check = if checked.is_ok() {
+                    status::Check::Succeeded
+                } else {
+                    status::Check::Failed
+                };
+                let completed = chrono::Utc::now();
+                runtime.check_changed_at = Some(completed);
+                runtime.last_completed_at = Some(completed);
+            }
+            if let Err(e) = checked {
                 crate::log_message(
                     "warn",
                     &format!("[DeadMansSwitch] watchdog tick failed: {}", e),
@@ -131,7 +155,7 @@ pub fn init(app: &AppHandle) {
             }
             tokio::time::sleep(WATCHDOG_INTERVAL).await;
         }
-    });
+    }));
 }
 
 /// One watchdog iteration. Returns Err only for IO/settings issues;
@@ -236,6 +260,49 @@ fn write_last_fired(when: &str) -> Result<(), String> {
 #[tauri::command]
 pub fn get_dead_mans_switch_config() -> Result<DeadMansSwitchConfig, String> {
     read_config()
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeadMansSwitchStatus {
+    config: DeadMansSwitchConfig,
+    state: status::State,
+    startup_reset_failed: bool,
+    last_iteration_completed_at: Option<String>,
+}
+
+/// A snapshot of local readiness; it is not a receipt for any Lockdown effect.
+#[tauri::command]
+pub fn get_dead_mans_switch_status() -> Result<DeadMansSwitchStatus, String> {
+    let settings = read_settings()?;
+    let config = settings.app.dead_mans_switch.unwrap_or_default();
+    let runtime = WATCHDOG
+        .lock()
+        .map_err(|_| "inactivity watchdog status unavailable")?;
+    let state = status::evaluate(status::Inputs {
+        enabled: config.enabled,
+        fired: config.last_fired_at.is_some(),
+        task_running: runtime
+            .task
+            .as_ref()
+            .is_some_and(|task| !task.inner().is_finished()),
+        personal_available: crate::settings::personal_settings_automation_available(),
+        baseline_valid: parse_iso(&config.last_activity_at)
+            .is_some_and(|time| time <= chrono::Utc::now()),
+        lockdown_enabled: settings.ideal.privacy.self_destruct.enabled == Some(true),
+        last_check: runtime.last_check,
+        check_recent: status::recent(
+            runtime.last_check,
+            runtime.check_changed_at.map(|time| time.timestamp()),
+            chrono::Utc::now().timestamp(),
+        ),
+    });
+    Ok(DeadMansSwitchStatus {
+        config,
+        state,
+        startup_reset_failed: runtime.startup_reset_failed,
+        last_iteration_completed_at: runtime.last_completed_at.map(|time| time.to_rfc3339()),
+    })
 }
 
 #[tauri::command]

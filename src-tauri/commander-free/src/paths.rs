@@ -852,6 +852,46 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn fleet_lifecycle_lock_child_probe() {
+        let Ok(name) = std::env::var("WINCMD_FLEET_LOCK_TEST_NAME") else { return; };
+        let expected = std::env::var("WINCMD_FLEET_LOCK_TEST_EXPECT").unwrap();
+        let result = super::acquire_machine_state_lock_with_timeout(&name, 100);
+        assert_eq!(result.is_ok(), expected == "available");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn fleet_lifecycle_lock_serializes_separate_processes_and_releases() {
+        let name = format!("fleet-life-test-{}", uuid::Uuid::new_v4().simple());
+        let run = |expect: &str| {
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "paths::tests::fleet_lifecycle_lock_child_probe", "--nocapture"])
+                .env("WINCMD_FLEET_LOCK_TEST_NAME", &name)
+                .env("WINCMD_FLEET_LOCK_TEST_EXPECT", expect)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn().unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while child.try_wait().unwrap().is_none() {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!("child lock probe timed out");
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            let result = child.wait_with_output().unwrap();
+            assert!(result.status.success(), "child lock probe failed: {}", String::from_utf8_lossy(&result.stderr));
+            assert!(String::from_utf8_lossy(&result.stdout).contains("1 passed"), "child lock probe did not run");
+        };
+        let held = super::acquire_machine_state_lock_with_timeout(&name, 100).unwrap();
+        run("blocked");
+        drop(held);
+        run("available");
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn an_abandoned_owner_does_not_leave_a_stale_machine_lock() {
         let name = format!("shield-abandoned-{}", uuid::Uuid::new_v4().simple());
         let abandoned_name = name.clone();

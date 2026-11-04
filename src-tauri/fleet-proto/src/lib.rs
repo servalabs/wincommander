@@ -8,7 +8,7 @@
 //! reference a catalog id (`catalog_id: String`), never a recombined literal.
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -2332,7 +2332,7 @@ pub fn verify_signature_b64(public_key_b64: &str, msg: &[u8], signature_b64: &st
     let Ok(vk) = VerifyingKey::from_bytes(&key_arr) else {
         return false;
     };
-    vk.verify(msg, &Signature::from_bytes(&sig_arr)).is_ok()
+    !vk.is_weak() && vk.verify_strict(msg, &Signature::from_bytes(&sig_arr)).is_ok()
 }
 
 // KT: write_canonical is the ONLY place that produces signing bytes. Two
@@ -2619,6 +2619,21 @@ mod tests {
     fn fleet_error_serializes_snake_case() {
         let json = serde_json::to_string(&FleetError::StaleEpoch).unwrap();
         assert_eq!(json, "\"stale_epoch\"");
+    }
+
+    #[test]
+    fn signature_verification_rejects_identity_key_forgery() {
+        // Encoded identity public key and R=identity, S=0 verify arbitrary
+        // messages under lax Ed25519 verification without a private key.
+        let mut identity = [0u8; 32];
+        identity[0] = 1;
+        let mut forged = [0u8; 64];
+        forged[0] = 1;
+        assert!(!verify_signature_b64(
+            &B64.encode(identity),
+            b"arbitrary command",
+            &B64.encode(forged)
+        ));
     }
 
     #[test]

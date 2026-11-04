@@ -239,6 +239,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn existing_aes256_gcm_diagnostic_fixture_remains_compatible() {
+        let key = core::array::from_fn(|i| i as u8);
+        let nonce = core::array::from_fn(|i| i as u8);
+        // Independent AES-GCM vector: key 00..1f, nonce 00..0b and the
+        // established diagnostic scope/date as associated data.
+        let fixture = "D1:2026-11-03:AAECAwQFBgcICQoLInq/aLGMrHytJf7q1ocXHve/5BSCHjwTSgOMKpvNPeLRMHmVuK8QivUE";
+        let plaintext = b"existing diagnostic record";
+        assert_eq!(
+            open_diagnostic_record(&key, "device", fixture).as_deref(),
+            Some(plaintext.as_slice())
+        );
+        assert_eq!(
+            seal_diagnostic_record(&key, "2026-11-03", "device", plaintext, nonce).unwrap(),
+            fixture
+        );
+        assert!(open_diagnostic_record(&key, "other", fixture).is_none());
+    }
+
+    #[test]
     fn diagnostic_contract_rejects_unstable_action_and_error_codes() {
         let mut event = DiagnosticEvent {
             event_id: "evt-1".into(),

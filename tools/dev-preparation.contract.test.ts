@@ -9,11 +9,11 @@ const prepared = JSON.parse(readFileSync("src-tauri/commander-free/tauri.prepare
 describe("desktop preparation outside the frontend deadline", () => {
   test("finishes native preparation and checks failure before invoking Tauri", () => {
     const prepare = launcher.indexOf("& $bun run tools/dev-server.ts --precleaned --prepare-only");
-    const tauri = launcher.indexOf("& $tauriCli dev");
+    const tauri = launcher.indexOf("& $tauriCli @tauriArgs");
     expect(prepare).toBeGreaterThan(0);
     expect(prepare).toBeLessThan(tauri);
     expect(launcher.slice(prepare, tauri)).toContain("if ($LASTEXITCODE -ne 0)");
-    expect(launcher).toContain("--config src-tauri/commander-free/tauri.prepared-dev.conf.json");
+    expect(launcher).toContain("'--config', 'src-tauri/commander-free/tauri.prepared-dev.conf.json'");
   });
 
   test("prepared config changes only the frontend hook and leaves security/defaults intact", () => {
