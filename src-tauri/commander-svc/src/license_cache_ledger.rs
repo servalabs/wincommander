@@ -23,6 +23,67 @@ struct LegacyCache {
     _seat_limit: Option<u32>,
 }
 
+/// Locate the same device's protected candidate; callers must verify it before use.
+pub(super) fn pending_renewal(
+    retained: &[u8],
+    expected: &StoreLicenseCacheRequest,
+) -> Result<Option<(StoreLicenseCacheRequest, u64)>, &'static str> {
+    let ledger: Ledger = match serde_json::from_slice(retained) {
+        Ok(ledger) => ledger,
+        Err(_) => {
+            let _: LegacyCache = serde_json::from_slice(retained)
+                .map_err(|_| "license security record is invalid")?;
+            Ledger {
+                version: 1,
+                records: vec![std::str::from_utf8(retained)
+                    .map_err(|_| "license security record is invalid")?
+                    .to_owned()],
+            }
+        }
+    };
+    if ledger.version != 1 || ledger.records.is_empty() || ledger.records.len() > MAX_RECORDS {
+        return Err("license security record is invalid");
+    }
+    let old: RefreshClaims =
+        serde_json::from_str(&expected.payload).map_err(|_| "license cache is invalid")?;
+    let mut found = None;
+    for record in ledger.records {
+        let cache: ExistingCache =
+            serde_json::from_str(&record).map_err(|_| "license security record is invalid")?;
+        let summary: SignedClaims = serde_json::from_str(&cache.token.payload)
+            .map_err(|_| "license security record is invalid")?;
+        if summary.license_id.as_deref() != Some(old.license_id.as_str()) {
+            continue;
+        }
+        let claims: RefreshClaims = serde_json::from_str(&cache.token.payload)
+            .map_err(|_| "license security record is invalid")?;
+        if claims.device_hash != old.device_hash
+            || claims.is_portable != old.is_portable
+            || found.is_some()
+        {
+            return Err("license security record is invalid");
+        }
+        let time = cache
+            .last_verified_at
+            .ok_or("license security record is invalid")?;
+        found = Some((
+            StoreLicenseCacheRequest {
+                payload: cache.token.payload,
+                signature: cache.token.signature,
+                hybrid: cache.token.hybrid,
+                seats_used: cache.seats_used,
+                seat_limit: cache.seat_limit,
+            },
+            time,
+        ));
+    }
+    Ok(found.filter(|(candidate, _)| {
+        candidate.payload != expected.payload
+            || candidate.signature != expected.signature
+            || candidate.hybrid != expected.hybrid
+    }))
+}
+
 /// Confirm that the exact signed token is already in the protected history.
 /// This does not create or update the history and does not authorize a device.
 pub(super) fn verify_current(

@@ -213,9 +213,12 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
         &crash_anchor,
     )
     .unwrap();
+    assert!(
+        !recover_pending_with_anchor(&crash_path, 200, &public, &current, &crash_anchor).unwrap()
+    );
     let retained = crash_anchor.read().unwrap().unwrap();
     let mut next_cache: serde_json::Value = serde_json::from_slice(&cache(&later)).unwrap();
-    next_cache["last_verified_at"] = 101.into();
+    next_cache["last_verified_at"] = 100.into();
     next_cache["seats_used"] = 1.into();
     next_cache["seat_limit"] = 3.into();
     let next_bytes = serde_json::to_vec(&next_cache).unwrap();
@@ -251,17 +254,23 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
         &crash_anchor
     )
     .is_err());
-    write_renewal_with_anchor(
-        &crash_path,
-        (&previous_epoch9, 99),
-        &later,
-        200,
-        &public,
-        &current,
-        &crash_anchor,
-    )
-    .unwrap();
-    assert!(verify_with_anchor(&crash_path, &later, 101, &public, &current, &crash_anchor).is_ok());
+    assert!(
+        recover_pending_with_anchor(&crash_path, 99, &public, &current, &crash_anchor).is_err()
+    );
+    assert_eq!(fs::read(&crash_path).unwrap(), prior_bytes);
+    assert!(
+        recover_pending_with_anchor(&crash_path, 200, &public, &current, &crash_anchor).unwrap()
+    );
+    assert!(
+        !recover_pending_with_anchor(&crash_path, 200, &public, &current, &crash_anchor).unwrap()
+    );
+    assert!(verify_with_anchor(&crash_path, &later, 100, &public, &current, &crash_anchor).is_ok());
+    let recovered_bytes = fs::read(&crash_path).unwrap();
+    crash_anchor.write(b"invalid").unwrap();
+    assert!(
+        recover_pending_with_anchor(&crash_path, 200, &public, &current, &crash_anchor).is_err()
+    );
+    assert_eq!(fs::read(&crash_path).unwrap(), recovered_bytes);
     anchor::remove_test_key(&crash_anchor_path).unwrap();
     write_with_anchor(
         &renewal_path,

@@ -199,6 +199,66 @@ fn write_renewal_with_anchor(
     atomic_write(path, &bytes).map_err(|_| "machine license cache is unavailable")
 }
 
+/// Reconcile an interrupted write using only the protected candidate and cache.
+pub(super) fn recover_pending_renewal(
+    path: &Path,
+    now: u64,
+    public_key: &str,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>,
+) -> Result<bool, &'static str> {
+    let anchor = anchor::Anchor::machine_named(r"SOFTWARE\ServaLabs\WinCommander\HybridLicence");
+    recover_pending_with_anchor(path, now, public_key, trust, &anchor)
+}
+
+fn recover_pending_with_anchor(
+    path: &Path,
+    now: u64,
+    public_key: &str,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>,
+    anchor: &anchor::Anchor,
+) -> Result<bool, &'static str> {
+    // This preliminary read selects a candidate only. The writer rechecks both
+    // records under its lock before performing any mutation.
+    let bytes = read_cache(path)?.ok_or("license cache is unavailable")?;
+    let existing: ExistingCache =
+        serde_json::from_slice(&bytes).map_err(|_| "license cache is invalid")?;
+    let time = existing
+        .last_verified_at
+        .ok_or("license cache verification time is missing")?;
+    let expected = StoreLicenseCacheRequest {
+        payload: existing.token.payload,
+        signature: existing.token.signature,
+        hybrid: existing.token.hybrid,
+        seats_used: existing.seats_used,
+        seat_limit: existing.seat_limit,
+    };
+    let retained = anchor
+        .read()
+        .map_err(|_| "license security record is unavailable")?
+        .ok_or("license security record is unavailable")?;
+    match ledger::pending_renewal(&retained, &expected)? {
+        Some((candidate, accepted_at)) => {
+            if accepted_at > now {
+                return Err("license security record is from the future");
+            }
+            write_renewal_with_anchor(
+                path,
+                (&expected, time),
+                &candidate,
+                accepted_at,
+                public_key,
+                trust,
+                anchor,
+            )?;
+            Ok(true)
+        }
+        None => {
+            verify_with_anchor(path, &expected, time, public_key, trust, anchor)?;
+            Ok(false)
+        }
+    }
+}
+
 fn read_cache(path: &Path) -> Result<Option<Vec<u8>>, &'static str> {
     Ok(match fs::File::open(path) {
         Ok(file) => {

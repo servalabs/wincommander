@@ -304,6 +304,9 @@ pub(crate) async fn renew_and_save(
     receipt_trust: &wincmd_pq_experiment::jws::Trust<'_>,
     licence: &RefreshLicence<'_>,
 ) -> Result<(), &'static str> {
+    if crate::license_cache::recover_pending_device_renewal()? {
+        return Err("license cache recovered; reload before retrying");
+    }
     let renewal = request_renewal(binding, receipt_trust, licence).await?;
     crate::license_cache::save_device_renewal(
         licence.payload,

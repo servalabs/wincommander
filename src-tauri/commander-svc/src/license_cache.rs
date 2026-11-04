@@ -319,6 +319,15 @@ pub(crate) fn save_device_renewal(
         &candidate, now_unix(), public, &trust.policy())
 }
 
+/// Recover an interrupted local save before attempting another renewal.
+#[cfg(feature = "experimental-pq-licence")]
+pub(crate) fn recover_pending_device_renewal() -> Result<bool, &'static str> {
+    let public = service_public_key().ok_or("license verification is unavailable")?;
+    let trust = hybrid_trust::configured()?;
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_| "system clock is unavailable")?.as_secs();
+    rollback::recover_pending_renewal(&machine_license_cache_path()?, now, public, &trust.policy())
+}
+
 /// Validate the experimental hybrid proof before the service persists it.
 /// Rollback protection and every licence reader must be implemented before use.
 #[cfg(feature = "experimental-pq-licence")]
