@@ -321,8 +321,8 @@ fn worker_enrolment_receipt_interoperates_and_is_not_a_licence() {
     assert!(jws::verify(encoded.as_bytes(), &licence).is_err());
 }
 
-#[test]
-fn authorized_worker_issuer_receipt_confirms_persisted_pending_credential() {
+#[tokio::test]
+async fn authorized_worker_issuer_receipt_confirms_persisted_pending_credential() {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
     use wincmd_pq_experiment::{jws, Purpose, ML_DSA_65_PUBLIC_KEY_LEN};
     let fixture: serde_json::Value =
@@ -385,6 +385,49 @@ fn authorized_worker_issuer_receipt_confirms_persisted_pending_credential() {
     assert!(wire::enrolment_receipt(br#"{"ok":false,"receipt":"x"}"#).is_err());
     assert!(wire::enrolment_receipt(br#"{"ok":true,"receipt":"x","extra":1}"#).is_err());
     assert!(wire::enrolment_receipt(&[b' '; 65_537]).is_err());
+
+    // Exercise the same asynchronous sequence used by the real transport.
+    // These fixture credentials are synthetic and never leave this process.
+    let async_path = format!(r"SOFTWARE\WinCommanderAsyncEnrolTest-{}", uuid::Uuid::new_v4());
+    let async_anchor = anchor::Anchor::test_user(async_path.clone());
+    save_locked(&async_anchor, &MachineDpapi, &binding, &pending).unwrap();
+    let state = || enrolment_state(&async_anchor, &MachineDpapi, &binding, &trust, accepted_at);
+    let before_async = async_anchor.read().unwrap().unwrap();
+    let lost = enrol_network_with(&binding, "test-licence-key", state, |body| async move {
+        let request: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(request["credentialId"], URL_SAFE_NO_PAD.encode([5u8; 32]));
+        assert_eq!(request["deviceSecret"], URL_SAFE_NO_PAD.encode([17u8; 32]));
+        Err("response lost")
+    }, |_| panic!("lost response cannot confirm")).await;
+    assert!(lost.is_err());
+    assert_eq!(async_anchor.read().unwrap().unwrap(), before_async);
+    let malformed = enrol_network_with(&binding, "test-licence-key", state, |_| async {
+        Ok(br#"{"ok":true,"receipt":"bad","extra":1}"#.to_vec())
+    }, |_| panic!("invalid response cannot confirm")).await;
+    assert!(malformed.is_err());
+    assert_eq!(async_anchor.read().unwrap().unwrap(), before_async);
+    let invalid_signature = enrol_network_with(&binding, "test-licence-key", state, |_| async {
+        Ok(br#"{"ok":true,"receipt":"not a signed receipt"}"#.to_vec())
+    }, |signed| {
+        confirm_with(&async_anchor, &MachineDpapi, &binding, &trust, signed, accepted_at)?;
+        Ok(())
+    }).await;
+    assert!(invalid_signature.is_err());
+    assert_eq!(async_anchor.read().unwrap().unwrap(), before_async);
+    let response = good_response.to_string().into_bytes();
+    let changed = enrol_network_with(&binding, "test-licence-key", state,
+        |_| async { Ok(response.clone()) }, |_| Err("licence changed")).await;
+    assert!(changed.is_err());
+    assert_eq!(async_anchor.read().unwrap().unwrap(), before_async);
+    enrol_network_with(&binding, "test-licence-key", state,
+        |_| async { Ok(response.clone()) }, |signed| {
+            confirm_with(&async_anchor, &MachineDpapi, &binding, &trust, signed, accepted_at)?;
+            Ok(())
+        }).await.unwrap();
+    enrol_network_with(&binding, "test-licence-key", state,
+        |_| async { panic!("confirmed secret must not be retransmitted") },
+        |_| panic!("confirmed identity needs no confirmation")).await.unwrap();
+    anchor::remove_test_key(&async_path).unwrap();
 
     let before = anchor.read().unwrap().unwrap();
     let lost = enrol_with(

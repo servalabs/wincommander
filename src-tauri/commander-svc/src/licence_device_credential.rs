@@ -571,20 +571,19 @@ pub(crate) async fn enrol_over_network(
             .map(|duration| duration.as_secs())
             .map_err(|_| INVALID)
     };
-    let state = {
-        let anchor = anchor::Anchor::machine_named(
-            r"SOFTWARE\ServaLabs\WinCommander\ExperimentalLicenceDevice",
-        );
-        enrolment_state(&anchor, &MachineDpapi, binding, receipt_trust, now()?)?
-    };
-    match state {
-        EnrolmentState::Confirmed(_) => Ok(()),
-        EnrolmentState::Pending(pending) => {
-            let body = wire::enrolment_request(binding, &pending, license_key)?;
-            let response = wire::post_enrolment(body).await?;
-            let signed = wire::enrolment_receipt(&response)?;
-            // Hold the credential lock first, then the cache and cross-process
-            // locks, so cache verification and confirmation cannot race.
+    enrol_network_with(
+        binding,
+        license_key,
+        || {
+            let anchor = anchor::Anchor::machine_named(
+                r"SOFTWARE\ServaLabs\WinCommander\ExperimentalLicenceDevice",
+            );
+            enrolment_state(&anchor, &MachineDpapi, binding, receipt_trust, now()?)
+        },
+        wire::post_enrolment,
+        |signed| {
+            // Lock order: credential, cache, then cross-process. Verification
+            // and confirmation must be one operation with no network I/O.
             let _guard = LOCK.lock().map_err(|_| INVALID)?;
             crate::license_cache::with_verified_refresh_wire(
                 licence.payload, licence.signature, licence.hybrid, licence.last_verified_at,
@@ -592,11 +591,36 @@ pub(crate) async fn enrol_over_network(
                     let anchor = anchor::Anchor::machine_named(
                         r"SOFTWARE\ServaLabs\WinCommander\ExperimentalLicenceDevice",
                     );
-                    confirm_locked(&anchor, &MachineDpapi, binding, receipt_trust, &signed, now()?)?;
+                    confirm_locked(&anchor, &MachineDpapi, binding, receipt_trust, signed, now()?)?;
                     Ok(())
                 },
-            )?;
-            Ok(())
+            )
+        },
+    ).await
+}
+
+// The production caller supplies the fixed transport and atomic cache check.
+// Injectable operations exercise the same asynchronous sequence in tests.
+async fn enrol_network_with<State, SendRequest, Response, Confirm>(
+    binding: &Binding<'_>,
+    license_key: &str,
+    state: State,
+    send: SendRequest,
+    confirm: Confirm,
+) -> Result<(), &'static str>
+where
+    State: FnOnce() -> Result<EnrolmentState, &'static str>,
+    SendRequest: FnOnce(Zeroizing<Vec<u8>>) -> Response,
+    Response: std::future::Future<Output = Result<Vec<u8>, &'static str>>,
+    Confirm: FnOnce(&str) -> Result<(), &'static str>,
+{
+    match state()? {
+        EnrolmentState::Confirmed(_) => Ok(()),
+        EnrolmentState::Pending(pending) => {
+            let body = wire::enrolment_request(binding, &pending, license_key)?;
+            let response = send(body).await?;
+            let signed = wire::enrolment_receipt(&response)?;
+            confirm(&signed)
         }
     }
 }
