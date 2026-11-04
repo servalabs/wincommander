@@ -1961,6 +1961,7 @@ dependencies = [
  "rcgen",
  "reqwest",
  "rustls",
+ "rustls-platform-verifier",
  "rustls-webpki",
  "serde",
  "serde_json",
