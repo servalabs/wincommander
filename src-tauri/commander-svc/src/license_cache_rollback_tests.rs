@@ -75,7 +75,7 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
             ml_dsa_65_public: pq_public,
         };
         let payload =
-            serde_json::json!({"license_id":id,"device_hash":"device", "iat":iat, "exp":exp})
+            serde_json::json!({"license_id":id,"device_hash":"device", "iat":iat, "exp":exp, "iss":"wincommander-license-worker", "sub":"com.servalabs.wincommander", "is_portable":false})
                 .to_string();
         let hybrid = jws::sign::assemble(
             payload.as_bytes(),
@@ -107,9 +107,36 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
     let old_bytes = cache(&previous);
     let rotated_other = make("lic-b", 101, 10000, 8, &new_ed, &new_pq, "new-ed", "new-pq");
     let rotated_bytes = cache(&rotated_other);
-    let rotated_ledger = ledger::advance(Some(&old_bytes), None, &rotated_other, &rotated_bytes, &public, &current, Some(&historical)).unwrap();
-    assert!(ledger::verify_current(&rotated_ledger, &rotated_other, 99, &rotated_bytes, &public, &current, Some(&historical)).is_ok());
-    assert!(ledger::verify_current(&rotated_ledger, &rotated_other, 99, &rotated_bytes, &public, &current, None).is_err());
+    let rotated_ledger = ledger::advance(
+        Some(&old_bytes),
+        None,
+        &rotated_other,
+        &rotated_bytes,
+        &public,
+        &current,
+        Some(&historical),
+    )
+    .unwrap();
+    assert!(ledger::verify_current(
+        &rotated_ledger,
+        &rotated_other,
+        99,
+        &rotated_bytes,
+        &public,
+        &current,
+        Some(&historical)
+    )
+    .is_ok());
+    assert!(ledger::verify_current(
+        &rotated_ledger,
+        &rotated_other,
+        99,
+        &rotated_bytes,
+        &public,
+        &current,
+        None
+    )
+    .is_err());
     assert!(validate_dual_request(&next, &public, &current).is_ok());
     assert!(
         check_previous_with_history(&old_bytes, &next, &public, &current, Some(&historical))
@@ -150,6 +177,159 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
     assert!(check_previous(&high_bytes, &exact_retry, &public, &current).is_ok());
     assert!(check_previous(&high_bytes, &later, &public, &current).is_ok());
     assert!(check_previous(&high_bytes, &other_same_second, &public, &current).is_ok());
+    // A renewal must not overwrite a changed cache and must preserve seat metadata.
+    let renewal_dir = std::env::temp_dir().join(format!(
+        "wincmd-renewal-cas-{}-{}",
+        std::process::id(),
+        NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::create_dir(&renewal_dir).unwrap();
+    let renewal_path = renewal_dir.join("license_cache.json");
+    let renewal_anchor_path = format!(
+        r"SOFTWARE\WinCommanderRenewalCas-{}-{}",
+        std::process::id(),
+        NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
+    );
+    let renewal_anchor = anchor::Anchor::test_user(renewal_anchor_path.clone());
+    let mut prior: serde_json::Value = serde_json::from_slice(&high_bytes).unwrap();
+    prior["seats_used"] = 1.into();
+    prior["seat_limit"] = 3.into();
+    let prior_bytes = serde_json::to_vec(&prior).unwrap();
+    // Simulate a crash after the protected history was advanced but before the
+    // cache file was replaced. Retrying the exact candidate must finish safely.
+    let crash_path = renewal_dir.join("interrupted.json");
+    let crash_anchor_path = format!(
+        r"SOFTWARE\WinCommanderRenewalCrash-{}-{}",
+        std::process::id(),
+        NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
+    );
+    let crash_anchor = anchor::Anchor::test_user(crash_anchor_path.clone());
+    write_with_anchor(
+        &crash_path,
+        &previous_epoch9,
+        &prior_bytes,
+        &public,
+        &current,
+        &crash_anchor,
+    )
+    .unwrap();
+    let retained = crash_anchor.read().unwrap().unwrap();
+    let mut next_cache: serde_json::Value = serde_json::from_slice(&cache(&later)).unwrap();
+    next_cache["last_verified_at"] = 101.into();
+    next_cache["seats_used"] = 1.into();
+    next_cache["seat_limit"] = 3.into();
+    let next_bytes = serde_json::to_vec(&next_cache).unwrap();
+    let advanced = ledger::advance(
+        Some(&retained),
+        Some(&prior_bytes),
+        &later,
+        &next_bytes,
+        &public,
+        &current,
+        None,
+    )
+    .unwrap();
+    crash_anchor.write(&advanced).unwrap();
+    let alternative = make("lic-a", 102, 9999, 9, &new_ed, &new_pq, "new-ed", "new-pq");
+    assert!(write_renewal_with_anchor(
+        &crash_path,
+        (&previous_epoch9, 99),
+        &alternative,
+        200,
+        &public,
+        &current,
+        &crash_anchor
+    )
+    .is_err());
+    assert!(write_renewal_with_anchor(
+        &crash_path,
+        (&previous_epoch9, 99),
+        &other_same_second,
+        200,
+        &public,
+        &current,
+        &crash_anchor
+    )
+    .is_err());
+    write_renewal_with_anchor(
+        &crash_path,
+        (&previous_epoch9, 99),
+        &later,
+        200,
+        &public,
+        &current,
+        &crash_anchor,
+    )
+    .unwrap();
+    assert!(verify_with_anchor(&crash_path, &later, 101, &public, &current, &crash_anchor).is_ok());
+    anchor::remove_test_key(&crash_anchor_path).unwrap();
+    write_with_anchor(
+        &renewal_path,
+        &previous_epoch9,
+        &prior_bytes,
+        &public,
+        &current,
+        &renewal_anchor,
+    )
+    .unwrap();
+    assert!(write_renewal_with_anchor(
+        &renewal_path,
+        (&previous_epoch9, 99),
+        &other_same_second,
+        200,
+        &public,
+        &current,
+        &renewal_anchor
+    )
+    .is_err());
+    let outcomes = std::thread::scope(|scope| {
+        let attempt = || {
+            let local_anchor = anchor::Anchor::test_user(renewal_anchor_path.clone());
+            write_renewal_with_anchor(
+                &renewal_path,
+                (&previous_epoch9, 99),
+                &later,
+                200,
+                &public,
+                &current,
+                &local_anchor,
+            )
+        };
+        let first = scope.spawn(attempt);
+        let second = scope.spawn(attempt);
+        [
+            first.join().unwrap().is_ok(),
+            second.join().unwrap().is_ok(),
+        ]
+    });
+    assert_eq!(outcomes.into_iter().filter(|ok| *ok).count(), 1);
+    let after = fs::read(&renewal_path).unwrap();
+    let saved: serde_json::Value = serde_json::from_slice(&after).unwrap();
+    assert_eq!(saved["seats_used"], 1);
+    assert_eq!(saved["seat_limit"], 3);
+    assert_eq!(saved["last_verified_at"], 101);
+    assert!(verify_with_anchor(
+        &renewal_path,
+        &later,
+        101,
+        &public,
+        &current,
+        &renewal_anchor
+    )
+    .is_ok());
+    assert!(write_renewal_with_anchor(
+        &renewal_path,
+        (&previous_epoch9, 99),
+        &later,
+        200,
+        &public,
+        &current,
+        &renewal_anchor
+    )
+    .is_err());
+    assert_eq!(fs::read(&renewal_path).unwrap(), after);
+    anchor::remove_test_key(&renewal_anchor_path).unwrap();
+    fs::remove_dir_all(renewal_dir).unwrap();
     let mut forged = previous;
     forged.hybrid.as_mut().unwrap().push('x');
     assert!(check_previous_with_history(
@@ -173,7 +353,11 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
     ));
     fs::create_dir(&dir).unwrap();
     let path = dir.join("license_cache.json");
-    let anchor_path = format!(r"SOFTWARE\WinCommanderLicenceTest-{}-{}", std::process::id(), NEXT_TEMP.fetch_add(1, Ordering::Relaxed));
+    let anchor_path = format!(
+        r"SOFTWARE\WinCommanderLicenceTest-{}-{}",
+        std::process::id(),
+        NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
+    );
     let anchor = anchor::Anchor::test_user(anchor_path.clone());
     fs::write(&path, &high_bytes).unwrap();
     assert!(verify_with_anchor(&path, &previous_epoch9, 99, &public, &current, &anchor).is_err());
@@ -181,11 +365,27 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
     anchor.write(&high_bytes).unwrap();
     assert!(verify_with_anchor(&path, &previous_epoch9, 99, &public, &current, &anchor).is_ok());
     assert!(verify_with_anchor(&path, &previous_epoch9, 100, &public, &current, &anchor).is_err());
-    assert!(write_with_anchor(&path, &same_second, b"replacement", &public, &current, &anchor).is_err());
+    assert!(write_with_anchor(
+        &path,
+        &same_second,
+        b"replacement",
+        &public,
+        &current,
+        &anchor
+    )
+    .is_err());
     assert_eq!(fs::read(&path).unwrap(), high_bytes);
     assert!(write_with_anchor(&path, &next, b"replacement", &public, &current, &anchor).is_err());
     assert_eq!(fs::read(&path).unwrap(), high_bytes);
-    assert!(write_with_anchor(&path, &previous_epoch9, &high_bytes, &public, &current, &anchor).is_ok());
+    assert!(write_with_anchor(
+        &path,
+        &previous_epoch9,
+        &high_bytes,
+        &public,
+        &current,
+        &anchor
+    )
+    .is_ok());
     let retained_before_check = anchor.read().unwrap();
     assert!(verify_with_anchor(&path, &previous_epoch9, 99, &public, &current, &anchor).is_ok());
     assert_eq!(anchor.read().unwrap(), retained_before_check);
@@ -193,7 +393,10 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
     changed_time["last_verified_at"] = 9999.into();
     fs::write(&path, serde_json::to_vec(&changed_time).unwrap()).unwrap();
     assert!(verify_with_anchor(&path, &previous_epoch9, 99, &public, &current, &anchor).is_err());
-    changed_time.as_object_mut().unwrap().remove("last_verified_at");
+    changed_time
+        .as_object_mut()
+        .unwrap()
+        .remove("last_verified_at");
     fs::write(&path, serde_json::to_vec(&changed_time).unwrap()).unwrap();
     assert!(verify_with_anchor(&path, &previous_epoch9, 99, &public, &current, &anchor).is_err());
     fs::write(&path, &high_bytes).unwrap();
@@ -203,17 +406,50 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
     let older = make("lic-a", 99, 10000, 9, &new_ed, &new_pq, "new-ed", "new-pq");
     assert!(write_with_anchor(&path, &older, &cache(&older), &public, &current, &anchor).is_err());
     assert!(!path.exists());
-    assert!(write_with_anchor(&path, &exact_retry, &cache(&exact_retry), &public, &current, &anchor).is_ok());
+    assert!(write_with_anchor(
+        &path,
+        &exact_retry,
+        &cache(&exact_retry),
+        &public,
+        &current,
+        &anchor
+    )
+    .is_ok());
     let later_bytes = cache(&later);
     assert!(ledger::advance(None, None, &later, &high_bytes, &public, &current, None).is_err());
     let mut ambiguous: serde_json::Value = serde_json::from_slice(&high_bytes).unwrap();
     ambiguous["version"] = 1.into();
     ambiguous["records"] = serde_json::json!([]);
-    assert!(ledger::advance(Some(&serde_json::to_vec(&ambiguous).unwrap()), None, &later, &later_bytes, &public, &current, None).is_err());
+    assert!(ledger::advance(
+        Some(&serde_json::to_vec(&ambiguous).unwrap()),
+        None,
+        &later,
+        &later_bytes,
+        &public,
+        &current,
+        None
+    )
+    .is_err());
     let missing_parent = dir.join("missing").join("license_cache.json");
-    assert!(write_with_anchor(&missing_parent, &later, &later_bytes, &public, &current, &anchor).is_err());
+    assert!(write_with_anchor(
+        &missing_parent,
+        &later,
+        &later_bytes,
+        &public,
+        &current,
+        &anchor
+    )
+    .is_err());
     assert!(verify_with_anchor(&path, &exact_retry, 99, &public, &current, &anchor).is_err());
-    assert!(write_with_anchor(&path, &previous_epoch9, &high_bytes, &public, &current, &anchor).is_err());
+    assert!(write_with_anchor(
+        &path,
+        &previous_epoch9,
+        &high_bytes,
+        &public,
+        &current,
+        &anchor
+    )
+    .is_err());
     assert!(write_with_anchor(&path, &later, &later_bytes, &public, &current, &anchor).is_ok());
     assert!(verify_with_anchor(&path, &later, 99, &public, &current, &anchor).is_ok());
     fs::write(&path, &high_bytes).unwrap();
@@ -221,7 +457,15 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
     fs::write(&path, &later_bytes).unwrap();
     let other = make("lic-b", 102, 10000, 9, &new_ed, &new_pq, "new-ed", "new-pq");
     assert!(write_with_anchor(&path, &other, &cache(&other), &public, &current, &anchor).is_ok());
-    assert!(write_with_anchor(&path, &previous_epoch9, &high_bytes, &public, &current, &anchor).is_err());
+    assert!(write_with_anchor(
+        &path,
+        &previous_epoch9,
+        &high_bytes,
+        &public,
+        &current,
+        &anchor
+    )
+    .is_err());
     assert!(write_with_anchor(&path, &later, &later_bytes, &public, &current, &anchor).is_ok());
     for id in ["lic-c", "lic-d"] {
         let item = make(id, 103, 10000, 9, &new_ed, &new_pq, "new-ed", "new-pq");
@@ -239,9 +483,12 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
     assert_eq!(fs::read(&path).unwrap(), cache(&fifth));
     fs::write(&path, &before).unwrap();
     assert!(write_with_anchor(&path, &later, &later_bytes, &public, &current, &anchor).is_ok());
-    let mut damaged: serde_json::Value = serde_json::from_slice(&anchor.read().unwrap().unwrap()).unwrap();
+    let mut damaged: serde_json::Value =
+        serde_json::from_slice(&anchor.read().unwrap().unwrap()).unwrap();
     damaged["records"][0] = "invalid".into();
-    anchor.write(&serde_json::to_vec(&damaged).unwrap()).unwrap();
+    anchor
+        .write(&serde_json::to_vec(&damaged).unwrap())
+        .unwrap();
     assert!(verify_with_anchor(&path, &later, 99, &public, &current, &anchor).is_err());
     assert!(write_with_anchor(&path, &later, &later_bytes, &public, &current, &anchor).is_err());
     assert_eq!(fs::read(&path).unwrap(), later_bytes);
@@ -251,7 +498,15 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
     // Missing anchor: preserve the verified current licence before switching.
     anchor::remove_test_key(&anchor_path).unwrap();
     assert!(write_with_anchor(&path, &other, &cache(&other), &public, &current, &anchor).is_ok());
-    assert!(write_with_anchor(&path, &previous_epoch9, &high_bytes, &public, &current, &anchor).is_err());
+    assert!(write_with_anchor(
+        &path,
+        &previous_epoch9,
+        &high_bytes,
+        &public,
+        &current,
+        &anchor
+    )
+    .is_err());
     assert!(write_with_anchor(&path, &later, &later_bytes, &public, &current, &anchor).is_ok());
     // A restored older anchor and newer cache must be reconciled first.
     anchor.write(&high_bytes).unwrap();
@@ -260,13 +515,29 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
     assert_eq!(fs::read(&path).unwrap(), later_bytes);
     assert!(write_with_anchor(&path, &later, &later_bytes, &public, &current, &anchor).is_ok());
     assert!(write_with_anchor(&path, &other, &cache(&other), &public, &current, &anchor).is_ok());
-    assert!(write_with_anchor(&path, &previous_epoch9, &high_bytes, &public, &current, &anchor).is_err());
+    assert!(write_with_anchor(
+        &path,
+        &previous_epoch9,
+        &high_bytes,
+        &public,
+        &current,
+        &anchor
+    )
+    .is_err());
     // A restored history with a different licence retains the current cache too.
     anchor.write(&cache(&other)).unwrap();
     fs::write(&path, &later_bytes).unwrap();
     let third = make("lic-c", 103, 10000, 9, &new_ed, &new_pq, "new-ed", "new-pq");
     assert!(write_with_anchor(&path, &third, &cache(&third), &public, &current, &anchor).is_ok());
-    assert!(write_with_anchor(&path, &previous_epoch9, &high_bytes, &public, &current, &anchor).is_err());
+    assert!(write_with_anchor(
+        &path,
+        &previous_epoch9,
+        &high_bytes,
+        &public,
+        &current,
+        &anchor
+    )
+    .is_err());
     assert!(write_with_anchor(&path, &later, &later_bytes, &public, &current, &anchor).is_ok());
     fs::remove_file(path).unwrap();
     anchor::remove_test_key(&anchor_path).unwrap();
@@ -276,34 +547,61 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
 #[test]
 fn worker_issued_licence_survives_history_reload_and_rejects_tampering() {
     use wincmd_pq_experiment::ML_DSA_65_PUBLIC_KEY_LEN;
-    let fixture: serde_json::Value = serde_json::from_str(include_str!("fixtures/workers-hybrid-licence.json")).unwrap();
-    let ed: [u8; 32] = general_purpose::URL_SAFE_NO_PAD.decode(fixture["publicEd"].as_str().unwrap()).unwrap().try_into().unwrap();
-    let pq: [u8; ML_DSA_65_PUBLIC_KEY_LEN] = general_purpose::URL_SAFE_NO_PAD.decode(fixture["publicPq"].as_str().unwrap()).unwrap().try_into().unwrap();
-    let trust = jws::Trust { purpose: Purpose::Licence, minimum_epoch: 7, ed_key_id: "ed-key", ed25519_public: &ed, pq_key_id: "pq-key", ml_dsa_65_public: &pq };
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/workers-hybrid-licence.json")).unwrap();
+    let ed: [u8; 32] = general_purpose::URL_SAFE_NO_PAD
+        .decode(fixture["publicEd"].as_str().unwrap())
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let pq: [u8; ML_DSA_65_PUBLIC_KEY_LEN] = general_purpose::URL_SAFE_NO_PAD
+        .decode(fixture["publicPq"].as_str().unwrap())
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let trust = jws::Trust {
+        purpose: Purpose::Licence,
+        minimum_epoch: 7,
+        ed_key_id: "ed-key",
+        ed25519_public: &ed,
+        pq_key_id: "pq-key",
+        ml_dsa_65_public: &pq,
+    };
     let public = fixture["publicClassical"].as_str().unwrap();
     let request = StoreLicenseCacheRequest {
         payload: fixture["payload"].as_str().unwrap().to_owned(),
         signature: fixture["signature"].as_str().unwrap().to_owned(),
         hybrid: Some(fixture["hybrid"].as_str().unwrap().to_owned()),
-        seats_used: None, seat_limit: None,
+        seats_used: None,
+        seat_limit: None,
     };
-    let verified_at = serde_json::from_str::<serde_json::Value>(&request.payload).unwrap()["iat"].as_u64().unwrap();
+    let verified_at = serde_json::from_str::<serde_json::Value>(&request.payload).unwrap()["iat"]
+        .as_u64()
+        .unwrap();
     let cache = serde_json::to_vec(&serde_json::json!({"token":{"payload":request.payload,"signature":request.signature,"hybrid":request.hybrid},"last_verified_at":verified_at})).unwrap();
     let id = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("wincmd-worker-history-{}-{id}", std::process::id()));
+    let dir =
+        std::env::temp_dir().join(format!("wincmd-worker-history-{}-{id}", std::process::id()));
     fs::create_dir(&dir).unwrap();
     let path = dir.join("license_cache.json");
-    let anchor_path = format!(r"SOFTWARE\WinCommanderWorkerHistoryTest-{}-{id}", std::process::id());
+    let anchor_path = format!(
+        r"SOFTWARE\WinCommanderWorkerHistoryTest-{}-{id}",
+        std::process::id()
+    );
     let anchor = anchor::Anchor::test_user(anchor_path.clone());
     write_with_anchor(&path, &request, &cache, public, &trust, &anchor).unwrap();
     drop(anchor);
     let reopened = anchor::Anchor::test_user(anchor_path.clone());
     verify_with_anchor(&path, &request, verified_at, public, &trust, &reopened).unwrap();
-    assert!(verify_with_anchor(&path, &request, verified_at + 1, public, &trust, &reopened).is_err());
+    assert!(
+        verify_with_anchor(&path, &request, verified_at + 1, public, &trust, &reopened).is_err()
+    );
     let mut tampered: serde_json::Value = serde_json::from_slice(&cache).unwrap();
     tampered["last_verified_at"] = (verified_at + 1).into();
     fs::write(&path, serde_json::to_vec(&tampered).unwrap()).unwrap();
-    assert!(verify_with_anchor(&path, &request, verified_at + 1, public, &trust, &reopened).is_err());
+    assert!(
+        verify_with_anchor(&path, &request, verified_at + 1, public, &trust, &reopened).is_err()
+    );
     fs::write(&path, &cache).unwrap();
     anchor::remove_test_key(&anchor_path).unwrap();
     assert!(verify_with_anchor(&path, &request, verified_at, public, &trust, &reopened).is_err());

@@ -298,6 +298,22 @@ pub(crate) async fn request_renewal(
     )
 }
 
+/// Save only if the verified cache did not change while the request was in flight.
+pub(crate) async fn renew_and_save(
+    binding: &Binding<'_>,
+    receipt_trust: &wincmd_pq_experiment::jws::Trust<'_>,
+    licence: &RefreshLicence<'_>,
+) -> Result<(), &'static str> {
+    let renewal = request_renewal(binding, receipt_trust, licence).await?;
+    crate::license_cache::save_device_renewal(
+        licence.payload,
+        licence.signature,
+        licence.hybrid,
+        licence.last_verified_at,
+        renewal,
+    )
+}
+
 /// No IPC verb is exposed. Any future caller must authenticate the user and
 /// supply independent receipt trust and service time, not caller-chosen policy.
 pub(crate) struct RefreshInput<'a> {

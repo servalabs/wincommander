@@ -304,6 +304,21 @@ pub(crate) fn validate_device_renewal(bytes: &[u8], licence_id: &str, device_has
     validate_device_renewal_with(bytes, public, &trust.policy(), licence_id, device_hash, portable)
 }
 
+/// Persist a renewal only if the original protected cache has not changed.
+#[cfg(feature = "experimental-pq-licence")]
+pub(crate) fn save_device_renewal(
+    original_payload: &str, original_signature: &str, original_hybrid: &str,
+    original_verified_at: u64, renewal: serde_json::Value,
+) -> Result<(), &'static str> {
+    let expected = StoreLicenseCacheRequest { payload: original_payload.into(), signature: original_signature.into(),
+        hybrid: Some(original_hybrid.into()), seats_used: None, seat_limit: None };
+    let candidate: StoreLicenseCacheRequest = serde_json::from_value(renewal).map_err(|_| "license renewal is invalid")?;
+    let public = service_public_key().ok_or("license verification is unavailable")?;
+    let trust = hybrid_trust::configured()?;
+    rollback::write_renewal(&machine_license_cache_path()?, &expected, original_verified_at,
+        &candidate, now_unix(), public, &trust.policy())
+}
+
 /// Validate the experimental hybrid proof before the service persists it.
 /// Rollback protection and every licence reader must be implemented before use.
 #[cfg(feature = "experimental-pq-licence")]

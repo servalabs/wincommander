@@ -3,12 +3,12 @@
 use super::*;
 use std::{io::Read, sync::Mutex};
 
+#[path = "../../commander-free/src/updater/hybrid_free_anchor.rs"]
+pub(crate) mod anchor;
 #[path = "license_cache_history.rs"]
 mod history;
 #[path = "license_cache_ledger.rs"]
 mod ledger;
-#[path = "../../commander-free/src/updater/hybrid_free_anchor.rs"]
-pub(crate) mod anchor;
 
 const CACHE_LIMIT: u64 = 64 * 1024;
 static WRITE_LOCK: Mutex<()> = Mutex::new(());
@@ -18,6 +18,10 @@ struct ExistingCache {
     token: ExistingToken,
     #[serde(default)]
     last_verified_at: Option<u64>,
+    #[serde(default)]
+    seats_used: Option<u32>,
+    #[serde(default)]
+    seat_limit: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -55,12 +59,144 @@ fn write_with_anchor(
     if let Some(existing) = existing.as_deref() {
         check_previous_with_history(existing, candidate, public_key, trust, old_trust.as_ref())?;
     }
-    let retained = anchor.read().map_err(|_| "license security record is unavailable")?;
-    let retained = ledger::advance(retained.as_deref(), existing.as_deref(), candidate, bytes, public_key, trust, old_trust.as_ref())?;
+    let retained = anchor
+        .read()
+        .map_err(|_| "license security record is unavailable")?;
+    let retained = ledger::advance(
+        retained.as_deref(),
+        existing.as_deref(),
+        candidate,
+        bytes,
+        public_key,
+        trust,
+        old_trust.as_ref(),
+    )?;
     // Record the authenticated candidate first. If the cache write is interrupted,
     // a retry of the same candidate is allowed while an older one remains blocked.
-    anchor.write(&retained).map_err(|_| "license security record is unavailable")?;
+    anchor
+        .write(&retained)
+        .map_err(|_| "license security record is unavailable")?;
     atomic_write(path, bytes).map_err(|_| "machine license cache is unavailable")
+}
+
+/// Save only if the exact cache and protected history still match the request.
+pub(super) fn write_renewal(
+    path: &Path,
+    expected: &StoreLicenseCacheRequest,
+    expected_time: u64,
+    candidate: &StoreLicenseCacheRequest,
+    now: u64,
+    public_key: &str,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>,
+) -> Result<(), &'static str> {
+    let anchor = anchor::Anchor::machine_named(r"SOFTWARE\ServaLabs\WinCommander\HybridLicence");
+    write_renewal_with_anchor(
+        path,
+        (expected, expected_time),
+        candidate,
+        now,
+        public_key,
+        trust,
+        &anchor,
+    )
+}
+
+fn write_renewal_with_anchor(
+    path: &Path,
+    previous: (&StoreLicenseCacheRequest, u64),
+    candidate: &StoreLicenseCacheRequest,
+    now: u64,
+    public_key: &str,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>,
+    anchor: &anchor::Anchor,
+) -> Result<(), &'static str> {
+    let (expected, expected_time) = previous;
+    let old_trust = history::configured(trust)?;
+    let _lock = WRITE_LOCK
+        .lock()
+        .map_err(|_| "license cache lock is unavailable")?;
+    let existing = read_cache(path)?.ok_or("license cache is unavailable")?;
+    let retained = anchor
+        .read()
+        .map_err(|_| "license security record is unavailable")?
+        .ok_or("license security record is unavailable")?;
+    let prior: ExistingCache =
+        serde_json::from_slice(&existing).map_err(|_| "license cache is invalid")?;
+    if prior.token.payload != expected.payload
+        || prior.token.signature != expected.signature
+        || prior.token.hybrid != expected.hybrid
+        || prior.last_verified_at != Some(expected_time)
+    {
+        return Err("license cache changed during renewal");
+    }
+    validate_request(expected, public_key)?;
+    let old_is_current = ledger::verify_current(
+        &retained,
+        expected,
+        expected_time,
+        &existing,
+        public_key,
+        trust,
+        old_trust.as_ref(),
+    )
+    .is_ok();
+    validate_dual_request(candidate, public_key, trust)?;
+    let old: RefreshClaims =
+        serde_json::from_str(&expected.payload).map_err(|_| "license cache is invalid")?;
+    let new: RefreshClaims =
+        serde_json::from_str(&candidate.payload).map_err(|_| "license renewal is invalid")?;
+    if old.license_id != new.license_id
+        || old.device_hash != new.device_hash
+        || old.is_portable != new.is_portable
+        || new.iss != "wincommander-license-worker"
+        || new.sub != MAINLINE_APP_ID
+    {
+        return Err("license renewal does not match device");
+    }
+    check_previous_with_history(&existing, candidate, public_key, trust, old_trust.as_ref())?;
+    let persisted = PersistedLicenseCache {
+        token: PersistedTokenEnvelope {
+            payload: &candidate.payload,
+            signature: &candidate.signature,
+            hybrid: candidate
+                .hybrid
+                .as_deref()
+                .ok_or("hybrid license is required")?,
+        },
+        last_verified_at: signed_verification_time(&candidate.payload, now)?,
+        seats_used: prior.seats_used,
+        seat_limit: prior.seat_limit,
+    };
+    let bytes =
+        serde_json::to_vec_pretty(&persisted).map_err(|_| "license cache could not be encoded")?;
+    if old_is_current {
+        let next = ledger::advance(
+            Some(&retained),
+            Some(&existing),
+            candidate,
+            &bytes,
+            public_key,
+            trust,
+            old_trust.as_ref(),
+        )?;
+        anchor
+            .write(&next)
+            .map_err(|_| "license security record is unavailable")?;
+    } else {
+        // A prior attempt may have committed the exact candidate to the anchor
+        // before its file write failed. Only that exact authenticated candidate
+        // and timestamp may complete the interrupted update.
+        ledger::verify_current(
+            &retained,
+            candidate,
+            persisted.last_verified_at,
+            &bytes,
+            public_key,
+            trust,
+            old_trust.as_ref(),
+        )?;
+    }
+    atomic_write(path, &bytes).map_err(|_| "machine license cache is unavailable")
 }
 
 fn read_cache(path: &Path) -> Result<Option<Vec<u8>>, &'static str> {
@@ -100,11 +236,23 @@ fn verify_with_anchor(
     anchor: &anchor::Anchor,
 ) -> Result<(), &'static str> {
     let old_trust = history::configured(trust)?;
-    let _lock = WRITE_LOCK.lock().map_err(|_| "license cache lock is unavailable")?;
+    let _lock = WRITE_LOCK
+        .lock()
+        .map_err(|_| "license cache lock is unavailable")?;
     let bytes = read_cache(path)?.ok_or("license cache is unavailable")?;
-    let retained = anchor.read().map_err(|_| "license security record is unavailable")?
+    let retained = anchor
+        .read()
+        .map_err(|_| "license security record is unavailable")?
         .ok_or("license security record is unavailable")?;
-    ledger::verify_current(&retained, candidate, expected_time, &bytes, public_key, trust, old_trust.as_ref())
+    ledger::verify_current(
+        &retained,
+        candidate,
+        expected_time,
+        &bytes,
+        public_key,
+        trust,
+        old_trust.as_ref(),
+    )
 }
 
 #[cfg(test)]
