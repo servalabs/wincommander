@@ -46,6 +46,47 @@ struct RequestBinding {
 }
 
 #[derive(Deserialize)]
+struct RequestFormat {
+    #[serde(default, deserialize_with = "present")]
+    windows_v2: bool,
+}
+
+fn present<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+    serde::de::IgnoredAny::deserialize(deserializer)?;
+    Ok(true)
+}
+
+#[derive(Deserialize)]
+struct RequestBindingV2 {
+    protocol_version: i64,
+    capabilities: Vec<String>,
+    device_id: String,
+    nonce: String,
+    ts: i64,
+    #[serde(default)]
+    decoy: bool,
+    windows_v2: fleet_proto::windows_v2::WindowsCheckinRequestV2,
+    #[serde(default)]
+    acks: Vec<serde::de::IgnoredAny>,
+    #[serde(default)]
+    action_outcomes: Vec<serde::de::IgnoredAny>,
+    #[serde(default, rename = "hmac", deserialize_with = "reject_legacy_auth")]
+    _hmac: (),
+    #[serde(
+        default,
+        rename = "hmac_version",
+        deserialize_with = "reject_legacy_auth"
+    )]
+    _hmac_version: (),
+}
+
+fn reject_legacy_auth<'de, D: serde::Deserializer<'de>>(_: D) -> Result<(), D::Error> {
+    Err(serde::de::Error::custom(
+        "legacy authentication in v2 check-in",
+    ))
+}
+
+#[derive(Deserialize)]
 struct ResponseBinding {
     protocol_version: i64,
     #[serde(default)]
@@ -122,7 +163,14 @@ impl PendingContact {
         key(&self.trust)?
             .verify_strict(&signing_bytes, &Signature::from_bytes(&raw))
             .map_err(|_| "contact_invalid_signature")?;
-        // Typed decoding rejects duplicate binding fields instead of silently choosing one.
+        // The signed exact bytes choose one format; a malformed v2 block must
+        // never fall back to the legacy in-body MAC shape.
+        let format: RequestFormat =
+            serde_json::from_slice(request).map_err(|_| "contact_invalid_request")?;
+        if format.windows_v2 {
+            return self.verify_v2_request_and_response(request, response);
+        }
+        // Preserve the existing typed v1 decoding and MAC-shape checks.
         let request: RequestBinding =
             serde_json::from_slice(request).map_err(|_| "contact_invalid_request")?;
         let hmac = STANDARD
@@ -143,6 +191,41 @@ impl PendingContact {
             return Err("contact_invalid_request");
         }
         let _untrusted_request_time = request.ts;
+        self.verify_response(response)
+    }
+
+    fn verify_v2_request_and_response(
+        &self,
+        request: &[u8],
+        response: &[u8],
+    ) -> Result<(), &'static str> {
+        let request: RequestBindingV2 = fleet_proto::windows_v2::decode_windows_v2(request)
+            .map_err(|_| "contact_invalid_request")?;
+        let binding = fleet_proto::windows_v2::FleetEnrollmentBinding {
+            org_id: fleet_proto::OrgId(self.trust.org_id.clone()),
+            device_id: fleet_proto::DeviceId(self.trust.device_id.clone()),
+            enrollment_generation: self.trust.enrollment_generation.clone(),
+            authority_key_b64: self.trust.signer_key.clone(),
+        };
+        if request.protocol_version != fleet_proto::CHECKIN_PROTOCOL_VERSION
+            || request.device_id != self.trust.device_id
+            || request.nonce != self.nonce
+            || request.decoy
+            || !request.acks.is_empty()
+            || !request.action_outcomes.is_empty()
+            || !request
+                .capabilities
+                .iter()
+                .any(|c| c == "windows_contact_receipt_v1")
+            || !request.windows_v2.has_expected_binding(&binding)
+        {
+            return Err("contact_invalid_request");
+        }
+        let _untrusted_request_time = request.ts;
+        self.verify_response(response)
+    }
+
+    fn verify_response(&self, response: &[u8]) -> Result<(), &'static str> {
         let response: ResponseBinding =
             serde_json::from_slice(response).map_err(|_| "contact_invalid_response")?;
         if response.protocol_version != fleet_proto::CHECKIN_PROTOCOL_VERSION
@@ -150,8 +233,7 @@ impl PendingContact {
         {
             return Err("contact_invalid_response");
         }
-        verify_policy(&self.trust, &response.policy)?;
-        Ok(())
+        verify_policy(&self.trust, &response.policy)
     }
 }
 

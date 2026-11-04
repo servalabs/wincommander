@@ -29,7 +29,7 @@ experimental-pq-licence = ["dep:wincmd-pq-experiment"]
 [dependencies]
 wincmd-shared = { path = "../wincmd-shared" }
 wincmd-pq-experiment = { path = "../wincmd-pq-experiment", optional = true }
-fleet-proto = { path = "../fleet-proto" }
+fleet-proto = { path = "../fleet-proto", features = ["windows-v2"] }
 fleet-agent-core = { path = "../fleet-agent-core", default-features = false, features = ["types", "transport"] }
 wincmd-volume = { path = "../wincmd-volume" }
 # Clipboard Guard's rule engine (plan §4.1): pure matcher/compiler shared with
