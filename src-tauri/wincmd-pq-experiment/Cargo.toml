@@ -38,3 +38,8 @@ required-features = ["experimental-signer"]
 name = "wincmd-pq-free-release-prepare"
 path = "src/bin/free_release_prepare.rs"
 required-features = ["experimental-signer"]
+
+[[bin]]
+name = "wincmd-pq-evidence-check"
+path = "src/bin/evidence_check.rs"
+required-features = ["experimental-offline-verifier"]

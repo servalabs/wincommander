@@ -5,12 +5,17 @@
 //! An opt-in signing rehearsal exists; no production issuer, persistent rollback
 //! protection, key rotation, expiry, or product format is implemented.
 
+#[cfg(any(
+    feature = "experimental-signer",
+    feature = "experimental-offline-verifier"
+))]
+pub mod evidence_attestation;
 pub mod free_release;
 pub mod jws;
 pub mod licence_device_proof;
-pub mod release;
 #[cfg(feature = "experimental-offline-verifier")]
 pub mod offline_release;
+pub mod release;
 
 use aws_lc_rs::signature::{UnparsedPublicKey, ML_DSA_65};
 use ed25519_dalek::{Signature, VerifyingKey};
@@ -31,6 +36,7 @@ pub enum Purpose {
     Licence = 1,
     Release = 2,
     LicenceEnrolment = 3,
+    EvidenceAttestation = 4,
 }
 
 /// Trust is local policy; none of these values may be selected by the sender.
