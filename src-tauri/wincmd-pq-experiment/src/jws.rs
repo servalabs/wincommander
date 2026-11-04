@@ -100,6 +100,7 @@ pub fn verify(input: &[u8], trust: &Trust<'_>) -> Result<Verified, VerifyError> 
         let purpose = match trust.purpose {
             Purpose::Licence => "licence",
             Purpose::Release => "release",
+            Purpose::LicenceEnrolment => "licence-enrolment",
         };
         if header.typ != TYPE
             || header.crit != ["profile", "purpose", "epoch"]

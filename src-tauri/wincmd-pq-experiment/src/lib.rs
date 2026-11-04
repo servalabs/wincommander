@@ -30,6 +30,7 @@ pub const ML_DSA_65_PUBLIC_KEY_LEN: usize = 1952;
 pub enum Purpose {
     Licence = 1,
     Release = 2,
+    LicenceEnrolment = 3,
 }
 
 /// Trust is local policy; none of these values may be selected by the sender.

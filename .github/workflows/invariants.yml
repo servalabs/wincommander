@@ -55,7 +55,9 @@ on:
 
 concurrency:
   group: invariants-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # Keep main's running checks when a newer commit arrives; obsolete PR heads
+  # can still be cancelled. GitHub may replace an older pending main run.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   ts-schema:

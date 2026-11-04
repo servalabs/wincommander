@@ -9,6 +9,9 @@ use sha2::{Digest, Sha256};
 use std::sync::Mutex;
 use zeroize::Zeroizing;
 
+#[path = "licence_device_receipt.rs"]
+mod receipt;
+
 const INVALID: &str = "device credential is invalid or unavailable";
 const LIMIT: usize = 64 * 1024;
 static LOCK: Mutex<()> = Mutex::new(());
@@ -71,6 +74,10 @@ struct Record {
     phase: String,
     id: [u8; 32],
     sealed: Vec<u8>,
+    #[serde(default)]
+    receipt: Option<String>,
+    #[serde(default)]
+    accepted_at: Option<u64>,
 }
 
 fn decode(
@@ -84,6 +91,8 @@ fn decode(
     let record: Record = serde_json::from_slice(bytes).map_err(|_| INVALID)?;
     if record.version != 2
         || record.phase != "pending"
+        || record.receipt.is_some()
+        || record.accepted_at.is_some()
         || record.sealed.is_empty()
         || record.sealed.len() > LIMIT
     {
@@ -125,6 +134,8 @@ fn save_locked(
         phase: "pending".into(),
         id: credential.id,
         sealed,
+        receipt: None,
+        accepted_at: None,
     })
     .map_err(|_| INVALID)?;
     if bytes.len() > LIMIT {
@@ -154,6 +165,129 @@ fn get_or_create_with(
     Ok(candidate)
 }
 
+pub(crate) struct ConfirmedCredential {
+    pub id: [u8; 32],
+    secret: Zeroizing<[u8; 32]>,
+}
+impl ConfirmedCredential {
+    pub(crate) fn secret(&self) -> &[u8; 32] {
+        &self.secret
+    }
+}
+
+fn confirmed_entropy(
+    binding: &Binding<'_>,
+    id: &[u8; 32],
+    receipt: &str,
+    accepted_at: u64,
+) -> Result<[u8; 32], &'static str> {
+    // Reuse pending validation for bounded identity fields before encoding.
+    entropy(binding, id)?;
+    let receipt_hash: [u8; 32] = Sha256::digest(receipt.as_bytes()).into();
+    let encoded = serde_json::to_vec(&(
+        "wincommander:licence-device-credential:confirmed:v2",
+        binding.licence_id,
+        binding.device_hash,
+        binding.issuer_origin,
+        id,
+        receipt_hash,
+        accepted_at,
+    ))
+    .map_err(|_| INVALID)?;
+    Ok(Sha256::digest(encoded).into())
+}
+
+fn decode_confirmed(
+    protector: &dyn Protector,
+    binding: &Binding<'_>,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>,
+    bytes: &[u8],
+    now: u64,
+) -> Result<ConfirmedCredential, &'static str> {
+    if bytes.is_empty() || bytes.len() > LIMIT {
+        return Err(INVALID);
+    }
+    let record: Record = serde_json::from_slice(bytes).map_err(|_| INVALID)?;
+    let receipt = record.receipt.as_deref().ok_or(INVALID)?;
+    let accepted_at = record.accepted_at.ok_or(INVALID)?;
+    if record.version != 2
+        || record.phase != "confirmed"
+        || record.sealed.is_empty()
+        || record.sealed.len() > LIMIT
+        || receipt.len() > 32 * 1024
+        || accepted_at > now
+    {
+        return Err(INVALID);
+    }
+    let unsealed = protector
+        .unprotect(
+            &record.sealed,
+            &confirmed_entropy(binding, &record.id, receipt, accepted_at)?,
+        )
+        .map_err(|_| INVALID)?;
+    if unsealed.len() != 32 {
+        return Err(INVALID);
+    }
+    let mut secret = Zeroizing::new([0u8; 32]);
+    secret.copy_from_slice(&unsealed);
+    let credential = PendingCredential {
+        id: record.id,
+        secret,
+    };
+    // A receipt must have been valid when accepted, but does not expire the
+    // already-confirmed local identity; later status checks remain separate.
+    receipt::verify(receipt, trust, binding, &credential, accepted_at)?;
+    Ok(ConfirmedCredential {
+        id: credential.id,
+        secret: credential.secret,
+    })
+}
+
+fn confirm_with(
+    anchor: &anchor::Anchor,
+    protector: &dyn Protector,
+    binding: &Binding<'_>,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>,
+    signed_receipt: &str,
+    now: u64,
+) -> Result<ConfirmedCredential, &'static str> {
+    let _guard = LOCK.lock().map_err(|_| INVALID)?;
+    let original = anchor.read().map_err(|_| INVALID)?.ok_or(INVALID)?;
+    let record: Record = serde_json::from_slice(&original).map_err(|_| INVALID)?;
+    if record.phase == "confirmed" {
+        if record.receipt.as_deref() != Some(signed_receipt) {
+            return Err(INVALID);
+        }
+        return decode_confirmed(protector, binding, trust, &original, now);
+    }
+    let pending = decode(protector, binding, &original)?;
+    receipt::verify(signed_receipt, trust, binding, &pending, now)?;
+    let sealed = protector
+        .protect(
+            pending.secret(),
+            &confirmed_entropy(binding, &pending.id, signed_receipt, now)?,
+        )
+        .map_err(|_| INVALID)?;
+    if sealed.is_empty() || sealed.len() > LIMIT {
+        return Err(INVALID);
+    }
+    let bytes = serde_json::to_vec(&Record {
+        version: 2,
+        phase: "confirmed".into(),
+        id: pending.id,
+        sealed,
+        receipt: Some(signed_receipt.into()),
+        accepted_at: Some(now),
+    })
+    .map_err(|_| INVALID)?;
+    if bytes.len() > LIMIT {
+        return Err(INVALID);
+    }
+    anchor.write(&bytes).map_err(|_| INVALID)?;
+    let written = anchor.read().map_err(|_| INVALID)?.ok_or(INVALID)?;
+    decode_confirmed(protector, binding, trust, &written, now)
+}
+
 /// Persist before contacting the issuer. This never establishes an active
 /// credential; a future confirmation path must verify a bound issuer receipt.
 pub(crate) fn get_or_create_pending(
@@ -166,6 +300,37 @@ pub(crate) fn get_or_create_pending(
         &MachineDpapi,
         binding,
     )
+}
+
+/// `now` and trust must come from the service's independent local policy.
+pub(crate) fn confirm_pending(
+    binding: &Binding<'_>,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>,
+    signed_receipt: &str,
+    now: u64,
+) -> Result<ConfirmedCredential, &'static str> {
+    confirm_with(
+        &anchor::Anchor::machine_named(
+            r"SOFTWARE\ServaLabs\WinCommander\ExperimentalLicenceDevice",
+        ),
+        &MachineDpapi,
+        binding,
+        trust,
+        signed_receipt,
+        now,
+    )
+}
+
+pub(crate) fn load_confirmed(
+    binding: &Binding<'_>,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>,
+    now: u64,
+) -> Result<ConfirmedCredential, &'static str> {
+    let _guard = LOCK.lock().map_err(|_| INVALID)?;
+    let store =
+        anchor::Anchor::machine_named(r"SOFTWARE\ServaLabs\WinCommander\ExperimentalLicenceDevice");
+    let bytes = store.read().map_err(|_| INVALID)?.ok_or(INVALID)?;
+    decode_confirmed(&MachineDpapi, binding, trust, &bytes, now)
 }
 
 #[cfg(test)]
