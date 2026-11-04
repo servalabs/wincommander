@@ -446,6 +446,38 @@ mod tests {
         assert!(validate_dual_request(&request, public, &trust).is_err());
     }
 
+    #[cfg(feature = "experimental-pq-licence")]
+    #[test]
+    fn worker_device_renewal_requires_both_signatures() {
+        use wincmd_pq_experiment::{jws, Purpose, ML_DSA_65_PUBLIC_KEY_LEN};
+        let fixture: serde_json::Value = serde_json::from_str(include_str!("fixtures/workers-device-renewal.json")).unwrap();
+        let ed: [u8; 32] = general_purpose::URL_SAFE_NO_PAD.decode(fixture["publicEd"].as_str().unwrap()).unwrap().try_into().unwrap();
+        let pq: [u8; ML_DSA_65_PUBLIC_KEY_LEN] = general_purpose::URL_SAFE_NO_PAD.decode(fixture["publicPq"].as_str().unwrap()).unwrap().try_into().unwrap();
+        let trust = jws::Trust { purpose: Purpose::Licence, minimum_epoch: 7, ed_key_id: "ed", ed25519_public: &ed, pq_key_id: "pq", ml_dsa_65_public: &pq };
+        let public = fixture["publicClassical"].as_str().unwrap();
+        let mut request = StoreLicenseCacheRequest {
+            payload: fixture["payload"].as_str().unwrap().to_owned(),
+            signature: fixture["signature"].as_str().unwrap().to_owned(),
+            hybrid: Some(fixture["hybrid"].as_str().unwrap().to_owned()),
+            seats_used: None, seat_limit: None,
+        };
+        assert!(validate_dual_request(&request, public, &trust).is_ok());
+        let claims: SignedClaims = serde_json::from_str(&request.payload).unwrap();
+        assert_eq!(claims.device_hash, "device-test");
+        request.signature = general_purpose::URL_SAFE_NO_PAD.encode([0u8; 64]);
+        assert!(validate_dual_request(&request, public, &trust).is_err());
+        request.signature = fixture["signature"].as_str().unwrap().to_owned();
+        for index in 0..2 {
+            let mut hybrid: serde_json::Value = serde_json::from_str(fixture["hybrid"].as_str().unwrap()).unwrap();
+            let signature = hybrid["signatures"][index]["signature"].as_str().unwrap();
+            let mut bytes = general_purpose::URL_SAFE_NO_PAD.decode(signature).unwrap();
+            bytes[0] ^= 1;
+            hybrid["signatures"][index]["signature"] = general_purpose::URL_SAFE_NO_PAD.encode(bytes).into();
+            request.hybrid = Some(hybrid.to_string());
+            assert!(validate_dual_request(&request, public, &trust).is_err());
+        }
+    }
+
     fn signed_request() -> (StoreLicenseCacheRequest, String) {
         let signing_key = SigningKey::from_bytes(&[7_u8; 32]);
         let payload = serde_json::json!({
