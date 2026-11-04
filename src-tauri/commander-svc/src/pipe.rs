@@ -669,7 +669,7 @@ async fn dispatch_verb(
         "svc.policy.install_epoch" => handle_install_epoch(policy_store, args),
 
 
-        "svc.fleet.begin_enrollment" | "svc.fleet.provision_trust" | "svc.fleet.replace_trust" | "svc.fleet.bind_origins" | "svc.fleet.get_trust" | "svc.fleet.install_policy" | "svc.fleet.get_policy" =>
+        "svc.fleet.begin_enrollment" | "svc.fleet.provision_trust" | "svc.fleet.replace_trust" | "svc.fleet.bind_origins" | "svc.fleet.get_trust" | "svc.fleet.provision_hybrid_trust" | "svc.fleet.get_hybrid_trust" | "svc.fleet.install_policy" | "svc.fleet.get_policy" =>
             handle_fleet_machine_policy(&feature_id, args, peer),
 
         "svc.fleet.contact_observation" => fleet_machine_policy_store().and_then(|store|
@@ -3583,7 +3583,7 @@ fn fleet_machine_policy_store()->Result<&'static crate::fleet_machine_policy::Fl
 }
 
 fn handle_fleet_machine_policy(verb: &str, args: serde_json::Value, peer: Option<&AuthenticatedPipePeer>) -> Result<serde_json::Value, VerbError> {
-    use crate::fleet_machine_policy::{FleetTrust, TransportProfile};
+    use crate::fleet_machine_policy::{FleetHybridTrust, FleetTrust, TransportProfile};
     let store=fleet_machine_policy_store()?;
     match verb {
         "svc.fleet.begin_enrollment" => {
@@ -3602,6 +3602,23 @@ fn handle_fleet_machine_policy(verb: &str, args: serde_json::Value, peer: Option
                 Some((trust, audit, origins, transport_profile, service_enabled)) => Ok(serde_json::json!({"trust": trust, "audit": audit, "origins": origins, "transport_profile": transport_profile, "service_enabled": service_enabled})),
                 None => Ok(serde_json::json!({"trust": null, "audit": [], "origins": [], "transport_profile": null, "service_enabled": false})),
             }
+        },
+        "svc.fleet.get_hybrid_trust" => {
+            if args != serde_json::json!({}) { return Err(VerbError::new("bad_request", "unexpected arguments")); }
+            let snapshot = store.hybrid_trust_snapshot().map_err(|kind| VerbError::new("fleet_policy_unavailable", kind))?;
+            match snapshot {
+                Some((binding, hybrid)) => Ok(serde_json::json!({"trust": binding, "hybrid_trust": hybrid})),
+                None => Ok(serde_json::json!({"trust": null, "hybrid_trust": null})),
+            }
+        },
+        "svc.fleet.provision_hybrid_trust" => {
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Request { trust: FleetTrust, hybrid_trust: FleetHybridTrust }
+            let request: Request = serde_json::from_value(args).map_err(|_| VerbError::new("bad_request", "invalid hybrid trust"))?;
+            let actor = peer.ok_or_else(|| VerbError::new("forbidden", "authenticated caller required"))?.caller_sid();
+            store.provision_hybrid_trust(request.trust, request.hybrid_trust, actor).map_err(|kind| VerbError::new("fleet_policy_rejected", kind))?;
+            Ok(serde_json::json!({"provisioned": true}))
         },
         "svc.fleet.provision_trust" => {
             #[derive(serde::Deserialize)]
@@ -5535,7 +5552,7 @@ mod tests {
 
     #[tokio::test]
     async fn fleet_trust_mutations_require_admin_and_policy_requires_pinned_peer() {
-        for verb in ["svc.fleet.begin_enrollment", "svc.fleet.provision_trust", "svc.fleet.replace_trust", "svc.fleet.bind_origins", "svc.fleet.get_trust"] {
+        for verb in ["svc.fleet.begin_enrollment", "svc.fleet.provision_trust", "svc.fleet.replace_trust", "svc.fleet.bind_origins", "svc.fleet.get_trust", "svc.fleet.provision_hybrid_trust", "svc.fleet.get_hybrid_trust"] {
             assert!(authorize(verb, false, 1234, &passing_gate()).await.is_err());
             assert_eq!(authorize(verb, true, 1234, &passing_gate()).await, Ok(None));
         }
