@@ -17,11 +17,18 @@ function Get-ChildItem {
 }
 function Get-ItemProperty { param($Path, $ErrorAction) [pscustomobject]@{ DistributionName='ImportedFixture'; BasePath='C:\Fixture\Imported' } }
 function Get-Item { param($LiteralPath, [switch]$Force, $ErrorAction) [pscustomobject]@{ FullName=$LiteralPath; Length=1024; LastWriteTime=[datetime]'2026-01-02' } }
-function Get-Command { param($Name, $ErrorAction) return $null }
+$script:wslPresent = $false
+function Get-Command { param($Name, $ErrorAction) if ($script:wslPresent) { return [pscustomobject]@{ Source = 'Invoke-TestWsl' } }; return $null }
+function Invoke-TestWsl { $global:LASTEXITCODE = 1; 'Synthetic Windows failure output' }
 $result = Get-WSLDataInfo
 if ($result.error -or $result.total -ne 2) { throw 'WSL synthetic disks were not returned.' }
+if (-not $result.partial -or $result.message -notmatch 'WSL command is unavailable') { throw 'A missing WSL command must identify why coverage is partial.' }
 if (@($result.files | Where-Object { $_.path -eq 'C:\Fixture\StoreFixture\LocalState\ext4.vhdx' }).Count -ne 1 -or @($result.files | Where-Object { $_.path -eq 'C:\Fixture\Imported\ext4.vhdx' }).Count -ne 1) { throw 'WSL disk paths were lost.' }
 $script:denyPackages = $true
 $partial = Get-WSLDataInfo
 if (-not $partial.partial -or $partial.status -ne 'partial' -or $partial.total -ne 1 -or @($partial.files | Where-Object { $_.path -eq 'C:\Fixture\Imported\ext4.vhdx' }).Count -ne 1) { throw 'WSL access failure must keep available rows and report incomplete.' }
+$script:denyPackages = $false
+$script:wslPresent = $true
+$failedList = Get-WSLDataInfo
+if (-not $failedList.partial -or $failedList.total -ne 2 -or $failedList.message -notmatch 'could not list WSL distributions') { throw 'A failed WSL listing must not invent a distro from its output and must explain partial coverage.' }
 Write-Output 'Passed: WSL Store and imported disk paths are retained.'

@@ -35,6 +35,8 @@ if ($result.partial -or $result.total -ne 1 -or $result.items[0].originalPath -n
 foreach ($mode in @('denied', 'enumeration-denied', 'short')) {
     $script:mode = $mode; $result = Get-RecycleBinInfo
     if (-not $result.partial -or $result.status -ne 'partial') { throw "An incomplete scan was reported complete: $mode" }
+    if ($mode -eq 'short' -and ($result.unreadableRecords -ne 1 -or $result.inaccessibleLocations -ne 0)) { throw 'Malformed metadata was not counted as an unreadable record.' }
+    if ($mode -ne 'short' -and ($result.unreadableRecords -ne 0 -or $result.inaccessibleLocations -ne 1)) { throw 'An inaccessible location was not counted accurately.' }
 }
 $script:mode = 'absent'; $result = Get-RecycleBinInfo
 if ($result.partial -or $result.total -ne 0) { throw 'An absent Recycle Bin was not reported as empty.' }

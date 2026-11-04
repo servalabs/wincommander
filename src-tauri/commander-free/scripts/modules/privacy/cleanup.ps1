@@ -387,7 +387,8 @@ function Get-PSHistory {
         }
         $entries = [Collections.Generic.List[object]]::new()
         for ($index = $commands.Count - 1; $index -ge 0; $index--) {
-            $entries.Add(@{ id = $index; command = $commands[$index] })
+            # Get-Content attaches provider metadata that can make JSON serialization traverse the provider graph.
+            $entries.Add(@{ id = $index; command = [string]::new($commands[$index].ToCharArray()) })
         }
         @{
             entries = @($entries.ToArray()); total = $commands.Count; fileTotal = $commands.Count
@@ -437,10 +438,16 @@ function Get-EventLogSummary {
 
 function Get-SRUMData {
     try {
-        $srumPath = "$env:SystemRoot\System32\sru\SRUDB.dat"
+        $srumDirectory = Join-Path $env:SystemRoot 'System32\sru'
+        $srumPath = Join-Path $srumDirectory 'SRUDB.dat'
         $database = $null
-        try { $database = Get-Item -LiteralPath $srumPath -Force -ErrorAction Stop }
+        $directory = $null
+        try { $directory = Get-Item -LiteralPath $srumDirectory -Force -ErrorAction Stop }
         catch [System.Management.Automation.ItemNotFoundException] { }
+        if ($directory) {
+            if (-not $directory.PSIsContainer -or ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'The SRUM directory cannot be verified.' }
+            $database = @(Get-ChildItem -LiteralPath $srumDirectory -Force -ErrorAction Stop | Where-Object { -not $_.PSIsContainer -and $_.Name -ieq 'SRUDB.dat' } | Select-Object -First 1)[0]
+        }
         $files = @()
         if ($null -ne $database) {
             $files += @{
@@ -2306,7 +2313,9 @@ $res | ConvertTo-Json -Compress
 
 function Get-NetworkDrives {
     try {
-        $drives = Get-PSDrive -PSProvider FileSystem | Where-Object { $null -ne $_.DisplayRoot } | Select-Object Name, DisplayRoot
+        $drives = @(Get-PSDrive -PSProvider FileSystem -ErrorAction Stop | Where-Object { $null -ne $_.DisplayRoot } | ForEach-Object {
+            @{ localName = $_.Name; remoteName = $_.DisplayRoot }
+        })
         @{ drives = $drives }
     }
     catch {
@@ -3062,6 +3071,8 @@ function Get-RecycleBinInfo {
         $totalSizeKB = 0.0
         $sidNameCache = @{}
         $partial = $false
+        $unreadableRecords = 0
+        $inaccessibleLocations = 0
 
         $drives = [System.IO.DriveInfo]::GetDrives() |
             Where-Object { $_.DriveType -in @('Fixed','Removable') -and $_.IsReady }
@@ -3072,9 +3083,9 @@ function Get-RecycleBinInfo {
                 if (-not $rootItem.PSIsContainer -or ($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Recycle Bin root unavailable.' }
                 $sidDirs = @(Get-ChildItem -LiteralPath $binRoot -Directory -Force -ErrorAction Stop)
             } catch [System.Management.Automation.ItemNotFoundException] { continue }
-            catch { $partial = $true; continue }
+            catch { $partial = $true; $inaccessibleLocations++; continue }
             foreach ($sidDir in $sidDirs) {
-                if ($sidDir.Attributes -band [IO.FileAttributes]::ReparsePoint) { $partial = $true; continue }
+                if ($sidDir.Attributes -band [IO.FileAttributes]::ReparsePoint) { $partial = $true; $inaccessibleLocations++; continue }
                 $sid = $sidDir.Name
                 if (-not $sidNameCache.ContainsKey($sid)) {
                     $resolved = $sid
@@ -3087,7 +3098,7 @@ function Get-RecycleBinInfo {
                 $account = $sidNameCache[$sid]
 
                 try { $iFiles = @(Get-ChildItem -LiteralPath $sidDir.FullName -Filter '$I*' -File -Force -ErrorAction Stop) }
-                catch { $partial = $true; continue }
+                catch { $partial = $true; $inaccessibleLocations++; continue }
                 foreach ($iFile in $iFiles) {
                     try {
                         if (($iFile.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $iFile.Length -gt 1MB) { throw 'Recycle Bin metadata unavailable.' }
@@ -3130,7 +3141,7 @@ function Get-RecycleBinInfo {
                             sid          = $sid
                             drive        = $drv.Name
                         }
-                    } catch { $partial = $true }
+                    } catch { $partial = $true; $unreadableRecords++ }
                 }
             }
         }
@@ -3139,9 +3150,11 @@ function Get-RecycleBinInfo {
             items       = $items
             total       = $items.Count
             totalSizeKB = [Math]::Round($totalSizeKB, 1)
+            unreadableRecords = $unreadableRecords
+            inaccessibleLocations = $inaccessibleLocations
             partial     = $partial
             status      = if ($partial) { 'partial' } else { 'complete' }
-            message     = if ($partial) { 'Some Recycle Bin records could not be read.' } else { $null }
+            message     = if ($partial) { "Read $($items.Count) records; $unreadableRecords records and $inaccessibleLocations locations could not be read." } else { $null }
         }
     }
     catch { @{ error = $true; message = $_.Exception.Message } }
@@ -3501,6 +3514,7 @@ function Get-WSLDataInfo {
         $files = @()
         $totalBytes = [int64]0
         $partial = $false
+        $wslFailure = $null
         $registeredDistros = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
         $distrosWithDisk = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
         $seenVhdx = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
@@ -3560,7 +3574,11 @@ function Get-WSLDataInfo {
             # walk as the only source incorrectly reports a real WSL setup as
             # empty. This query is read-only and does not start a distro.
             $quietResult = @(& $wsl.Source -l -q 2>$null)
-            if ($LASTEXITCODE -ne 0) { $partial = $true }
+            if ($LASTEXITCODE -ne 0) {
+                $partial = $true
+                $wslFailure = 'Windows could not list WSL distributions; some WSL data may be unavailable.'
+                $quietResult = @()
+            }
             foreach ($distro in $quietResult) {
                 # wsl.exe can emit UTF-16LE through the legacy PowerShell host;
                 # strip its NUL separators before comparing it to Lxss names.
@@ -3574,7 +3592,11 @@ function Get-WSLDataInfo {
             # as a read-only fallback so the card does not show a false zero.
             if ($registeredDistros.Count -eq 0) {
                 $verboseResult = @(& $wsl.Source -l -v 2>$null)
-                if ($LASTEXITCODE -ne 0) { $partial = $true }
+                if ($LASTEXITCODE -ne 0) {
+                    $partial = $true
+                    $wslFailure = 'Windows could not list WSL distributions; some WSL data may be unavailable.'
+                    $verboseResult = @()
+                }
                 foreach ($line in $verboseResult) {
                     $name = ([string]$line).Replace([string][char]0, '').Trim() -replace '^\*\s*', '' -replace '\s{2,}.*$', ''
                     if ($name -and $name -notmatch '^(NAME|There are no installed distributions)') {
@@ -3584,9 +3606,9 @@ function Get-WSLDataInfo {
                     }
                 }
             }
-            } catch { $partial = $true }
-        } else { $partial = $true }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some WSL sources could not be checked.' } else { $null } }
+            } catch { $partial = $true; $wslFailure = 'Windows could not list WSL distributions; some WSL data may be unavailable.' }
+        } else { $partial = $true; $wslFailure = 'The Windows WSL command is unavailable; distributions could not be checked.' }
+        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($wslFailure) { $wslFailure } elseif ($partial) { 'Some WSL sources could not be checked.' } else { $null } }
     }
     catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
 }
@@ -4268,9 +4290,19 @@ function Get-OfficeTempFilesInfo {
             try { $item = Get-Item -LiteralPath $root -Force -ErrorAction Stop }
             catch [System.Management.Automation.ItemNotFoundException] { continue }
             if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Office temporary-file coverage is unavailable.' }
-            Get-ChildItem -Path $root -Recurse -Depth 2 -File -Include '~$*.doc*','~$*.xls*','~$*.ppt*' -Force -ErrorAction Stop | ForEach-Object {
-                $files.Add(@{ name = "Office temporary file: $($_.FullName.Substring($root.Length).TrimStart('\\'))"; path = $_.FullName; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
-                $totalBytes += $_.Length
+            $queue = [Collections.Generic.Queue[object]]::new()
+            $queue.Enqueue(@{ path = $root; depth = 0 })
+            while ($queue.Count -gt 0) {
+                $directory = $queue.Dequeue()
+                foreach ($child in @(Get-ChildItem -LiteralPath $directory.path -Force -ErrorAction Stop)) {
+                    if ($child.Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }
+                    if ($child.PSIsContainer) {
+                        if ($directory.depth -lt 2) { $queue.Enqueue(@{ path = $child.FullName; depth = $directory.depth + 1 }) }
+                    } elseif ($child.Name -like '~$*.doc*' -or $child.Name -like '~$*.xls*' -or $child.Name -like '~$*.ppt*') {
+                        $files.Add(@{ name = "Office temporary file: $($child.FullName.Substring($root.Length).TrimStart('\\'))"; path = $child.FullName; sizeKB = [math]::Round($child.Length / 1KB, 1); modified = $child.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
+                        $totalBytes += $child.Length
+                    }
+                }
             }
         }
         $tempRoot = $env:TEMP
@@ -4279,11 +4311,20 @@ function Get-OfficeTempFilesInfo {
         catch [System.Management.Automation.ItemNotFoundException] { }
         if ($tempItem) {
             if (-not $tempItem.PSIsContainer -or ($tempItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Office temporary-file coverage is unavailable.' }
-            Get-ChildItem -Path $tempRoot -Recurse -Depth 2 -File -Filter '*.tmp' -Force -ErrorAction Stop |
-                Sort-Object LastWriteTime -Descending | ForEach-Object {
-                    $files.Add(@{ name = "Temporary file: $($_.FullName.Substring($tempRoot.Length).TrimStart('\\'))"; path = $_.FullName; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
-                    $totalBytes += $_.Length
+            $queue = [Collections.Generic.Queue[object]]::new()
+            $queue.Enqueue(@{ path = $tempRoot; depth = 0 })
+            while ($queue.Count -gt 0) {
+                $directory = $queue.Dequeue()
+                foreach ($child in @(Get-ChildItem -LiteralPath $directory.path -Force -ErrorAction Stop)) {
+                    if ($child.Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }
+                    if ($child.PSIsContainer) {
+                        if ($directory.depth -lt 2) { $queue.Enqueue(@{ path = $child.FullName; depth = $directory.depth + 1 }) }
+                    } elseif ($child.Name -like '*.tmp') {
+                        $files.Add(@{ name = "Temporary file: $($child.FullName.Substring($tempRoot.Length).TrimStart('\\'))"; path = $child.FullName; sizeKB = [math]::Round($child.Length / 1KB, 1); modified = $child.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
+                        $totalBytes += $child.Length
+                    }
                 }
+            }
         }
         @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
     }
@@ -4494,7 +4535,12 @@ function Get-CellularHistoryInfo {
     $partial = $false
     try {
         $interfaces = @(& netsh.exe mbn show interfaces 2>$null)
-        if ($LASTEXITCODE -ne 0) { throw 'Cellular interfaces could not be read.' }
+        if ($LASTEXITCODE -ne 0) {
+            $service = Get-Service -Name 'WwanSvc' -ErrorAction SilentlyContinue
+            if (-not $service) { throw 'Windows Mobile Broadband service is unavailable; cellular profiles could not be checked.' }
+            if ($service.Status -ne 'Running') { throw 'Windows Mobile Broadband service is stopped; cellular profiles could not be checked.' }
+            throw 'Cellular interfaces could not be read from Windows Mobile Broadband.'
+        }
         $interfaceNames = @()
         foreach ($line in $interfaces) {
             $text = ([string]$line).Trim()
@@ -4502,17 +4548,23 @@ function Get-CellularHistoryInfo {
                 $interfaceNames += $Matches[2].Trim()
             }
         }
+        if ($interfaceNames.Count -eq 0) {
+            return @{ files = @(); total = 0; totalSizeMB = 0; interfaceCount = 0; partial = $true; status = 'partial'; message = 'No readable cellular interface was reported; saved profiles could not be verified.' }
+        }
         foreach ($interface in $interfaceNames) {
             try {
                 $profiles = @(& netsh.exe mbn show profiles interface="$interface" 2>$null)
                 if ($LASTEXITCODE -ne 0) { throw 'Cellular profiles could not be read.' }
+                $recognizedProfiles = 0
                 foreach ($line in $profiles) {
                     $text = ([string]$line).Trim()
                     if ($text -match '(?i)^(All User Profile|Profile|Profile Name)\s*:\s*(.+)$') {
                         $profileName = $Matches[2].Trim()
                         $files.Add(@{ name = "Cellular profile ($interface): $profileName"; profileName = $profileName; interface = $interface; source = 'Cellular profile'; sizeKB = 0; modified = '' })
+                        $recognizedProfiles++
                     }
                 }
+                if ($recognizedProfiles -eq 0) { $partial = $true }
             } catch { $partial = $true }
         }
         @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = 0; interfaceCount = $interfaceNames.Count; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some cellular profiles could not be checked.' } else { $null } }

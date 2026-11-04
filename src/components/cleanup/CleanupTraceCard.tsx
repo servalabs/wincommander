@@ -8,7 +8,7 @@ import {
 } from "@/components/ui/tooltip";
 import { getCleanupScheduleUnavailableReason, type CleanupCategory } from "../../panels/cleanup/cleanupCategories";
 import { isDefaultExcludedCleanup } from "../../panels/cleanup/cleanupManualPolicy";
-import { hasLimitedCleanupCoverage, isClipboardHistoryOff, observedProcessRows, summarizeCleanupResult, type CleanupVerification } from "../../panels/cleanup/cleanupDisplayModel";
+import { hasLimitedCleanupCoverage, isClipboardHistoryOff, observedPartialRows, observedProcessRows, summarizeCleanupResult, type CleanupVerification } from "../../panels/cleanup/cleanupDisplayModel";
 import CleanupScheduleControl from "./CleanupScheduleControl";
 import { getSafeCleanupPreview } from "./CleanupRecordPreview";
 import { cleanupCardPreview } from "./cleanupPreviewPresentation";
@@ -157,6 +157,7 @@ export default function CleanupTraceCard({
   const scanFlags = rawData && typeof rawData === "object" && !Array.isArray(rawData) ? rawData as Record<string, unknown> : undefined;
   const incomplete = scanFlags?.partial === true || scanFlags?.complete === false || scanFlags?.status === "partial" || scanFlags?.coverage === "partial" || scanFlags?.accessDenied === true;
   const observedProcesses = observedProcessRows(category.id, rawData);
+  const observedRecords = observedPartialRows(category.id, rawData);
   const clipboardOff = isClipboardHistoryOff(category.id, rawData);
   const limited = hasLimitedCleanupCoverage(category.id, rawData) || !!groupedItems?.some(group => hasLimitedCleanupCoverage(category.id, group.rawData));
   const isEmpty = count === 0 && !limited;
@@ -191,6 +192,8 @@ export default function CleanupTraceCard({
   const band = BAND[bandState];
   const accessibleStatus = bandState === "incomplete" && observedProcesses !== null
     ? `${observedProcesses} ${observedProcesses === 1 ? "process" : "processes"} observed; scan incomplete`
+    : bandState === "incomplete" && observedRecords !== null
+    ? `${observedRecords} ${observedRecords === 1 ? "record" : "records"} observed; scan incomplete`
     : bandState === "has"
     ? `${count} ${countUnit} found`
     : band.label;
@@ -560,7 +563,7 @@ export default function CleanupTraceCard({
             </div>
           )}
           {!loading && limited && count === 0 && <span>No items found in the checked locations.</span>}
-          {(error || (incomplete && observedProcesses !== null)) && !loading && (
+          {(error || (incomplete && (observedProcesses !== null || observedRecords !== null))) && !loading && (
             <div
               className="font-mono line-clamp-2"
               role={incomplete ? "status" : "alert"}
@@ -573,7 +576,7 @@ export default function CleanupTraceCard({
                 color: incomplete ? "var(--color-warning)" : "var(--color-danger)",
               }}
             >
-              {incomplete ? observedProcesses !== null && typeof scanFlags?.coverageNote === "string" ? `${observedProcesses} ${observedProcesses === 1 ? "process" : "processes"} observed. ${scanFlags.coverageNote}` : observedProcesses !== null ? `${observedProcesses} ${observedProcesses === 1 ? "process" : "processes"} observed. Scan incomplete; open details.` : "Scan incomplete. Open details to review coverage." : "Scan failed. Try again or check access."}
+              {incomplete ? observedProcesses !== null && typeof scanFlags?.coverageNote === "string" ? `${observedProcesses} ${observedProcesses === 1 ? "process" : "processes"} observed. ${scanFlags.coverageNote}` : observedProcesses !== null ? `${observedProcesses} ${observedProcesses === 1 ? "process" : "processes"} observed. Scan incomplete; open details.` : observedRecords !== null ? `${observedRecords} ${observedRecords === 1 ? "record" : "records"} observed. Scan incomplete; open details.` : "Scan incomplete. Open details to review coverage." : "Scan failed. Try again or check access."}
             </div>
           )}
           {/* Owner: manual-only view-only cards (Process Review) were stuck at

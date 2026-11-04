@@ -603,6 +603,8 @@ fn resolve_powershell_path() -> String {
 #[path = "backend_powershell_tests.rs"]
 mod powershell_host_tests;
 
+const POWERSHELL_UTF8_OUTPUT: &str = "[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)\n";
+
 fn build_powershell_command() -> (Command, String) {
     let exe = resolve_powershell_path();
     let mut cmd = Command::new(&exe);
@@ -6099,8 +6101,8 @@ pub(crate) async fn run_backend_script_with_timeout(
         "Write-PrivacyShieldDebugStage 'router'\n"
     } else { "" };
     let full_script = format!(
-        "{}\n\n{}{}\n\n{}\n\n{}{}Invoke-BackendCommand",
-        core_utils, additional_modules, command_module, core_router, machine_wide_assertion, shield_debug_stage
+        "{}{}\n\n{}{}\n\n{}\n\n{}{}Invoke-BackendCommand",
+        POWERSHELL_UTF8_OUTPUT, core_utils, additional_modules, command_module, core_router, machine_wide_assertion, shield_debug_stage
     );
 
     // Execute PowerShell via stdin (memory-only, never writes to disk)
@@ -6163,10 +6165,10 @@ pub(crate) async fn run_backend_script_with_timeout(
     let trimmed = stdout.trim();
     let stderr_trimmed = stderr.trim();
 
-    // These outputs can contain locally requested Wi-Fi keys or clipboard text.
+    // These outputs can contain locally requested Wi-Fi keys, clipboard text, or command history.
     // Never forward or log raw output when the child fails or sends malformed
     // JSON; its contents must not escape through an error or raw-output path.
-    if matches!(command.as_str(), "Get-WlanProfiles" | "Get-ClipboardHistoryStatus" | "Get-CleanupSummaryAllUsers")
+    if matches!(command.as_str(), "Get-WlanProfiles" | "Get-ClipboardHistoryStatus" | "Get-CleanupSummaryAllUsers" | "Get-PSHistory")
         && (!output.status.success()
             || serde_json::from_str::<serde_json::Value>(trimmed).is_err())
     {

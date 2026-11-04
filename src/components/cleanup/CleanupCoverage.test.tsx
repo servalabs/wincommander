@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { ALL_CATEGORIES } from "../../panels/cleanup/cleanupCategories";
 import { readCleanupScanResult, readCleanupUserSummary } from "../../panels/cleanup/cleanupScanResult";
 import { cleanupScanFailure } from "../../panels/cleanup/cleanupScanFailure";
-import { summarizeCleanupGroups, summarizeCleanupResult } from "../../panels/cleanup/cleanupDisplayModel";
+import { observedPartialRows, summarizeCleanupGroups, summarizeCleanupResult } from "../../panels/cleanup/cleanupDisplayModel";
 import CleanupDisplayDetails from "./CleanupDisplayDetails";
 import CleanupTraceCard from "./CleanupTraceCard";
 
@@ -11,6 +11,36 @@ const category = ALL_CATEGORIES.find(item => item.id === "walFiles")!;
 const limited = { files: [], total: 0, coverage: "limited" };
 
 describe("cleanup coverage presentation", () => {
+  test("partial credential metadata shows an observed count without revealing records on the card", () => {
+    const credentials = ALL_CATEGORIES.find(item => item.id === "credentialManager")!;
+    const raw = { partial: true, status: "partial", message: "Other vault entries were not inspected.", files: [
+      { name: "Saved credential target: private-target", credentialType: 1, password: "secret-fixture" },
+      { name: "Saved credential target: second-target", credentialType: 2 },
+    ] };
+    const result = readCleanupScanResult(credentials, { success: true, data: raw });
+    expect(result.count).toBe(-1);
+    const card = renderToStaticMarkup(<CleanupTraceCard category={credentials} count={result.count} preview={[]} rawData={result.raw} error={result.error} loading={false} clearing={false} onClear={() => {}} onViewDetails={() => {}} />);
+    expect(card).toContain("2 records observed");
+    expect(card).toContain("Scan incomplete");
+    expect(card).toContain("Details");
+    expect(card).not.toContain("private-target");
+    expect(card).not.toContain("secret-fixture");
+    const summary = summarizeCleanupResult({ id: credentials.id, count: result.count, raw: result.raw, error: result.error });
+    expect(summary.state).toBe("partial");
+    expect(summary.count).toBeNull();
+    const details = renderToStaticMarkup(<CleanupDisplayDetails category={credentials} mode="advanced" count={result.count} items={[]} rawData={{ ...raw, files: [{ name: "Saved credential identity", credentialType: 1 }] }} error={result.error} clearing={false} clearLabel="Clear" onClose={() => {}} onClear={() => {}} />);
+    expect(details).toContain("1 record observed");
+    expect(details).toContain("Saved credential identity");
+    expect(details).toContain("Other vault entries were not inspected.");
+    expect(details).toContain("disabled");
+  });
+  test("observed counts require supported partial metadata records", () => {
+    expect(observedPartialRows("wslData", { partial: true, status: "partial", files: [{ name: "disk" }] })).toBe(1);
+    expect(observedPartialRows("gitActivity", { partial: true, status: "partial", files: [] })).toBeNull();
+    expect(observedPartialRows("gitActivity", { partial: true, status: "partial", files: [null] })).toBeNull();
+    expect(observedPartialRows("credentialManager", { error: true, partial: true, status: "partial", files: [{}] })).toBeNull();
+    expect(observedPartialRows("unrelated", { partial: true, status: "partial", files: [{}] })).toBeNull();
+  });
   test("a failed activity scan retains the captured category counts without claiming a complete total", () => {
     const activity = ALL_CATEGORIES.find(item => item.id === "ntUserTraces")!;
     const raw = { error: true, message: "A later registry source was unavailable.", sections: [
