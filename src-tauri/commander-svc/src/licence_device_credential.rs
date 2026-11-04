@@ -33,7 +33,7 @@ fn entropy(binding: &Binding<'_>, credential_id: &[u8; 32]) -> Result<[u8; 32], 
         return Err(INVALID);
     }
     let encoded = serde_json::to_vec(&(
-        "wincommander:licence-device-credential:v1",
+        "wincommander:licence-device-credential:pending:v2",
         binding.licence_id,
         binding.device_hash,
         binding.issuer_origin,
@@ -43,11 +43,11 @@ fn entropy(binding: &Binding<'_>, credential_id: &[u8; 32]) -> Result<[u8; 32], 
     Ok(Sha256::digest(encoded).into())
 }
 
-pub(crate) struct Credential {
+pub(crate) struct PendingCredential {
     pub id: [u8; 32],
     secret: Zeroizing<[u8; 32]>,
 }
-impl Credential {
+impl PendingCredential {
     pub(crate) fn generate() -> Result<Self, &'static str> {
         let mut id = [0u8; 32];
         let mut secret = Zeroizing::new([0u8; 32]);
@@ -68,6 +68,7 @@ impl Credential {
 #[serde(deny_unknown_fields)]
 struct Record {
     version: u8,
+    phase: String,
     id: [u8; 32],
     sealed: Vec<u8>,
 }
@@ -76,12 +77,16 @@ fn decode(
     protector: &dyn Protector,
     binding: &Binding<'_>,
     bytes: &[u8],
-) -> Result<Credential, &'static str> {
+) -> Result<PendingCredential, &'static str> {
     if bytes.is_empty() || bytes.len() > LIMIT {
         return Err(INVALID);
     }
     let record: Record = serde_json::from_slice(bytes).map_err(|_| INVALID)?;
-    if record.version != 1 || record.sealed.is_empty() || record.sealed.len() > LIMIT {
+    if record.version != 2
+        || record.phase != "pending"
+        || record.sealed.is_empty()
+        || record.sealed.len() > LIMIT
+    {
         return Err(INVALID);
     }
     let secret = protector
@@ -92,19 +97,18 @@ fn decode(
     }
     let mut fixed = Zeroizing::new([0u8; 32]);
     fixed.copy_from_slice(&secret);
-    Ok(Credential {
+    Ok(PendingCredential {
         id: record.id,
         secret: fixed,
     })
 }
 
-fn save_with(
+fn save_locked(
     anchor: &anchor::Anchor,
     protector: &dyn Protector,
     binding: &Binding<'_>,
-    credential: &Credential,
+    credential: &PendingCredential,
 ) -> Result<(), &'static str> {
-    let _guard = LOCK.lock().map_err(|_| INVALID)?;
     // Never silently replace an existing or damaged identity. Recovery and
     // cross-process coordination must be designed before this is connected.
     if anchor.read().map_err(|_| INVALID)?.is_some() {
@@ -117,7 +121,8 @@ fn save_with(
         return Err(INVALID);
     }
     let bytes = serde_json::to_vec(&Record {
-        version: 1,
+        version: 2,
+        phase: "pending".into(),
         id: credential.id,
         sealed,
     })
@@ -135,28 +140,26 @@ fn save_with(
     Ok(())
 }
 
-fn load_with(
+fn get_or_create_with(
     anchor: &anchor::Anchor,
     protector: &dyn Protector,
     binding: &Binding<'_>,
-) -> Result<Credential, &'static str> {
+) -> Result<PendingCredential, &'static str> {
     let _guard = LOCK.lock().map_err(|_| INVALID)?;
-    let bytes = anchor.read().map_err(|_| INVALID)?.ok_or(INVALID)?;
-    decode(protector, binding, &bytes)
+    if let Some(bytes) = anchor.read().map_err(|_| INVALID)? {
+        return decode(protector, binding, &bytes);
+    }
+    let candidate = PendingCredential::generate()?;
+    save_locked(anchor, protector, binding, &candidate)?;
+    Ok(candidate)
 }
 
-pub(crate) fn save(binding: &Binding<'_>, credential: &Credential) -> Result<(), &'static str> {
-    save_with(
-        &anchor::Anchor::machine_named(
-            r"SOFTWARE\ServaLabs\WinCommander\ExperimentalLicenceDevice",
-        ),
-        &MachineDpapi,
-        binding,
-        credential,
-    )
-}
-pub(crate) fn load(binding: &Binding<'_>) -> Result<Credential, &'static str> {
-    load_with(
+/// Persist before contacting the issuer. This never establishes an active
+/// credential; a future confirmation path must verify a bound issuer receipt.
+pub(crate) fn get_or_create_pending(
+    binding: &Binding<'_>,
+) -> Result<PendingCredential, &'static str> {
+    get_or_create_with(
         &anchor::Anchor::machine_named(
             r"SOFTWARE\ServaLabs\WinCommander\ExperimentalLicenceDevice",
         ),
