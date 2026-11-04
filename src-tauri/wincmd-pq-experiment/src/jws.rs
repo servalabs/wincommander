@@ -102,6 +102,8 @@ pub fn verify(input: &[u8], trust: &Trust<'_>) -> Result<Verified, VerifyError> 
             Purpose::Release => "release",
             Purpose::LicenceEnrolment => "licence-enrolment",
             Purpose::EvidenceAttestation => "evidence-attestation",
+            Purpose::FleetCommand => "fleet-command",
+            Purpose::FleetReceipt => "fleet-receipt",
         };
         if header.typ != TYPE
             || header.crit != ["profile", "purpose", "epoch"]

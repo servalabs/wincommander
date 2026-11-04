@@ -38,6 +38,8 @@ mod command;
 mod decimal;
 mod decode;
 mod envelopes;
+#[cfg(feature = "windows-v2-hybrid")]
+mod hybrid;
 mod lossless;
 mod outcome;
 mod receipt;
@@ -47,6 +49,8 @@ pub use checkin_auth::*;
 pub use command::*;
 pub use decode::*;
 pub use envelopes::*;
+#[cfg(feature = "windows-v2-hybrid")]
+pub use hybrid::*;
 pub use lossless::*;
 pub use outcome::*;
 pub use receipt::*;

@@ -33,6 +33,8 @@ pub fn signing_inputs(
         Purpose::Release => "release",
         Purpose::LicenceEnrolment => "licence-enrolment",
         Purpose::EvidenceAttestation => "evidence-attestation",
+        Purpose::FleetCommand => "fleet-command",
+        Purpose::FleetReceipt => "fleet-receipt",
     };
     let header = |alg: &str, kid: &str| -> Result<String, VerifyError> {
         let bytes = serde_json::to_vec(&json!({"alg": alg, "kid": kid, "typ": TYPE,
