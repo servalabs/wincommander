@@ -212,6 +212,29 @@ mod tests {
     }
 
     #[test]
+    fn complex_exclusions_match_crawl_and_watcher_on_nested_files() {
+        let dir = TempDir::new().unwrap();
+        let nested = dir.path().join("nested");
+        fs::create_dir(&nested).unwrap();
+        let excluded = nested.join("secret-a.txt");
+        let included = nested.join("public-a.txt");
+        fs::write(&excluded, b"secret").unwrap();
+        fs::write(&included, b"public").unwrap();
+        let exclusions = crate::crawler::build_globset(&["{secret,private}-?.txt".into()]).unwrap();
+        let files =
+            crate::crawler::collect_files(&[dir.path().to_path_buf()], &exclusions, &[], u64::MAX);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, included);
+        let excluded_event = make_event(EventKind::Create(CreateKind::File), &excluded);
+        assert!(apply_fs_event(&excluded_event, &[], &exclusions, u64::MAX).is_none());
+        let included_event = make_event(EventKind::Create(CreateKind::File), &included);
+        assert!(matches!(
+            apply_fs_event(&included_event, &[], &exclusions, u64::MAX),
+            Some(FsEventAction::Upsert(_))
+        ));
+    }
+
+    #[test]
     fn non_excluded_file_still_matches_when_exclusions_present() {
         let dir = TempDir::new().unwrap();
         let file = dir.path().join("keep.rs");
