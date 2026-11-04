@@ -20,6 +20,8 @@ chrono = { version = "0.4", default-features = false, features = ["std"], option
 base64 = "0.22"
 ed25519-dalek = { version = "3", default-features = false, features = ["alloc", "signature", "rand_core"] }
 sha2 = "0.11"
+# Used only by the Windows v2 raw-byte check-in authentication contract.
+hmac = { version = "0.13", optional = true }
 
 # Clipboard-guard policy types (plan §4.1) — Severity/Action/Rule/MatchKind/
 # etc. are NOT redefined here (NON-GOALS.md forbids duplicating a shared wire
@@ -41,7 +43,7 @@ ts-rs = { version = "10", optional = true, features = ["serde-json-impl"] }
 ts-codegen = ["dep:ts-rs", "wincmd-clip-rules/ts-codegen", "windows-v2"]
 # Neutral Windows protocol contracts. No transport or execution is enabled by
 # this feature; v1-only consumers retain their existing dependency closure.
-windows-v2 = ["dep:json-syntax", "dep:chrono"]
+windows-v2 = ["dep:json-syntax", "dep:chrono", "dep:hmac"]
 # Pure cfg gate (no deps) for COMMAND_METADATA — keeps the catalog metadata
 # table out of the AV-scanned Free binary's dependency closure. Enable only in
 # consumers that need catalog discovery (fleet-server, commander-pro).

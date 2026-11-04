@@ -108,6 +108,30 @@ mod tests {
     }
 
     #[test]
+    fn raw_checkin_auth_is_independent_of_json_features() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../fixtures/windows_v2_checkin_auth_vectors.json"
+        ))
+        .unwrap();
+        let key: Vec<u8> = (0..32).collect();
+        for vector in fixture["vectors"].as_array().unwrap() {
+            let body = vector["body"].as_str().unwrap().as_bytes();
+            let header = vector["header"].as_str().unwrap();
+            assert_eq!(
+                sign_windows_v2_checkin_auth(&key, "POST", "/v1/agents/checkin", body).as_deref(),
+                Some(header)
+            );
+            assert!(verify_windows_v2_checkin_auth(
+                &key,
+                "POST",
+                "/v1/agents/checkin",
+                body,
+                &[header]
+            ));
+        }
+    }
+
+    #[test]
     fn fleet_proto_does_not_enable_legacy_serde_features() {
         let numeric: Value = serde_json::from_str(r#"{"number":1.2300e-2}"#).unwrap();
         let expected = if cfg!(feature = "precise") {

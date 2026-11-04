@@ -2,6 +2,10 @@
 //! Enrollment-bound Windows wire records. These pure contracts do not enable
 //! transport, persistence, command execution, or legacy-protocol fallback.
 //!
+//! Windows v2 check-in authenticates its original body bytes using a separate
+//! method/path-bound HMAC header. This authenticates bytes; it does not itself
+//! validate JSON, freshness, nonce replay, enrollment state, or telemetry.
+//!
 //! Windows peers must require the v2 block by authenticated device kind and
 //! reject mixed v1 reports. Decode original complete wire bytes with
 //! [`decode_windows_v2`] before extracting this block. Arbitrary JSON is exact
@@ -29,6 +33,7 @@
 //! definitive rejection may be quarantined locally, never treated as success.
 //! Servers release proofs only after committing the exact claimed receipts and
 //! dispatch state; storage/signing failure must not consume one-shot delivery.
+mod checkin_auth;
 mod command;
 mod decimal;
 mod decode;
@@ -38,6 +43,7 @@ mod outcome;
 mod receipt;
 mod validation;
 
+pub use checkin_auth::*;
 pub use command::*;
 pub use decode::*;
 pub use envelopes::*;
