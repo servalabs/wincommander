@@ -66,6 +66,44 @@ pub fn verify<R: Read>(
     Ok(verified.epoch)
 }
 
+/// Prepare the two exact messages for separately controlled signers. The
+/// caller must validate the original case and keep the archive stable while
+/// reading it. Signatures must be checked again against the current archive.
+#[cfg(feature = "experimental-signer")]
+pub fn prepare<R: Read>(
+    file: R,
+    epoch: u64,
+    trust: &jws::Trust<'_>,
+) -> Result<jws::sign::SigningInputs, &'static str> {
+    if trust.purpose != Purpose::EvidenceAttestation || trust.minimum_epoch == 0 {
+        return Err("invalid attestation policy");
+    }
+    let payload = serde_json::to_vec(&digest(file)?).map_err(|_| "invalid attestation claims")?;
+    jws::sign::signing_inputs(&payload, epoch, trust).map_err(|_| "attestation preparation failed")
+}
+
+/// Recompute the statement from the current archive and verify both detached
+/// signatures before returning an envelope. Neither input signature is trusted.
+#[cfg(feature = "experimental-signer")]
+pub fn assemble<R: Read>(
+    file: R,
+    epoch: u64,
+    trust: &jws::Trust<'_>,
+    ed_signature: &[u8],
+    pq_signature: &[u8],
+) -> Result<Vec<u8>, &'static str> {
+    if ed_signature.len() != 64 || pq_signature.len() != 3309 {
+        return Err("invalid attestation signature length");
+    }
+    sign(
+        file,
+        epoch,
+        trust,
+        |_| Ok(ed_signature.to_vec()),
+        |_| Ok(pq_signature.to_vec()),
+    )
+}
+
 /// The caller owns both signing keys and must separately validate the original
 /// archive and prevent changes during reading. No historical protection or
 /// trusted timestamp is claimed.
@@ -139,6 +177,26 @@ mod tests {
             )
             .unwrap();
             assert_eq!(verify(&signed, &original[..], &trust), Ok(3));
+            let messages = prepare(&original[..], 3, &trust).unwrap();
+            let ed_signature = ed.sign(&messages.ed).to_bytes();
+            let mut pq_signature = vec![0; 3309];
+            pq.sign(&messages.pq, &mut pq_signature).unwrap();
+            let detached =
+                assemble(&original[..], 3, &trust, &ed_signature, &pq_signature).unwrap();
+            assert_eq!(verify(&detached, &original[..], &trust), Ok(3));
+            assert!(assemble(
+                &b"modified archive"[..],
+                3,
+                &trust,
+                &ed_signature,
+                &pq_signature
+            )
+            .is_err());
+            assert!(assemble(&original[..], 4, &trust, &ed_signature, &pq_signature).is_err());
+            assert!(
+                assemble(&original[..], 3, &trust, &ed_signature[..63], &pq_signature).is_err()
+            );
+
             assert!(sign(
                 &b""[..],
                 3,

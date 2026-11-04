@@ -9,7 +9,10 @@ or that the archive was protected against quantum attacks in the past.
 `evidence_attestation::sign` requires independently managed signing callbacks.
 There is no production key custody, issuer, user interface or release process.
 Callers must verify the original bundle independently and prevent changes while
-reading it. The experimental offline checker can be built with the
+reading it. The optional `prepare` API creates exact messages for independently
+controlled signers; `assemble` recomputes the archive digest and verifies both
+returned raw signatures, so changed bytes, keys or epoch are rejected. The
+experimental offline checker can be built with the
 `experimental-offline-verifier` feature:
 
 ```text
