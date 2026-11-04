@@ -24,6 +24,8 @@ mod hybrid_trust;
 #[cfg(feature = "experimental-pq-licence")]
 #[path = "license_cache_rollback.rs"]
 mod rollback;
+#[cfg(feature = "experimental-pq-licence")]
+pub(crate) use rollback::anchor as licence_device_anchor;
 
 const DEFAULT_LICENSE_PUBLIC_KEY_B64: &str = "Z4ulYtrFLpOZYVLGpNo_PlegZsitTmJx2JwfyIqSJpY";
 const MAINLINE_APP_ID: &str = "com.servalabs.wincommander";

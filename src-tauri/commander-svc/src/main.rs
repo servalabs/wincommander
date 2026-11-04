@@ -75,6 +75,9 @@ mod diagnostics;
 mod policy_store;
 mod fleet_machine_policy;
 mod fleet_credential;
+#[cfg(all(windows, feature = "experimental-pq-licence"))]
+#[allow(dead_code)] // Not connected to enrolment or production licence decisions.
+mod licence_device_credential;
 mod fleet_runtime_env;
 mod fleet_presence;
 #[cfg(windows)]

@@ -8,7 +8,7 @@ mod history;
 #[path = "license_cache_ledger.rs"]
 mod ledger;
 #[path = "../../commander-free/src/updater/hybrid_free_anchor.rs"]
-mod anchor;
+pub(crate) mod anchor;
 
 const CACHE_LIMIT: u64 = 64 * 1024;
 static WRITE_LOCK: Mutex<()> = Mutex::new(());
