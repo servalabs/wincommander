@@ -233,6 +233,15 @@ jobs:
           $output | ForEach-Object { Write-Host $_ }
           if ($code -ne 0) { exit $code }
           if (($output -join "`n") -notmatch 'running 1 test') { throw 'The isolated Shield process test did not run.' }
+      - name: Test isolated PowerShell ACL probe
+        shell: pwsh
+        run: |
+          $test = 'backend::powershell_host_tests::hidden_backend_reads_acls_without_foreign_parent_modules'
+          $output = & cargo test --locked -p commander-free --lib $test -- --ignored --exact --nocapture 2>&1
+          $code = $LASTEXITCODE
+          $output | ForEach-Object { Write-Host $_ }
+          if ($code -ne 0) { exit $code }
+          if (($output -join "`n") -notmatch 'running 1 test') { throw 'The PowerShell ACL test did not run.' }
       - run: cargo test --workspace --no-fail-fast
       - name: Test elevated-to-standard Fleet mutex access when available
         shell: pwsh
