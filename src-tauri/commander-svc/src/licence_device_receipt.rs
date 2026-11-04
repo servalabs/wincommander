@@ -26,6 +26,16 @@ pub(super) fn verify(
     credential: &PendingCredential,
     now: u64,
 ) -> Result<(), &'static str> {
+    verify_epoch(encoded, trust, binding, credential, now).map(|_| ())
+}
+
+pub(super) fn verify_epoch(
+    encoded: &str,
+    trust: &jws::Trust<'_>,
+    binding: &Binding<'_>,
+    credential: &PendingCredential,
+    now: u64,
+) -> Result<u64, &'static str> {
     if trust.purpose != Purpose::LicenceEnrolment || encoded.len() > 32 * 1024 {
         return Err(INVALID);
     }
@@ -48,5 +58,5 @@ pub(super) fn verify(
     {
         return Err(INVALID);
     }
-    Ok(())
+    Ok(signed.epoch)
 }

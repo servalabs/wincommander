@@ -257,6 +257,41 @@ pub(crate) fn configured_device_receipt_trust() -> Result<hybrid_trust::Trust, &
     hybrid_trust::configured()
 }
 
+#[cfg(feature = "experimental-pq-licence")]
+pub(crate) use rollback::history::HistoricalTrust as DeviceReceiptHistory;
+
+/// Historical keys are only for already-retained, protected receipt evidence.
+#[cfg(feature = "experimental-pq-licence")]
+pub(crate) fn historical_device_receipt_trust(
+    current: &wincmd_pq_experiment::jws::Trust<'_>,
+) -> Result<Option<rollback::history::HistoricalTrust>, &'static str> {
+    if current.purpose != wincmd_pq_experiment::Purpose::LicenceEnrolment {
+        return Err("receipt trust is invalid");
+    }
+    let licence_policy = wincmd_pq_experiment::jws::Trust {
+        purpose: wincmd_pq_experiment::Purpose::Licence,
+        minimum_epoch: current.minimum_epoch,
+        ed_key_id: current.ed_key_id,
+        ed25519_public: current.ed25519_public,
+        pq_key_id: current.pq_key_id,
+        ml_dsa_65_public: current.ml_dsa_65_public,
+    };
+    rollback::history::configured(&licence_policy)
+}
+
+#[cfg(all(test, feature = "experimental-pq-licence"))]
+pub(crate) fn test_device_receipt_history(
+    current: &wincmd_pq_experiment::jws::Trust<'_>, values: [Option<&str>; 5],
+) -> Result<Option<rollback::history::HistoricalTrust>, &'static str> {
+    let licence_policy = wincmd_pq_experiment::jws::Trust {
+        purpose: wincmd_pq_experiment::Purpose::Licence,
+        minimum_epoch: current.minimum_epoch, ed_key_id: current.ed_key_id,
+        ed25519_public: current.ed25519_public, pq_key_id: current.pq_key_id,
+        ml_dsa_65_public: current.ml_dsa_65_public,
+    };
+    rollback::history::parse(&licence_policy, values)
+}
+
 /// Build proof input only for the exact signed cache retained by the service.
 #[cfg(feature = "experimental-pq-licence")]
 #[allow(dead_code)] // The service-side renewal path is not exposed yet.

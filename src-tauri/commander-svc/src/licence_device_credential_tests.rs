@@ -643,6 +643,26 @@ async fn authorized_worker_issuer_receipt_confirms_persisted_pending_credential(
     .is_err());
     let stored = anchor.read().unwrap().unwrap();
     assert!(decode_confirmed(&MachineDpapi, &binding, &trust, &stored, accepted_at + 1).is_ok());
+    // A previously protected receipt remains usable after a planned rotation,
+    // but old keys cannot authorize a new confirmation or exceed their bound.
+    let new_ed = [0u8; 32];
+    let new_pq = [0u8; ML_DSA_65_PUBLIC_KEY_LEN];
+    let current = jws::Trust { purpose: Purpose::LicenceEnrolment, minimum_epoch: 8,
+        ed_key_id: "new-ed", ed25519_public: &new_ed,
+        pq_key_id: "new-pq", ml_dsa_65_public: &new_pq };
+    let history_values = [fixture["publicEd"].as_str(), fixture["publicPq"].as_str(),
+        Some("ed"), Some("pq"), Some("7")];
+    let history = crate::license_cache::test_device_receipt_history(&current, history_values).unwrap().unwrap();
+    assert!(decode_confirmed_with_history(&MachineDpapi, &binding, &current, Some(&history), &stored, accepted_at + 1).is_ok());
+    assert!(decode_confirmed_with_history(&MachineDpapi, &binding, &current, None, &stored, accepted_at + 1).is_err());
+    let limited = crate::license_cache::test_device_receipt_history(&current,
+        [history_values[0], history_values[1], Some("ed"), Some("pq"), Some("6")]).unwrap().unwrap();
+    assert!(decode_confirmed_with_history(&MachineDpapi, &binding, &current, Some(&limited), &stored, accepted_at + 1).is_err());
+    let unconfirmed_path = format!(r"SOFTWARE\WinCommanderRotationTest-{}", uuid::Uuid::new_v4());
+    let unconfirmed = anchor::Anchor::test_user(unconfirmed_path.clone());
+    save_locked(&unconfirmed, &MachineDpapi, &binding, &pending).unwrap();
+    assert!(confirm_with(&unconfirmed, &MachineDpapi, &binding, &current, receipt, accepted_at).is_err());
+    anchor::remove_test_key(&unconfirmed_path).unwrap();
     assert!(enrol_with(
         &anchor,
         &MachineDpapi,

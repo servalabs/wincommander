@@ -3,7 +3,7 @@
 use super::*;
 use wincmd_pq_experiment::{jws, Purpose, ML_DSA_65_PUBLIC_KEY_LEN};
 
-pub(super) struct HistoricalTrust {
+pub(crate) struct HistoricalTrust {
     ed: [u8; 32],
     pq: [u8; ML_DSA_65_PUBLIC_KEY_LEN],
     ed_id: String,
@@ -11,7 +11,22 @@ pub(super) struct HistoricalTrust {
     maximum_epoch: u64,
 }
 
-pub(super) fn configured(
+impl HistoricalTrust {
+    pub(crate) fn receipt_policy(&self) -> jws::Trust<'_> {
+        jws::Trust {
+            purpose: Purpose::LicenceEnrolment,
+            minimum_epoch: 1,
+            ed_key_id: &self.ed_id,
+            ed25519_public: &self.ed,
+            pq_key_id: &self.pq_id,
+            ml_dsa_65_public: &self.pq,
+        }
+    }
+
+    pub(crate) fn maximum_epoch(&self) -> u64 { self.maximum_epoch }
+}
+
+pub(crate) fn configured(
     current: &jws::Trust<'_>,
 ) -> Result<Option<HistoricalTrust>, &'static str> {
     parse(
@@ -26,7 +41,7 @@ pub(super) fn configured(
     )
 }
 
-pub(super) fn parse(
+pub(crate) fn parse(
     current: &jws::Trust<'_>,
     values: [Option<&str>; 5],
 ) -> Result<Option<HistoricalTrust>, &'static str> {

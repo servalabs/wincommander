@@ -385,6 +385,18 @@ fn decode_confirmed(
     bytes: &[u8],
     now: u64,
 ) -> Result<ConfirmedCredential, &'static str> {
+    let historical = crate::license_cache::historical_device_receipt_trust(trust)?;
+    decode_confirmed_with_history(protector, binding, trust, historical.as_ref(), bytes, now)
+}
+
+fn decode_confirmed_with_history(
+    protector: &dyn Protector,
+    binding: &Binding<'_>,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>,
+    historical: Option<&crate::license_cache::DeviceReceiptHistory>,
+    bytes: &[u8],
+    now: u64,
+) -> Result<ConfirmedCredential, &'static str> {
     if bytes.is_empty() || bytes.len() > LIMIT {
         return Err(INVALID);
     }
@@ -417,7 +429,11 @@ fn decode_confirmed(
     };
     // A receipt must have been valid when accepted, but does not expire the
     // already-confirmed local identity; later status checks remain separate.
-    receipt::verify(receipt, trust, binding, &credential, accepted_at)?;
+    if receipt::verify(receipt, trust, binding, &credential, accepted_at).is_err() {
+        let old = historical.ok_or(INVALID)?;
+        let epoch = receipt::verify_epoch(receipt, &old.receipt_policy(), binding, &credential, accepted_at)?;
+        if epoch > old.maximum_epoch() { return Err(INVALID); }
+    }
     Ok(ConfirmedCredential {
         id: credential.id,
         secret: credential.secret,

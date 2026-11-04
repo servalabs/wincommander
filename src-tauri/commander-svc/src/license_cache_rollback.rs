@@ -6,7 +6,7 @@ use std::{io::Read, sync::Mutex};
 #[path = "../../commander-free/src/updater/hybrid_free_anchor.rs"]
 pub(crate) mod anchor;
 #[path = "license_cache_history.rs"]
-mod history;
+pub(super) mod history;
 #[path = "license_cache_ledger.rs"]
 mod ledger;
 
