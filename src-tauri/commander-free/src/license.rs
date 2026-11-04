@@ -32,6 +32,25 @@ const MAX_TRIAL_ELIGIBILITY_CACHE_TTL_SECONDS: u64 = 24 * 60 * 60;
 /// lifecycle change such as a new activation or an explicit deactivation.
 const LICENSE_SERVICE_REFRESH_INTERVAL_SECONDS: u64 = 4 * 60 * 60;
 const LICENSE_NETWORK_HINT: &str = "Check your connection or try another network; the licence service requires a quantum-resistant secure connection.";
+// Allow ample room for a hybrid proof and legacy fields while bounding both
+// declared-length and streaming/chunked server responses.
+const LICENSE_RESPONSE_LIMIT: usize = 256 * 1024;
+
+async fn read_license_response<T: serde::de::DeserializeOwned>(
+    mut response: reqwest::Response,
+) -> Result<T, String> {
+    if response.content_length().is_some_and(|size| size > LICENSE_RESPONSE_LIMIT as u64) {
+        return Err("License response is too large.".into());
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| "Could not read license response.")? {
+        if bytes.len().checked_add(chunk.len()).map_or(true, |size| size > LICENSE_RESPONSE_LIMIT) {
+            return Err("License response is too large.".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&bytes).map_err(|_| "License response is malformed.".into())
+}
 #[cfg_attr(feature = "portable", allow(dead_code))] // portable edition has no trial
 #[cfg(test)]
 const TRIAL_DURATION_SECONDS: u64 = 16 * 24 * 60 * 60; // 16 days
@@ -798,7 +817,7 @@ async fn trial_available_from_worker(
         .send()
         .await
         .ok()?;
-    let body = response.json::<WorkerTrialStatusResponse>().await.ok()?;
+    let body = read_license_response::<WorkerTrialStatusResponse>(response).await.ok()?;
     body.ok.then_some(TrialAvailability {
         available: body.available.unwrap_or(false),
         cache_ttl_seconds: bounded_trial_eligibility_cache_ttl(body.cache_ttl_seconds),
@@ -1565,8 +1584,7 @@ pub async fn activate_license(license_key: String) -> Result<serde_json::Value, 
             format!("License server request failed: {}. {}", e, LICENSE_NETWORK_HINT)
         })?;
 
-    let payload: WorkerTokenResponse = response
-        .json()
+    let payload: WorkerTokenResponse = read_license_response(response)
         .await
         .map_err(|e| format!("Invalid license server response: {}", e))?;
 
@@ -1720,8 +1738,7 @@ pub async fn refresh_license() -> Result<serde_json::Value, String> {
         .await
         .map_err(|e| format!("License refresh request failed: {}. {}", e, LICENSE_NETWORK_HINT))?;
 
-    let payload: WorkerTokenResponse = response
-        .json()
+    let payload: WorkerTokenResponse = read_license_response(response)
         .await
         .map_err(|e| format!("Invalid refresh response: {}", e))?;
 
@@ -1863,8 +1880,7 @@ pub async fn start_trial() -> Result<serde_json::Value, String> {
                 format!("Trial server request failed: {}. {}", e, LICENSE_NETWORK_HINT)
             })?;
 
-        let payload: WorkerTokenResponse = response
-            .json()
+        let payload: WorkerTokenResponse = read_license_response(response)
             .await
             .map_err(|e| format!("Invalid trial server response: {}", e))?;
 
@@ -1952,7 +1968,7 @@ pub async fn deactivate_license_internal() -> Result<(), String> {
             )
         })?;
 
-    let payload: WorkerTokenResponse = response.json().await.map_err(|e| {
+    let payload: WorkerTokenResponse = read_license_response(response).await.map_err(|e| {
         format!(
             "Invalid deactivation response; the licence was kept so you can retry: {}",
             e
@@ -1989,6 +2005,50 @@ pub async fn deactivate_license() -> Result<(), String> {
 mod tests {
     use super::*;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+
+    #[tokio::test]
+    async fn license_response_is_bounded_for_fixed_and_chunked_bodies() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        async fn response(body: Vec<u8>, chunked: bool) -> reqwest::Response {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0; 1024];
+                let _ = socket.read(&mut request).await;
+                let header = if chunked {
+                    "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n".to_string()
+                } else {
+                    format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len())
+                };
+                if socket.write_all(header.as_bytes()).await.is_err() { return; }
+                if chunked {
+                    if socket.write_all(format!("{:x}\r\n", body.len()).as_bytes()).await.is_err() { return; }
+                    let _ = socket.write_all(&body).await;
+                    let _ = socket.write_all(b"\r\n0\r\n\r\n").await;
+                } else {
+                    let _ = socket.write_all(&body).await;
+                }
+            });
+            reqwest::Client::builder().no_proxy().build().unwrap()
+                .get(format!("http://{addr}/")).send().await.unwrap()
+        }
+
+        let prefix = b"{\"data\":\"";
+        let suffix = b"\"}";
+        let mut exact = prefix.to_vec();
+        exact.resize(LICENSE_RESPONSE_LIMIT - suffix.len(), b'x');
+        exact.extend_from_slice(suffix);
+        for chunked in [false, true] {
+            let parsed: serde_json::Value = read_license_response(response(exact.clone(), chunked).await).await.unwrap();
+            assert_eq!(parsed["data"].as_str().unwrap().len(), LICENSE_RESPONSE_LIMIT - prefix.len() - suffix.len());
+            let mut oversized = exact.clone();
+            oversized.push(b' ');
+            assert!(read_license_response::<serde_json::Value>(response(oversized, chunked).await).await.is_err());
+        }
+        assert!(read_license_response::<serde_json::Value>(response(b"{".to_vec(), false).await).await.is_err());
+    }
 
     #[cfg(all(windows, feature = "experimental-pq-licence"))]
     #[test]
