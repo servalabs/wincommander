@@ -205,6 +205,68 @@ fn validate_claims(payload: &[u8]) -> Result<(), &'static str> {
     Ok(())
 }
 
+#[cfg(feature = "experimental-pq-licence")]
+#[derive(Deserialize)]
+struct RefreshClaims {
+    license_id: String,
+    device_hash: String,
+    iss: String,
+    sub: String,
+    #[serde(default)]
+    is_portable: bool,
+}
+
+#[cfg(feature = "experimental-pq-licence")]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RefreshWire<'a> {
+    app_id: &'static str,
+    device_hash: &'a str,
+    hybrid: &'a str,
+    is_portable: bool,
+    payload: &'a str,
+    signature: &'a str,
+}
+
+#[cfg(feature = "experimental-pq-licence")]
+fn build_refresh_wire(
+    request: &StoreLicenseCacheRequest, public_key: &str,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>, licence_id: &str, device_hash: &str,
+) -> Result<Vec<u8>, &'static str> {
+    validate_dual_request(request, public_key, trust)?;
+    let signature = general_purpose::URL_SAFE_NO_PAD.decode(&request.signature).map_err(|_| "license cache signature is invalid")?;
+    if signature.len() != 64 || general_purpose::URL_SAFE_NO_PAD.encode(signature) != request.signature {
+        return Err("license cache signature is invalid");
+    }
+    let claims: RefreshClaims = serde_json::from_str(&request.payload).map_err(|_| "license cache payload is invalid")?;
+    if claims.license_id != licence_id || claims.device_hash != device_hash
+        || claims.iss != "wincommander-license-worker" || claims.sub != MAINLINE_APP_ID {
+        return Err("license does not match device credential");
+    }
+    let wire = serde_json::to_vec(&RefreshWire { app_id: MAINLINE_APP_ID, device_hash,
+        hybrid: request.hybrid.as_deref().ok_or("hybrid license is required")?,
+        is_portable: claims.is_portable, payload: &request.payload, signature: &request.signature,
+    }).map_err(|_| "license cache request is invalid")?;
+    if wire.len() > 16 * 1024 { return Err("license cache request is invalid"); }
+    Ok(wire)
+}
+
+/// Build proof input only for the exact signed cache retained by the service.
+#[cfg(feature = "experimental-pq-licence")]
+#[allow(dead_code)] // The service-side renewal path is not exposed yet.
+pub(crate) fn verified_refresh_wire(
+    payload: &str, signature: &str, hybrid: &str, last_verified_at: u64,
+    licence_id: &str, device_hash: &str,
+) -> Result<Vec<u8>, &'static str> {
+    let request = StoreLicenseCacheRequest { payload: payload.into(), signature: signature.into(),
+        hybrid: Some(hybrid.into()), seats_used: None, seat_limit: None };
+    let public = service_public_key().ok_or("license verification is unavailable")?;
+    let trust = hybrid_trust::configured()?;
+    let wire = build_refresh_wire(&request, public, &trust.policy(), licence_id, device_hash)?;
+    rollback::verify_current(&machine_license_cache_path()?, &request, last_verified_at, public, &trust.policy())?;
+    Ok(wire)
+}
+
 /// Validate the experimental hybrid proof before the service persists it.
 /// Rollback protection and every licence reader must be implemented before use.
 #[cfg(feature = "experimental-pq-licence")]
@@ -345,6 +407,33 @@ mod tests {
         };
         let public = fixture["publicClassical"].as_str().unwrap();
         assert!(validate_dual_request(&request, public, &trust).is_ok());
+        let wire = build_refresh_wire(&request, public, &trust, "licence-test", "device-test").unwrap();
+        let decoded: serde_json::Value = serde_json::from_slice(&wire).unwrap();
+        if std::env::var_os("WINCMD_EXPORT_TEST_REFRESH_FIXTURE").is_some() {
+            use sha2::{Digest, Sha256};
+            let id = [5u8; 32];
+            let nonce = [7u8; 32];
+            let digest: [u8; 32] = Sha256::digest(&wire).into();
+            let challenge = wincmd_pq_experiment::licence_device_proof::Challenge {
+                operation: wincmd_pq_experiment::licence_device_proof::Operation::Refresh,
+                credential_id: &id, nonce: &nonce, request_digest: &digest, expires_at: 2_000_000_000,
+            };
+            let proof = wincmd_pq_experiment::licence_device_proof::sign(&[17; 32], &challenge);
+            println!("REFRESH_FIXTURE={}", serde_json::json!({
+                "body": std::str::from_utf8(&wire).unwrap(), "publicEd": fixture["publicEd"],
+                "publicPq": fixture["publicPq"], "publicClassical": fixture["publicClassical"],
+                "credentialId": general_purpose::URL_SAFE_NO_PAD.encode(id),
+                "nonce": general_purpose::URL_SAFE_NO_PAD.encode(nonce),
+                "digest": general_purpose::URL_SAFE_NO_PAD.encode(digest),
+                "proof": general_purpose::URL_SAFE_NO_PAD.encode(proof), "expiresAt": 2_000_000_000u64,
+            }));
+        }
+        assert_eq!(decoded["appId"], MAINLINE_APP_ID);
+        assert_eq!(decoded["deviceHash"], "device-test");
+        assert_eq!(decoded["isPortable"], false);
+        assert_eq!(decoded["payload"], request.payload);
+        assert!(build_refresh_wire(&request, public, &trust, "other", "device-test").is_err());
+        assert!(build_refresh_wire(&request, public, &trust, "licence-test", "other").is_err());
         let claims: SignedClaims = serde_json::from_str(&request.payload).unwrap();
         assert_eq!(
             signed_verification_time(&request.payload, claims.iat + 1_000_000).unwrap(),

@@ -175,6 +175,83 @@ impl ConfirmedCredential {
     }
 }
 
+pub(crate) struct RefreshProof {
+    pub body: Vec<u8>,
+    pub tag: [u8; 32],
+}
+
+fn sign_refresh_wire(
+    credential: &ConfirmedCredential,
+    body: Vec<u8>,
+    credential_id: &[u8; 32],
+    nonce: &[u8; 32],
+    digest: &[u8; 32],
+    expires_at: u64,
+    now: u64,
+) -> Result<RefreshProof, &'static str> {
+    use subtle::ConstantTimeEq;
+    if credential.id != *credential_id
+        || expires_at <= now
+        // Server lifetime is 120 seconds; allow one minute for clock skew.
+        || expires_at > now.saturating_add(180)
+        || body.is_empty()
+        || body.len() > 16 * 1024
+    {
+        return Err(INVALID);
+    }
+    let actual: [u8; 32] = Sha256::digest(&body).into();
+    if !bool::from(actual.ct_eq(digest)) {
+        return Err(INVALID);
+    }
+    let challenge = wincmd_pq_experiment::licence_device_proof::Challenge {
+        operation: wincmd_pq_experiment::licence_device_proof::Operation::Refresh,
+        credential_id,
+        nonce,
+        request_digest: digest,
+        expires_at,
+    };
+    let tag = wincmd_pq_experiment::licence_device_proof::sign(credential.secret(), &challenge);
+    Ok(RefreshProof { body, tag })
+}
+
+/// No IPC verb is exposed. Any future caller must authenticate the user and
+/// supply independent receipt trust and service time, not caller-chosen policy.
+pub(crate) struct RefreshInput<'a> {
+    pub payload: &'a str,
+    pub signature: &'a str,
+    pub hybrid: &'a str,
+    pub last_verified_at: u64,
+    pub credential_id: &'a [u8; 32],
+    pub nonce: &'a [u8; 32],
+    pub digest: &'a [u8; 32],
+    pub expires_at: u64,
+    pub now: u64,
+}
+pub(crate) fn sign_refresh(
+    binding: &Binding<'_>,
+    receipt_trust: &wincmd_pq_experiment::jws::Trust<'_>,
+    input: &RefreshInput<'_>,
+) -> Result<RefreshProof, &'static str> {
+    let credential = load_confirmed(binding, receipt_trust, input.now)?;
+    let wire = crate::license_cache::verified_refresh_wire(
+        input.payload,
+        input.signature,
+        input.hybrid,
+        input.last_verified_at,
+        binding.licence_id,
+        binding.device_hash,
+    )?;
+    sign_refresh_wire(
+        &credential,
+        wire,
+        input.credential_id,
+        input.nonce,
+        input.digest,
+        input.expires_at,
+        input.now,
+    )
+}
+
 fn confirmed_entropy(
     binding: &Binding<'_>,
     id: &[u8; 32],

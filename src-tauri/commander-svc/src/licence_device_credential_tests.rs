@@ -402,6 +402,102 @@ fn authorized_worker_issuer_receipt_confirms_persisted_pending_credential() {
     .unwrap();
     assert_eq!(confirmed.id, pending.id);
     assert_eq!(confirmed.secret(), pending.secret());
+    let body = br#"{"example":"validated request"}"#.to_vec();
+    let digest: [u8; 32] = Sha256::digest(&body).into();
+    let nonce = [7u8; 32];
+    let expiry = accepted_at + 120;
+    let proof = sign_refresh_wire(
+        &confirmed,
+        body.clone(),
+        &pending.id,
+        &nonce,
+        &digest,
+        expiry,
+        accepted_at,
+    )
+    .unwrap();
+    assert_eq!(proof.body, body);
+    let challenge = wincmd_pq_experiment::licence_device_proof::Challenge {
+        operation: wincmd_pq_experiment::licence_device_proof::Operation::Refresh,
+        credential_id: &pending.id,
+        nonce: &nonce,
+        request_digest: &digest,
+        expires_at: expiry,
+    };
+    assert_eq!(
+        proof.tag,
+        wincmd_pq_experiment::licence_device_proof::sign(pending.secret(), &challenge)
+    );
+    assert!(sign_refresh_wire(
+        &confirmed,
+        body.clone(),
+        &[4; 32],
+        &nonce,
+        &digest,
+        expiry,
+        accepted_at
+    )
+    .is_err());
+    assert!(sign_refresh_wire(
+        &confirmed,
+        body.clone(),
+        &pending.id,
+        &nonce,
+        &[0; 32],
+        expiry,
+        accepted_at
+    )
+    .is_err());
+    assert!(sign_refresh_wire(
+        &confirmed,
+        body.clone(),
+        &pending.id,
+        &nonce,
+        &digest,
+        accepted_at - 1,
+        accepted_at
+    )
+    .is_err());
+    assert!(sign_refresh_wire(
+        &confirmed,
+        body.clone(),
+        &pending.id,
+        &nonce,
+        &digest,
+        accepted_at,
+        accepted_at
+    )
+    .is_err());
+    assert!(sign_refresh_wire(
+        &confirmed,
+        body.clone(),
+        &pending.id,
+        &nonce,
+        &digest,
+        accepted_at + 180,
+        accepted_at
+    )
+    .is_ok());
+    assert!(sign_refresh_wire(
+        &confirmed,
+        body.clone(),
+        &pending.id,
+        &nonce,
+        &digest,
+        accepted_at + 181,
+        accepted_at
+    )
+    .is_err());
+    assert!(sign_refresh_wire(
+        &confirmed,
+        Vec::new(),
+        &pending.id,
+        &nonce,
+        &digest,
+        expiry,
+        accepted_at
+    )
+    .is_err());
     let stored = anchor.read().unwrap().unwrap();
     assert!(decode_confirmed(&MachineDpapi, &binding, &trust, &stored, accepted_at + 1).is_ok());
     assert!(enrol_with(
