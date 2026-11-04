@@ -1,6 +1,41 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 use super::*;
 
+#[tokio::test]
+async fn release_exchange_saves_before_send_and_retries_identical_bytes() {
+    use std::cell::RefCell;
+    let pending = RefCell::new(None::<Vec<u8>>);
+    let first = release_exchange_with(
+        || Ok(pending.borrow().clone().map(Zeroizing::new)),
+        || async { Ok(Zeroizing::new(b"exact release".to_vec())) },
+        |request| { *pending.borrow_mut() = Some(request.to_vec()); Ok(request) },
+        |request| { assert_eq!(pending.borrow().as_deref(), Some(request.as_slice())); async { Err(INVALID) } },
+    ).await;
+    assert!(first.is_err());
+    assert_eq!(pending.borrow().as_deref(), Some(b"exact release".as_slice()));
+    let malformed = release_exchange_with(
+        || Ok(pending.borrow().clone().map(Zeroizing::new)),
+        || async { panic!("retry requested a new challenge") },
+        |_| panic!("retry overwrote the saved request"),
+        |_| async { Ok(br#"{"ok":true,"extra":1}"#.to_vec()) },
+    ).await;
+    assert!(malformed.is_err());
+    assert_eq!(pending.borrow().as_deref(), Some(b"exact release".as_slice()));
+    let second = release_exchange_with(
+        || Ok(pending.borrow().clone().map(Zeroizing::new)),
+        || async { panic!("retry requested a new challenge") },
+        |_| panic!("retry overwrote the saved request"),
+        |request| { assert_eq!(request.as_slice(), b"exact release"); async { Ok(br#"{"ok":true}"#.to_vec()) } },
+    ).await;
+    assert!(second.is_ok());
+    assert_eq!(pending.borrow().as_deref(), Some(b"exact release".as_slice()));
+    let not_saved = release_exchange_with(
+        || Ok(None), || async { Ok(Zeroizing::new(b"request".to_vec())) }, |_| Err(INVALID),
+        |_| async { panic!("release was sent without saving") },
+    ).await;
+    assert!(not_saved.is_err());
+}
+
 #[test]
 fn disposable_registry_credential_is_encrypted_bound_and_not_replaced() {
     let path = format!(

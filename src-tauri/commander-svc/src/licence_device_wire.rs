@@ -97,6 +97,59 @@ struct RenewalRequest<'a> {
     proof: String,
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StoredReleaseRequest {
+    old_request: String,
+    credential_id: String,
+    nonce: String,
+    request_digest: String,
+    expires_at: u64,
+    proof: String,
+}
+
+impl Drop for StoredReleaseRequest {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.old_request.zeroize();
+        self.credential_id.zeroize();
+        self.nonce.zeroize();
+        self.request_digest.zeroize();
+        self.proof.zeroize();
+    }
+}
+
+/// Authenticate an exact stored request without requiring the challenge to
+/// remain live: the server permits receipt retries after challenge expiry.
+pub(super) fn verify_stored_release_request(
+    credential: &ConfirmedCredential, expected_body: &[u8], request: &[u8],
+) -> Result<(), &'static str> {
+    use subtle::ConstantTimeEq;
+    if expected_body.is_empty() || expected_body.len() > REQUEST_LIMIT || request.is_empty() || request.len() > 32 * 1024 {
+        return Err(INVALID);
+    }
+    let value: StoredReleaseRequest = serde_json::from_slice(request).map_err(|_| INVALID)?;
+    let canonical = zeroize::Zeroizing::new(serde_json::to_vec(&value).map_err(|_| INVALID)?);
+    if value.expires_at > MAX_SAFE_INTEGER || canonical.as_slice() != request {
+        return Err(INVALID);
+    }
+    let body = zeroize::Zeroizing::new(URL_SAFE_NO_PAD.decode(&value.old_request).map_err(|_| INVALID)?);
+    if URL_SAFE_NO_PAD.encode(body.as_slice()) != value.old_request || body.as_slice() != expected_body { return Err(INVALID); }
+    let id = fixed(&value.credential_id)?;
+    let nonce = fixed(&value.nonce)?;
+    let digest = fixed(&value.request_digest)?;
+    let proof = fixed(&value.proof)?;
+    let actual: [u8; 32] = Sha256::digest(expected_body).into();
+    if id != credential.id || !bool::from(actual.ct_eq(&digest)) { return Err(INVALID); }
+    let challenge = wincmd_pq_experiment::licence_device_proof::Challenge {
+        operation: wincmd_pq_experiment::licence_device_proof::Operation::Deactivate,
+        credential_id: &id, nonce: &nonce, request_digest: &digest, expires_at: value.expires_at,
+    };
+    let expected = wincmd_pq_experiment::licence_device_proof::sign(credential.secret(), &challenge);
+    if !bool::from(expected.ct_eq(&proof)) { return Err(INVALID); }
+    Ok(())
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ReleaseResponse { ok: bool }
@@ -213,7 +266,6 @@ pub(super) enum Endpoint {
     Challenge,
     Renewal,
     ReleaseChallenge,
-    Release,
 }
 
 /// Uses only the fixed licensing origin and never follows redirects.
@@ -222,10 +274,17 @@ pub(super) async fn post(endpoint: Endpoint, body: Vec<u8>) -> Result<Vec<u8>, &
         Endpoint::Challenge => "/experimental/device/challenge",
         Endpoint::Renewal => "/experimental/device/renew",
         Endpoint::ReleaseChallenge => "/experimental/device/release-challenge",
-        Endpoint::Release => "/experimental/device/release",
     };
     let client = required_hybrid_client()?;
     post_to(&client, &format!("{LICENCE_ORIGIN}{path}"), body).await
+}
+
+/// Keep the persisted release request in zeroing memory until the HTTP body is dropped.
+pub(super) async fn post_release(body: zeroize::Zeroizing<Vec<u8>>) -> Result<Vec<u8>, &'static str> {
+    if body.is_empty() || body.len() > 32 * 1024 { return Err(INVALID); }
+    let client = required_hybrid_client()?;
+    let bytes = bytes::Bytes::from_owner(body);
+    post_body(&client, &format!("{LICENCE_ORIGIN}/experimental/device/release"), bytes.into()).await
 }
 
 /// The request buffer is wiped after the HTTP body releases its last reference.
