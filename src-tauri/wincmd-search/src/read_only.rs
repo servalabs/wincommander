@@ -76,7 +76,7 @@ pub(crate) fn validate_ancestors(path: &Path) -> io::Result<()> {
 pub(crate) fn validate_storage(root: &Path) -> io::Result<()> {
     #[cfg(windows)]
     {
-        return retry_windows_access_denied(|| validate_storage_once(root));
+        retry_windows_access_denied(|| validate_storage_once(root))
     }
     #[cfg(not(windows))]
     validate_storage_once(root)
