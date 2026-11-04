@@ -19,7 +19,7 @@ const specs = {
     image: products["private-server/base.png"],
   },
   max: {
-    storageTb: 40,
+    storageTb: 150,
     speedGbps: 20,
     cpu: "Ryzen 9 16C",
     image: products["private-server/max-nobg.png"],
@@ -47,12 +47,14 @@ export default function PrivateServerShowcase() {
         <div className="server-model-toggle" aria-label="Server model">
           <button
             className={model === "pro" ? "active" : ""}
+            aria-pressed={model === "pro"}
             onClick={() => setModel("pro")}
           >
             Pro
           </button>
           <button
             className={model === "max" ? "active pro" : ""}
+            aria-pressed={model === "max"}
             onClick={() => setModel("max")}
           >
             Max

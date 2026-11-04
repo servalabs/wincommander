@@ -137,6 +137,18 @@ export async function refreshPackageAndAppInventories(
   return checkPackageManagers();
 }
 
+export function describePackageRefresh(result: PackageUpdateInventory): string {
+  if (result.cancelled) return "App inventory refreshed; package manager check was cancelled.";
+  const failed = result.managers.filter((manager) => manager.available && manager.error).map((manager) => manager.manager);
+  const unavailable = result.managers.filter((manager) => !manager.available).map((manager) => manager.manager);
+  if (failed.length || unavailable.length) {
+    const details = [failed.length ? `Failed: ${failed.join(", ")}` : "", unavailable.length ? `Unavailable: ${unavailable.join(", ")}` : ""].filter(Boolean).join("; ");
+    return `App inventory refreshed; package checks incomplete. ${details}.`;
+  }
+  if (!result.managers.length) return "App inventory refreshed; no package manager results were returned.";
+  return "Installed apps and package updates refreshed.";
+}
+
 export function managerUpdateStatus(manager: ManagerInventory): {
   label: string;
   tone: "accent" | "neutral" | "warning";

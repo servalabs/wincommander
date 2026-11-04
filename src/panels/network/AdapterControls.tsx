@@ -3,7 +3,7 @@ import { Button, Classes, Dialog, Icon } from "@/components/ui/bp";
 import { useAppState } from "../../context/AppContext";
 import { isPrivilegedWriteBlocked, MACHINE_SCOPE_ELEVATION_MESSAGE } from "../../lib/machineScopeElevation";
 import type { PhysicalNetworkAdapter } from "../../hooks/useBackend";
-import { adapterMacDescription, formatAdapterMac, type AdapterAction } from "./adapterState";
+import { adapterMacDescription, formatAdapterMac, isInactiveAdapter, shouldGroupInactiveAdapter, type AdapterAction } from "./adapterState";
 import { useAdapterInventory } from "./useAdapterInventory";
 
 export default function AdapterControls() {
@@ -12,7 +12,29 @@ export default function AdapterControls() {
     const { inventory, error, loading, busyId, operationMessage, refresh, change } = useAdapterInventory();
     const [pending, setPending] = useState<{ adapter: PhysicalNetworkAdapter; action: AdapterAction } | null>(null);
     const adapters = inventory?.adapters ?? [];
+    const visibleAdapters = adapters.filter(adapter => !shouldGroupInactiveAdapter(adapter));
+    const inactiveAdapters = adapters.filter(shouldGroupInactiveAdapter);
     const disabled = needsElevation || !!busyId || !!error || !inventory;
+
+    const renderAdapter = (adapter: PhysicalNetworkAdapter) => (
+        <div key={adapter.id} className={`adapter-row ${adapter.status === "Up" ? "adapter-row--active" : "adapter-row--inactive"}`} style={{ flexWrap: "wrap" }}>
+            <Icon icon={adapter.kind === "wifi" ? "cell-tower" : "globe-network"} size={16} />
+            <div className="adapter-row__identity">
+                <div className="flex items-center gap-2"><span className="font-mono text-xs font-bold">{adapter.name}</span><span className="adapter-status-chip">{adapter.status || "Unknown"}</span></div>
+                <div className="text-xs">Current: {formatAdapterMac(adapter.currentMac)}</div>
+                <div className="text-xs">Permanent: {formatAdapterMac(adapter.factoryMac)}</div>
+                {adapter.configuredMac && <div className="text-xs">Configured: {formatAdapterMac(adapter.configuredMac)}</div>}
+                <div className="text-xs text-[var(--color-text-muted)]">{adapterMacDescription(adapter)}</div>
+                {adapter.configuredMode === "rotate-on-launch" && <div className="text-xs">Legacy rotation setting detected. Automatic rotation is unavailable; use a one-time change or restore.</div>}
+            </div>
+            <div className="flex flex-wrap gap-1">
+                <Button small disabled={disabled || !!adapter.recoveryPending || !!adapter.configurationError} onClick={() => setPending({ adapter, action: "randomize" })}>Randomize once</Button>
+                <Button small disabled={disabled || !!adapter.recoveryPending || !!adapter.configurationError} onClick={() => setPending({ adapter, action: "factory" })}>Restore factory</Button>
+                {adapter.recoveryPending && <Button small intent="warning" disabled={disabled} onClick={() => setPending({ adapter, action: "recover" })}>Undo interrupted change</Button>}
+            </div>
+            {busyId === adapter.id && <p role="status" className="text-xs">Applying and verifying…</p>}
+        </div>
+    );
 
     return (
         <section className="merged-segment merged-segment--adapters">
@@ -29,28 +51,11 @@ export default function AdapterControls() {
                 {loading && !inventory && <p role="status" className="text-xs">Reading Windows adapters…</p>}
                 {inventory?.checkedAt && <p className="text-xs text-[var(--color-text-muted)]">Last checked: {new Date(inventory.checkedAt).toLocaleTimeString()}</p>}
                 {!error && inventory && adapters.length === 0 && <p className="text-xs">No physical network adapters are present.</p>}
-                {!error && adapters.length > 0 && adapters.every(a => a.status !== "Up") && <p className="text-xs">Adapters are present; none currently has an active link.</p>}
+                {!error && adapters.length > 0 && adapters.every(a => isInactiveAdapter(a.status)) && <p className="text-xs">Adapters are present; none currently has an active link.</p>}
                 <div className="adapter-list">
-                    {adapters.map(adapter => (
-                        <div key={adapter.id} className={`adapter-row ${adapter.status === "Up" ? "adapter-row--active" : "adapter-row--inactive"}`} style={{ flexWrap: "wrap" }}>
-                            <Icon icon={adapter.kind === "wifi" ? "cell-tower" : "globe-network"} size={16} />
-                            <div className="adapter-row__identity">
-                                <div className="flex items-center gap-2"><span className="font-mono text-xs font-bold">{adapter.name}</span><span className="adapter-status-chip">{adapter.status}</span></div>
-                                <div className="text-xs">Current: {formatAdapterMac(adapter.currentMac)}</div>
-                                <div className="text-xs">Permanent: {formatAdapterMac(adapter.factoryMac)}</div>
-                                {adapter.configuredMac && <div className="text-xs">Configured: {formatAdapterMac(adapter.configuredMac)}</div>}
-                                <div className="text-xs text-[var(--color-text-muted)]">{adapterMacDescription(adapter)}</div>
-                                {adapter.configuredMode === "rotate-on-launch" && <div className="text-xs">Legacy rotation setting detected. Automatic rotation is unavailable; use a one-time change or restore.</div>}
-                            </div>
-                            <div className="flex flex-wrap gap-1">
-                                <Button small disabled={disabled || !!adapter.recoveryPending || !!adapter.configurationError} onClick={() => setPending({ adapter, action: "randomize" })}>Randomize once</Button>
-                                <Button small disabled={disabled || !!adapter.recoveryPending || !!adapter.configurationError} onClick={() => setPending({ adapter, action: "factory" })}>Restore factory</Button>
-                                {adapter.recoveryPending && <Button small intent="warning" disabled={disabled} onClick={() => setPending({ adapter, action: "recover" })}>Undo interrupted change</Button>}
-                            </div>
-                            {busyId === adapter.id && <p role="status" className="text-xs">Applying and verifying…</p>}
-                        </div>
-                    ))}
+                    {visibleAdapters.map(renderAdapter)}
                 </div>
+                {inactiveAdapters.length > 0 && <details className="mt-2"><summary className="cursor-pointer text-xs">Inactive adapters ({inactiveAdapters.length})</summary><div className="adapter-list mt-2">{inactiveAdapters.map(renderAdapter)}</div></details>}
                 {operationMessage && <p role="status" className="text-xs mt-2">{operationMessage}</p>}
             </div>
             <Dialog isOpen={!!pending} onClose={() => setPending(null)} title="Change adapter address" style={{ width: 460 }}>

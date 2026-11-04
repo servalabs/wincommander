@@ -20,7 +20,26 @@
 .sd-config-block {
     display: flex;
     flex-direction: column;
-    gap: 0;
+    gap: 10px;
+    min-width: 0;
+}
+
+.sd-workspace { min-width: 0; }
+.sd-workspace-tabs { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
+.sd-workspace-panel { display: flex; flex-direction: column; gap: 10px; min-width: 0; margin-top: 0; }
+.sd-workspace-panel[hidden] { display: none; }
+.sd-workspace-intro { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; color: var(--color-text-muted); font-size: 11px; }
+.sd-workspace-intro strong { color: var(--color-text-primary); font-size: 13px; }
+.sd-workspace-warning { margin: 0; padding: 8px 10px; border-left: 3px solid var(--color-danger); background: var(--color-danger-dim); color: var(--color-text-primary); font-size: 11px; line-height: 1.45; }
+.sd-columns-card .sd-row { grid-template-columns: 28px minmax(0, 1fr) auto; }
+.sd-step-info { max-width: 300px; margin: 0; padding: 10px; color: var(--color-text-primary); font-size: 12px; line-height: 1.45; }
+
+.lockdown-triggers-card {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+}
+
+.lockdown-triggers-card > * {
+    min-width: 0;
 }
 
 /* ── Panic Hotkey row ─────────────────────────────────────────── */
@@ -110,7 +129,8 @@
     justify-content: space-between;
     gap: 12px;
     padding: 8px 10px;
-    margin-bottom: 12px;
+    margin-bottom: 0;
+    flex-wrap: wrap;
     background: var(--color-accent-subtle);
     border: 1px solid var(--color-accent-dim);
     border-radius: 4px;
@@ -150,7 +170,7 @@
     background: var(--color-bg-card);
     overflow: hidden;
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
 }
 .sd-columns-card > .sd-group {
     margin-bottom: 0;
@@ -165,7 +185,7 @@
     border-left: 1px solid var(--color-border);
 }
 .sd-columns-card > .sd-group.is-wide {
-    grid-column: span 2;
+    grid-column: auto;
 }
 .sd-columns-card .sd-group-header {
     cursor: default;
@@ -178,29 +198,18 @@
 .sd-columns-card .sd-group-body {
     border-top: none;
     padding: 4px 0;
-    max-height: 360px;
-    overflow-y: auto;
-    overflow-x: hidden;
     flex: 1 1 auto;
 }
 /* Single-column rows by default inside the columns card */
 .sd-columns-card .sd-rows-grid,
 .sd-columns-card .sd-rows-grid.is-two-col {
-    grid-template-columns: 1fr;
-    column-gap: 0;
-}
-/* The wide (spanning) group puts its rows in 2 sub-columns to use the space */
-.sd-columns-card > .sd-group.is-wide .sd-rows-grid {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
     column-gap: 8px;
 }
+.sd-workspace .sd-columns-card { grid-template-columns: minmax(0, 1fr); }
+.sd-workspace .sd-columns-card > .sd-group + .sd-group { border-left: 0; border-top: 1px solid var(--color-border); }
+.sd-workspace .sd-columns-card .sd-rows-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 235px), 1fr)); }
 @media (max-width: 1100px) {
-    .sd-columns-card {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-    .sd-columns-card > .sd-group.is-wide {
-        grid-column: span 2;
-    }
     .sd-columns-card > .sd-group:nth-child(2n+1) {
         border-left: none;
     }
@@ -209,9 +218,6 @@
     }
 }
 @media (max-width: 640px) {
-    .sd-columns-card {
-        grid-template-columns: 1fr;
-    }
     .sd-columns-card > .sd-group,
     .sd-columns-card > .sd-group.is-wide {
         grid-column: span 1;
@@ -290,6 +296,8 @@ html.light .sd-group {
     cursor: pointer;
     user-select: none;
     transition: background 0.15s;
+    flex-wrap: wrap;
+    min-width: 0;
 }
 
 .sd-group-header:not(.is-static):hover {
@@ -340,6 +348,8 @@ html.light .sd-group-header:not(.is-static):hover {
     letter-spacing: 1.5px;
     color: var(--color-text-primary);
     flex-grow: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
 }
 
 .sd-group.is-danger .sd-group-title {
@@ -438,6 +448,7 @@ html.light .sd-row:hover {
     color: var(--color-text-primary);
     letter-spacing: 0.2px;
     line-height: 1.2;
+    overflow-wrap: anywhere;
 }
 
 .sd-row-label.is-disabled {
@@ -490,20 +501,15 @@ html.light .sd-bulk-btn.bp6-button.bp6-minimal:hover {
  * matching the breakpoint .sd-rows-grid.is-two-col already uses. */
 .sd-targets-row {
     display: grid;
-    grid-template-columns: 1fr;
-    gap: 0;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+    align-items: start;
+    gap: 10px;
 }
 
-@media (min-width: 720px) {
-    .sd-targets-row {
-        grid-template-columns: 1fr 1fr;
-        gap: 0 12px;
-    }
-}
 
 /* ── User-folder shred list ───────────────────────────────────── */
 .sd-shred-folders {
-    margin: 10px 0 14px;
+    margin: 0;
     padding: 10px 12px;
     background: var(--color-danger-dim);
     border: 1px solid var(--color-danger-dim);
@@ -511,12 +517,15 @@ html.light .sd-bulk-btn.bp6-button.bp6-minimal:hover {
     display: flex;
     flex-direction: column;
     gap: 8px;
+    min-width: 0;
 }
 
 .sd-shred-folders-header {
     display: flex;
     align-items: center;
     gap: 10px;
+    flex-wrap: wrap;
+    min-width: 0;
 }
 
 .sd-shred-folders-icon {
@@ -571,12 +580,11 @@ html.light .sd-bulk-btn.bp6-button.bp6-minimal:hover {
 
 .sd-shred-folder-path {
     flex: 1;
+    min-width: 0;
     font-family: var(--font-mono);
     font-size: 11px;
     color: var(--color-text-primary);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    overflow-wrap: anywhere;
 }
 
 html.light .sd-shred-folder-row {
@@ -614,6 +622,10 @@ html.light .sd-shred-folder-row {
     font-weight: 400;
     letter-spacing: 0;
     color: var(--color-text-muted);
+}
+
+.secret-panel .sd-config-block .sd-remove-users-list {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr));
 }
 
 /* Reboot-to-USB is intentionally a distinct, always-visible card: it is not

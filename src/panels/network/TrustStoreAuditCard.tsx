@@ -5,7 +5,7 @@ import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Icon } from "../../components/ui/icon";
 import EmptyState from "../../components/shared/EmptyState";
-import { InfoPopover, InfoTip } from "./InfoTip";
+import { InfoPopover } from "./InfoTip";
 import { MaintenanceNotice, TableSkeleton } from "./MaintenanceNotice";
 
 type BaselineEntry = Pick<TrustCertificate, "scope" | "store" | "thumbprint" | "subject">;
@@ -88,16 +88,6 @@ export function TrustStoreAuditCard() {
           <div className="min-w-0">
             <CardTitle className="flex items-center gap-1.5">
               Trust store audit
-              <InfoTip
-                label="What this audit means"
-                content={
-                  <span>
-                    Shows trusted CA certificates and changes to them. A certificate outside the
-                    Windows AuthRoot reference is <strong>not automatically malicious</strong>:
-                    security software, enterprise policy, and local tools can add legitimate roots.
-                  </span>
-                }
-              />
             </CardTitle>
             <CardDescription className="mt-1">
               See who can add TLS trust to this PC, and what changed since your saved baseline.
@@ -136,6 +126,7 @@ export function TrustStoreAuditCard() {
         {audit && !busy ? (
           <>
             <div className="flex flex-wrap gap-2">
+              <Badge tone="neutral">{audit.certificates.length} certificates scanned</Badge>
               <Badge tone="neutral">{roots.length} trusted roots</Badge>
               {audit.referenceAvailable ? (
                 <Badge tone={outsideWindowsReference.length ? "warning" : "success"}>
@@ -233,7 +224,8 @@ export function TrustStoreAuditCard() {
           </>
         ) : null}
 
-        <InfoPopover title="Certificate trust transparency">
+        <InfoPopover iconOnly title="Certificate trust transparency">
+          <p>Security software, enterprise policy, and local tools can add legitimate trusted certificates.</p>
           <p>
             <strong className="text-[var(--text)]">Root:</strong> certificates that can anchor TLS
             trust for this user or machine.

@@ -1,6 +1,6 @@
 import type { DiskAnalyzerMode } from "@/lib/diskAnalyzer";
 
-const TABS: { id: DiskAnalyzerMode; label: string }[] = [{ id: "space", label: "Space" }, { id: "large", label: "Large Files" }, { id: "types", label: "File Types" }];
+const TABS: { id: DiskAnalyzerMode; label: string }[] = [{ id: "space", label: "Space" }, { id: "large", label: "Large Files" }];
 
 export default function DiskAnalyzerTabs({ mode, disabled, onChange }: { mode: DiskAnalyzerMode; disabled: boolean; onChange: (mode: DiskAnalyzerMode) => void }) {
     function move(key: string) {

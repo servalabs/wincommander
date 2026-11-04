@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { CheckboxControl } from "../../components/ui/bp";
@@ -8,6 +8,8 @@ import { formatBytes } from "./routineCleanerHelpers";
 import type { useFileHygiene } from "./useFileHygiene";
 import { toExplorerDisplayPath } from "./maintenancePathDisplay";
 import { hasExpandedDuplicateGroups, isDuplicateGroupExpanded, setDuplicateGroupExpanded, toggleDuplicateGroups } from "./duplicateGroupPresentation";
+import { duplicateRemovalReason } from "./duplicateRemovalReason";
+import { duplicateProfileKey, duplicateProfileLabel, isDuplicateGroupsFiltered } from "./duplicateProfile";
 import "./DuplicateGroups.css";
 
 type Tools = ReturnType<typeof useFileHygiene>;
@@ -29,17 +31,31 @@ function formatModified(modified: string | null) {
   } catch { return "Modified date unavailable"; }
 }
 
-export function DuplicateGroups({ tools }: { tools: Tools }) {
+export function DuplicateGroups({ tools, onFilterChange }: { tools: Tools; onFilterChange: (active: boolean) => void }) {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("all");
+  const [profile, setProfile] = useState("all");
   const [visibleCount, setVisibleCount] = useState(50);
   const [expandedGroupIds, setExpandedGroupIds] = useState<Set<string> | null>(null);
   const firstMatchRef = useRef<HTMLDetailsElement>(null);
   const groups = tools.duplicateScan?.groups;
+  const profiles = useMemo(() => {
+    const choices = new Map<string, string>();
+    for (const group of groups ?? []) for (const file of group.files) choices.set(duplicateProfileKey(file), duplicateProfileLabel(file));
+    return [...choices.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+  }, [groups]);
+  useEffect(() => {
+    if (profile !== "all" && !profiles.some(([key]) => key === profile)) setProfile("all");
+  }, [profile, profiles]);
+  useEffect(() => {
+    onFilterChange(isDuplicateGroupsFiltered(query, category, profile));
+    return () => onFilterChange(false);
+  }, [category, onFilterChange, profile, query]);
   const filtered = useMemo(() => (groups ?? []).filter((group) =>
     (category === "all" || group.files.some((file) => (fileType(file.name)?.id ?? "other") === category)) &&
+    (profile === "all" || group.files.some((file) => duplicateProfileKey(file) === profile)) &&
     group.files.some((file) => `${file.name} ${toExplorerDisplayPath(file.path) ?? ""}`.toLowerCase().includes(query.trim().toLowerCase())),
-  ), [category, groups, query]);
+  ), [category, groups, profile, query]);
   const groupKey = (group: DuplicateGroup) => `${group.id}:${group.memberOffset}`;
   const isExpanded = (group: DuplicateGroup) => isDuplicateGroupExpanded(expandedGroupIds, groupKey(group));
   const setGroupExpanded = (group: DuplicateGroup, open: boolean) => {
@@ -57,14 +73,19 @@ export function DuplicateGroups({ tools }: { tools: Tools }) {
     requestAnimationFrame(() => firstMatchRef.current?.querySelector("summary")?.focus());
   };
   return <section className="duplicate-workspace" aria-label="Discovered duplicate groups">
+    {groups?.some((group) => group.files.some((file) => file.removalBlockReason === "profiles_unavailable")) && <p role="status" className="text-xs text-[var(--warn)]">Windows user profile locations could not be verified, so removal is unavailable. Reconnect any offline profile drives or ask an administrator, then scan again.</p>}
     <form className="duplicate-filters" onSubmit={onSearch}>
       <label><Icon icon="search" size={14} /><input aria-label="Search duplicate files and locations" value={query} onChange={(event) => { setQuery(event.target.value); setVisibleCount(50); }} placeholder="Search file names or locations" /></label>
       <select aria-label="Duplicate file type" value={category} onChange={(event) => { setCategory(event.target.value); setVisibleCount(50); }}>
         <option value="all">All file types</option>{TYPES.map((type) => <option key={type.id} value={type.id}>{type.label}</option>)}<option value="other">Other</option>
       </select>
+      <select aria-label="Filter duplicate groups by user profile" value={profile} onChange={(event) => { setProfile(event.target.value); setVisibleCount(50); }}>
+        <option value="all">All profiles</option>{profiles.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+      </select>
       <span>{filtered.length} of {groups?.length ?? 0} loaded groups · filters apply to this page</span>
       <Button size="sm" variant="outline" type="button" disabled={!filtered.length} onClick={toggleAll}>{hasExpandedGroups ? "Collapse all" : "Expand all"}</Button>
     </form>
+    {profile !== "all" && <p className="text-xs text-[var(--text-dim)]">Showing groups containing this profile among loaded copies. All copies in each matching group remain visible.</p>}
     {filtered.slice(0, visibleCount).map((group, index) => <DuplicateGroupRows key={groupKey(group)} group={group} tools={tools} open={isExpanded(group)} onOpenChange={(open) => setGroupExpanded(group, open)} groupRef={index === 0 ? firstMatchRef : undefined} />)}
     {!filtered.length && <p className="duplicate-empty">{groups?.length ? "No groups match this filter. Your selection is unchanged." : tools.duplicateScan?.cancelled ? "No verified groups are available from this partial scan. Scan again to compare the remaining files." : "No identical file groups were found in the returned scan scope."}</p>}
     {filtered.length > visibleCount && <Button size="sm" variant="outline" onClick={() => setVisibleCount((count) => count + 50)}>Show more groups ({filtered.length - visibleCount} remaining)</Button>}
@@ -85,12 +106,10 @@ function DuplicateGroupRows({ group, tools, open, onOpenChange, groupRef }: { gr
       {group.files.slice(0, visibleCount).map((file) => {
         const retained = retainedId === file.id;
         const displayPath = toExplorerDisplayPath(file.path) ?? "Location unavailable";
-        // Older already-running backends do not include `removable`; treat the
-        // missing field as an ordinary reviewable file until the next rebuild.
-        const protectedForReview = file.removable === false;
+        const protectedForReview = file.removable !== true;
         return <div key={file.id} className="duplicate-member" data-retained={retained || undefined}>
           <CheckboxControl checked={tools.selected.has(file.id)} disabled={tools.busy || retained || protectedForReview} ariaLabel={`${tools.selected.has(file.id) ? "Deselect" : "Select"} ${file.name} at ${displayPath}`} onChange={() => tools.select(file.id)} />
-          <span className="duplicate-member-location"><strong>{file.name}</strong><small title={displayPath}>{displayPath} · {formatModified(file.modified)}</small></span>
+          <span className="duplicate-member-location"><strong>{file.name}</strong><small title={displayPath}>{displayPath} · {formatModified(file.modified)} · {duplicateProfileLabel(file)}</small>{protectedForReview && <small>{duplicateRemovalReason(file.removalBlockReason)}</small>}</span>
           <span className="duplicate-member-size">{formatBytes(file.size)}</span>
           <Button size="sm" variant="ghost" disabled={tools.busy} aria-label={`Open ${file.name} in Explorer`} onClick={() => void tools.openDuplicate(file.id)}><Icon icon="folder-open" size={14} /> Open</Button>
           {protectedForReview ? <Badge tone="neutral">Protected · review only</Badge> : retained ? <Badge tone="success">Kept copy</Badge> : <Button size="sm" variant="ghost" disabled={tools.busy} aria-label={`Keep ${file.name} at ${displayPath}`} onClick={() => tools.keepFile(group.id, file.id)}>Keep selected</Button>}

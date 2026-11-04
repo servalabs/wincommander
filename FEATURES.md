@@ -126,8 +126,8 @@ the backend and private component before execution.
   kept available for retry.
 - Preview-first maintenance flows for supported cleanup categories.
 - Maintenance workspaces for Deep Cleanup, Windows Storage, duplicates, disk
-  analysis, startup, registry hygiene, and local operation history. Large Files
-  and File Types are tabs within Disk Space Analysis. The compact tab row stays
+  analysis, startup, and registry hygiene. Local maintenance results appear in
+  Logs. Large Files and file-type breakdowns are available in Disk Space Analysis. The compact tab row stays
   visible while its content scrolls. System Cleanup retains Browser Audit,
   Editor History, Office Document History, Adobe Recent Files, Windows activity,
   clipboard, network and credential tools.
@@ -148,10 +148,10 @@ the backend and private component before execution.
   chart depth, navigation history, progress, and cancellation. Partial scans
   identify skipped entries and scan limits; charts show logical file sizes,
   not measured physical allocation or guaranteed reclaimable space.
-- Space, Large Files and File Types share one Disk Space Analysis workspace.
+- Space and Large Files share one Disk Space Analysis workspace.
   The selected-folder inspector has reserved space beside the chart; small
   or display-limited areas are represented by an explicit Other tile.
-  File Types reports counts and logical sizes in the current cached scope.
+  File Types reports counts and logical sizes by category and extension in the current cached scope.
   Partial scans offer a fresh scan of a browsed subfolder for more detail.
 - Large Files uses a selected minimum file size, type filters, search, and
   sorting. Results disclose the backend display limit and incomplete scans.
@@ -160,6 +160,8 @@ the backend and private component before execution.
 - Duplicate Smart Select and an explicit copy-to-keep preference, with
   backend content and identity rechecks, retention checks, and a refreshed
   scan after removal. Repeated paths and hard links are not counted as extras.
+  Protected application files and other user profiles are excluded from removal;
+  Windows file ownership is checked before deletion.
   Entering Duplicate Cleanup scans local fixed drives automatically; chosen
   folder scans remain available. A disk-backed inventory bounds memory use;
   paged groups disclose their result limits and partial-scan status.
@@ -296,8 +298,9 @@ Fleet adds organization-managed behavior and server-backed operations:
 
 Local Fleet Vault management uses machine-wide Windows access groups.
 Administrators can assign a new private Vault directly to an enabled Windows
-user. Once saved, only its owner can edit the private policy while unmounted;
-a standard owner cannot transfer ownership. Group membership changes remain
+user. Editing saved Vault permissions requires an elevated administrator and
+the existing per-Vault authorization; mounted Vaults cannot be edited.
+Group membership changes remain
 restricted to authorized administrators. Seeing a group does not grant access
 to its Vaults.
 

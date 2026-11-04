@@ -54,9 +54,6 @@ export function PackageUpdateTools() {
   const isBusy = busy || packageSnapshot.status === "checking";
   const unavailableOptionalManagers = packages?.managers?.filter((manager) => (manager.manager === "chocolatey" || manager.manager === "scoop") && !manager.available)
     .map((manager) => MANAGER_LABELS[manager.manager] ?? manager.manager) ?? [];
-  const refreshTitle = unavailableOptionalManagers.length
-    ? `Refresh app and package updates. ${unavailableOptionalManagers.map((manager) => `${manager} is not installed`).join(". ")}.`
-    : "Refresh app and package updates";
   const managerCheckErrors = packages?.managers?.filter((manager) => manager.available && manager.error)
     .map((manager) => `${MANAGER_LABELS[manager.manager] ?? manager.manager}: ${manager.error}`) ?? [];
 
@@ -90,36 +87,6 @@ export function PackageUpdateTools() {
     });
   }, [displayedUpdateIds]);
 
-  const inspectPackages = async () => {
-    setMessage(undefined);
-    try {
-      await runPackageAction("Refresh", async () => {
-        setMessage("Refreshing installed apps…");
-        try {
-          const result = await runPackageUpdateInventoryCheck(() => refreshPackageAndAppInventories(
-            async () => {
-              setMessage("Refreshing installed app inventory…");
-              await refreshAppInventoryFully();
-            },
-            async () => {
-              setMessage("Checking Winget, Chocolatey, Scoop, and npm…");
-              setCheckingManagers(true);
-              try { return await backendRef.current.packageUpdatesInventory(); }
-              finally { setCheckingManagers(false); }
-            },
-          ));
-          setPackageIds(new Set());
-          setMessage(result.cancelled
-            ? "App inventory refreshed; package manager check was cancelled."
-            : "App inventory and package manager updates refreshed.");
-        } finally {
-          setCheckingManagers(false);
-        }
-      });
-    }
-    catch (cause) { setMessage(`Update check failed: ${String(cause)}`); }
-    finally { setCheckingManagers(false); }
-  };
   const applyPackages = async (updateKeys = [...packageIds]) => {
     const selectedRows = updateRows.filter(({ key }) => updateKeys.includes(key));
     if (!selectedRows.length) return;
@@ -222,24 +189,11 @@ export function PackageUpdateTools() {
   };
   const cancel = async () => { await backendRef.current.packageUpdatesCancel(); };
 
-  const displayedUpdateCount = updateRows.length;
-
   return <section id="package-updates" className="flex scroll-mt-4 flex-col gap-4">
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-4 py-2.5">
-      <h3 className="text-sm font-semibold" title="App inventory and package manager updates are shown together.">App and package updates</h3>
-      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--text-mute)]">
-        {isBusy
-          ? <span className="flex items-center gap-2 text-[var(--text-dim)]"><Spinner size={14} />{waitingForPackageOperation ? "Queued — waiting for the current package operation…" : installingOptionalManagers ? "Installing missing managers…" : "Checking package updates…"}</span>
-          : packageSnapshot.lastCheckedAt
-            ? <span>Last checked {new Date(packageSnapshot.lastCheckedAt).toLocaleTimeString()}</span>
-            : <span>Checks automatically after WinCommander starts</span>}
-        {displayedUpdateCount > 0 && <Badge tone="accent">{displayedUpdateCount} update{displayedUpdateCount === 1 ? "" : "s"}</Badge>}
-      </div>
-      <div className="ml-auto flex items-center gap-2">
+    <div className="flex flex-wrap items-center justify-end gap-2">
+        {isBusy && <span role="status" className="mr-auto flex items-center gap-2 text-xs text-[var(--text-dim)]"><Spinner size={14} />{waitingForPackageOperation ? "Queued — waiting for the current package operation…" : installingOptionalManagers ? "Installing missing managers…" : "Checking package updates…"}</span>}
         {unavailableOptionalManagers.length > 0 && <Button variant="outline" size="sm" disabled={isBusy} onClick={() => void installMissingOptionalManagers()} aria-label={`Install missing package managers: ${unavailableOptionalManagers.join(" and ")}`} title={`Installs only the missing manager(s): ${unavailableOptionalManagers.map((manager) => `${manager} is not installed`).join("; ")}.`}><Icon icon="download" />Install missing managers</Button>}
         {isBusy && checkingManagers && !installingOptionalManagers && <Button variant="outline" size="sm" onClick={() => void cancel()}><Icon icon="stop" />Cancel</Button>}
-        <Button variant="outline" size="sm" disabled={isBusy} onClick={() => void inspectPackages()} aria-label="Refresh app and package updates" title={refreshTitle}><Icon icon="refresh" />Refresh</Button>
-      </div>
     </div>
     {packageSnapshot.error && <Notice tone="warning" text={`Package update check failed: ${packageSnapshot.error}`} />}
     {managerCheckErrors.length > 0 && <Notice tone="warning" text={`Some package-manager checks failed: ${managerCheckErrors.join("; ")}`} />}
@@ -256,7 +210,9 @@ export function PackageUpdateTools() {
         onToggle={() => setPackageIds((selected) => toggle(selected, row.key))}
         onApply={() => void applyPackages([row.key])}
       />)}
-    </div> : packages && <Notice tone="success" text="No updates are available from app inventory, Winget, Chocolatey, Scoop, or npm." />}
+    </div> : packages && (packageSnapshot.error || managerCheckErrors.length > 0 || packages.cancelled || !packageSnapshot.catalogInventoryFresh
+      ? <Notice tone="warning" text="No updates are shown, but one or more checks are incomplete or out of date. Refresh to check again." />
+      : <Notice tone="success" text="No updates were found in the completed app and package manager checks." />)}
     {!!packageIds.size && <div className="flex justify-end"><Button variant="primary" disabled={isBusy} onClick={() => void applyPackages()}>Update {packageIds.size} selected</Button></div>}
     {message && <Notice
       tone={/failed|could not|couldn't|error|not confirmed/i.test(message) ? "warning" : isBusy ? "info" : "success"}

@@ -24,6 +24,7 @@ import { notifyPersonalMountSyncWarning, notifyPolicyMountSyncWarning } from "@/
 import VaultOperationNotice, { type VaultNoticeTone } from "./shared/VaultOperationNotice";
 import { vaultMountResultConfirmed } from "@/panels/fleet/vaultOperationConfirmation";
 import { runOperation } from "../context/OperationContext";
+import { displayEraseDetail } from "../lib/cryptoEraseReceipt";
 import { DESTRUCT_STEPS, isStepEnabled } from "../types/lockdownSteps";
 import { DEFAULT_ALWAYS_HIDDEN_SIDEBAR_ACTIONS, DEFAULT_BORROWED_EXTRAS } from "../lib/visibilityDefaults";
 import { requestDestructiveCapability } from "../hooks/destructiveAuthz";
@@ -649,7 +650,7 @@ export default function RightSidebar() {
             try {
                 await invoke('full_lockdown', { capabilityToken });
             } catch (err) {
-                showError(`Lockdown failed: ${String(err)}`);
+                showError(`Lockdown failed: ${displayEraseDetail(String(err))}`);
             } finally {
                 setLoadingAction(null);
             }
@@ -714,7 +715,7 @@ export default function RightSidebar() {
             if (ok) {
                 def.resolve();
             } else {
-                def.reject(new Error(error || 'failed'));
+                def.reject(new Error(displayEraseDetail(error || 'failed')));
             }
         });
 
@@ -805,7 +806,7 @@ export default function RightSidebar() {
             //   - Pro binary not installed
             // Without this toast, the row-rejection path below makes
             // every step error in red but the user has no clue why.
-            const reason = String(err);
+            const reason = displayEraseDetail(String(err));
             showError(`Lockdown failed: ${reason}`);
             const e = new Error(reason);
             deferreds.forEach((d) => d.reject(e));

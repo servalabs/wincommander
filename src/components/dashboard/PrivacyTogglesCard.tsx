@@ -90,12 +90,14 @@ export default function PrivacyTogglesCard({
             className={`killswitch-toggle ${internetCut ? "cut" : "live"}`}
             onClick={() => onToggleInternet(!internetCut)}
             disabled={internetPending}
+            aria-label={internetCut ? "Internet blocked" : "Internet on"}
+            aria-pressed={internetCut}
             title={internetCut
               ? "All internet traffic is blocked — click to restore"
               : "Internet is live — click to cut all traffic"}
           >
             {internetCut ? <GlobeLock size={13} /> : <Globe size={13} />}
-            {internetCut ? "Internet OFF" : "Internet ON"}
+            INT {internetCut ? "OFF" : "ON"}
           </button>
         )}
         <BluetoothControl />

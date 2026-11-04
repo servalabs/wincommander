@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
   classifyEraseError,
+  displayEraseDetail,
   formatReceiptForClipboard,
   receiptEscrowAdvice,
   receiptFacts,
@@ -20,6 +21,11 @@ const receipt = (over: Partial<EraseReceipt>): EraseReceipt => ({
   keyEvicted: true,
   detail: "All key protectors removed and the volume locked.",
   ...over,
+});
+
+it("hides engine branding in user-facing failure details", () => {
+  expect(displayEraseDetail("VERACRYPT provider could not be read")).toBe("encrypted container provider could not be read");
+  expect(classifyEraseError("VeraCrypt provider unavailable").hint.toLowerCase()).not.toContain("veracrypt");
 });
 
 describe("receiptTone / receiptHeadline", () => {

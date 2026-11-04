@@ -42,9 +42,13 @@ import RuntimeStatusSection from "./RuntimeStatusSection";
 import SupportConsole from "./SupportConsole";
 import SilentStartSetting from "./SilentStartSetting";
 import ProcessElevationStatus from "./ProcessElevationStatus";
+import FleetConnectView from "../fleet/FleetConnectView";
+import { useFleetManagementAccess } from "../fleet/useFleetManagementAccess";
+import { InfoPopover } from "../network/InfoTip";
 import { DEFAULT_BORROWED_PANELS } from "../../lib/visibilityDefaults";
 import "./index.css";
 import "../privacy/index.css";
+import "../fleet/index.css";
 
 // Empty by default: the cover-name field starts blank (no pre-filled
 // Microsoft-impersonation suggestion). When the user enables cover mode
@@ -85,8 +89,9 @@ function DgzTile({ icon, title, desc, checked, warn, loading, disabled, onChange
                 <span className="dgz-tile-ico"><Icon icon={icon} size={15} /></span>
                 <div className="dgz-tile-body">
                     <div className="dgz-tile-title">{title}</div>
-                    <div className="dgz-tile-desc">{desc}</div>
+                    {disabled && <div className="dgz-tile-desc">{desc}</div>}
                 </div>
+                <InfoPopover iconOnly title={title}><p>{desc}</p></InfoPopover>
                 {control ?? (
                     <Switch
                         checked={checked}
@@ -685,6 +690,13 @@ function LockDisguiseSection() {
     );
 }
 
+function FleetSettingsCard() {
+    const { canManage } = useFleetManagementAccess();
+    const wasAuthorized = useRef(false);
+    if (canManage) wasAuthorized.current = true;
+    return wasAuthorized.current ? <section className="fleet-panel" aria-label="Fleet settings" hidden={!canManage}><FleetConnectView /></section> : null;
+}
+
 // ── 3. BORROWED MODE ──────────────────────────────────────────────────────────
 
 function BorrowedModeSection() {
@@ -827,7 +839,7 @@ function SelfDestructSection() {
             <p className="sec-hint">
                 Armed by: the Destroy PIN on the calculator, any trigger below, or the Lockdown button in the sidebar.
                 Before shutting down, WinCommander restores the genuine Windows calculator so no trace of the disguise remains.
-                Clearing VeraCrypt keys wipes cached passwords from memory — it does <strong>not</strong> delete your volumes.
+                Clearing encryption keys wipes cached passwords from memory — it does <strong>not</strong> delete your volumes.
             </p>
 
             {/* ── Master opt-in toggle ── */}
@@ -929,11 +941,12 @@ export default function SecretPanel() {
                     <TabsTrigger value="disguise">Disguise &amp; branding</TabsTrigger>
                     <TabsTrigger value="borrowed">Borrowed mode &amp; visibility</TabsTrigger>
                     <TabsTrigger value="lockdown">Lockdown &amp; self-destruct</TabsTrigger>
-                    <TabsTrigger value="diagnostics">Diagnostics</TabsTrigger>
+                    <TabsTrigger value="diagnostics">Logs</TabsTrigger>
                 </TabsList>
                 <TabsContent value="disguise">
                     <div className="secret-grid">
                         <LockDisguiseSection />
+                        <FleetSettingsCard />
                     </div>
                 </TabsContent>
                 <TabsContent value="borrowed">
@@ -950,7 +963,7 @@ export default function SecretPanel() {
                 <TabsContent value="diagnostics" className="secret-diagnostics-tab">
                     <div className="secret-grid secret-diagnostics-grid">
                         <RuntimeStatusSection />
-                        <SectionCard title="Diagnostic Center" icon="document" className="secret-grid__wide secret-diagnostics-log-card">
+                        <SectionCard title="Logs" icon="document" className="secret-grid__wide secret-diagnostics-log-card">
                             <SupportConsole />
                         </SectionCard>
                     </div>

@@ -10,7 +10,7 @@ import EmptyState from "../../components/shared/EmptyState";
 import { firewallConfirmCopy } from "../../lib/firewallAuditCopy";
 import { summarizeFirewallAudit, type FirewallAction } from "../../lib/firewallAuditView";
 import { DangerConfirmDialog } from "./DangerConfirmDialog";
-import { InfoPopover, InfoTip } from "./InfoTip";
+import { InfoPopover } from "./InfoTip";
 import { FirewallRemediationReport } from "./FirewallRemediationReport";
 import { FirewallRulesTable } from "./FirewallRulesTable";
 import { MaintenanceNotice, TableSkeleton } from "./MaintenanceNotice";
@@ -37,17 +37,6 @@ export function FirewallAuditCard({ firewall }: { firewall: ReturnType<typeof us
           <div className="min-w-0">
             <CardTitle className="flex items-center gap-1.5">
               Firewall audit
-              <InfoTip
-                label="What this audit looks for"
-                content={
-                  <span>
-                    <strong>What it flags:</strong> third-party rules that allow all traffic, or
-                    are switched off when they should be blocking something.{" "}
-                    <strong>Never touched:</strong> Windows, Microsoft, Defender, and WinCommander's
-                    own rules.
-                  </span>
-                }
-              />
             </CardTitle>
             <CardDescription className="mt-1">
               Reviews the firewall rules other software has added, and tells you which ones are worth
@@ -66,7 +55,7 @@ export function FirewallAuditCard({ firewall }: { firewall: ReturnType<typeof us
                 <Icon icon="refresh" />
               </Button>
             ) : null}
-            <InfoPopover title="Firewall audit">
+            <InfoPopover iconOnly title="Firewall audit">
               <p>
                 <strong className="text-[var(--text)]">What it flags:</strong> rules that allow
                 traffic for every program, and rules meant to block something but switched off — a
@@ -138,18 +127,17 @@ export function FirewallAuditCard({ firewall }: { firewall: ReturnType<typeof us
 
         {audit && !firewall.auditing && summary ? (
           <>
-            <MaintenanceNotice tone={summary.intent} headline={summary.headline}>
-              {summary.detail}
-            </MaintenanceNotice>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="min-w-0 flex-1"><MaintenanceNotice tone={summary.intent} headline={summary.headline}>
+                {summary.detail}
+              </MaintenanceNotice></div>
+              <Badge tone="neutral">{rules.length} rules to review</Badge>
+              {selectedCount > 0 ? <Badge tone="accent">{selectedCount} selected</Badge> : null}
+              {audit.cancelled ? <Badge tone="warning">partial</Badge> : null}
+            </div>
 
             {rules.length > 0 ? (
               <>
-                <div className="flex flex-wrap items-center gap-2">
-                  <Badge tone="neutral">{rules.length} to review</Badge>
-                  {selectedCount > 0 ? <Badge tone="accent">{selectedCount} selected</Badge> : null}
-                  {audit.cancelled ? <Badge tone="warning">partial</Badge> : null}
-                </div>
-
                 <FirewallRulesTable
                   rules={rules}
                   selected={firewall.selected}

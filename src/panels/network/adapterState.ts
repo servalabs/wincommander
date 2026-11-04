@@ -2,6 +2,15 @@ import type { AdapterMacResult, PhysicalNetworkAdapter } from "../../hooks/useBa
 
 export type AdapterAction = "randomize" | "factory" | "recover";
 
+/** Unknown or newly introduced states stay visible rather than being called inactive. */
+export function isInactiveAdapter(status: string | null | undefined): boolean {
+    return ["down", "disconnected", "disabled", "not present", "notpresent", "lowerlayerdown"].includes((status ?? "").trim().toLowerCase());
+}
+
+export function shouldGroupInactiveAdapter(adapter: Pick<PhysicalNetworkAdapter, "status" | "recoveryPending" | "configurationError">): boolean {
+    return isInactiveAdapter(adapter.status) && !adapter.recoveryPending && !adapter.configurationError;
+}
+
 export function formatAdapterMac(value: string | null | undefined): string {
     const normalized = value?.replace(/[:-]/g, "").toUpperCase();
     return normalized?.match(/^[0-9A-F]{12}$/) ? normalized.match(/.{2}/g)!.join(":") : "Unknown";

@@ -32,6 +32,7 @@ export function FileHygieneTools() {
   const tools = useFileHygiene();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [rootsOpen, setRootsOpen] = useState(false);
+  const [groupsFiltered, setGroupsFiltered] = useState(false);
   // Notices are dismissible rather than floating indefinitely: dismissal
   // resets whenever the underlying error/result identity changes (a fresh
   // scan error or a fresh remove result should reappear even if the last
@@ -96,7 +97,7 @@ export function FileHygieneTools() {
           </div>
           <p className="text-[13px] text-[var(--text-dim)]">
             {tools.tool === "duplicates"
-              ? "Select copies to remove; one verified copy per group is always retained."
+              ? "Review copies by location, then select the ones to remove. One verified copy per group is retained."
               : "Only folders still empty at removal time are deleted."}
           </p>
           <Tabs value={tools.tool} onValueChange={(value) => tools.changeTool(value as "duplicates" | "empty")}>
@@ -105,6 +106,7 @@ export function FileHygieneTools() {
               <TabsTrigger value="empty">Empty folders</TabsTrigger>
             </TabsList>
           </Tabs>
+          {tools.tool === "duplicates" && <div className="duplicate-scan-options"><label htmlFor="duplicate-minimum-size">Minimum size</label><select id="duplicate-minimum-size" aria-label="Minimum duplicate file size" value={tools.minimumSizeBytes} disabled={tools.busy} onChange={(event) => tools.changeMinimumSize(Number(event.target.value))}><option value={200 * 1024}>200 KB (recommended)</option><option value={1024 * 1024}>1 MB</option><option value={10 * 1024 * 1024}>10 MB</option><option value={100 * 1024 * 1024}>100 MB</option><option value={0}>Any size (slower)</option></select><span>Changing this requires a new scan. Protected application files and other profiles are review-only.</span></div>}
           {hasScan && (
             <div className="flex flex-wrap items-center gap-2 pt-1">
               {tools.tool === "duplicates" ? (
@@ -127,13 +129,13 @@ export function FileHygieneTools() {
         </div>
         <div className="maintenance-file-hygiene-content flex flex-col gap-3">
           {tools.tool === "duplicates" && <DuplicateScanStatus progress={tools.progress} scan={tools.duplicateScan} scanning={scanning} local={tools.scopeMode === "local"} />}
-          {tools.tool === "duplicates" && <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--text-dim)]"><label>Find duplicates at least <select aria-label="Minimum duplicate file size" className="rounded border border-[var(--border)] bg-[var(--surface-2)] p-1.5" value={tools.minimumSizeBytes} disabled={tools.busy} onChange={(event) => tools.changeMinimumSize(Number(event.target.value))}><option value={200 * 1024}>200 KB (recommended)</option><option value={1024 * 1024}>1 MB</option><option value={10 * 1024 * 1024}>10 MB</option><option value={100 * 1024 * 1024}>100 MB</option><option value={0}>Any size (slower)</option></select></label><span>Small files are skipped to keep whole-drive scans practical.</span></div>}
           {hasScan && <div className="flex flex-wrap items-center gap-2">
             {tools.tool === "duplicates" && <label className="text-xs text-[var(--text-dim)]">Keep <select aria-label="Duplicate copy retention preference" className="rounded border border-[var(--border)] bg-[var(--surface-2)] p-1.5" value={tools.keepPolicy} disabled={tools.busy} onChange={(event) => tools.changeKeepPolicy(event.target.value as "first" | "shortest-path" | "newest-modified" | "oldest-modified")}><option value="first">First verified copy</option><option value="newest-modified">Newest modified</option><option value="oldest-modified">Oldest modified</option><option value="shortest-path">Shortest path</option></select><span className="ml-1">from loaded copies</span></label>}
-            <Button size="sm" variant="outline" disabled={tools.busy || !count} onClick={tools.smartSelect}>{tools.tool === "duplicates" ? "Select duplicate copies on this page" : "Select all empty folders"}</Button>
+            <Button size="sm" variant="outline" disabled={tools.busy || !count || (tools.tool === "duplicates" && groupsFiltered)} onClick={tools.smartSelect}>{tools.tool === "duplicates" ? "Select duplicate copies on this page" : "Select all empty folders"}</Button>
             <Button size="sm" variant="ghost" disabled={tools.busy || !tools.selected.size} onClick={tools.clearSelection}>Clear selection</Button>
+            {tools.tool === "duplicates" && groupsFiltered && <span className="text-xs text-[var(--text-dim)]">Clear filters to select copies across the page. Existing selections are unchanged.</span>}
           </div>}
-          {tools.tool === "duplicates" && hasScan && <p className="text-xs text-[var(--text-dim)]">Contents are verified with a full cryptographic content hash. Files below {formatBytes(tools.duplicateScan?.minimumSizeBytes ?? tools.minimumSizeBytes)} are intentionally excluded; choose Any size to include them. The full eligible scope is indexed without a file-count cap; results are paged at 100 groups and 200 additional copies per group. Page changes clear selections. Potential duplicate data is logical size, not measured free space.</p>}
+          {tools.tool === "duplicates" && hasScan && <details className="text-xs text-[var(--text-dim)]"><summary className="cursor-pointer">How review and removal work</summary><p className="mt-2">Contents are verified with a full cryptographic content hash. Files below {formatBytes(tools.duplicateScan?.minimumSizeBytes ?? tools.minimumSizeBytes)} are excluded. Results are paged at 100 groups and 200 additional copies per group; changing pages clears selections. Potential duplicate data is logical size, not measured free space. Before removal, ownership and file contents are checked again and an unchanged copy must remain.</p></details>}
           {/* Exactly one scan entry point per state: none of these four
               branches can render at the same time as another. */}
           {!tools.roots.length && (tools.tool === "empty" || tools.scopeMode === "folders") && (
@@ -160,7 +162,7 @@ export function FileHygieneTools() {
 
           {tools.tool === "duplicates" && tools.duplicateScan && (
             <>
-              <DuplicateGroups tools={tools} />
+              <DuplicateGroups tools={tools} onFilterChange={setGroupsFiltered} />
               <nav aria-label="Duplicate result pages" className="flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--text-dim)]"><span>Groups {count ? tools.duplicateScan.groupOffset + 1 : 0}–{tools.duplicateScan.groupOffset + tools.duplicateScan.groups.length} of {count.toLocaleString()}</span><div className="flex gap-2"><Button size="sm" variant="outline" disabled={tools.busy || tools.duplicateScan.groupOffset === 0} onClick={() => loadDuplicateGroupPage(Math.max(0, tools.duplicateScan!.groupOffset - 100))}>Previous groups</Button><Button size="sm" variant="outline" disabled={tools.busy || !tools.duplicateScan.hasMoreGroups} onClick={() => loadDuplicateGroupPage(tools.duplicateScan!.groupOffset + 100)}>Next groups</Button></div></nav>
               <SelectionActionBar disabled={tools.busy} count={tools.selected.size} bytesLabel={selectedBytes > 0 ? `${formatBytes(selectedBytes)} logical bytes selected` : undefined} onRemove={() => setConfirmOpen(true)} />
             </>
