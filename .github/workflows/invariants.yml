@@ -575,6 +575,9 @@ jobs:
       - name: cargo llvm-cov (summary only)
         env:
           RUST_MIN_STACK: "16777216"
+          # Instrumented process tests can exhaust Windows runner capacity when
+          # the default test harness launches all available threads at once.
+          RUST_TEST_THREADS: "4"
         run: |
           cargo llvm-cov --workspace --summary-only
 
