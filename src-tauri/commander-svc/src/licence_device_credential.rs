@@ -485,18 +485,13 @@ enum EnrolmentState {
     Confirmed(ConfirmedCredential),
 }
 
-fn enrol_with<F, C>(
+fn enrolment_state(
     anchor: &anchor::Anchor,
     protector: &dyn Protector,
     binding: &Binding<'_>,
     trust: &wincmd_pq_experiment::jws::Trust<'_>,
-    clock: C,
-    send: F,
-) -> Result<ConfirmedCredential, &'static str>
-where
-    F: FnOnce(&[u8; 32], &[u8; 32]) -> Result<String, &'static str>,
-    C: Fn() -> u64,
-{
+    now: u64,
+) -> Result<EnrolmentState, &'static str> {
     let state = {
         let _guard = LOCK.lock().map_err(|_| INVALID)?;
         let _process_lock = crate::licence_security_lock().map_err(|_| INVALID)?;
@@ -511,17 +506,29 @@ where
                 match record.phase.as_str() {
                     "pending" => EnrolmentState::Pending(decode(protector, binding, &bytes)?),
                     "confirmed" => EnrolmentState::Confirmed(decode_confirmed(
-                        protector,
-                        binding,
-                        trust,
-                        &bytes,
-                        clock(),
+                        protector, binding, trust, &bytes, now,
                     )?),
                     _ => return Err(INVALID),
                 }
             }
         }
     };
+    Ok(state)
+}
+
+fn enrol_with<F, C>(
+    anchor: &anchor::Anchor,
+    protector: &dyn Protector,
+    binding: &Binding<'_>,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>,
+    clock: C,
+    send: F,
+) -> Result<ConfirmedCredential, &'static str>
+where
+    F: FnOnce(&[u8; 32], &[u8; 32]) -> Result<String, &'static str>,
+    C: Fn() -> u64,
+{
+    let state = enrolment_state(anchor, protector, binding, trust, clock())?;
     match state {
         EnrolmentState::Confirmed(confirmed) => Ok(confirmed),
         EnrolmentState::Pending(pending) => {
@@ -529,6 +536,56 @@ where
             // transport. Never log or expose this secret to a desktop caller.
             let signed_receipt = send(&pending.id, pending.secret())?;
             confirm_with(anchor, protector, binding, trust, &signed_receipt, clock())
+        }
+    }
+}
+
+/// Register a pending identity over the fixed hybrid-only connection. The
+/// caller must independently authorize the request and supply receipt trust.
+pub(crate) async fn enrol_over_network(
+    binding: &Binding<'_>,
+    receipt_trust: &wincmd_pq_experiment::jws::Trust<'_>,
+    licence: &RefreshLicence<'_>,
+    license_key: &str,
+) -> Result<(), &'static str> {
+    if binding.issuer_origin != wire::LICENCE_ORIGIN {
+        return Err(INVALID);
+    }
+    // Never transmit a device secret for an unverified or superseded cache.
+    checked_refresh_wire(binding, licence)?;
+    let now = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .map_err(|_| INVALID)
+    };
+    let state = {
+        let anchor = anchor::Anchor::machine_named(
+            r"SOFTWARE\ServaLabs\WinCommander\ExperimentalLicenceDevice",
+        );
+        enrolment_state(&anchor, &MachineDpapi, binding, receipt_trust, now()?)?
+    };
+    match state {
+        EnrolmentState::Confirmed(_) => Ok(()),
+        EnrolmentState::Pending(pending) => {
+            let body = wire::enrolment_request(binding, &pending, license_key)?;
+            let response = wire::post_enrolment(body).await?;
+            let signed = wire::enrolment_receipt(&response)?;
+            // The cache may have changed during network I/O; refuse confirmation
+            // until it is rechecked. Pending credentials remain retryable.
+            checked_refresh_wire(binding, licence)?;
+            let anchor = anchor::Anchor::machine_named(
+                r"SOFTWARE\ServaLabs\WinCommander\ExperimentalLicenceDevice",
+            );
+            confirm_with(
+                &anchor,
+                &MachineDpapi,
+                binding,
+                receipt_trust,
+                &signed,
+                now()?,
+            )?;
+            Ok(())
         }
     }
 }

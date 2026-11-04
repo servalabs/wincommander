@@ -1003,6 +1003,7 @@ dependencies = [
  "anyhow",
  "aws-lc-rs",
  "base64 0.22.1",
+ "bytes",
  "ed25519-dalek 3.0.0",
  "fleet-agent-core",
  "fleet-proto",

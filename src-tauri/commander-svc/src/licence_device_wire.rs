@@ -1,12 +1,71 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Experimental device renewal wire messages and fixed-origin transport. No IPC is enabled.
-use super::{sign_refresh_wire, ConfirmedCredential, INVALID};
+use super::{sign_refresh_wire, Binding, ConfirmedCredential, PendingCredential, INVALID};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::{Deserialize, Serialize};
 
 const RESPONSE_LIMIT: usize = 4096;
 const REQUEST_LIMIT: usize = 16 * 1024;
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EnrolmentRequest<'a> {
+    app_id: &'static str,
+    license_key: &'a str,
+    device_hash: &'a str,
+    credential_id: String,
+    device_secret: &'a str,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EnrolmentResponse {
+    ok: bool,
+    receipt: String,
+}
+
+/// The returned body and temporary encoded secret are zeroed when released.
+pub(super) fn enrolment_request(
+    binding: &Binding<'_>,
+    pending: &PendingCredential,
+    license_key: &str,
+) -> Result<zeroize::Zeroizing<Vec<u8>>, &'static str> {
+    let license_key = license_key.trim();
+    if license_key.is_empty()
+        || license_key.len() > 512
+        || binding.device_hash.is_empty()
+        || binding.device_hash.len() > 512
+        || binding.device_hash.trim() != binding.device_hash
+    {
+        return Err(INVALID);
+    }
+    let secret = zeroize::Zeroizing::new(URL_SAFE_NO_PAD.encode(pending.secret()));
+    let mut body = zeroize::Zeroizing::new(Vec::new());
+    serde_json::to_writer(
+        &mut *body,
+        &EnrolmentRequest {
+            app_id: "com.servalabs.wincommander",
+            license_key,
+            device_hash: binding.device_hash,
+            credential_id: URL_SAFE_NO_PAD.encode(pending.id),
+            device_secret: &secret,
+        },
+    )
+    .map_err(|_| INVALID)?;
+    Ok(body)
+}
+
+pub(super) fn enrolment_receipt(response: &[u8]) -> Result<String, &'static str> {
+    if response.is_empty() || response.len() > HTTP_RESPONSE_LIMIT {
+        return Err(INVALID);
+    }
+    let value: EnrolmentResponse = serde_json::from_slice(response).map_err(|_| INVALID)?;
+    if !value.ok || value.receipt.is_empty() || value.receipt.len() > 32 * 1024 {
+        return Err(INVALID);
+    }
+    Ok(value.receipt)
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -119,6 +178,23 @@ pub(super) async fn post(endpoint: Endpoint, body: Vec<u8>) -> Result<Vec<u8>, &
     post_to(&client, &format!("{LICENCE_ORIGIN}{path}"), body).await
 }
 
+/// The request buffer is wiped after the HTTP body releases its last reference.
+pub(super) async fn post_enrolment(
+    body: zeroize::Zeroizing<Vec<u8>>,
+) -> Result<Vec<u8>, &'static str> {
+    if body.is_empty() || body.len() > 64 * 1024 {
+        return Err(INVALID);
+    }
+    let client = required_hybrid_client()?;
+    let bytes = bytes::Bytes::from_owner(body);
+    post_body(
+        &client,
+        &format!("{LICENCE_ORIGIN}/experimental/device/enrol"),
+        bytes.into(),
+    )
+    .await
+}
+
 fn required_hybrid_provider() -> rustls::crypto::CryptoProvider {
     let mut provider = rustls::crypto::aws_lc_rs::default_provider();
     provider.kx_groups = vec![rustls::crypto::aws_lc_rs::kx_group::X25519MLKEM768];
@@ -152,6 +228,14 @@ async fn post_to(
     if body.is_empty() || body.len() > 64 * 1024 {
         return Err(INVALID);
     }
+    post_body(client, url, body.into()).await
+}
+
+async fn post_body(
+    client: &reqwest::Client,
+    url: &str,
+    body: reqwest::Body,
+) -> Result<Vec<u8>, &'static str> {
     let mut response = client
         .post(url)
         .header(reqwest::header::CONTENT_TYPE, "application/json")

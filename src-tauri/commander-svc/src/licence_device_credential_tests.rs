@@ -362,6 +362,30 @@ fn authorized_worker_issuer_receipt_confirms_persisted_pending_credential() {
     save_locked(&anchor, &MachineDpapi, &binding, &pending).unwrap();
     let receipt = fixture["receipt"].as_str().unwrap();
     let accepted_at = fixture["acceptedAt"].as_u64().unwrap();
+    let body = wire::enrolment_request(&binding, &pending, " test-licence-key ").unwrap();
+    let body_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(body_json["appId"], "com.servalabs.wincommander");
+    assert_eq!(body_json["licenseKey"], "test-licence-key");
+    assert_eq!(body_json["deviceHash"], binding.device_hash);
+    assert_eq!(
+        body_json["credentialId"],
+        URL_SAFE_NO_PAD.encode(pending.id)
+    );
+    assert_eq!(
+        body_json["deviceSecret"],
+        URL_SAFE_NO_PAD.encode(pending.secret())
+    );
+    assert!(wire::enrolment_request(&binding, &pending, " ").is_err());
+    assert!(wire::enrolment_request(&binding, &pending, &"x".repeat(513)).is_err());
+    let good_response = serde_json::json!({"ok": true, "receipt": receipt});
+    assert_eq!(
+        wire::enrolment_receipt(good_response.to_string().as_bytes()).unwrap(),
+        receipt
+    );
+    assert!(wire::enrolment_receipt(br#"{"ok":false,"receipt":"x"}"#).is_err());
+    assert!(wire::enrolment_receipt(br#"{"ok":true,"receipt":"x","extra":1}"#).is_err());
+    assert!(wire::enrolment_receipt(&[b' '; 65_537]).is_err());
+
     let before = anchor.read().unwrap().unwrap();
     let lost = enrol_with(
         &anchor,
