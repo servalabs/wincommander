@@ -16,6 +16,16 @@ mod argus;
 mod attend_watch;
 mod authz;
 mod autostart;
+mod hide_recovery;
+#[cfg(windows)]
+mod hide_recovery_launch;
+
+pub fn run_hide_recovery_listener() {
+    hide_recovery::run();
+}
+pub fn update_hide_recovery_listener(shortcut: &str) -> i32 {
+    hide_recovery::update(shortcut).map(|_| 0).unwrap_or(1)
+}
 mod backend;
 mod child_jobs;
 pub mod cli;
@@ -446,15 +456,34 @@ fn update_hide_hotkey(app: tauri::AppHandle, hotkey: String) -> Result<(), Strin
         g.clone()
     };
 
+    hide_recovery::validate(&hotkey)?;
+    if old == hotkey {
+        return hide_recovery::configure(&hotkey);
+    }
+
     if is_custom_hide_peek_hotkey(&old) {
-        let _ = app.global_shortcut().unregister(old.as_str());
+        app.global_shortcut().unregister(old.as_str()).map_err(|error| format!("Could not release the previous hide shortcut: {error}"))?;
     }
     // Register whenever a hotkey is set so it works as an always-on hide/unhide
     // toggle — the handler hides a visible window and shows a hidden one. (It
     // used to register only while already hidden, so a freshly-set hotkey did
     // nothing until the app was hidden some other way.)
     if is_custom_hide_peek_hotkey(&hotkey) {
-        register_hide_peek_hotkey(&app, &hotkey)?;
+        if let Err(error) = register_hide_peek_hotkey(&app, &hotkey) {
+            if is_custom_hide_peek_hotkey(&old) {
+                register_hide_peek_hotkey(&app, &old).map_err(|restore| format!("{error}; previous shortcut could not be restored: {restore}"))?;
+            }
+            return Err(error);
+        }
+    }
+
+    if let Err(error) = hide_recovery::configure(&hotkey) {
+        if is_custom_hide_peek_hotkey(&hotkey) { let _ = app.global_shortcut().unregister(hotkey.as_str()); }
+        if is_custom_hide_peek_hotkey(&old) {
+            register_hide_peek_hotkey(&app, &old).map_err(|restore| format!("{error}; previous shortcut could not be restored: {restore}"))?;
+        }
+        hide_recovery::configure(&old).map_err(|restore| format!("{error}; recovery shortcut could not be restored: {restore}"))?;
+        return Err(error);
     }
 
     // Re-acquire to store the new value.
@@ -1316,6 +1345,11 @@ fn apply_wincommander_hide_mode(app: tauri::AppHandle, hidden: bool) -> Result<(
         }
     }
 
+    let recovery_result = app.try_state::<HideHotkeyState>()
+        .ok_or_else(|| "Hide shortcut state is unavailable".to_string())
+        .and_then(|state| state.0.lock().map_err(|e| e.to_string()).map(|value| value.clone()))
+        .and_then(|shortcut| hide_recovery::configure(&shortcut));
+
     // Write HiddenMode DWORD to HKLM\SOFTWARE\WinCommander (contract: read by R5/NSIS).
     write_wc_registry_dword("HiddenMode", if hidden { 1 } else { 0 });
     log_message_src(
@@ -1416,7 +1450,7 @@ fn apply_wincommander_hide_mode(app: tauri::AppHandle, hidden: bool) -> Result<(
         });
     }
 
-    Ok(())
+    recovery_result
 }
 
 /// FREE Tauri command — enters calculator mode immediately (no PIN required to
@@ -1874,6 +1908,9 @@ pub fn run() {
             let saved_hide_hotkey = settings::cached_settings()
                 .and_then(|s| s.ideal.identity.hide_win_commander_hotkey)
                 .unwrap_or_else(|| "Ctrl+Shift+G".to_string());
+            if let Err(error) = hide_recovery::configure(&saved_hide_hotkey) {
+                log_message_src("warn", "core", &format!("[Hide recovery] {error}"));
+            }
             app.manage(HideHotkeyState(Mutex::new(saved_hide_hotkey)));
 
             // Load the tray icon explicitly from the embedded PNG so it
@@ -2056,7 +2093,7 @@ pub fn run() {
                     // transition after React mounted in packaged builds.
                     let _ = startup_auth::enter_calculator_mode_with(window.clone(), false);
                     let _ = startup_window::defer_reveal_until_ready(&window);
-                } else if foreground_launch && !hidden_mode {
+                } else if foreground_launch && (!hidden_mode || args.iter().any(|arg| arg == "--recovery-reveal")) {
                     let _ = window.set_skip_taskbar(false);
                     reveal_main_window(app.handle());
                 }
