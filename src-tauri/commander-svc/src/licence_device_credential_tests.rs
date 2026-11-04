@@ -1,6 +1,57 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 use super::*;
 
+#[tokio::test]
+async fn release_exchange_saves_before_send_and_retries_identical_bytes() {
+    use std::cell::RefCell;
+    let pending = RefCell::new(None::<(Vec<u8>, bool)>);
+    let load = || Ok(pending.borrow().as_ref().map(|(request, confirmed)| release_pending::SavedRelease {
+        request: Zeroizing::new(request.clone()), confirmed: *confirmed,
+    }));
+    let first = release_exchange_with(
+        load,
+        || async { Ok(Zeroizing::new(b"exact release".to_vec())) },
+        |request| { *pending.borrow_mut() = Some((request.to_vec(), false)); Ok(request) },
+        |request| { assert_eq!(pending.borrow().as_ref().map(|v| v.0.as_slice()), Some(request.as_slice())); async { Err(INVALID) } },
+        |_, _| panic!("unconfirmed release was recorded"),
+    ).await;
+    assert!(first.is_err());
+    assert_eq!(pending.borrow().as_ref().map(|v| v.0.as_slice()), Some(b"exact release".as_slice()));
+    let malformed = release_exchange_with(
+        load,
+        || async { panic!("retry requested a new challenge") },
+        |_| panic!("retry overwrote the saved request"),
+        |_| async { Ok(br#"{"ok":true,"extra":1}"#.to_vec()) },
+        |_, _| panic!("malformed response was recorded"),
+    ).await;
+    assert!(malformed.is_err());
+    assert!(!pending.borrow().as_ref().unwrap().1);
+    let interrupted = release_exchange_with(load, || async { panic!("retry requested a new challenge") },
+        |_| panic!("retry overwrote the saved request"), |_| async { Ok(br#"{"ok":true}"#.to_vec()) },
+        |_, _| Err(INVALID)).await;
+    assert!(interrupted.is_err());
+    assert!(!pending.borrow().as_ref().unwrap().1);
+    let second = release_exchange_with(
+        load,
+        || async { panic!("retry requested a new challenge") },
+        |_| panic!("retry overwrote the saved request"),
+        |request| { assert_eq!(request.as_slice(), b"exact release"); async { Ok(br#"{"ok":true}"#.to_vec()) } },
+        |request, _| { assert_eq!(request.as_slice(), b"exact release"); pending.borrow_mut().as_mut().unwrap().1 = true; Ok(()) },
+    ).await;
+    assert!(second.is_ok());
+    assert!(pending.borrow().as_ref().unwrap().1);
+    let recovered = release_exchange_with(load, || async { panic!("confirmed release requested a challenge") },
+        |_| panic!("confirmed release was restaged"), |_| async { panic!("confirmed release was resent") },
+        |_, _| panic!("confirmed release was rewritten")).await;
+    assert!(recovered.is_ok());
+    let not_saved = release_exchange_with(
+        || Ok(None), || async { Ok(Zeroizing::new(b"request".to_vec())) }, |_| Err(INVALID),
+        |_| async { panic!("release was sent without saving") },
+        |_, _| panic!("unsent release was confirmed"),
+    ).await;
+    assert!(not_saved.is_err());
+}
+
 #[test]
 fn disposable_registry_credential_is_encrypted_bound_and_not_replaced() {
     let path = format!(

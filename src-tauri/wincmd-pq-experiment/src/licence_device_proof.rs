@@ -9,12 +9,23 @@ use aws_lc_rs::hmac;
 
 const DOMAIN: &[u8] = b"wincommander:licence-device-proof:v1\0";
 const REQUEST_DOMAIN: &[u8] = b"wincommander:licence-challenge-request:v1\0";
+const RELEASE_REQUEST_DOMAIN: &[u8] = b"wincommander:licence-release-challenge-request:v1\0";
+const RELEASE_ACK_DOMAIN: &[u8] = b"wincommander:licence-release-ack:v1\0";
 
 /// Authenticate the request for a challenge; this tag is replayable and does
 /// not replace the one-use challenge or licence and device checks.
 pub fn sign_challenge_request(secret: &[u8; 32], credential_id: &[u8; 32], request_digest: &[u8; 32]) -> [u8; 32] {
-    let mut message = Vec::with_capacity(REQUEST_DOMAIN.len() + 64);
-    message.extend_from_slice(REQUEST_DOMAIN);
+    sign_request(REQUEST_DOMAIN, secret, credential_id, request_digest)
+}
+
+/// Prepare a release challenge request. This does not release a seat.
+pub fn sign_release_challenge_request(secret: &[u8; 32], credential_id: &[u8; 32], request_digest: &[u8; 32]) -> [u8; 32] {
+    sign_request(RELEASE_REQUEST_DOMAIN, secret, credential_id, request_digest)
+}
+
+fn sign_request(domain: &[u8], secret: &[u8; 32], credential_id: &[u8; 32], request_digest: &[u8; 32]) -> [u8; 32] {
+    let mut message = Vec::with_capacity(domain.len() + 64);
+    message.extend_from_slice(domain);
     message.extend_from_slice(credential_id);
     message.extend_from_slice(request_digest);
     let key = hmac::Key::new(hmac::HMAC_SHA256, secret);
@@ -57,6 +68,16 @@ pub fn sign(secret: &[u8; 32], challenge: &Challenge<'_>) -> [u8; 32] {
         .unwrap()
 }
 
+/// Only acknowledge after the release outcome has been durably recorded.
+pub fn sign_release_acknowledgement(secret: &[u8; 32], challenge: &Challenge<'_>) -> Result<[u8; 32], &'static str> {
+    if !matches!(challenge.operation, Operation::Deactivate) { return Err("invalid release acknowledgement"); }
+    let mut message = Vec::with_capacity(RELEASE_ACK_DOMAIN.len() + DOMAIN.len() + 105);
+    message.extend_from_slice(RELEASE_ACK_DOMAIN);
+    message.extend_from_slice(&transcript(challenge));
+    let key = hmac::Key::new(hmac::HMAC_SHA256, secret);
+    Ok(hmac::sign(&key, &message).as_ref().try_into().unwrap())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -72,6 +93,17 @@ mod tests {
         let mut changed = digest;
         changed[0] ^= 1;
         assert_ne!(sign_challenge_request(&secret, &id, &changed), expected);
+    }
+
+    #[test]
+    fn release_request_uses_a_distinct_domain() {
+        let id = std::array::from_fn(|i| i as u8);
+        let digest = std::array::from_fn(|i| (i + 64) as u8);
+        let secret = std::array::from_fn(|i| (i + 96) as u8);
+        let expected = [0x83, 0xc7, 0x15, 0x10, 0xbf, 0x85, 0x93, 0x79, 0xb1, 0x57, 0xe5, 0xcc, 0x6f, 0xa5, 0xb5, 0xa9,
+            0x3c, 0x76, 0xde, 0x87, 0x8b, 0x02, 0xb2, 0xb0, 0xfa, 0x92, 0xf8, 0xa5, 0xf1, 0x70, 0x94, 0x26];
+        assert_eq!(sign_release_challenge_request(&secret, &id, &digest), expected);
+        assert_ne!(sign_challenge_request(&secret, &id, &digest), expected);
     }
 
     #[test]
@@ -102,5 +134,11 @@ mod tests {
             ..challenge
         };
         assert!(hmac::verify(&key, &transcript(&altered), &expected).is_err());
+        let release = Challenge { operation: Operation::Deactivate, ..challenge };
+        let ack = [0x06, 0xd6, 0x6f, 0xdb, 0x87, 0x34, 0xac, 0xcf, 0x5c, 0xb1, 0x57, 0x08, 0x36, 0x57, 0xb4, 0x8c,
+            0x8e, 0x79, 0x17, 0x0e, 0x03, 0x09, 0x40, 0x7c, 0x4e, 0x57, 0x90, 0x85, 0xd7, 0xd4, 0x03, 0x7c];
+        assert_eq!(sign_release_acknowledgement(&secret, &release).unwrap(), ack);
+        assert_ne!(sign(&secret, &release), ack);
+        assert!(sign_release_acknowledgement(&secret, &challenge).is_err());
     }
 }

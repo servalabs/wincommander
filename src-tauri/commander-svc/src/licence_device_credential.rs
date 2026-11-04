@@ -13,6 +13,8 @@ use zeroize::Zeroizing;
 mod receipt;
 #[path = "licence_device_wire.rs"]
 mod wire;
+#[path = "licence_device_release_pending.rs"]
+mod release_pending;
 
 const INVALID: &str = "device credential is invalid or unavailable";
 pub(crate) const RETRY_LATER: &str = "Licence service is busy. Wait two minutes and retry.";
@@ -193,6 +195,20 @@ fn sign_refresh_wire(
     expires_at: u64,
     now: u64,
 ) -> Result<RefreshProof, &'static str> {
+    sign_device_wire(credential, body, credential_id, nonce, digest, expires_at, now,
+        wincmd_pq_experiment::licence_device_proof::Operation::Refresh)
+}
+
+fn sign_device_wire(
+    credential: &ConfirmedCredential,
+    body: Vec<u8>,
+    credential_id: &[u8; 32],
+    nonce: &[u8; 32],
+    digest: &[u8; 32],
+    expires_at: u64,
+    now: u64,
+    operation: wincmd_pq_experiment::licence_device_proof::Operation,
+) -> Result<RefreshProof, &'static str> {
     use subtle::ConstantTimeEq;
     if credential.id != *credential_id
         || expires_at <= now
@@ -208,7 +224,7 @@ fn sign_refresh_wire(
         return Err(INVALID);
     }
     let challenge = wincmd_pq_experiment::licence_device_proof::Challenge {
-        operation: wincmd_pq_experiment::licence_device_proof::Operation::Refresh,
+        operation,
         credential_id,
         nonce,
         request_digest: digest,
@@ -310,6 +326,71 @@ pub(crate) fn prepare_renewal_request(
     let credential = load_confirmed(binding, receipt_trust, now)?;
     let body = checked_refresh_wire(binding, licence)?;
     wire::renewal_request(&credential, body, challenge, now)
+}
+
+/// Prepare only from the current verified cache and confirmed device identity.
+/// The resulting release request must be persisted securely before it is sent.
+pub(crate) fn prepare_release_challenge_request(
+    binding: &Binding<'_>, receipt_trust: &wincmd_pq_experiment::jws::Trust<'_>,
+    licence: &RefreshLicence<'_>, now: u64,
+) -> Result<Vec<u8>, &'static str> {
+    let credential = load_confirmed(binding, receipt_trust, now)?;
+    let body = checked_refresh_wire(binding, licence)?;
+    wire::release_challenge_request(&credential, &body)
+}
+
+/// Check the cache and device identity again before constructing the release.
+pub(crate) fn prepare_release_request(
+    binding: &Binding<'_>, receipt_trust: &wincmd_pq_experiment::jws::Trust<'_>,
+    licence: &RefreshLicence<'_>, challenge: &[u8], now: u64,
+) -> Result<Vec<u8>, &'static str> {
+    let credential = load_confirmed(binding, receipt_trust, now)?;
+    let body = checked_refresh_wire(binding, licence)?;
+    wire::release_request(&credential, body, challenge, now)
+}
+
+/// Experimental service-only exchange. It records success, but retains the
+/// local licence; an authorized, crash-safe finalizer is still required.
+pub(crate) async fn request_release(
+    binding: &Binding<'_>, receipt_trust: &wincmd_pq_experiment::jws::Trust<'_>, licence: &RefreshLicence<'_>,
+) -> Result<(), &'static str> {
+    if binding.issuer_origin != wire::LICENCE_ORIGIN { return Err(INVALID); }
+    let now = || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs()).map_err(|_| INVALID);
+    release_exchange_with(
+        || release_pending::load(binding, receipt_trust, licence, now()?),
+        || async {
+            let start = prepare_release_challenge_request(binding, receipt_trust, licence, now()?)?;
+            let challenge = wire::post(wire::Endpoint::ReleaseChallenge, start).await?;
+            prepare_release_request(binding, receipt_trust, licence, &challenge, now()?).map(Zeroizing::new)
+        },
+        |request| release_pending::stage(binding, receipt_trust, licence, now()?, &request),
+        wire::post_release,
+        |request, response| release_pending::confirm(binding, receipt_trust, licence, now()?, &request, &response),
+    ).await
+}
+
+async fn release_exchange_with<Load, Begin, BeginFuture, Stage, Send, SendFuture, Confirm>(
+    load: Load, begin: Begin, stage: Stage, send: Send, confirm: Confirm,
+) -> Result<(), &'static str>
+where
+    Load: FnOnce() -> Result<Option<release_pending::SavedRelease>, &'static str>,
+    Begin: FnOnce() -> BeginFuture,
+    BeginFuture: std::future::Future<Output = Result<Zeroizing<Vec<u8>>, &'static str>>,
+    Stage: FnOnce(Zeroizing<Vec<u8>>) -> Result<Zeroizing<Vec<u8>>, &'static str>,
+    Send: FnOnce(Zeroizing<Vec<u8>>) -> SendFuture,
+    SendFuture: std::future::Future<Output = Result<Vec<u8>, &'static str>>,
+    Confirm: FnOnce(Zeroizing<Vec<u8>>, Vec<u8>) -> Result<(), &'static str>,
+{
+    let request = match load()? {
+        Some(existing) if existing.confirmed => return Ok(()),
+        Some(existing) => existing.request,
+        None => stage(begin().await?)?,
+    };
+    let saved = Zeroizing::new(request.to_vec());
+    let response = send(request).await?;
+    wire::confirmed_release(&response)?;
+    confirm(saved, response)
 }
 
 /// Perform one bounded renewal exchange. The caller must authenticate the caller,

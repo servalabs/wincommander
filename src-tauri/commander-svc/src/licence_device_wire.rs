@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Experimental device renewal wire messages and fixed-origin transport. No IPC is enabled.
-use super::{sign_refresh_wire, Binding, ConfirmedCredential, PendingCredential, INVALID, RETRY_LATER};
+//! Experimental device renewal and release messages. No IPC is enabled.
+use super::{sign_device_wire, Binding, ConfirmedCredential, PendingCredential, INVALID, RETRY_LATER};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -97,6 +97,91 @@ struct RenewalRequest<'a> {
     proof: String,
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StoredReleaseRequest {
+    old_request: String,
+    credential_id: String,
+    nonce: String,
+    request_digest: String,
+    expires_at: u64,
+    proof: String,
+}
+
+impl Drop for StoredReleaseRequest {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.old_request.zeroize();
+        self.credential_id.zeroize();
+        self.nonce.zeroize();
+        self.request_digest.zeroize();
+        self.proof.zeroize();
+    }
+}
+
+/// Authenticate an exact stored request without requiring the challenge to
+/// remain live: the server permits receipt retries after challenge expiry.
+pub(super) fn verify_stored_release_request(
+    credential: &ConfirmedCredential, expected_body: &[u8], request: &[u8],
+) -> Result<(), &'static str> {
+    use subtle::ConstantTimeEq;
+    if expected_body.is_empty() || expected_body.len() > REQUEST_LIMIT || request.is_empty() || request.len() > 32 * 1024 {
+        return Err(INVALID);
+    }
+    let value: StoredReleaseRequest = serde_json::from_slice(request).map_err(|_| INVALID)?;
+    let canonical = zeroize::Zeroizing::new(serde_json::to_vec(&value).map_err(|_| INVALID)?);
+    if value.expires_at > MAX_SAFE_INTEGER || canonical.as_slice() != request {
+        return Err(INVALID);
+    }
+    let body = zeroize::Zeroizing::new(URL_SAFE_NO_PAD.decode(&value.old_request).map_err(|_| INVALID)?);
+    if URL_SAFE_NO_PAD.encode(body.as_slice()) != value.old_request || body.as_slice() != expected_body { return Err(INVALID); }
+    let id = fixed(&value.credential_id)?;
+    let nonce = fixed(&value.nonce)?;
+    let digest = fixed(&value.request_digest)?;
+    let proof = fixed(&value.proof)?;
+    let actual: [u8; 32] = Sha256::digest(expected_body).into();
+    if id != credential.id || !bool::from(actual.ct_eq(&digest)) { return Err(INVALID); }
+    let challenge = wincmd_pq_experiment::licence_device_proof::Challenge {
+        operation: wincmd_pq_experiment::licence_device_proof::Operation::Deactivate,
+        credential_id: &id, nonce: &nonce, request_digest: &digest, expires_at: value.expires_at,
+    };
+    let expected = wincmd_pq_experiment::licence_device_proof::sign(credential.secret(), &challenge);
+    if !bool::from(expected.ct_eq(&proof)) { return Err(INVALID); }
+    Ok(())
+}
+
+/// This is only called for a durably confirmed release, never on a network response alone.
+pub(super) fn release_acknowledgement_request(
+    credential: &ConfirmedCredential, expected_body: &[u8], request: &[u8],
+) -> Result<zeroize::Zeroizing<Vec<u8>>, &'static str> {
+    use zeroize::Zeroize;
+    verify_stored_release_request(credential, expected_body, request)?;
+    let mut value: StoredReleaseRequest = serde_json::from_slice(request).map_err(|_| INVALID)?;
+    let id = fixed(&value.credential_id)?;
+    let nonce = fixed(&value.nonce)?;
+    let digest = fixed(&value.request_digest)?;
+    let challenge = wincmd_pq_experiment::licence_device_proof::Challenge {
+        operation: wincmd_pq_experiment::licence_device_proof::Operation::Deactivate,
+        credential_id: &id, nonce: &nonce, request_digest: &digest, expires_at: value.expires_at,
+    };
+    let ack = wincmd_pq_experiment::licence_device_proof::sign_release_acknowledgement(credential.secret(), &challenge).map_err(|_| INVALID)?;
+    value.proof.zeroize();
+    value.proof = URL_SAFE_NO_PAD.encode(ack);
+    Ok(zeroize::Zeroizing::new(serde_json::to_vec(&value).map_err(|_| INVALID)?))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReleaseResponse { ok: bool }
+
+/// Do not clear the local licence unless a complete success response is read.
+pub(super) fn confirmed_release(response: &[u8]) -> Result<(), &'static str> {
+    if response.is_empty() || response.len() > RESPONSE_LIMIT { return Err(INVALID); }
+    let value: ReleaseResponse = serde_json::from_slice(response).map_err(|_| INVALID)?;
+    if !value.ok { return Err(INVALID); }
+    Ok(())
+}
+
 fn fixed(value: &str) -> Result<[u8; 32], &'static str> {
     if value.len() != 43 {
         return Err(INVALID);
@@ -114,12 +199,27 @@ pub(super) fn challenge_request(
     credential: &ConfirmedCredential,
     body: &[u8],
 ) -> Result<Vec<u8>, &'static str> {
+    challenge_request_for(credential, body, false)
+}
+
+pub(super) fn release_challenge_request(
+    credential: &ConfirmedCredential,
+    body: &[u8],
+) -> Result<Vec<u8>, &'static str> {
+    challenge_request_for(credential, body, true)
+}
+
+fn challenge_request_for(credential: &ConfirmedCredential, body: &[u8], release: bool) -> Result<Vec<u8>, &'static str> {
     if body.is_empty() || body.len() > REQUEST_LIMIT {
         return Err(INVALID);
     }
     let id = URL_SAFE_NO_PAD.encode(credential.id);
     let digest: [u8; 32] = Sha256::digest(body).into();
-    let proof = wincmd_pq_experiment::licence_device_proof::sign_challenge_request(credential.secret(), &credential.id, &digest);
+    let proof = if release {
+        wincmd_pq_experiment::licence_device_proof::sign_release_challenge_request(credential.secret(), &credential.id, &digest)
+    } else {
+        wincmd_pq_experiment::licence_device_proof::sign_challenge_request(credential.secret(), &credential.id, &digest)
+    };
     serde_json::to_vec(&ChallengeRequest {
         old_request: URL_SAFE_NO_PAD.encode(body),
         credential_id: &id,
@@ -135,6 +235,19 @@ pub(super) fn renewal_request(
     response: &[u8],
     now: u64,
 ) -> Result<Vec<u8>, &'static str> {
+    device_request(credential, body, response, now, wincmd_pq_experiment::licence_device_proof::Operation::Refresh)
+}
+
+pub(super) fn release_request(
+    credential: &ConfirmedCredential, body: Vec<u8>, response: &[u8], now: u64,
+) -> Result<Vec<u8>, &'static str> {
+    device_request(credential, body, response, now, wincmd_pq_experiment::licence_device_proof::Operation::Deactivate)
+}
+
+fn device_request(
+    credential: &ConfirmedCredential, body: Vec<u8>, response: &[u8], now: u64,
+    operation: wincmd_pq_experiment::licence_device_proof::Operation,
+) -> Result<Vec<u8>, &'static str> {
     if response.is_empty() || response.len() > RESPONSE_LIMIT {
         return Err(INVALID);
     }
@@ -145,7 +258,7 @@ pub(super) fn renewal_request(
     let id = fixed(&challenge.credential_id)?;
     let nonce = fixed(&challenge.nonce)?;
     let digest = fixed(&challenge.request_digest)?;
-    let proof = sign_refresh_wire(
+    let proof = sign_device_wire(
         credential,
         body,
         &id,
@@ -153,6 +266,7 @@ pub(super) fn renewal_request(
         &digest,
         challenge.expires_at,
         now,
+        operation,
     )?;
     serde_json::to_vec(&RenewalRequest {
         old_request: URL_SAFE_NO_PAD.encode(&proof.body),
@@ -171,6 +285,7 @@ const HTTP_RESPONSE_LIMIT: usize = 64 * 1024;
 pub(super) enum Endpoint {
     Challenge,
     Renewal,
+    ReleaseChallenge,
 }
 
 /// Uses only the fixed licensing origin and never follows redirects.
@@ -178,9 +293,18 @@ pub(super) async fn post(endpoint: Endpoint, body: Vec<u8>) -> Result<Vec<u8>, &
     let path = match endpoint {
         Endpoint::Challenge => "/experimental/device/challenge",
         Endpoint::Renewal => "/experimental/device/renew",
+        Endpoint::ReleaseChallenge => "/experimental/device/release-challenge",
     };
     let client = required_hybrid_client()?;
     post_to(&client, &format!("{LICENCE_ORIGIN}{path}"), body).await
+}
+
+/// Keep the persisted release request in zeroing memory until the HTTP body is dropped.
+pub(super) async fn post_release(body: zeroize::Zeroizing<Vec<u8>>) -> Result<Vec<u8>, &'static str> {
+    if body.is_empty() || body.len() > 32 * 1024 { return Err(INVALID); }
+    let client = required_hybrid_client()?;
+    let bytes = bytes::Bytes::from_owner(body);
+    post_body(&client, &format!("{LICENCE_ORIGIN}/experimental/device/release"), bytes.into()).await
 }
 
 /// The request buffer is wiped after the HTTP body releases its last reference.
@@ -287,6 +411,43 @@ mod tests {
         let request: serde_json::Value = serde_json::from_slice(&challenge_request(&credential, &body).unwrap()).unwrap();
         for field in ["credentialId", "oldRequest", "challengeProof"] {
             assert_eq!(request[field], fixture[field]);
+        }
+    }
+
+    #[test]
+    fn release_wire_is_action_bound_and_validates_the_challenge() {
+        let credential = ConfirmedCredential { id: [7; 32], secret: zeroize::Zeroizing::new([9; 32]) };
+        let body = b"verified licence request".to_vec();
+        let digest: [u8; 32] = Sha256::digest(&body).into();
+        let start: serde_json::Value = serde_json::from_slice(&release_challenge_request(&credential, &body).unwrap()).unwrap();
+        assert_eq!(start["challengeProof"], URL_SAFE_NO_PAD.encode(
+            wincmd_pq_experiment::licence_device_proof::sign_release_challenge_request(credential.secret(), &credential.id, &digest)));
+        let refresh: serde_json::Value = serde_json::from_slice(&challenge_request(&credential, &body).unwrap()).unwrap();
+        assert_ne!(start["challengeProof"], refresh["challengeProof"]);
+        let nonce = [8; 32];
+        let response = serde_json::json!({ "ok": true, "credentialId": URL_SAFE_NO_PAD.encode(credential.id),
+            "nonce": URL_SAFE_NO_PAD.encode(nonce), "requestDigest": URL_SAFE_NO_PAD.encode(digest), "expiresAt": 1060 });
+        let encoded = serde_json::to_vec(&response).unwrap();
+        let request: serde_json::Value = serde_json::from_slice(&release_request(&credential, body.clone(), &encoded, 1000).unwrap()).unwrap();
+        let challenge = wincmd_pq_experiment::licence_device_proof::Challenge {
+            operation: wincmd_pq_experiment::licence_device_proof::Operation::Deactivate,
+            credential_id: &credential.id, nonce: &nonce, request_digest: &digest, expires_at: 1060,
+        };
+        assert_eq!(request["proof"], URL_SAFE_NO_PAD.encode(wincmd_pq_experiment::licence_device_proof::sign(credential.secret(), &challenge)));
+        assert!(release_request(&credential, b"other".to_vec(), &encoded, 1000).is_err());
+        assert!(release_request(&credential, body.clone(), &encoded, 1060).is_err());
+        let mut wrong_device = response.clone();
+        wrong_device["credentialId"] = serde_json::json!(URL_SAFE_NO_PAD.encode([6; 32]));
+        assert!(release_request(&credential, body.clone(), &serde_json::to_vec(&wrong_device).unwrap(), 1000).is_err());
+        let mut bad_nonce = response.clone();
+        bad_nonce["nonce"] = serde_json::json!("invalid");
+        assert!(release_request(&credential, body.clone(), &serde_json::to_vec(&bad_nonce).unwrap(), 1000).is_err());
+        let mut unexpected = response.clone();
+        unexpected["extra"] = serde_json::json!(1);
+        assert!(release_request(&credential, body.clone(), &serde_json::to_vec(&unexpected).unwrap(), 1000).is_err());
+        assert!(confirmed_release(br#"{"ok":true}"#).is_ok());
+        for invalid in [br#"{"ok":false}"#.as_slice(), br#"{"ok":true,"extra":1}"#, b"{}"] {
+            assert!(confirmed_release(invalid).is_err());
         }
     }
 
