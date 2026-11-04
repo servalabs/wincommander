@@ -233,3 +233,6 @@ mod lossless_tests;
 
 #[path = "tests_summary.rs"]
 mod summary_tests;
+
+#[path = "tests_epoch.rs"]
+mod epoch_tests;

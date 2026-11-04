@@ -15,6 +15,7 @@ pub struct WindowsCommandV2 {
     pub catalog_id: String,
     pub action_class: ActionClass,
     pub payload: LosslessJson,
+    /// Full signed i64 value; compare without clamping or unsigned conversion.
     #[serde(with = "super::decimal::epoch")]
     #[cfg_attr(feature = "ts-codegen", ts(type = "string"))]
     pub epoch_version: i64,
@@ -58,7 +59,6 @@ pub fn verify_windows_command(
         && !command.command_id.is_empty()
         && !command.idempotency_key.is_empty()
         && !command.catalog_id.is_empty()
-        && command.epoch_version >= 0
         && command.signer_key == expected_signer
         && strong_canonical_key(expected_signer)
         && canonical_signature(&command.signature)

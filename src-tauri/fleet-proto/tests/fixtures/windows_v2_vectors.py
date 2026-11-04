@@ -15,12 +15,24 @@ outcome={'version':2,'binding':binding,'receipt_id':'receipt-1','sequence':'1','
 op=c(['fleet.windows.action-outcome.v2',2,binding,'receipt-1','1',None,'delivery-1','fixture.inspect','safe','unknown','report',outcome['observed_at'],outcome['summary']]);oh=hashlib.sha256(op).digest();outcome['record_hash']=oh.hex();outcome['signature']=b64(key(7).sign(oh))
 ack={'binding':binding,'command_id':'delivery-1','report_id':'report-1','success':False,'detail':'fixture','result':c({'error':'fixture'}).decode(),'phase':None,'terminal_reason':None}
 request=c({'nonce':'nonce-1','windows_v2':{'version':2,'binding':binding,'acks':[ack],'outcomes':[outcome]}})
-response=c({'windows_v2':{'version':2,'binding':binding,'commands':[command],'ack_receipts':[{'command_id':'delivery-1','report_id':'report-1','report_sha256':hashlib.sha256(c(['fleet.windows.ack.v2',ack])).hexdigest(),'disposition':'accepted','resulting_status':'failed'}],'outcome_receipts':[{'receipt_id':'receipt-1','sequence':'1','record_hash':oh.hex(),'disposition':'accepted'}],'head':{'last_sequence':'1','previous_hash':oh.hex()}}})
+response=c({'windows_v2':{'version':2,'binding':binding,'commands':[command],'ack_receipts':[{'command_id':'delivery-1','report_id':'report-1','report_sha256':hashlib.sha256(c(['fleet.windows.ack.v2',ack])).hexdigest(),'disposition':'accepted','resulting_status':'failed'}],'outcome_receipts':[{'receipt_id':'receipt-1','sequence':'1','record_hash':oh.hex(),'disposition':'accepted'}],'command_epoch_floor':'4','head':{'last_sequence':'1','previous_hash':oh.hex()}}})
 proof={'version':2,'binding':binding,'nonce':'nonce-1','request_sha256':b64(hashlib.sha256(request).digest()),'http_status':200,'response_sha256':b64(hashlib.sha256(response).digest()),'signature':''}
 pp=c(['fleet.windows.outcome-receipt.v2',binding,'nonce-1',proof['request_sha256'],200,proof['response_sha256']]);proof['signature']=b64(key(11).sign(pp))
 vector={'description':'Public test seeds: device 7, authority 11, operator 13, each repeated 32 bytes. Independently generated with Python cryptography Ed25519 and hashlib SHA256.','device_key':pub(7),'command':command,'command_preimage':cp.decode(),'outcome':outcome,'outcome_preimage':op.decode(),'ack':ack,'result_hash':hashlib.sha256(c(['fleet.windows.result.v2',ack['result']])).hexdigest(),'ack_hash':hashlib.sha256(c(['fleet.windows.ack.v2',ack])).hexdigest(),'request_bytes':request.decode(),'response_bytes':response.decode(),'proof':proof,'proof_preimage':pp.decode()}
 readiness=dict(outcome,receipt_id='readiness-1',command_id=None,catalog_id='readiness.self_test',summary={'kind':'readiness','result':{'arm_predicate':'unknown','signed_dispatch':'pass','simulate_branch':'pass','recovery_path':'fail','observed_at':'2025-12-31T23:00:00-01:00'}})
 rp=c(['fleet.windows.action-outcome.v2',2,binding,readiness['receipt_id'],'1',None,None,readiness['catalog_id'],'safe','unknown','report',readiness['observed_at'],readiness['summary']]);rh=hashlib.sha256(rp).digest();readiness['record_hash']=rh.hex();readiness['signature']=b64(key(7).sign(rh))
 vector['readiness']=readiness;vector['readiness_preimage']=rp.decode()
+epoch_vectors=[]
+for value in [-9223372036854775808, 9223372036854775807]:
+    cmd=dict(command,epoch_version=str(value))
+    command_preimage=c(['fleet.windows.command.v2',binding,cmd['idempotency_key'],cmd['catalog_id'],cmd['action_class'],cmd['payload'],cmd['epoch_version']])
+    cmd['signature']=b64(key(13).sign(command_preimage))
+    reply=json.loads(response);reply['windows_v2']['command_epoch_floor']=str(value);reply['windows_v2']['commands']=[cmd]
+    reply_bytes=c(reply)
+    receipt=dict(proof,response_sha256=b64(hashlib.sha256(reply_bytes).digest()))
+    receipt_preimage=c(['fleet.windows.outcome-receipt.v2',binding,'nonce-1',receipt['request_sha256'],200,receipt['response_sha256']])
+    receipt['signature']=b64(key(11).sign(receipt_preimage))
+    epoch_vectors.append({'command':cmd,'command_preimage':command_preimage.decode(),'response_bytes':reply_bytes.decode(),'proof':receipt,'proof_preimage':receipt_preimage.decode()})
+vector['epoch_boundaries']=epoch_vectors
 from pathlib import Path
 Path(__file__).with_name('windows_v2.json').write_text(json.dumps(vector,indent=2,ensure_ascii=False)+'\n')

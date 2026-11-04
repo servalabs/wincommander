@@ -14,7 +14,9 @@
 //!
 //! Consume one detached proof only for its live nonce, original request/response
 //! buffers and current enrollment/lifecycle. Verify it before acting on any
-//! response field, including jobs or policy outside this block. Action signature
+//! response field, including jobs or policy outside this block. The required
+//! command epoch floor is independent of policy revision and applies to each
+//! command in the response; equal epochs are permitted. Action signature
 //! verification alone does not bind the server-assigned delivery ID.
 //!
 //! Accepted/duplicate ACK receipts settle only the matching report ID and hash.

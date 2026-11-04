@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! JSON strings preserve counter precision for JavaScript and other consumers.
+//! Canonical JSON strings preserve integer precision for every consumer.
 use serde::{Deserialize, Deserializer, Serializer};
 
 fn digits(value: &str) -> bool {
@@ -29,16 +29,17 @@ pub(super) mod unsigned {
 pub(super) mod epoch {
     use super::*;
     pub fn serialize<S: Serializer>(value: &i64, serializer: S) -> Result<S::Ok, S::Error> {
-        if *value < 0 {
-            return Err(serde::ser::Error::custom("epoch must not be negative"));
-        }
         serializer.serialize_str(&value.to_string())
     }
     pub fn deserialize<'de, D: Deserializer<'de>>(decoder: D) -> Result<i64, D::Error> {
         let value = String::deserialize(decoder)?;
-        if !digits(&value) {
+        let canonical = match value.strip_prefix('-') {
+            Some(magnitude) => magnitude != "0" && digits(magnitude),
+            None => digits(&value),
+        };
+        if !canonical {
             return Err(serde::de::Error::custom(
-                "expected canonical epoch decimal string",
+                "expected canonical signed epoch decimal string",
             ));
         }
         value

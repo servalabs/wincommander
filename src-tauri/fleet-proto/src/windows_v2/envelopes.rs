@@ -132,6 +132,12 @@ impl WindowsOutcomeHeadV2 {
 pub struct WindowsCheckinResponseV2 {
     pub version: u16,
     pub binding: FleetEnrollmentBinding,
+    /// Authenticated server command rollback floor, independent of a targeted
+    /// policy revision. Compare every command against this same floor; several
+    /// commands may have the same epoch. Full i64 range, encoded losslessly.
+    #[serde(with = "super::decimal::epoch")]
+    #[cfg_attr(feature = "ts-codegen", ts(type = "string"))]
+    pub command_epoch_floor: i64,
     pub commands: Vec<WindowsCommandV2>,
     pub ack_receipts: Vec<WindowsAckReceiptV2>,
     pub outcome_receipts: Vec<WindowsOutcomeReceiptV2>,

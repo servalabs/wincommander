@@ -79,3 +79,26 @@ test("closed command/readiness summaries roundtrip and bind every structured fie
     assert.ok(!verify(null, hash(preimage(changed)), publicKey(fixture.device_key), Buffer.from(readiness.signature, "base64")));
   }
 });
+
+
+test("signed i64 epoch extremes survive JS roundtrip and bind floor authority", () => {
+  for (const [index, epoch] of ["-9223372036854775808", "9223372036854775807"].entries()) {
+    const vector = fixture.epoch_boundaries[index];
+    const command = JSON.parse(JSON.stringify(vector.command));
+    assert.equal(command.epoch_version, epoch);
+    assert.equal(commandBytes(command).toString("utf8"), vector.command_preimage);
+    assert.equal(sign(null, commandBytes(command), privateKey(13)).toString("base64"), command.signature);
+    const response = JSON.parse(vector.response_bytes);
+    assert.equal(response.windows_v2.command_epoch_floor, epoch);
+    assert.equal(BigInt(response.windows_v2.command_epoch_floor), BigInt(epoch));
+    assert.equal(typeof response.windows_v2.command_epoch_floor, "string");
+    const proof = vector.proof;
+    const preimage = bytes(["fleet.windows.outcome-receipt.v2", proof.binding, proof.nonce, proof.request_sha256, proof.http_status, proof.response_sha256]);
+    assert.equal(preimage.toString("utf8"), vector.proof_preimage);
+    assert.equal(hash(Buffer.from(vector.response_bytes)).toString("base64"), proof.response_sha256);
+    assert.equal(sign(null, preimage, privateKey(11)).toString("base64"), proof.signature);
+    response.windows_v2.command_epoch_floor = "0";
+    const altered = bytes(["fleet.windows.outcome-receipt.v2", proof.binding, proof.nonce, proof.request_sha256, proof.http_status, hash(bytes(response)).toString("base64")]);
+    assert.ok(!verify(null, altered, publicKey(proof.binding.authority_key_b64), Buffer.from(proof.signature, "base64")));
+  }
+});
