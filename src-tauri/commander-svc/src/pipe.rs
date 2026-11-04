@@ -835,6 +835,14 @@ fn valid_diagnostic_operation_id(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
 }
 
+#[cfg(feature = "experimental-pq-licence")]
+fn hybrid_renewal_error(error: &str) -> VerbError {
+    VerbError::new("license_renewal_rejected",
+        if error == crate::licence_device_credential::RETRY_LATER {
+            crate::licence_device_credential::RETRY_LATER
+        } else { "license renewal is unavailable" })
+}
+
 async fn handle_hybrid_license_renewal(
     args: serde_json::Value,
     trust_origin: Option<TrustOrigin>,
@@ -848,7 +856,7 @@ async fn handle_hybrid_license_renewal(
     #[cfg(feature = "experimental-pq-licence")]
     { crate::licence_device_credential::renew_from_machine_cache().await
         .map(|_| serde_json::json!({ "renewed": true }))
-        .map_err(|_| VerbError::new("license_renewal_rejected", "license renewal is unavailable")) }
+        .map_err(hybrid_renewal_error) }
     #[cfg(not(feature = "experimental-pq-licence"))]
     { Err(VerbError::new("license_renewal_rejected", "license renewal is unavailable")) }
 }
@@ -5594,6 +5602,15 @@ mod tests {
         assert_eq!(injected.kind, "license_renewal_rejected");
         let gate = gate_denying_with(PeerAuthError::PathNotAllowed);
         assert!(authorize(RENEW_HYBRID_LICENSE_VERB, true, 1234, &gate).await.is_err());
+    }
+
+    #[cfg(feature = "experimental-pq-licence")]
+    #[test]
+    fn hybrid_renewal_exposes_only_the_safe_retry_message() {
+        let limited = hybrid_renewal_error(crate::licence_device_credential::RETRY_LATER);
+        assert_eq!(limited.message, crate::licence_device_credential::RETRY_LATER);
+        let private = hybrid_renewal_error("sensitive server detail");
+        assert_eq!(private.message, "license renewal is unavailable");
     }
 
     #[tokio::test]

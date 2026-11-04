@@ -15,6 +15,7 @@ mod receipt;
 mod wire;
 
 const INVALID: &str = "device credential is invalid or unavailable";
+pub(crate) const RETRY_LATER: &str = "Licence service is busy. Wait two minutes and retry.";
 const LIMIT: usize = 64 * 1024;
 static LOCK: Mutex<()> = Mutex::new(());
 

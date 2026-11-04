@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Experimental device renewal wire messages and fixed-origin transport. No IPC is enabled.
-use super::{sign_refresh_wire, Binding, ConfirmedCredential, PendingCredential, INVALID};
+use super::{sign_refresh_wire, Binding, ConfirmedCredential, PendingCredential, INVALID, RETRY_LATER};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::{Deserialize, Serialize};
 
@@ -243,6 +243,9 @@ async fn post_body(
         .send()
         .await
         .map_err(|_| INVALID)?;
+    if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return Err(RETRY_LATER);
+    }
     if response.status() != reqwest::StatusCode::OK
         || response
             .content_length()
@@ -393,5 +396,9 @@ mod tests {
         let oversized =
             serve(b"HTTP/1.1 200 OK\r\nContent-Length: 65537\r\nConnection: close\r\n\r\n").await;
         assert!(post_to(&client, &oversized, b"{}".to_vec()).await.is_err());
+        let limited = serve(b"HTTP/1.1 429 Too Many Requests\r\nRetry-After: 120\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
+        assert_eq!(post_to(&client, &limited, b"{}".to_vec()).await.unwrap_err(), RETRY_LATER);
+        let unavailable = serve(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
+        assert_eq!(post_to(&client, &unavailable, b"{}".to_vec()).await.unwrap_err(), INVALID);
     }
 }
