@@ -943,7 +943,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     const clearAndReconcile = async (cat: CleanupCategory, allowDefaultExcluded = false): Promise<ClearOutcome> => {
         const before = Math.max(0, _cleanupCache[cat.id]?.count ?? cardDataMap[cat.id]?.count ?? 0);
         const clearer = clearerMap[cat.id];
-        if (!clearer) return { result: 'failed', before, after: before, removed: 0 };
+        if (!cat.clearDataKey || !clearer) return { result: 'failed', before, after: before, removed: 0 };
         const recordVerification = (outcome: ClearOutcome): ClearOutcome => {
             const current = _cleanupCache[cat.id];
             if (current) updateCacheEntry(cat.id, {
@@ -1161,6 +1161,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     };
 
     const handleCardClear = async (cat: CleanupCategory, onDriveWipe?: () => void) => {
+        if (!cat.clearDataKey) return;
         const allowDefaultExcluded = isDefaultExcludedCleanup(cat.id);
         if (!await requestCleanupManualAuthorization(cat, 'clear', requestConfirm)) return;
         if (cat.id === 'unallocatedErase') {
@@ -1225,6 +1226,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     ) => {
         const withFindings = categories.filter(cat =>
             !cat.actionOnly &&
+            !!cat.clearDataKey &&
             (cardDataMap[cat.id]?.count ?? 0) > 0 &&
             clearerMap[cat.id] &&
             !isDefaultExcludedCleanup(cat.id) &&
@@ -1284,6 +1286,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     // sub-section's own data map, so the main current-user grid is never
     // touched. `targets` undefined = all users.
     const runOtherUserClear = async (cat: CleanupCategory, targets: string[] | undefined, allowDefaultExcluded = false) => {
+        if (!cat.clearDataKey) return;
         if (isDefaultExcludedCleanup(cat.id) && !allowDefaultExcluded) return;
         const prev = otherUserDataMap[cat.id] || { count: -1, items: [] };
         const setCard = (data: CardData) => {
@@ -1320,7 +1323,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
 
     // "Clear for {selected user}" in the sub-section.
     const handleOtherUserClear = async (cat: CleanupCategory) => {
-        if (!selectedUser || !MULTI_USER_CLEANUP_IDS.has(cat.id) || otherUserClearBusy.current || scheduleMutationBusy.current) return;
+        if (!cat.clearDataKey || !selectedUser || !MULTI_USER_CLEANUP_IDS.has(cat.id) || otherUserClearBusy.current || scheduleMutationBusy.current) return;
         otherUserClearBusy.current = true;
         setOtherUserClearing(true);
         try {
@@ -1339,7 +1342,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
 
     // "Clear for all users" in the sub-section (admin-only, scopeAware-only).
     const handleCardClearAllUsers = async (cat: CleanupCategory) => {
-        if (!MULTI_USER_CLEANUP_IDS.has(cat.id) || otherUserClearBusy.current || scheduleMutationBusy.current) return;
+        if (!cat.clearDataKey || !MULTI_USER_CLEANUP_IDS.has(cat.id) || otherUserClearBusy.current || scheduleMutationBusy.current) return;
         otherUserClearBusy.current = true;
         setOtherUserClearing(true);
         try {

@@ -5,6 +5,7 @@ $ast = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $
 $definition = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-CellularHistoryInfo' }, $true)
 . ([scriptblock]::Create($definition.Extent.Text))
 $script:hasProfile = $true; $script:failCommand = $false
+function Get-NetAdapter { [CmdletBinding()] param([switch]$IncludeHidden) [pscustomobject]@{ InterfaceType = 243; NdisPhysicalMedium = 8 } }
 function netsh.exe {
     $global:LASTEXITCODE = if ($script:failCommand) { 1 } else { 0 }
     if (($args -join ' ') -like '*show interfaces*') { 'Name : Mock cellular interface' }
@@ -15,6 +16,18 @@ if ($populated.error -or $populated.total -ne 1 -or $populated.interfaceCount -n
 $script:hasProfile = $false
 $empty = Get-CellularHistoryInfo
 if ($empty.error -or -not $empty.partial -or $empty.total -ne 0 -or $empty.interfaceCount -ne 1) { throw 'Unrecognized profile output must not be treated as a verified empty inventory.' }
+function netsh.exe {
+    $global:LASTEXITCODE = 0
+    if (($args -join ' ') -like '*show interfaces*') { 'Name : Mock cellular interface' }
+    else { 'There are no profiles on interface Mock cellular interface.' }
+}
+$verifiedEmpty = Get-CellularHistoryInfo
+if ($verifiedEmpty.error -or $verifiedEmpty.partial -or $verifiedEmpty.total -ne 0 -or $verifiedEmpty.status -ne 'complete') { throw 'An explicit no-profiles response should be a verified empty inventory.' }
+function netsh.exe {
+    $global:LASTEXITCODE = if ($script:failCommand) { 1 } else { 0 }
+    if (($args -join ' ') -like '*show interfaces*') { 'Name : Mock cellular interface' }
+    elseif ($script:hasProfile) { 'Profile Name : Mock profile' }
+}
 $script:failCommand = $true
 $script:serviceStatus = 'Stopped'
 function Get-Service { [CmdletBinding()] param([string]$Name) if ($script:serviceStatus) { [pscustomobject]@{ Status = $script:serviceStatus } } }
@@ -24,6 +37,11 @@ $script:serviceStatus = $null
 if ((Get-CellularHistoryInfo).message -notmatch 'service is unavailable') { throw 'An unavailable broadband service must be identified.' }
 $script:serviceStatus = 'Running'
 if ((Get-CellularHistoryInfo).message -notmatch 'interfaces could not be read') { throw 'A running service with a failed query must remain an error.' }
+function Get-NetAdapter { [CmdletBinding()] param([switch]$IncludeHidden) [pscustomobject]@{ InterfaceType = 6; NdisPhysicalMedium = 0 } }
+$noHardware = Get-CellularHistoryInfo
+if ($noHardware.error -or $noHardware.partial -or -not $noHardware.noHardware -or $noHardware.status -ne 'not_applicable' -or $noHardware.coverageNote -notmatch 'disconnected') { throw 'No current broadband adapter must be distinguished from a verified empty profile inventory.' }
+function Get-NetAdapter { [CmdletBinding()] param([switch]$IncludeHidden) throw 'Synthetic adapter enumeration failure' }
+if (-not (Get-CellularHistoryInfo).error) { throw 'Failed adapter inventory must not become an empty or no-hardware result.' }
 $script:failCommand = $false
 function netsh.exe {
     $global:LASTEXITCODE = 0

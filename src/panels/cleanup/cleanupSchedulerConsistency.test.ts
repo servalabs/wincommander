@@ -21,11 +21,11 @@ describe("System Cleanup scheduler catalogue", () => {
   });
   test("every clearable card has a schedule or a named execution blocker", () => {
     const blockedIds = new Set([
-      "cloudPlaceholders", "inactiveUserProtectionMetadata", "cellularHistory", "gitActivity", "ntfsJournals",
+      "cloudPlaceholders", "inactiveUserProtectionMetadata", "cellularHistory", "credentialManager", "gitActivity", "ntfsJournals",
     ]);
     const cards = [...STANDARD_CATEGORIES, ...DEEP_DFIR_CATEGORIES];
     expect(cards.length).toBe(80);
-    expect(cards.filter(category => category.schedulable).length).toBe(75);
+    expect(cards.filter(category => category.schedulable).length).toBe(74);
     for (const category of cards) {
       expect(category.schedulable === true).toBe(!blockedIds.has(category.id));
       if (blockedIds.has(category.id)) expect(getCleanupScheduleUnavailableReason(category)).not.toBeNull();

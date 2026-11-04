@@ -131,6 +131,11 @@ the backend and private component before execution.
   visible while its content scrolls. System Cleanup retains Browser Audit,
   Editor History, Office Document History, Adobe Recent Files, Windows activity,
   clipboard, network and credential tools.
+- System Cleanup distinguishes verified empty sources from unavailable or
+  incomplete reads. Saved Credentials and Git Activity provide scan-only
+  identity/configuration metadata with an explicit source scope. Amcache needs
+  a readable Windows registry inventory; Resource Usage History currently
+  reports SRUM database metadata rather than decoded historical records.
 - Dedicated developer-tool and AI-cache categories. AI cache cleanup excludes
   user-managed models, datasets, credentials, and resumable upload staging.
 - Deep Cleanup scans supported application cache locations automatically and

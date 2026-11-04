@@ -18,10 +18,10 @@ function Get-WCScheduledCredentials {
 function cmdkey.exe { throw 'Localized console output must not be parsed.' }
 
 $result = Get-CredentialManagerInfo
-if ($result.error -or -not $result.partial -or $result.total -ne 1 -or @($result.files).Count -ne 1 -or $result.files[0].name -ne 'Saved credential target: synthetic-target' -or $result.files[0].credentialType -ne 1 -or $result.files[0].username -ne 'synthetic-user') { throw 'Successful enumeration did not return the credential identity or partial coverage.' }
+if ($result.error -or $result.partial -or $result.status -ne 'complete' -or $result.coverage -ne 'limited' -or $result.total -ne 1 -or @($result.files).Count -ne 1 -or $result.files[0].name -ne 'Saved credential target: synthetic-target' -or $result.files[0].credentialType -ne 1 -or $result.files[0].username -ne 'synthetic-user') { throw 'Successful enumeration did not return the credential identity with limited coverage.' }
 $script:credentialFixtureMode = 'empty'
 $result = Get-CredentialManagerInfo
-if ($result.error -or -not $result.partial -or $result.total -ne 0 -or @($result.files).Count -ne 0) { throw 'Successful empty enumeration did not remain empty with partial coverage.' }
+if ($result.error -or $result.partial -or $result.status -ne 'complete' -or $result.coverage -ne 'limited' -or $result.total -ne 0 -or @($result.files).Count -ne 0) { throw 'Successful empty enumeration did not remain empty with limited coverage.' }
 $script:credentialFixtureMode = 'failed'
 $result = Get-CredentialManagerInfo
 if (-not $result.error) { throw 'Failed credential enumeration was reported as an empty result.' }
