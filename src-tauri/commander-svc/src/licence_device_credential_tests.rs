@@ -298,3 +298,60 @@ fn worker_enrolment_receipt_interoperates_and_is_not_a_licence() {
     };
     assert!(jws::verify(encoded.as_bytes(), &licence).is_err());
 }
+
+#[test]
+fn authorized_worker_issuer_receipt_confirms_persisted_pending_credential() {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    use wincmd_pq_experiment::{jws, Purpose, ML_DSA_65_PUBLIC_KEY_LEN};
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/workers-enrolment-issuer.json")).unwrap();
+    let ed: [u8; 32] = URL_SAFE_NO_PAD
+        .decode(fixture["publicEd"].as_str().unwrap())
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let pq: [u8; ML_DSA_65_PUBLIC_KEY_LEN] = URL_SAFE_NO_PAD
+        .decode(fixture["publicPq"].as_str().unwrap())
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let trust = jws::Trust {
+        purpose: Purpose::LicenceEnrolment,
+        minimum_epoch: 7,
+        ed_key_id: "ed",
+        ed25519_public: &ed,
+        pq_key_id: "pq",
+        ml_dsa_65_public: &pq,
+    };
+    let binding = Binding {
+        licence_id: "license-test",
+        device_hash: "device-test",
+        issuer_origin: "https://license.example",
+    };
+    let pending = PendingCredential {
+        id: [5; 32],
+        secret: Zeroizing::new([17; 32]),
+    };
+    let path = format!(
+        r"SOFTWARE\WinCommanderIssuerReceiptTest-{}",
+        uuid::Uuid::new_v4()
+    );
+    let anchor = anchor::Anchor::test_user(path.clone());
+    save_locked(&anchor, &MachineDpapi, &binding, &pending).unwrap();
+    let receipt = fixture["receipt"].as_str().unwrap();
+    let accepted_at = fixture["acceptedAt"].as_u64().unwrap();
+    let confirmed = confirm_with(
+        &anchor,
+        &MachineDpapi,
+        &binding,
+        &trust,
+        receipt,
+        accepted_at,
+    )
+    .unwrap();
+    assert_eq!(confirmed.id, pending.id);
+    assert_eq!(confirmed.secret(), pending.secret());
+    let stored = anchor.read().unwrap().unwrap();
+    assert!(decode_confirmed(&MachineDpapi, &binding, &trust, &stored, accepted_at + 1).is_ok());
+    anchor::remove_test_key(&path).unwrap();
+}
