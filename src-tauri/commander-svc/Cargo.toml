@@ -24,7 +24,7 @@ path = "src/main.rs"
 
 [features]
 # Compile-only migration work; this does not enable issuance or cache writes.
-experimental-pq-licence = ["dep:wincmd-pq-experiment"]
+experimental-pq-licence = ["dep:wincmd-pq-experiment", "dep:rustls", "dep:rustls-platform-verifier"]
 
 [dependencies]
 wincmd-shared = { path = "../wincmd-shared" }
@@ -49,9 +49,12 @@ subtle = "2"
 base64 = "0.22"
 url = "2"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "stream"] }
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "std", "prefer-post-quantum"], optional = true }
+rustls-platform-verifier = { version = "0.7", optional = true }
 ed25519-dalek = { version = "3", default-features = false, features = ["alloc", "signature"] }
 
 [dev-dependencies]
+rcgen = "0.14"
 uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", features = ["test-util"] }
 aws-lc-rs = { version = "1.19", default-features = false, features = ["alloc", "aws-lc-sys"] }

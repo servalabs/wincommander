@@ -115,13 +115,33 @@ pub(super) async fn post(endpoint: Endpoint, body: Vec<u8>) -> Result<Vec<u8>, &
         Endpoint::Challenge => "/experimental/device/challenge",
         Endpoint::Renewal => "/experimental/device/renew",
     };
-    let client = reqwest::Client::builder()
+    let client = required_hybrid_client()?;
+    post_to(&client, &format!("{LICENCE_ORIGIN}{path}"), body).await
+}
+
+fn required_hybrid_provider() -> rustls::crypto::CryptoProvider {
+    let mut provider = rustls::crypto::aws_lc_rs::default_provider();
+    provider.kx_groups = vec![rustls::crypto::aws_lc_rs::kx_group::X25519MLKEM768];
+    provider
+}
+
+fn required_hybrid_client() -> Result<reqwest::Client, &'static str> {
+    use rustls_platform_verifier::BuilderVerifierExt;
+    let config = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
+        required_hybrid_provider(),
+    ))
+    .with_protocol_versions(&[&rustls::version::TLS13])
+    .map_err(|_| INVALID)?
+    .with_platform_verifier()
+    .map_err(|_| INVALID)?
+    .with_no_client_auth();
+    reqwest::Client::builder()
         .https_only(true)
         .redirect(reqwest::redirect::Policy::none())
+        .use_preconfigured_tls(config)
         .timeout(std::time::Duration::from_secs(15))
         .build()
-        .map_err(|_| INVALID)?;
-    post_to(&client, &format!("{LICENCE_ORIGIN}{path}"), body).await
+        .map_err(|_| INVALID)
 }
 
 async fn post_to(
@@ -176,6 +196,99 @@ mod tests {
             socket.write_all(response).await.unwrap();
         });
         format!("http://{address}/test")
+    }
+
+    #[tokio::test]
+    async fn renewal_tls_requires_hybrid_exchange_and_trusted_certificate() {
+        use rustls::pki_types::PrivatePkcs8KeyDer;
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        let rcgen::CertifiedKey { cert, signing_key } =
+            rcgen::generate_simple_self_signed(vec!["127.0.0.1".into()]).unwrap();
+        let server = |group| {
+            let mut provider = rustls::crypto::aws_lc_rs::default_provider();
+            provider.kx_groups = vec![group];
+            Arc::new(
+                rustls::ServerConfig::builder_with_provider(Arc::new(provider))
+                    .with_protocol_versions(&[&rustls::version::TLS13])
+                    .unwrap()
+                    .with_no_client_auth()
+                    .with_single_cert(
+                        vec![cert.der().clone()],
+                        PrivatePkcs8KeyDer::from(signing_key.serialize_der()).into(),
+                    )
+                    .unwrap(),
+            )
+        };
+        let trusted = || {
+            let mut roots = rustls::RootCertStore::empty();
+            roots.add(cert.der().clone()).unwrap();
+            let config =
+                rustls::ClientConfig::builder_with_provider(Arc::new(required_hybrid_provider()))
+                    .with_protocol_versions(&[&rustls::version::TLS13])
+                    .unwrap()
+                    .with_root_certificates(roots)
+                    .with_no_client_auth();
+            reqwest::Client::builder()
+                .no_proxy()
+                .https_only(true)
+                .redirect(reqwest::redirect::Policy::none())
+                .timeout(Duration::from_secs(5))
+                .use_preconfigured_tls(config)
+                .build()
+                .unwrap()
+        };
+        async fn attempt(server: Arc<rustls::ServerConfig>, client: reqwest::Client) -> bool {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let address = listener.local_addr().unwrap();
+            let task = std::thread::spawn(move || {
+                let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                let socket = loop {
+                    match listener.accept() {
+                        Ok((socket, _)) => break socket,
+                        Err(e)
+                            if e.kind() == std::io::ErrorKind::WouldBlock
+                                && std::time::Instant::now() < deadline =>
+                        {
+                            std::thread::sleep(Duration::from_millis(10))
+                        }
+                        Err(_) => return,
+                    }
+                };
+                socket.set_nonblocking(false).unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                socket
+                    .set_write_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut tls = rustls::StreamOwned::new(
+                    rustls::ServerConnection::new(server).unwrap(),
+                    socket,
+                );
+                let mut request = [0u8; 1024];
+                if tls.read(&mut request).is_ok() {
+                    let _ = tls.write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                    );
+                    let _ = tls.flush();
+                }
+            });
+            let ok = post_to(&client, &format!("https://{address}/"), b"{}".to_vec())
+                .await
+                .is_ok();
+            task.join().unwrap();
+            ok
+        }
+        let hybrid = server(rustls::crypto::aws_lc_rs::kx_group::X25519MLKEM768);
+        let classical = server(rustls::crypto::aws_lc_rs::kx_group::X25519);
+        assert!(attempt(hybrid.clone(), trusted()).await);
+        assert!(!attempt(classical, trusted()).await);
+        assert!(!attempt(hybrid, required_hybrid_client().unwrap()).await);
     }
 
     #[tokio::test]
