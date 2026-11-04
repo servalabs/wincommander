@@ -39,6 +39,45 @@ fn verify_proof(
     (verified.payload == payload).then_some(verified.epoch)
 }
 
+/// Bind the original enrollment request and response to the challenge and
+/// HTTP status. Both peers must use the raw, complete transport bytes.
+pub fn windows_hybrid_enrollment_preimage(
+    challenge: &str,
+    request: &[u8],
+    status: u16,
+    response: &[u8],
+) -> Vec<u8> {
+    crate::canonical_json_bytes(&serde_json::json!([
+        "fleet.windows.enrollment.v2",
+        challenge,
+        windows_bytes_sha256(request),
+        status,
+        windows_bytes_sha256(response)
+    ]))
+}
+
+/// Verify the exact enrollment exchange against independently provisioned
+/// trust. The returned epoch must be protected before enrollment is installed.
+pub fn verify_windows_hybrid_enrollment(
+    challenge: &str,
+    request: &[u8],
+    status: u16,
+    response: &[u8],
+    expected_ed_key: &str,
+    proof: &[u8],
+    trust: &WindowsHybridTrust<'_>,
+) -> Option<u64> {
+    if status != 200 || STANDARD.encode(trust.ed25519_public) != expected_ed_key {
+        return None;
+    }
+    verify_proof(
+        proof,
+        &windows_hybrid_enrollment_preimage(challenge, request, status, response),
+        Purpose::FleetEnrollment,
+        trust,
+    )
+}
+
 /// Requires both signatures over this exact command and the existing strict
 /// v2 action verification. The caller must also authenticate the enclosing
 /// response, delivery ID and freshness, and persist the returned epoch.

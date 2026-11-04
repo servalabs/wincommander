@@ -39,6 +39,68 @@ fn sign_proof(
 }
 
 #[test]
+fn hybrid_enrollment_binds_flight_and_independent_trust() {
+    let ed = SigningKey::from_bytes(&[23; 32]);
+    let ed_key = ed.verifying_key().to_bytes();
+    let pq = PqdsaKeyPair::generate(&ML_DSA_65_SIGNING).unwrap();
+    let pq_key: [u8; ML_DSA_65_PUBLIC_KEY_LEN] = pq.public_key().as_ref().try_into().unwrap();
+    let trust = WindowsHybridTrust {
+        minimum_epoch: 1,
+        ed_key_id: "fleet-ed",
+        ed25519_public: &ed_key,
+        pq_key_id: "fleet-pq",
+        ml_dsa_65_public: &pq_key,
+    };
+    let challenge = "22222222-2222-4222-8222-222222222222";
+    let request = b"{\"device\":1}";
+    let response = b"{\"generation\":1}";
+    let preimage = windows_hybrid_enrollment_preimage(challenge, request, 200, response);
+    let proof = sign_proof(&preimage, Purpose::FleetEnrollment, &ed, &pq, &pq_key);
+    let key = STANDARD.encode(ed_key);
+    let verify =
+        |c: &str, r: &[u8], s: u16, b: &[u8], k: &str, p: &[u8], t: &WindowsHybridTrust<'_>| {
+            verify_windows_hybrid_enrollment(c, r, s, b, k, p, t)
+        };
+    assert_eq!(
+        verify(challenge, request, 200, response, &key, &proof, &trust),
+        Some(7)
+    );
+    assert!(verify("different", request, 200, response, &key, &proof, &trust).is_none());
+    assert!(verify(challenge, b"changed", 200, response, &key, &proof, &trust).is_none());
+    assert!(verify(challenge, request, 201, response, &key, &proof, &trust).is_none());
+    assert!(verify(challenge, request, 200, b"changed", &key, &proof, &trust).is_none());
+    assert!(verify(challenge, request, 200, response, "other", &proof, &trust).is_none());
+    let high_floor = WindowsHybridTrust {
+        minimum_epoch: 8,
+        ..trust
+    };
+    assert!(verify(challenge, request, 200, response, &key, &proof, &high_floor).is_none());
+    let wrong_purpose = sign_proof(&preimage, Purpose::FleetReceipt, &ed, &pq, &pq_key);
+    assert!(verify(
+        challenge,
+        request,
+        200,
+        response,
+        &key,
+        &wrong_purpose,
+        &trust
+    )
+    .is_none());
+    let mut missing: serde_json::Value = serde_json::from_slice(&proof).unwrap();
+    missing["signatures"].as_array_mut().unwrap().pop();
+    assert!(verify(
+        challenge,
+        request,
+        200,
+        response,
+        &key,
+        &serde_json::to_vec(&missing).unwrap(),
+        &trust
+    )
+    .is_none());
+}
+
+#[test]
 fn hybrid_commands_and_receipts_require_both_keys_exact_bytes_and_purpose() {
     let ed = SigningKey::from_bytes(&[23; 32]);
     let ed_key = ed.verifying_key().to_bytes();

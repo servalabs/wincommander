@@ -39,6 +39,7 @@ pub enum Purpose {
     EvidenceAttestation = 4,
     FleetCommand = 5,
     FleetReceipt = 6,
+    FleetEnrollment = 7,
 }
 
 /// Trust is local policy; none of these values may be selected by the sender.
