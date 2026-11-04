@@ -7,7 +7,7 @@
 //! bounded Ed25519-signed envelope and writes only one fixed file.
 
 use base64::{engine::general_purpose, Engine as _};
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -187,7 +187,7 @@ fn validate_request(
         VerifyingKey::from_bytes(&key_arr).map_err(|_| "license verification is unavailable")?;
     let signature = Signature::from_bytes(&signature_arr);
     verifying_key
-        .verify(request.payload.as_bytes(), &signature)
+        .verify_strict(request.payload.as_bytes(), &signature)
         .map_err(|_| "license cache signature is invalid")?;
 
     validate_claims(request.payload.as_bytes())
@@ -654,6 +654,31 @@ mod tests {
             validate_request(&forged, &public_key),
             Err("license cache signature is invalid")
         );
+    }
+
+    #[test]
+    fn weak_licence_key_cannot_authorize_machine_cache() {
+        let (mut request, _) = signed_request();
+        let mut weak_key = [0u8; 32];
+        weak_key[0] = 1;
+        let mut signature = [0u8; 64];
+        signature[0] = 1;
+        request.signature = general_purpose::URL_SAFE_NO_PAD.encode(signature);
+        assert!(validate_request(
+            &request,
+            &general_purpose::URL_SAFE_NO_PAD.encode(weak_key)
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn worker_licence_classical_signature_remains_accepted() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("fixtures/workers-hybrid-licence.json")).unwrap();
+        let (mut request, _) = signed_request();
+        request.payload = fixture["payload"].as_str().unwrap().to_owned();
+        request.signature = fixture["signature"].as_str().unwrap().to_owned();
+        assert!(validate_request(&request, fixture["publicClassical"].as_str().unwrap()).is_ok());
     }
 
     #[test]
