@@ -307,6 +307,38 @@ pub(super) async fn post_release(body: zeroize::Zeroizing<Vec<u8>>) -> Result<Ve
     post_body(&client, &format!("{LICENCE_ORIGIN}/experimental/device/release"), bytes.into()).await
 }
 
+/// Proof that this process sent the exact acknowledgement and received a
+/// successful, bounded response over the fixed hybrid-only transport.
+pub(super) struct AcknowledgementConfirmation([u8; 32]);
+
+impl AcknowledgementConfirmation {
+    pub(super) fn matches(&self, request: &[u8]) -> bool {
+        use subtle::ConstantTimeEq;
+        let digest: [u8; 32] = Sha256::digest(request).into();
+        bool::from(self.0.ct_eq(&digest))
+    }
+}
+
+pub(super) async fn post_release_acknowledgement(
+    body: zeroize::Zeroizing<Vec<u8>>,
+) -> Result<AcknowledgementConfirmation, &'static str> {
+    if body.is_empty() || body.len() > 32 * 1024 { return Err(INVALID); }
+    let digest: [u8; 32] = Sha256::digest(body.as_slice()).into();
+    let client = required_hybrid_client()?;
+    let bytes = bytes::Bytes::from_owner(body);
+    let response = post_body(&client, &format!("{LICENCE_ORIGIN}/experimental/device/release-ack"), bytes.into()).await?;
+    confirmed_release(&response)?;
+    Ok(AcknowledgementConfirmation(digest))
+}
+
+#[cfg(test)]
+pub(super) fn test_acknowledgement_confirmation(
+    request: &[u8], response: &[u8],
+) -> Result<AcknowledgementConfirmation, &'static str> {
+    confirmed_release(response)?;
+    Ok(AcknowledgementConfirmation(Sha256::digest(request).into()))
+}
+
 /// The request buffer is wiped after the HTTP body releases its last reference.
 pub(super) async fn post_enrolment(
     body: zeroize::Zeroizing<Vec<u8>>,
