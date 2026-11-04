@@ -320,6 +320,8 @@ struct WorkerTrialRequest<'a> {
     is_portable: bool,
     #[serde(rename = "hybridCapable")]
     hybrid_capable: bool,
+    #[serde(rename = "trialProtocol")]
+    trial_protocol: &'static str,
 }
 
 fn now_unix() -> u64 {
@@ -827,6 +829,7 @@ async fn trial_available_from_worker(
             app_version: env!("CARGO_PKG_VERSION"),
             is_portable: false,
             hybrid_capable: cfg!(feature = "experimental-pq-licence"),
+            trial_protocol: "recoverable-v3",
         })
         .send()
         .await
@@ -840,8 +843,7 @@ fn trial_availability_from_response(body: WorkerTrialStatusResponse) -> Option<T
     if body.available.unwrap_or(false) && body.recoverable { return None; }
     body.ok.then_some(TrialAvailability {
         available: body.available.unwrap_or(false) && (body.hybrid_required == cfg!(feature = "experimental-pq-licence")),
-        // A classical build cannot verify the hybrid proof on recovery.
-        recoverable: cfg!(feature = "experimental-pq-licence") && body.recoverable,
+        recoverable: body.recoverable && body.hybrid_required == cfg!(feature = "experimental-pq-licence"),
         hybrid_required: body.hybrid_required,
         cache_ttl_seconds: bounded_trial_eligibility_cache_ttl(body.cache_ttl_seconds),
     })
@@ -895,12 +897,10 @@ fn cached_trial_availability_from_json(raw: &str, device_hash: &str, now: u64) -
 
 #[cfg_attr(feature = "portable", allow(dead_code))] // portable edition has no trial
 fn load_trial_eligibility_cache(device_hash: &str, now: u64) -> Option<(bool, bool)> {
-    // Recovery and expiry can change while another Windows account is active.
-    // A hybrid client must ask the service rather than trust an advisory cache.
-    if cfg!(feature = "experimental-pq-licence") { return None; }
+    // A negative or recovery result can change in another Windows account.
     let path = trial_eligibility_cache_path().ok()?;
     let raw = fs::read_to_string(path).ok()?;
-    cached_trial_availability_from_json(&raw, device_hash, now)
+    cached_trial_availability_from_json(&raw, device_hash, now).filter(|state| state.0 && !state.1)
 }
 
 #[cfg_attr(feature = "portable", allow(dead_code))] // portable edition has no trial
@@ -1911,13 +1911,14 @@ pub async fn start_trial() -> Result<serde_json::Value, String> {
         clear_trial_eligibility_cache();
 
         let response = client
-            .post(format!("{}/trial/v2", api_base))
+            .post(format!("{}/trial/v3", api_base))
             .json(&WorkerTrialRequest {
                 device_hash: &device_hash,
                 app_id: APP_ID,
                 app_version: env!("CARGO_PKG_VERSION"),
                 is_portable: is_portable_os(),
                 hybrid_capable: cfg!(feature = "experimental-pq-licence"),
+                trial_protocol: "recoverable-v3",
             })
             .send()
             .await
@@ -2433,13 +2434,13 @@ mod tests {
 
     #[cfg(not(feature = "portable"))]
     #[test]
-    fn trial_eligibility_recovery_requires_hybrid_verification() {
+    fn trial_eligibility_recovery_matches_issuer_profile() {
         let response: WorkerTrialStatusResponse = serde_json::from_value(serde_json::json!({
             "ok": true, "available": false, "recoverable": true, "cacheTtlSeconds": 43200
         })).unwrap();
         let state = trial_availability_from_response(response).unwrap();
         assert!(!state.available);
-        assert_eq!(state.recoverable, cfg!(feature = "experimental-pq-licence"));
+        assert_eq!(state.recoverable, !cfg!(feature = "experimental-pq-licence"));
         let invalid: WorkerTrialStatusResponse = serde_json::from_value(serde_json::json!({
             "ok": true, "available": true, "recoverable": true
         })).unwrap();
@@ -2456,8 +2457,10 @@ mod tests {
         assert_eq!(trial_availability_from_response(classical).unwrap().available,
             !cfg!(feature = "experimental-pq-licence"));
         let request = WorkerTrialRequest { device_hash: "device", app_id: APP_ID,
-            app_version: "test", is_portable: false, hybrid_capable: cfg!(feature = "experimental-pq-licence") };
-        assert_eq!(serde_json::to_value(request).unwrap()["hybridCapable"], cfg!(feature = "experimental-pq-licence"));
+            app_version: "test", is_portable: false, hybrid_capable: cfg!(feature = "experimental-pq-licence"), trial_protocol: "recoverable-v3" };
+        let request = serde_json::to_value(request).unwrap();
+        assert_eq!(request["hybridCapable"], cfg!(feature = "experimental-pq-licence"));
+        assert_eq!(request["trialProtocol"], "recoverable-v3");
     }
 
     #[cfg(feature = "experimental-pq-licence")]
