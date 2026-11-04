@@ -285,8 +285,20 @@ pub(super) fn verify_current(
     public_key: &str,
     trust: &wincmd_pq_experiment::jws::Trust<'_>,
 ) -> Result<(), &'static str> {
+    with_verified_current(path, candidate, expected_time, public_key, trust, || Ok(()))
+}
+
+/// Run a short, non-blocking operation while the verified cache cannot change.
+pub(super) fn with_verified_current<T>(
+    path: &Path,
+    candidate: &StoreLicenseCacheRequest,
+    expected_time: u64,
+    public_key: &str,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>,
+    operation: impl FnOnce() -> Result<T, &'static str>,
+) -> Result<T, &'static str> {
     let anchor = anchor::Anchor::machine_named(r"SOFTWARE\ServaLabs\WinCommander\HybridLicence");
-    verify_with_anchor(path, candidate, expected_time, public_key, trust, &anchor)
+    with_verified_anchor(path, candidate, expected_time, public_key, trust, &anchor, operation)
 }
 
 fn verify_with_anchor(
@@ -297,6 +309,18 @@ fn verify_with_anchor(
     trust: &wincmd_pq_experiment::jws::Trust<'_>,
     anchor: &anchor::Anchor,
 ) -> Result<(), &'static str> {
+    with_verified_anchor(path, candidate, expected_time, public_key, trust, anchor, || Ok(()))
+}
+
+fn with_verified_anchor<T>(
+    path: &Path,
+    candidate: &StoreLicenseCacheRequest,
+    expected_time: u64,
+    public_key: &str,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>,
+    anchor: &anchor::Anchor,
+    operation: impl FnOnce() -> Result<T, &'static str>,
+) -> Result<T, &'static str> {
     let old_trust = history::configured(trust)?;
     let _lock = WRITE_LOCK
         .lock()
@@ -315,7 +339,8 @@ fn verify_with_anchor(
         public_key,
         trust,
         old_trust.as_ref(),
-    )
+    )?;
+    operation()
 }
 
 #[cfg(test)]

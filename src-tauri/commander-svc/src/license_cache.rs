@@ -258,13 +258,23 @@ pub(crate) fn verified_refresh_wire(
     payload: &str, signature: &str, hybrid: &str, last_verified_at: u64,
     licence_id: &str, device_hash: &str,
 ) -> Result<Vec<u8>, &'static str> {
+    with_verified_refresh_wire(payload, signature, hybrid, last_verified_at, licence_id, device_hash, Ok)
+}
+
+/// Run a short operation only while the exact verified cache remains current.
+#[cfg(feature = "experimental-pq-licence")]
+pub(crate) fn with_verified_refresh_wire<T>(
+    payload: &str, signature: &str, hybrid: &str, last_verified_at: u64,
+    licence_id: &str, device_hash: &str,
+    operation: impl FnOnce(Vec<u8>) -> Result<T, &'static str>,
+) -> Result<T, &'static str> {
     let request = StoreLicenseCacheRequest { payload: payload.into(), signature: signature.into(),
         hybrid: Some(hybrid.into()), seats_used: None, seat_limit: None };
     let public = service_public_key().ok_or("license verification is unavailable")?;
     let trust = hybrid_trust::configured()?;
     let wire = build_refresh_wire(&request, public, &trust.policy(), licence_id, device_hash)?;
-    rollback::verify_current(&machine_license_cache_path()?, &request, last_verified_at, public, &trust.policy())?;
-    Ok(wire)
+    rollback::with_verified_current(&machine_license_cache_path()?, &request, last_verified_at, public,
+        &trust.policy(), || operation(wire))
 }
 
 #[cfg(feature = "experimental-pq-licence")]

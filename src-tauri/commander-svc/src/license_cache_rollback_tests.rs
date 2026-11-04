@@ -373,6 +373,21 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
     // Upgrade the previous single-record format without losing its floor.
     anchor.write(&high_bytes).unwrap();
     assert!(verify_with_anchor(&path, &previous_epoch9, 99, &public, &current, &anchor).is_ok());
+    // Confirmation runs while cache writers are excluded, and never runs for
+    // a stale cache. This closes the check-then-confirm race.
+    let mut called = false;
+    with_verified_anchor(&path, &previous_epoch9, 99, &public, &current, &anchor, || {
+        called = true;
+        assert!(WRITE_LOCK.try_lock().is_err());
+        Ok(())
+    }).unwrap();
+    assert!(called);
+    called = false;
+    assert!(with_verified_anchor(&path, &previous_epoch9, 100, &public, &current, &anchor, || {
+        called = true;
+        Ok(())
+    }).is_err());
+    assert!(!called);
     assert!(verify_with_anchor(&path, &previous_epoch9, 100, &public, &current, &anchor).is_err());
     assert!(write_with_anchor(
         &path,

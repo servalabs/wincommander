@@ -434,6 +434,18 @@ fn confirm_with(
 ) -> Result<ConfirmedCredential, &'static str> {
     let _guard = LOCK.lock().map_err(|_| INVALID)?;
     let _process_lock = crate::licence_security_lock().map_err(|_| INVALID)?;
+    confirm_locked(anchor, protector, binding, trust, signed_receipt, now)
+}
+
+// Caller must hold the credential lock and the cross-process security lock.
+fn confirm_locked(
+    anchor: &anchor::Anchor,
+    protector: &dyn Protector,
+    binding: &Binding<'_>,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>,
+    signed_receipt: &str,
+    now: u64,
+) -> Result<ConfirmedCredential, &'static str> {
     let original = anchor.read().map_err(|_| INVALID)?.ok_or(INVALID)?;
     let record: Record = serde_json::from_slice(&original).map_err(|_| INVALID)?;
     if record.phase == "confirmed" {
@@ -571,19 +583,18 @@ pub(crate) async fn enrol_over_network(
             let body = wire::enrolment_request(binding, &pending, license_key)?;
             let response = wire::post_enrolment(body).await?;
             let signed = wire::enrolment_receipt(&response)?;
-            // The cache may have changed during network I/O; refuse confirmation
-            // until it is rechecked. Pending credentials remain retryable.
-            checked_refresh_wire(binding, licence)?;
-            let anchor = anchor::Anchor::machine_named(
-                r"SOFTWARE\ServaLabs\WinCommander\ExperimentalLicenceDevice",
-            );
-            confirm_with(
-                &anchor,
-                &MachineDpapi,
-                binding,
-                receipt_trust,
-                &signed,
-                now()?,
+            // Hold the credential lock first, then the cache and cross-process
+            // locks, so cache verification and confirmation cannot race.
+            let _guard = LOCK.lock().map_err(|_| INVALID)?;
+            crate::license_cache::with_verified_refresh_wire(
+                licence.payload, licence.signature, licence.hybrid, licence.last_verified_at,
+                binding.licence_id, binding.device_hash, |_| {
+                    let anchor = anchor::Anchor::machine_named(
+                        r"SOFTWARE\ServaLabs\WinCommander\ExperimentalLicenceDevice",
+                    );
+                    confirm_locked(&anchor, &MachineDpapi, binding, receipt_trust, &signed, now()?)?;
+                    Ok(())
+                },
             )?;
             Ok(())
         }
