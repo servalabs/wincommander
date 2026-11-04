@@ -184,6 +184,26 @@ fn fleet_policy_relay_requires_matching_active_session_and_protected_helper() {
 }
 
 #[test]
+fn hybrid_trust_read_requires_active_session_and_verified_installed_helper() {
+    let gate = SessionHelperGate::with_allowed_root(
+        Arc::new(Probe), Some(PathBuf::from(r"C:\ProgramData\WinCommander\bin")),
+    );
+    let verb = "svc.fleet.read_hybrid_trust";
+    assert_eq!(gate.authorize_fleet_policy_observation(&identity(2), verb, 2, true, || Ok(())),
+        Ok(TrustOrigin::SessionHelperPinned));
+    assert_eq!(gate.authorize_fleet_policy_observation(&identity(2), verb, 3, true, || Ok(())),
+        Err(PeerAuthError::WrongSession));
+    assert_eq!(gate.authorize_fleet_policy_observation(&identity(2), verb, 2, false, || Ok(())),
+        Err(PeerAuthError::WrongSession));
+    assert_eq!(gate.authorize_fleet_policy_observation(&identity(2), verb, 2, true, || Err(PeerAuthError::PathNotAllowed)),
+        Err(PeerAuthError::PathNotAllowed));
+    let mut foreign = identity(2);
+    foreign.canonical_image_path = r"C:\Users\other\wincommander-pro.exe".into();
+    assert_eq!(gate.authorize_fleet_policy_observation(&foreign, verb, 2, true, || panic!("foreign image must not be verified")),
+        Err(PeerAuthError::PathNotAllowed));
+}
+
+#[test]
 fn fleet_policy_relay_retains_per_session_rate_limit() {
     let gate = SessionHelperGate::with_allowed_root(
         Arc::new(Probe),

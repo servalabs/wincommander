@@ -168,7 +168,7 @@ impl SessionHelperGate {
         active: bool,
         verify: impl FnOnce() -> Result<(), PeerAuthError>,
     ) -> Result<TrustOrigin, PeerAuthError> {
-        if !matches!(verb, "svc.fleet.install_policy" | "svc.fleet.get_policy") {
+        if !matches!(verb, "svc.fleet.install_policy" | "svc.fleet.get_policy" | "svc.fleet.read_hybrid_trust") {
             return Err(PeerAuthError::PathNotAllowed);
         }
         if !active || captured_session == 0 || identity.session_id != captured_session {

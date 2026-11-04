@@ -134,6 +134,7 @@ pub fn is_known_verb(feature_id: &str) -> bool {
             | "svc.fleet.get_trust"
             | "svc.fleet.provision_hybrid_trust"
             | "svc.fleet.get_hybrid_trust"
+            | "svc.fleet.read_hybrid_trust"
             | "svc.fleet.install_policy"
             | "svc.fleet.get_policy"
             | "svc.fleet.contact_observation"
@@ -372,7 +373,7 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         // peer may call this verb", not "trust its payload".
         "svc.policy.install_epoch" => CapabilityClass::SessionHelper,
         "svc.fleet.begin_enrollment" | "svc.fleet.provision_trust" | "svc.fleet.replace_trust" | "svc.fleet.bind_origins" | "svc.fleet.get_trust" | "svc.fleet.provision_hybrid_trust" | "svc.fleet.get_hybrid_trust" => CapabilityClass::Privileged,
-        "svc.fleet.install_policy" | "svc.fleet.get_policy" | "svc.fleet.contact_observation" => CapabilityClass::SessionHelper,
+        "svc.fleet.install_policy" | "svc.fleet.get_policy" | "svc.fleet.contact_observation" | "svc.fleet.read_hybrid_trust" => CapabilityClass::SessionHelper,
         "svc.shared_shortcuts.set_claim" => CapabilityClass::SessionHelper,
 
         // ── Ink Receipt (D-2 / plan §4.3, §5) ─────────────────────────────
@@ -732,7 +733,7 @@ mod tests {
             assert!(is_known_verb(verb));
             assert_eq!(classify_verb(verb), CapabilityClass::Privileged);
         }
-        for verb in ["svc.fleet.install_policy", "svc.fleet.get_policy", "svc.fleet.contact_observation"] {
+        for verb in ["svc.fleet.install_policy", "svc.fleet.get_policy", "svc.fleet.contact_observation", "svc.fleet.read_hybrid_trust"] {
             assert!(is_known_verb(verb));
             assert_eq!(classify_verb(verb), CapabilityClass::SessionHelper);
         }
