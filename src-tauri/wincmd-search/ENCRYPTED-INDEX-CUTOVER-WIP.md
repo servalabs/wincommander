@@ -22,10 +22,12 @@ contains potentially sensitive extracted content and is currently plaintext.
   generation is verified and all older processes are excluded; report failures
   honestly. Deleting files does not guarantee physical erasure on SSDs, backups,
   snapshots, or filesystem journals. Avoid plaintext temporary index files.
-- The prototype uses randomly generated 96-bit AES-GCM nonces without a
-  per-key invocation limit or durable crash-safe usage accounting. Establish
-  and enforce an appropriate key-rotation bound or adopt a reviewed alternative
-  before activation. Do not rely on memory-only counters.
+- Experimental format v2 derives a separate key for each randomly generated
+  256-bit file ID, uses distinct counter nonces for chunks and the footer, and
+  caps each file at 65,536 chunks. This depends on fresh OS randomness across
+  crashes and needs native streaming validation and cryptographic review before
+  release. The format changed from v1; existing experimental files cannot be
+  reopened and must be rebuilt in a fresh unselected generation.
 - Before activation, verify large Tantivy reads against the prototype 8 MiB
   range limit, file identity and rename confinement, crash boundaries, disk-full
   recovery, stale processes, cross-user isolation, and installed Windows service
