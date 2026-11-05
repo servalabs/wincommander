@@ -7,6 +7,23 @@ fn paths() -> (String, String) {
      format!(r"SOFTWARE\WinCommanderActivationGateTest-{id}"))
 }
 
+fn example_pending() -> PendingActivation {
+    let credential_id = [4; 32];
+    let credential_secret = [5; 32];
+    PendingActivation { operation_id: "b".repeat(64), licence_key: "secret".into(),
+        device_hash: "a".repeat(64), portable: false, credential_id, credential_secret,
+        credential_commitment: credential_commitment(&credential_id, &credential_secret) }
+}
+
+#[test]
+fn commitment_matches_wire_vector_without_disclosing_secret() {
+    let pending = example_pending();
+    assert_eq!(pending.credential_commitment, "fdef1206908c31b0f3b9ecce79bfb437e32deabe702d7f6fbf529b14f44a136f");
+    let body = pending.request_body().unwrap();
+    assert!(!String::from_utf8_lossy(&body).contains(&hex_bytes(&pending.credential_secret)));
+    assert_ne!(pending.credential_commitment, credential_commitment(&pending.credential_id, &[6; 32]));
+}
+
 #[test]
 fn protected_pending_intent_reopens_exactly_and_refuses_replacement() {
     let (path, gate_path) = paths();
@@ -30,7 +47,9 @@ fn protected_pending_intent_reopens_exactly_and_refuses_replacement() {
     assert_eq!(json["deviceHash"], device);
     assert_eq!(json["appId"], "com.servalabs.wincommander");
     assert_eq!(json["isPortable"], false);
-    assert_eq!(json.as_object().unwrap().len(), 5);
+    assert_eq!(json["activationCredentialId"], hex_bytes(first.credential_id()));
+    assert_eq!(json["activationCredentialCommitment"], first.credential_commitment);
+    assert_eq!(json.as_object().unwrap().len(), 7);
     assert!(begin_at(&reopened, &gate, &MachineDpapi, "another-key", &device, false).is_err());
     assert!(begin_at(&reopened, &gate, &MachineDpapi, "secret-licence-key", &"b".repeat(64), false).is_err());
     assert!(begin_at(&reopened, &gate, &MachineDpapi, "secret-licence-key", &device, true).is_err());
@@ -74,10 +93,10 @@ fn completed_intent_never_reissues_same_operation_after_lost_reply() {
 
 #[test]
 fn signed_response_must_bind_exact_pending_operation_and_machine() {
-    let pending = PendingActivation { operation_id: "b".repeat(64), licence_key: "secret".into(),
-        device_hash: "a".repeat(64), portable: false };
+    let pending = example_pending();
     let claims = serde_json::json!({"license_id":"licence", "device_hash":pending.device_hash,
         "activation_operation_id":pending.operation_id, "activation_generation":1,
+        "activation_credential_id":hex_bytes(&pending.credential_id), "activation_credential_commitment":pending.credential_commitment,
         "is_portable":false, "plan":"pro", "iss":"wincommander-license-worker",
         "sub":"com.servalabs.wincommander", "iat":100, "exp":200});
     let body = |payload: serde_json::Value| serde_json::to_vec(&serde_json::json!({"ok":true,
@@ -91,6 +110,8 @@ fn signed_response_must_bind_exact_pending_operation_and_machine() {
         ("activation_operation_id", serde_json::json!("c".repeat(64))),
         ("device_hash", serde_json::json!("d".repeat(64))),
         ("activation_generation", serde_json::json!(0)),
+        ("activation_credential_id", serde_json::json!("f".repeat(64))),
+        ("activation_credential_commitment", serde_json::json!("f".repeat(64))),
         ("is_portable", serde_json::json!(true)),
         ("plan", serde_json::json!("trial")),
         ("iss", serde_json::json!("other")),
@@ -110,8 +131,7 @@ fn real_classical_and_hybrid_signatures_bind_activation_operation() {
     use aws_lc_rs::signature::{KeyPair, PqdsaKeyPair, ML_DSA_65_SIGNING};
     use ed25519_dalek::{Signer, SigningKey};
     use wincmd_pq_experiment::{jws, Purpose, VerifyError};
-    let pending = PendingActivation { operation_id: "b".repeat(64), licence_key: "secret".into(),
-        device_hash: "a".repeat(64), portable: false };
+    let pending = example_pending();
     let classical = SigningKey::from_bytes(&[7; 32]);
     let ed = SigningKey::from_bytes(&[8; 32]);
     let pq = PqdsaKeyPair::generate(&ML_DSA_65_SIGNING).unwrap();
@@ -121,6 +141,7 @@ fn real_classical_and_hybrid_signatures_bind_activation_operation() {
         ed25519_public: &ed_public, pq_key_id: "pq", ml_dsa_65_public: pq_public };
     let payload = serde_json::json!({"license_id":"licence", "device_hash":pending.device_hash,
         "activation_operation_id":pending.operation_id, "activation_generation":1,
+        "activation_credential_id":hex_bytes(&pending.credential_id), "activation_credential_commitment":pending.credential_commitment,
         "is_portable":false, "plan":"pro", "iss":"wincommander-license-worker",
         "sub":"com.servalabs.wincommander", "iat":100, "exp":200}).to_string();
     let signature = URL_SAFE_NO_PAD.encode(classical.sign(payload.as_bytes()).to_bytes());

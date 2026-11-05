@@ -22,7 +22,7 @@ struct Envelope { version: u8, sealed: String }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Completion { operation_id: String, device_hash: String, portable: bool,
-    key_digest: String, payload: String, receipt: String }
+    key_digest: String, credential_id: [u8; 32], credential_commitment: String, payload: String, receipt: String }
 
 pub(crate) struct CompletedEvidence {
     pub pending: PendingActivation,
@@ -37,6 +37,9 @@ pub(crate) struct PendingActivation {
     licence_key: String,
     device_hash: String,
     portable: bool,
+    credential_id: [u8; 32],
+    credential_secret: [u8; 32],
+    credential_commitment: String,
 }
 
 #[derive(Deserialize)]
@@ -58,6 +61,8 @@ struct ActivationClaims {
     device_hash: String,
     activation_operation_id: String,
     activation_generation: u64,
+    activation_credential_id: String,
+    activation_credential_commitment: String,
     is_portable: bool,
     plan: String,
     iss: String,
@@ -77,7 +82,7 @@ pub(crate) struct VerifiedActivation {
 }
 
 impl Drop for PendingActivation {
-    fn drop(&mut self) { self.licence_key.zeroize(); }
+    fn drop(&mut self) { self.licence_key.zeroize(); self.credential_secret.zeroize(); }
 }
 
 impl PendingActivation {
@@ -85,9 +90,14 @@ impl PendingActivation {
     pub(crate) fn licence_key(&self) -> &str { &self.licence_key }
     pub(crate) fn device_hash(&self) -> &str { &self.device_hash }
     pub(crate) fn portable(&self) -> bool { self.portable }
+    pub(crate) fn credential_id(&self) -> &[u8; 32] { &self.credential_id }
+    pub(crate) fn credential_secret(&self) -> &[u8; 32] { &self.credential_secret }
 
     /// The same protected intent always yields the same idempotent request.
     pub(crate) fn request_body(&self) -> Result<Zeroizing<Vec<u8>>, &'static str> {
+        if self.credential_commitment != credential_commitment(&self.credential_id, &self.credential_secret) {
+            return Err(INVALID);
+        }
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
         struct Request<'a> {
@@ -96,13 +106,28 @@ impl PendingActivation {
             app_id: &'static str,
             is_portable: bool,
             operation_id: &'a str,
+            activation_credential_id: String,
+            activation_credential_commitment: &'a str,
         }
         let mut output = Zeroizing::new(Vec::new());
         serde_json::to_writer(&mut *output, &Request { license_key: &self.licence_key,
             device_hash: &self.device_hash, app_id: "com.servalabs.wincommander",
-            is_portable: self.portable, operation_id: &self.operation_id }).map_err(|_| INVALID)?;
+            is_portable: self.portable, operation_id: &self.operation_id,
+            activation_credential_id: hex_bytes(&self.credential_id),
+            activation_credential_commitment: &self.credential_commitment }).map_err(|_| INVALID)?;
         Ok(output)
     }
+}
+
+fn hex_bytes(bytes: &[u8]) -> String { bytes.iter().map(|byte| format!("{byte:02x}")).collect() }
+
+fn credential_commitment(id: &[u8; 32], secret: &[u8; 32]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut digest = Sha256::new();
+    digest.update(b"wincommander:activation-credential:v1\0");
+    digest.update(id);
+    digest.update(secret);
+    hex_bytes(&digest.finalize())
 }
 
 fn valid_hex(value: &str) -> bool {
@@ -132,6 +157,8 @@ fn verify_response_with(pending: &PendingActivation, bytes: &[u8], now: u64,
     let claims: ActivationClaims = serde_json::from_str(&envelope.payload).map_err(|_| INVALID)?;
     if claims.license_id.is_empty() || claims.license_id.len() > 256 || claims.device_hash != pending.device_hash
         || claims.activation_operation_id != pending.operation_id || claims.is_portable != pending.portable
+        || claims.activation_credential_id != hex_bytes(&pending.credential_id)
+        || claims.activation_credential_commitment != pending.credential_commitment
         || claims.activation_generation == 0 || claims.activation_generation > 9_007_199_254_740_991
         || claims.plan.is_empty() || claims.plan == "trial" || claims.iss != "wincommander-license-worker"
         || claims.sub != "com.servalabs.wincommander" || claims.iat > now.saturating_add(300)
@@ -187,6 +214,7 @@ fn completed_at(store: &Anchor, protector: &dyn Protector) -> Result<Option<Comp
     let payload = URL_SAFE_NO_PAD.decode(&completed.payload).map_err(|_| INVALID)?;
     if !valid_hex(&completed.operation_id) || !valid_hex(&completed.device_hash) || !valid_hex(&completed.key_digest)
         || payload.is_empty() || payload.len() > 16 * 1024 || URL_SAFE_NO_PAD.encode(payload) != completed.payload
+        || !valid_hex(&completed.credential_commitment)
         || completed.receipt.is_empty() || completed.receipt.len() > 32 * 1024 { return Err(INVALID); }
     Ok(Some(completed))
 }
@@ -195,7 +223,8 @@ fn load_at(store: &Anchor, protector: &dyn Protector) -> Result<Option<PendingAc
     let Some((version, plaintext)) = unseal_at(store, protector)? else { return Ok(None); };
     if version == 2 { completed_at(store, protector)?.ok_or(INVALID)?; return Ok(None); }
     let pending: PendingActivation = serde_json::from_slice(&plaintext).map_err(|_| INVALID)?;
-    if !valid_hex(&pending.operation_id) || !valid_request(&pending.licence_key, &pending.device_hash) {
+    if !valid_hex(&pending.operation_id) || !valid_request(&pending.licence_key, &pending.device_hash)
+        || pending.credential_commitment != credential_commitment(&pending.credential_id, &pending.credential_secret) {
         return Err(INVALID);
     }
     Ok(Some(pending))
@@ -227,7 +256,8 @@ fn complete_at(store: &Anchor, protector: &dyn Protector, pending: &PendingActiv
     use sha2::{Digest, Sha256};
     let key_digest: String = Sha256::digest(pending.licence_key.as_bytes()).iter().map(|byte| format!("{byte:02x}")).collect();
     let value = Completion { operation_id: pending.operation_id.clone(), device_hash: pending.device_hash.clone(),
-        portable: pending.portable, key_digest, payload: URL_SAFE_NO_PAD.encode(payload), receipt: receipt.into() };
+        portable: pending.portable, key_digest, credential_id: pending.credential_id,
+        credential_commitment: pending.credential_commitment.clone(), payload: URL_SAFE_NO_PAD.encode(payload), receipt: receipt.into() };
     let plaintext = Zeroizing::new(serde_json::to_vec(&value).map_err(|_| INVALID)?);
     let sealed = protector.protect(&plaintext, ENTROPY).map_err(|_| INVALID)?;
     if sealed.is_empty() || sealed.len() > LIMIT / 2 { return Err(INVALID); }
@@ -268,7 +298,8 @@ pub(crate) fn ensure_completed_matches_locked(pending: &PendingActivation, paylo
     -> Result<(), &'static str> {
     let completed = completed_at(&machine(), &MachineDpapi)?.ok_or(INVALID)?;
     if !completed_matches(&completed, pending.licence_key(), pending.device_hash(), pending.portable())
-        || completed.operation_id != pending.operation_id
+        || completed.operation_id != pending.operation_id || completed.credential_id != pending.credential_id
+        || completed.credential_commitment != pending.credential_commitment
         || completed.payload != URL_SAFE_NO_PAD.encode(payload) || completed.receipt != receipt { return Err(INVALID); }
     Ok(())
 }
@@ -276,7 +307,8 @@ pub(crate) fn ensure_completed_matches_locked(pending: &PendingActivation, paylo
 fn ensure_matches_at(store: &Anchor, protector: &dyn Protector, pending: &PendingActivation) -> Result<(), &'static str> {
     let saved = load_at(store, protector)?.ok_or(INVALID)?;
     if saved.operation_id != pending.operation_id || saved.device_hash != pending.device_hash
-        || saved.portable != pending.portable
+        || saved.portable != pending.portable || saved.credential_id != pending.credential_id
+        || !bool::from(saved.credential_secret.ct_eq(&pending.credential_secret))
         || !bool::from(saved.licence_key.as_bytes().ct_eq(pending.licence_key.as_bytes())) {
         return Err(INVALID);
     }
@@ -348,7 +380,7 @@ async fn settle_pending_locked(pending: &PendingActivation) -> Result<(), &'stat
     }
     let verified = send_pending(pending).await?;
     crate::license_cache::store_activation(&pending, &verified)?;
-    crate::licence_device_credential::enrol_from_machine_cache(pending.licence_key()).await?;
+    crate::licence_device_credential::enrol_precommitted_from_machine_cache(pending).await?;
     crate::licence_device_credential::acknowledge_activation(&pending, &verified).await
 }
 
@@ -405,7 +437,14 @@ fn begin_locked(store: &Anchor, gate: &Anchor, protector: &dyn Protector,
     let mut operation_id = String::with_capacity(64);
     for byte in random { write!(&mut operation_id, "{byte:02x}").map_err(|_| INVALID)?; }
     random.zeroize();
-    let pending = PendingActivation { operation_id, licence_key: key.into(), device_hash: device.into(), portable };
+    let mut credential_id = [0u8; 32];
+    let mut credential_secret = [0u8; 32];
+    rand::rngs::OsRng.try_fill_bytes(&mut credential_id).map_err(|_| INVALID)?;
+    rand::rngs::OsRng.try_fill_bytes(&mut credential_secret).map_err(|_| INVALID)?;
+    let credential_commitment = credential_commitment(&credential_id, &credential_secret);
+    let pending = PendingActivation { operation_id, licence_key: key.into(), device_hash: device.into(), portable,
+        credential_id, credential_secret, credential_commitment };
+    credential_secret.zeroize();
     let plaintext = Zeroizing::new(serde_json::to_vec(&pending).map_err(|_| INVALID)?);
     let sealed = protector.protect(&plaintext, ENTROPY).map_err(|_| INVALID)?;
     if sealed.is_empty() || sealed.len() > LIMIT / 2 { return Err(INVALID); }
@@ -413,7 +452,8 @@ fn begin_locked(store: &Anchor, gate: &Anchor, protector: &dyn Protector,
     store.write(&record).map_err(|_| INVALID)?;
     let saved = load_at(store, protector)?.ok_or(INVALID)?;
     if saved.operation_id != pending.operation_id || saved.device_hash != pending.device_hash
-        || saved.portable != pending.portable
+        || saved.portable != pending.portable || saved.credential_id != pending.credential_id
+        || !bool::from(saved.credential_secret.ct_eq(&pending.credential_secret))
         || !bool::from(saved.licence_key.as_bytes().ct_eq(pending.licence_key.as_bytes())) {
         return Err(INVALID);
     }
@@ -465,7 +505,8 @@ fn completed_for_key(key: &str, device: &str, portable: bool) -> Result<Option<C
     if !completed_matches(&completed, key, device, portable) { return Err(INVALID); }
     let payload = URL_SAFE_NO_PAD.decode(&completed.payload).map_err(|_| INVALID)?;
     Ok(Some(CompletedEvidence { pending: PendingActivation { operation_id: completed.operation_id,
-        licence_key: key.into(), device_hash: device.into(), portable }, payload, receipt: completed.receipt }))
+        licence_key: key.into(), device_hash: device.into(), portable, credential_id: completed.credential_id,
+        credential_secret: [0; 32], credential_commitment: completed.credential_commitment }, payload, receipt: completed.receipt }))
 }
 
 #[cfg(test)]
