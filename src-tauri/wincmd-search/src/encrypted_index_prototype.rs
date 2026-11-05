@@ -323,8 +323,17 @@ mod tantivy_trial {
                 return Err(io::Error::new(io::ErrorKind::PermissionDenied, "read-only index cannot create a key"));
             }
             let anchor = CheckedDirectory::pin_root_path(root)?;
+            // Conservative defense against a caller falsely reporting a fresh
+            // index: any existing entry requires an already-protected key.
+            // This observation needs an external cross-process writer lease;
+            // it cannot by itself prevent files appearing after enumeration.
+            let mut entries = std::fs::read_dir(root)?;
+            let existing_data = match entries.next() {
+                Some(entry) => { entry?; true },
+                None => false,
+            };
             let inner = CheckedDirectory::open(root, mode).map_err(|e| io::Error::other(e.to_string()))?;
-            let key = crate::encrypted_key_prototype::PinnedIndexKey::open(root, index_id, has_index)?;
+            let key = crate::encrypted_key_prototype::PinnedIndexKey::open(root, index_id, has_index || existing_data)?;
             Ok(Self { inner, key: Arc::new(KeyOwner::Protected(key)), _root_anchor: Arc::new(anchor) })
         }
     }
@@ -591,6 +600,15 @@ mod tantivy_trial {
         }
     }
 
+    #[test]
+    fn existing_index_data_cannot_be_mistaken_for_fresh_storage() {
+        let root = tempfile::tempdir().unwrap();
+        let original = root.path().join("meta.json");
+        std::fs::write(&original, b"existing index").unwrap();
+        assert!(TrialDirectory::open_protected(root.path(), AccessMode::Writable, &[6; 16], false).is_err());
+        assert!(!root.path().join("protected-search-key.v1").exists());
+        assert_eq!(std::fs::read(original).unwrap(), b"existing index");
+    }
     #[test]
     fn protected_read_only_directories_never_create_a_key() {
         let root = tempfile::tempdir().unwrap();
