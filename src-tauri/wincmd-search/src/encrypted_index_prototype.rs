@@ -166,6 +166,11 @@ impl<R: Read + Seek> ProtectedFile<R> {
 }
 
 #[test]
+fn experimental_cipher_clears_sensitive_state_on_drop() {
+    fn require_zeroize_on_drop<T: zeroize::ZeroizeOnDrop>() {}
+    require_zeroize_on_drop::<Aes256Gcm>();
+}
+#[test]
 fn random_access_and_tampering_are_detected() {
     let key = [42; 32];
     let mut text = vec![b'A'; CHUNK * 2 + 173];
@@ -314,6 +319,9 @@ mod tantivy_trial {
         // Caller must authorize root and hold the migration lease while
         // determining the independently trusted index identity.
         fn open_protected(root: &Path, mode: AccessMode, index_id: &[u8; 16], has_index: bool) -> io::Result<Self> {
+            if mode != AccessMode::Writable && !has_index {
+                return Err(io::Error::new(io::ErrorKind::PermissionDenied, "read-only index cannot create a key"));
+            }
             let anchor = CheckedDirectory::pin_root_path(root)?;
             let inner = CheckedDirectory::open(root, mode).map_err(|e| io::Error::other(e.to_string()))?;
             let key = crate::encrypted_key_prototype::PinnedIndexKey::open(root, index_id, has_index)?;
@@ -583,6 +591,16 @@ mod tantivy_trial {
         }
     }
 
+    #[test]
+    fn protected_read_only_directories_never_create_a_key() {
+        let root = tempfile::tempdir().unwrap();
+        for mode in [AccessMode::SharedReader, AccessMode::GuardedReader] {
+            assert!(TrialDirectory::open_protected(root.path(), mode, &[6; 16], false).is_err());
+            assert!(!root.path().join("protected-search-key.v1").exists());
+            assert!(TrialDirectory::open_protected(root.path(), mode, &[6; 16], true).is_err());
+            assert!(!root.path().join("protected-search-key.v1").exists());
+        }
+    }
     #[test]
     fn protected_key_remains_pinned_until_directory_clones_and_handles_close() {
         let root = tempfile::tempdir().unwrap();
