@@ -2,6 +2,80 @@ use super::*;
 
 static SERIAL: Mutex<()> = Mutex::new(());
 
+// Each child is a new process so SQLite has not already been initialized by
+// unrelated tests. A passing stress run cannot prove the reported race absent.
+#[test]
+fn concurrent_sqlcipher_first_use_stress() {
+    const CHILD: &str = "WC_SQLCIPHER_FIRST_USE_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        let dir = tempfile::tempdir().unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(16));
+        let workers: Vec<_> = (0..16).map(|number| {
+            let barrier = barrier.clone();
+            let path = dir.path().join(format!("first-use-{number}.sqlite"));
+            std::thread::spawn(move || -> Result<(), String> {
+                barrier.wait();
+                let conn = rusqlite::Connection::open(path).map_err(|e| e.to_string())?;
+                let key = format!("x'{}'", "18".repeat(32));
+                let rc = unsafe { rusqlite::ffi::sqlite3_key(conn.handle(), key.as_ptr().cast(), key.len() as i32) };
+                if rc != rusqlite::ffi::SQLITE_OK { return Err(format!("sqlite3_key returned {rc}")); }
+                conn.execute_batch("CREATE TABLE probe (id INTEGER); INSERT INTO probe VALUES (1);")
+                    .map_err(|e| e.to_string())?;
+                Ok(())
+            })
+        }).collect();
+        for worker in workers { worker.join().unwrap().unwrap(); }
+        return;
+    }
+    for iteration in 0..30 {
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["duplicate_finder::tests::concurrent_sqlcipher_first_use_stress", "--exact", "--nocapture"])
+            .env(CHILD, "1").output().unwrap();
+        assert!(result.status.success(), "first-use iteration {iteration} failed: {}", String::from_utf8_lossy(&result.stderr));
+    }
+}
+
+#[test]
+fn encrypted_scan_database_remains_private_after_bulk_commit() {
+    let mut index = index::ScanIndex::new().unwrap();
+    let marker = "duplicate-sensitive-directory-378951";
+    let mode: String = index.connection.query_row("PRAGMA journal_mode", [], |row| row.get(0)).unwrap();
+    let temp_store: i64 = index.connection.query_row("PRAGMA temp_store", [], |row| row.get(0)).unwrap();
+    assert_eq!(mode.to_lowercase(), "off");
+    assert_eq!(temp_store, 2, "SQLite temporary stores must stay in memory");
+    let transaction = index.connection.transaction().unwrap();
+    for number in 0..1_000 {
+        let path = format!("{marker}/{number:04}");
+        transaction.execute("INSERT INTO directories(path,root) VALUES(?1,?2)", rusqlite::params![path, marker]).unwrap();
+    }
+    transaction.commit().unwrap();
+    let rows: i64 = index.connection.query_row("SELECT count(*) FROM directories", [], |row| row.get(0)).unwrap();
+    assert_eq!(rows, 1_000);
+    for entry in std::fs::read_dir(index.directory.path()).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_type().unwrap().is_file() {
+            let bytes = std::fs::read(entry.path()).unwrap();
+            assert!(!bytes.windows(marker.len()).any(|window| window == marker.as_bytes()));
+        }
+    }
+}
+
+#[test]
+fn scan_scratch_does_not_expose_paths_on_disk() {
+    let index = index::ScanIndex::new().unwrap();
+    let marker = "scratch-secret-path-94252";
+    index.connection.execute(
+        "INSERT INTO directories(path,root) VALUES(?1,?1)",
+        [marker],
+    ).unwrap();
+    let path = index.directory.path().join("scan.sqlite");
+    let bytes = std::fs::read(&path).unwrap();
+    assert!(!bytes.windows(marker.len()).any(|window| window == marker.as_bytes()));
+    assert!(!bytes.starts_with(b"SQLite format 3\0"));
+    let other = rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    assert!(other.query_row("SELECT count(*) FROM directories", [], |row| row.get::<_, i64>(0)).is_err());
+}
+
 #[test]
 fn inventory_excludes_its_own_database_inside_the_scanned_folder() {
     let _serial = SERIAL.lock().unwrap();
