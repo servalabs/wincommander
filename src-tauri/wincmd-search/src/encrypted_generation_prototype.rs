@@ -179,3 +179,36 @@ mod tests {
         assert!(publish(&mut reopened, &UserProtector, [3; 16], || Ok([4; 32])).is_err());
     }
 }
+
+/// Immutable, DPAPI-authenticated provenance for the selected generation.
+/// Missing/corrupt provenance never proves a fresh installation.
+#[cfg(windows)]
+pub(crate) fn record_origin(root: &std::path::Path, id: &[u8; 16], fresh: bool) -> io::Result<()> {
+    use crate::read_only::{AccessMode, CheckedDirectory};
+    let _pins = CheckedDirectory::pin_root_path(root)?;
+    if let Some(existing) = inspect_origin(root, id)? {
+        return if existing == fresh { Ok(()) } else { Err(invalid()) };
+    }
+    let dir = CheckedDirectory::open(root, AccessMode::Writable).map_err(|e| io::Error::other(e.to_string()))?;
+    let mut plain = b"WCORIG01".to_vec(); plain.extend_from_slice(id); plain.push(u8::from(fresh));
+    let protected = UserProtector.seal(&plain)?;
+    dir.atomic_create_pinned(std::path::Path::new("origin-proof.v1"), &protected)?;
+    if inspect_origin(root, id)? != Some(fresh) { return Err(invalid()); }
+    Ok(())
+}
+
+#[cfg(windows)]
+pub(crate) fn inspect_origin(root: &std::path::Path, id: &[u8; 16]) -> io::Result<Option<bool>> {
+    use crate::read_only::{AccessMode, CheckedDirectory};
+    use tantivy::directory::error::OpenReadError;
+    let _pins = CheckedDirectory::pin_root_path(root)?;
+    let dir = CheckedDirectory::open(root, AccessMode::GuardedReader).map_err(|e| io::Error::other(e.to_string()))?;
+    let bytes = match dir.atomic_read_bounded(std::path::Path::new("origin-proof.v1"), MAX_PROTECTED) {
+        Ok(v) => v,
+        Err(OpenReadError::FileDoesNotExist(_)) => return Ok(None),
+        Err(e) => return Err(io::Error::other(e.to_string())),
+    };
+    let plain = UserProtector.open(&bytes)?;
+    if plain.len() != 25 || &plain[..8] != b"WCORIG01" || &plain[8..24] != id { return Err(invalid()); }
+    match plain[24] { 0 => Ok(Some(false)), 1 => Ok(Some(true)), _ => Err(invalid()) }
+}

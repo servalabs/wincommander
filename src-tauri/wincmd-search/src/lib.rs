@@ -320,6 +320,10 @@ impl SearchEngine {
     /// Directory-entry durability and anti-downgrade remain unverified.
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     pub fn select_experimental_candidate(&mut self, selection_dir: &std::path::Path) -> Result<()> {
+        self.select_experimental_candidate_with_origin(selection_dir, false)
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    fn select_experimental_candidate_with_origin(&mut self, selection_dir: &std::path::Path, fresh: bool) -> Result<()> {
         use sha2::{Digest, Sha256};
         use tantivy::directory::Directory;
         use crate::encrypted_generation_prototype::{PinnedSelectionStore, UserProtector};
@@ -333,6 +337,7 @@ impl SearchEngine {
         let manifest = directory.atomic_read(std::path::Path::new("meta.json"))
             .map_err(|e| std::io::Error::other(e.to_string()))?;
         let digest: [u8; 32] = Sha256::digest(&manifest).into();
+        crate::encrypted_generation_prototype::record_origin(selection_dir, &id, fresh)?;
         let mut selection = PinnedSelectionStore::open(selection_dir)?;
         crate::encrypted_generation_prototype::publish(&mut selection, &UserProtector, id, || Ok(digest))?;
         self.config.skip_paths.push(selection_dir.to_path_buf());
@@ -384,6 +389,17 @@ impl SearchEngine {
         if exists {
             return Self::open_experimental_selected_with_policy(config, path_policy, &selection);
         }
+        // Only a missing/empty directory or the authenticated scope-only
+        // directory can establish that there was no legacy index.
+        let fresh = match std::fs::symlink_metadata(&config.index_dir) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
+            Err(e) => return Err(e.into()),
+            Ok(_) => {
+                let _old_pins = crate::read_only::CheckedDirectory::pin_root_path(&config.index_dir)?;
+                if std::fs::read_dir(&config.index_dir)?.next().transpose()?.is_none() { true }
+                else { Self::experimental_scope_only(&config.index_dir)? }
+            },
+        };
         let mut identity = [0u8; 16];
         OsRng.fill_bytes(&mut identity);
         if identity == [0; 16] { return Err(SearchError::Config("cannot create encrypted index identity".into())); }
@@ -395,7 +411,7 @@ impl SearchEngine {
                 report.omitted, report.skipped_links,
             ));
         }
-        engine.select_experimental_candidate(&selection)?;
+        engine.select_experimental_candidate_with_origin(&selection, fresh)?;
         engine.start_indexing_internal(true)?;
         Ok(engine)
     }
@@ -522,6 +538,21 @@ impl SearchEngine {
         let generation = parent.join(format!(".wincommander-encrypted-{}", hex::encode(selected.index_id)));
         let directory = TrialDirectory::open_protected(&generation, AccessMode::GuardedReader, &selected.index_id, true)?;
         tantivy::Index::open(directory).map_err(|_| SearchError::Config("encrypted index cannot be opened".into()))?;
+        Ok(())
+    }
+    /// Verify a scope-only directory without a backup only when the selected
+    /// generation has authenticated proof that no legacy index existed.
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    pub fn verify_fresh_scope_selection(old: &std::path::Path, selection_dir: &std::path::Path) -> Result<()> {
+        use crate::encrypted_generation_prototype::{inspect, inspect_origin, PinnedSelectionStore, UserProtector};
+        if !Self::experimental_scope_only(old)? { return Err(SearchError::Config("legacy index remains".into())); }
+        Self::verify_selected_generation(old, selection_dir)?;
+        let mut selection = PinnedSelectionStore::open(selection_dir)?;
+        let selected = inspect(&mut selection, &UserProtector)?
+            .ok_or_else(|| SearchError::Config("encrypted selection missing".into()))?;
+        if inspect_origin(selection_dir, &selected.index_id)? != Some(true) {
+            return Err(SearchError::Config("fresh search provenance unavailable".into()));
+        }
         Ok(())
     }
     /// Offline phase: authenticate the selected encrypted generation before
@@ -1385,6 +1416,23 @@ mod tests {
         assert!(SearchEngine::abort_search_migration(&old, &selection, tx, &fence).is_err());
         SearchEngine::commit_search_migration(&old, &selection, tx, &fence).unwrap();
         assert!(SearchEngine::inspect_search_migration(&selection).unwrap().is_none());
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    #[test]
+    fn fresh_install_scope_only_remains_verifiable_on_next_update() {
+        let root = TempDir::new().unwrap();
+        let old = root.path().join("fts"); let data = root.path().join("data");
+        fs::create_dir(&data).unwrap(); fs::write(data.join("doc.txt"), b"freshscope").unwrap();
+        let config = make_config(old.clone(), vec![data]);
+        let engine = SearchEngine::open_or_rebuild_experimental_with_policy(config, Arc::new(|_| true)).unwrap();
+        engine.stop(); drop(engine);
+        // A fresh setup has no old backup but may later publish its scope.
+        if old.exists() { fs::remove_dir(&old).unwrap(); }
+        publish_experimental_scope(&old, b"scope", |_| Ok(())).unwrap();
+        let selection = root.path().join(".wincommander-encrypted-selection");
+        SearchEngine::verify_fresh_scope_selection(&old, &selection).unwrap();
+        // A quarantined-legacy check still requires its expected backup.
+        assert!(SearchEngine::verify_quarantined_selection(&old, &selection).is_err());
     }
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     #[test]

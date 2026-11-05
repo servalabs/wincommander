@@ -40,6 +40,10 @@ fn classify(parent: &Path, old: &Path, selection: &Path) -> Result<State, String
     }
 }
 
+fn verify_preserved_or_fresh(old: &Path, selection: &Path) -> Result<(), String> {
+    if SearchEngine::verify_quarantined_selection(old, selection).is_ok() { return Ok(()); }
+    SearchEngine::verify_fresh_scope_selection(old, selection).map_err(|e| e.to_string())
+}
 fn reject_pending(selection: &Path) -> Result<(), String> {
     if present(selection).map_err(|_| "Cannot inspect encrypted search selection.")?
         && SearchEngine::inspect_search_migration(selection).map_err(|e| e.to_string())?.is_some() {
@@ -81,8 +85,8 @@ pub fn run(phase: &str) -> Result<String, String> {
                     Ok("staged reconciliation=pending old-cache=retained".into())
                 },
                 State::Quarantined => {
-                    SearchEngine::verify_quarantined_selection(&old, &selection).map_err(|e| e.to_string())?;
-                    Ok("already-quarantined".into())
+                    verify_preserved_or_fresh(&old, &selection)?;
+                    Ok("selected".into())
                 },
             }
         }
@@ -92,8 +96,8 @@ pub fn run(phase: &str) -> Result<String, String> {
             State::Fresh => Ok("fresh".into()),
             State::NeedsQuarantine => SearchEngine::verify_selected_generation(&old, &selection)
                 .map(|_| "staged old-cache=retained".into()).map_err(|e| e.to_string()),
-            State::Quarantined => SearchEngine::verify_quarantined_selection(&old, &selection)
-                .map(|_| "already-quarantined".into()).map_err(|e| e.to_string()),
+            State::Quarantined => verify_preserved_or_fresh(&old, &selection)
+                .map(|_| "selected".into()),
             State::NeedsRebuild => Err("The encrypted search generation is not ready.".into()),
             }
         },
