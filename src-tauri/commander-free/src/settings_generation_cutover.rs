@@ -104,6 +104,27 @@ impl SelectedFile {
     fn replace(&self, bytes: &[u8]) -> Result<(), String> { crate::datastore_io::atomic_write(&self.path, bytes) }
 }
 
+/// Explicit first migration only. The caller must provide an independently
+/// verified current source and enforce maintenance for all ordinary writers.
+/// Marker absence cannot detect restoration/deletion of a previous cutover;
+/// this is acceptable only under the documented first-rollout assumption.
+pub(super) fn provision_first_migration(
+    guard: &super::settings_generation_ownership::SettingsGenerationLock,
+    anchor: &ProtectedFileAnchor, root: &Path, verify_source_and_maintenance: &impl Fn() -> Result<(), String>,
+) -> Result<(), String> {
+    guard.require_exclusive().map_err(|e| e.to_string())?;
+    if anchor.read()?.is_some() { return Err("settings cutover anchor already exists".into()); }
+    for name in [".settings-cutover-candidate.v1", ".settings-generation.v1"] {
+        if super::settings_rotation_trial::read_generation_file(&root.join(name), 16 * 1024 * 1024 * 2 + 65_536)?.is_some() {
+            return Err("existing settings cutover artifacts require recovery".into());
+        }
+    }
+    verify_source_and_maintenance()?;
+    anchor.provision_legacy()?;
+    verify_source_and_maintenance()?;
+    Ok(())
+}
+
 /// Start or resume initial selection. A crash after writing Preparing cannot
 /// fall back to legacy; retry requires the exact candidate and a fresh source
 /// verification under the same ownership/fencing rules as initial selection.
@@ -268,6 +289,24 @@ mod tests {
         assert!(select_initial(&shared, &anchor, &file, b"valid:one", &verify).is_err());
         assert!(file.read().unwrap().is_none());
         assert_eq!(anchor.read().unwrap(), Some(AnchorState::Legacy));
+    }
+
+    #[test]
+    fn first_migration_preserves_existing_key_and_rejects_ambiguous_artifacts() {
+        let (root, guard) = fixture();
+        let key = root.path().join("f6-keystore.dat");
+        std::fs::write(&key, b"existing key").unwrap();
+        let anchor = ProtectedFileAnchor::new(root.path(), super::super::settings_rotation_trial::StoreScope::Machine);
+        assert!(provision_first_migration(&guard, &anchor, root.path(), &|| Err("writer running".into())).is_err());
+        assert!(anchor.read().unwrap().is_none());
+        let stage = root.path().join(".settings-cutover-candidate.v1");
+        std::fs::write(&stage, b"ambiguous prior state").unwrap();
+        assert!(provision_first_migration(&guard, &anchor, root.path(), &|| Ok(())).is_err());
+        assert_eq!(std::fs::read(&stage).unwrap(), b"ambiguous prior state");
+        std::fs::remove_file(stage).unwrap();
+        provision_first_migration(&guard, &anchor, root.path(), &|| Ok(())).unwrap();
+        assert_eq!(anchor.read().unwrap(), Some(AnchorState::Legacy));
+        assert_eq!(std::fs::read(key).unwrap(), b"existing key");
     }
 
 }

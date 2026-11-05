@@ -99,7 +99,18 @@ checkpoint. The offline acknowledgement is an operator statement, not a
 technical fence against another process. They must not be exposed by a release
 installer until independently enforced maintenance mode, protected root and
 lock ACL acceptance, source preservation and crash/cross-user tests pass.
-Existing installations do not automatically receive a Legacy anchor. A missing
-anchor is an error, because blindly creating one could mistake deleted migration
-state for a first migration and restore stale signing identity. A separately
-authorized recovery/provisioning design is still required for those installs.
+Existing installations do not automatically receive a Legacy anchor during
+normal startup. The explicit debug migration can provision the first anchor
+only after it verifies the held original snapshot, rejects any existing cutover
+artifacts, and checks for known running WinCommander processes and service.
+This assumes a first rollout: deletion or restoration of all prior cutover
+artifacts remains indistinguishable from no prior migration. An independent
+rollback anchor is still needed for stronger protection.
+
+The debug migration rechecks known executable names and the named service while
+validating the held source and fails visibly if they are running or cannot be
+inspected. Process scans do not prevent a new launch after the scan and do not
+identify renamed copies. The rollout must stop autostart/service routes and
+require all clients to upgrade before migration; these checks are not a
+substitute for enforced maintenance mode. Original settings and the signing
+key remain in place, and the staged encrypted candidate is retained.

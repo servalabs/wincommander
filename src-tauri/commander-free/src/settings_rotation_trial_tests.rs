@@ -572,11 +572,32 @@ fn fresh_install_selects_encrypted_empty_generation_and_resumes_pending() {
     std::fs::write(root.path().join(".settings-cutover-candidate.v1"), &candidate).unwrap();
     anchor.write(&AnchorState::Preparing { next: cutover::digest(&candidate) }).unwrap();
     assert!(owner.read_all().is_err());
-    select_fresh_generation(&owner._ownership, root.path(), StoreScope::Machine).unwrap();
+    select_fresh_generation(&owner._ownership, root.path(), StoreScope::Machine, &|| Ok(())).unwrap();
     assert!(owner.read_all().unwrap().is_empty());
     let seed = json!({"signing_seed_hex": "c".repeat(64)});
     assert_eq!(owner.get_or_create_f6(|| Ok(seed.clone())).unwrap(), seed);
     assert_eq!(owner.get_or_create_f6(|| panic!("existing key must be returned")).unwrap(), seed);
     assert_eq!(std::fs::read(root.path().join(".settings-cutover-candidate.v1")).unwrap(), candidate);
     assert!(!root.path().join(".install.material").exists());
+}
+
+#[test]
+#[cfg_attr(windows, ignore = "requires elevated machine-lock ACL provisioning; run explicitly in Windows acceptance")]
+fn first_existing_migration_checks_maintenance_and_preserves_f6_source() {
+    let root = tempfile::tempdir().unwrap(); provision_test_lock(root.path());
+    let old = [42; 32]; let mut input = sections(&old); let old_key = derive_section_key(&old, None).unwrap();
+    let f6 = json!({"signing_seed_hex": "d".repeat(64)});
+    let encrypted_f6 = encode_section(&old_key, &serde_json::to_vec(&f6).unwrap(), "machine:f6-keystore").unwrap();
+    input.push(("f6-keystore".into(), encrypted_f6.clone()));
+    let source_path = root.path().join("f6-original.dat");
+    std::fs::write(&source_path, encrypted_f6.as_bytes()).unwrap();
+    let candidate = prepare(&old, &input).unwrap();
+    let owner = LockedSelectedGeneration::acquire(root.path()).unwrap();
+    let anchor = ProtectedFileAnchor::new(root.path(), StoreScope::Machine);
+    assert!(cutover::provision_first_migration(&owner._ownership, &anchor, root.path(), &|| Err("writer running".into())).is_err());
+    assert!(anchor.read().unwrap().is_none());
+    cutover::provision_first_migration(&owner._ownership, &anchor, root.path(), &|| verify_source(&candidate, &old, &input)).unwrap();
+    stage_and_select(&owner._ownership, &anchor, root.path(), || Ok(candidate.clone()), &|bytes| verify_source(bytes, &old, &input)).unwrap();
+    assert_eq!(owner.read_all().unwrap()["f6-keystore"], f6);
+    assert_eq!(std::fs::read_to_string(source_path).unwrap(), encrypted_f6);
 }

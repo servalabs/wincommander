@@ -50,6 +50,10 @@ use std::fs;
 use std::path::PathBuf;
 
 #[cfg(any(test, feature = "experimental-settings-generation"))]
+#[path = "settings_generation_maintenance.rs"]
+mod settings_generation_maintenance;
+
+#[cfg(any(test, feature = "experimental-settings-generation"))]
 #[path = "settings_generation_bootstrap.rs"]
 mod settings_generation_bootstrap;
 

@@ -778,23 +778,42 @@ fn stage_and_select<A: Anchor>(
 /// authorization remain mandatory external prerequisites.
 #[cfg(windows)]
 pub(super) fn migrate_explicitly() -> Result<(), String> {
+    super::settings_generation_maintenance::verify_known_writers_stopped()?;
     let (root, _pins, scope) = experimental_runtime_root()?;
+    match scope {
+        StoreScope::Machine => super::settings_generation_acl_windows::provision_or_verify(&root),
+        StoreScope::CurrentUser => super::settings_generation_acl_windows::provision_user_or_verify(&root),
+    }.map_err(|_| "cannot provision authorized settings lock; existing data preserved")?;
+    super::settings_generation_maintenance::verify_known_writers_stopped()?;
     let owner = LockedSelectedGeneration::acquire_for(&root, scope)?;
     let anchor = ProtectedFileAnchor::new(&root, scope);
-    match anchor.read()? {
+    let initial = anchor.read()?;
+    match initial {
         Some(AnchorState::Active { .. }) => { owner.read_reconciled()?; return Ok(()); },
-        Some(AnchorState::Legacy | AnchorState::Preparing { .. }) => {},
+        Some(AnchorState::Legacy | AnchorState::Preparing { .. }) | None => {},
         Some(AnchorState::Updating { .. }) => return Err("settings update requires authorized recovery before migration".into()),
-        None => return Err("settings cutover anchor is missing; existing data preserved".into()),
     }
     let snapshot = match scope {
         StoreScope::Machine => source_snapshot::Snapshot::capture_machine()?,
         StoreScope::CurrentUser => source_snapshot::Snapshot::capture_user()?,
     };
     let held = std::cell::RefCell::new(snapshot);
+    if initial.is_none() {
+        // Authenticate every original, including F6, before provisioning the
+        // first marker. This assumes the first rollout has never selected a
+        // prior generation; losing all old cutover artifacts is undetectable.
+        let probe = held.borrow_mut().prepare()?;
+        cutover::provision_first_migration(&owner._ownership, &anchor, &root, &|| {
+            super::settings_generation_maintenance::verify_known_writers_stopped()?;
+            held.borrow_mut().verify_generation(&probe)
+        })?;
+    }
     stage_and_select(&owner._ownership, &anchor, &root,
         || held.borrow_mut().prepare(),
-        &|bytes| held.borrow_mut().verify_generation(bytes))
+        &|bytes| {
+            super::settings_generation_maintenance::verify_known_writers_stopped()?;
+            held.borrow_mut().verify_generation(bytes)
+        })
 }
 
 // Fresh installs have no legacy key or sections to migrate. The marker and
@@ -814,15 +833,16 @@ fn verify_fresh_generation(root: &Path, scope: StoreScope, candidate: &[u8]) -> 
 }
 fn select_fresh_generation(
     guard: &super::settings_generation_ownership::SettingsGenerationLock,
-    root: &Path, scope: StoreScope,
+    root: &Path, scope: StoreScope, verify_maintenance: &impl Fn() -> Result<(), String>,
 ) -> Result<(), String> {
     guard.require_exclusive().map_err(|e| e.to_string())?;
+    verify_maintenance()?;
     let anchor = ProtectedFileAnchor::new(root, scope);
     if matches!(anchor.read()?, Some(AnchorState::Active { .. })) {
         return cutover::read_active(guard, &anchor, &SelectedFile::new(root), &|bytes| verify_scoped_generation(scope, bytes)).map(|_| ());
     }
     stage_and_select(guard, &anchor, root, || prepare_fresh_generation(scope),
-        &|bytes| verify_fresh_generation(root, scope, bytes))
+        &|bytes| { verify_maintenance()?; verify_fresh_generation(root, scope, bytes) })
 }
 
 #[cfg(windows)]
@@ -848,7 +868,9 @@ fn prepare_fresh_root() -> Result<(PathBuf, Vec<std::fs::File>, StoreScope), Str
 /// and prevent old executable launches before calling it.
 #[cfg(windows)]
 pub(super) fn provision_verified_fresh_install() -> Result<(), String> {
+    super::settings_generation_maintenance::verify_known_writers_stopped()?;
     let (root, _pins, scope) = prepare_fresh_root()?;
+    super::settings_generation_maintenance::verify_known_writers_stopped()?;
     super::settings_generation_bootstrap::provision_fresh(&root, scope, |path| {
         match scope {
             StoreScope::Machine => super::settings_generation_acl_windows::provision_or_verify(path),
@@ -856,7 +878,7 @@ pub(super) fn provision_verified_fresh_install() -> Result<(), String> {
         }.map_err(|_| "cannot provision authorized settings lock".into())
     })?;
     let owner = LockedSelectedGeneration::acquire_for(&root, scope)?;
-    select_fresh_generation(&owner._ownership, &root, scope)
+    select_fresh_generation(&owner._ownership, &root, scope, &|| super::settings_generation_maintenance::verify_known_writers_stopped())
 }
 
 /// Trial reader/writer for an already selected generation. The caller must
