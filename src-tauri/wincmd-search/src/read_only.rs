@@ -206,7 +206,7 @@ impl CheckedDirectory {
         let root = pins.last().ok_or_else(denied)?;
         let mut random = [0u8; 16]; OsRng.fill_bytes(&mut random);
         let temp_name = format!(".encrypted-index-{}.tmp", hex::encode(random));
-        let mut file = std::fs::OpenOptions::new().access_mode(FILE_GENERIC_WRITE | DELETE | FILE_READ_ATTRIBUTES)
+        let mut file = std::fs::OpenOptions::new().write(true).access_mode(FILE_GENERIC_WRITE | DELETE | FILE_READ_ATTRIBUTES)
             .share_mode(FILE_SHARE_READ).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
             .create_new(true).open(self.root.join(temp_name))?;
         let result = (|| -> io::Result<()> {
@@ -556,6 +556,16 @@ mod tests {
         assert_eq!(std::fs::read(&outside).unwrap(), b"outside");
         assert_eq!(identity(), before);
         if result.is_ok() { assert_eq!(std::fs::read(root.join(path)).unwrap(), b"third"); }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn atomic_pinned_write_creates_a_new_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let directory = CheckedDirectory::open(dir.path(), AccessMode::Writable).unwrap();
+        let path = Path::new("fresh-manifest");
+        directory.atomic_write_pinned(path, b"ciphertext fixture").unwrap();
+        assert_eq!(std::fs::read(dir.path().join(path)).unwrap(), b"ciphertext fixture");
     }
 
     #[cfg(windows)]
