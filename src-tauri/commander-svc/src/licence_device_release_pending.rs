@@ -155,10 +155,9 @@ fn prepare_finalization_locked(
         binding.device_hash, &credential.id, generation, &cache)
 }
 
-/// Recheck the prepared journal, retired licence, exact credential, request and
-/// durable acknowledgement without using the original cache file. This is a
-/// read-only preflight; deletion and marker cleanup remain unimplemented.
-pub(crate) fn verify_prepared_recovery(
+/// Reverify all protected evidence, then remove only the exact cached licence.
+/// The gate, credential and acknowledgement remain for retry and finalization.
+pub(crate) fn remove_prepared_cache(
     trust: &wincmd_pq_experiment::jws::Trust<'_>, now: u64,
 ) -> Result<bool, &'static str> {
     let _guard = LOCK.lock().map_err(|_| INVALID)?;
@@ -169,7 +168,8 @@ pub(crate) fn verify_prepared_recovery(
         let bytes = credential_anchor.read().map_err(|_| INVALID)?.ok_or(INVALID)?;
         let credential = decode_confirmed(&MachineDpapi, &binding, trust, &bytes, now)?;
         verify_prepared_ack(&release_anchor(&binding)?, &crate::license_cache::release_gate::machine(),
-            &MachineDpapi, &binding, &credential, &body, journal)
+            &MachineDpapi, &binding, &credential, &body, journal)?;
+        crate::license_cache::remove_prepared_cache_locked(journal)
     })?;
     Ok(verified.is_some())
 }

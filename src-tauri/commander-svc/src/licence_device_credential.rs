@@ -390,21 +390,24 @@ pub(crate) async fn request_release(
 }
 
 /// No caller-supplied licence identity, trust, cache or path is accepted.
-/// Success means the server acknowledgement was saved; the local licence remains.
-/// Authentication and crash-safe local finalization are still required before IPC use.
+/// Success means acknowledgement is saved and the matching cache is removed.
+/// Credential, acknowledgement and gate finalization are still required before IPC use.
 pub(crate) async fn release_from_machine_cache() -> Result<(), &'static str> {
     let trust = crate::license_cache::configured_device_receipt_trust()?;
     let mut receipt_policy = trust.policy();
     receipt_policy.purpose = wincmd_pq_experiment::Purpose::LicenceEnrolment;
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
         .map_err(|_| INVALID)?.as_secs();
-    if release_pending::verify_prepared_recovery(&receipt_policy, now)? { return Ok(()); }
+    if release_pending::remove_prepared_cache(&receipt_policy, now)? { return Ok(()); }
     let cache = crate::license_cache::load_release_licence_snapshot()?;
     let binding = Binding { licence_id: &cache.licence_id, device_hash: &cache.device_hash,
         issuer_origin: wire::LICENCE_ORIGIN };
     let licence = RefreshLicence { payload: &cache.payload, signature: &cache.signature,
         hybrid: &cache.hybrid, last_verified_at: cache.last_verified_at };
-    request_release(&binding, &receipt_policy, &licence).await
+    request_release(&binding, &receipt_policy, &licence).await?;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| INVALID)?.as_secs();
+    if release_pending::remove_prepared_cache(&receipt_policy, now)? { Ok(()) } else { Err(INVALID) }
 }
 
 /// Resume only a protected confirmed release. On an uncertain send or write,

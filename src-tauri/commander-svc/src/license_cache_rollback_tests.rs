@@ -266,7 +266,6 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
     super::super::release_gate::bind_request_at(&recovery_gate, &context, b"release").unwrap();
     super::super::release_gate::prepare_finalization_at(&recovery_gate, &context, b"release", "lic-a", "device", &[3; 32], 2, &cache(&generation_two)).unwrap();
     let journal_bytes = recovery_gate.read().unwrap().unwrap();
-    fs::remove_file(&retired_path).unwrap();
     let read_again = || with_prepared_release_recovery_at(&public, &current, &anchor::Anchor::test_user(recovery_gate_path.clone()),
         &anchor::Anchor::test_user(retired_anchor_path.clone()), |journal, snapshot, wire| {
             assert_eq!(journal.context, context);
@@ -275,6 +274,34 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
             assert!(!wire.is_empty());
             Ok(())
         });
+    assert!(matches!(read_again(), Ok(Some(()))));
+    let remove_once = || with_prepared_release_recovery_at(&public, &current, &anchor::Anchor::test_user(recovery_gate_path.clone()),
+        &anchor::Anchor::test_user(retired_anchor_path.clone()), |journal, _, _| remove_prepared_cache_with(&retired_path, journal, false, || Ok(())));
+    fs::write(&retired_path, cache(&generation_three_same_second)).unwrap();
+    assert!(remove_once().is_err());
+    assert_eq!(fs::read(&retired_path).unwrap(), cache(&generation_three_same_second));
+    fs::write(&retired_path, cache(&generation_two)).unwrap();
+    let fail_before = with_prepared_release_recovery_at(&public, &current, &recovery_gate, &reopened_anchor,
+        |journal, _, _| remove_prepared_cache_with(&retired_path, journal, false, || Err("injected")));
+    assert!(fail_before.is_err());
+    assert_eq!(fs::read(&retired_path).unwrap(), cache(&generation_two));
+    let moved_path = renewal_dir.join("replaced-cache.json");
+    let moved_parent = renewal_dir.with_extension("moved");
+    let raced = with_prepared_release_recovery_at(&public, &current, &recovery_gate, &reopened_anchor,
+        |journal, _, _| remove_prepared_cache_with(&retired_path, journal, false, || {
+            assert!(fs::write(&retired_path, b"changed").is_err());
+            assert!(fs::rename(&retired_path, &moved_path).is_err());
+            assert!(fs::rename(&renewal_dir, &moved_parent).is_err());
+            Ok(())
+        }));
+    assert!(matches!(raced, Ok(Some(()))));
+    assert!(matches!(remove_once(), Ok(Some(()))));
+    assert!(!retired_path.exists());
+    // A reopened journal permits the exact operation to finish after a crash.
+    assert!(matches!(remove_once(), Ok(Some(()))));
+    fs::create_dir(&retired_path).unwrap();
+    assert!(remove_once().is_err());
+    fs::remove_dir(&retired_path).unwrap();
     assert!(matches!(read_again(), Ok(Some(()))));
     let mut modified: serde_json::Value = serde_json::from_slice(&journal_bytes).unwrap();
     modified["finalization"]["generation"] = 3.into();
@@ -759,5 +786,39 @@ fn worker_issued_licence_survives_history_reload_and_rejects_tampering() {
     assert!(load_snapshot_with_anchor(&path, public, &trust, &reopened).is_err());
     assert!(verify_with_anchor(&path, &request, verified_at, public, &trust, &reopened).is_err());
     fs::remove_file(path).unwrap();
+    fs::remove_dir(dir).unwrap();
+}
+
+#[test]
+#[ignore = "explicit acceptance: requires elevated Windows to set test ACLs"]
+fn release_cache_delete_enforces_protected_windows_acls() {
+    fn icacls(path: &Path, args: &[&str]) {
+        let output = std::process::Command::new("icacls.exe").arg(path).args(args).output().unwrap();
+        assert!(output.status.success(), "icacls failed: {}", String::from_utf8_lossy(&output.stderr));
+    }
+    let dir = std::env::temp_dir().join(format!("wincmd-release-acl-{}", uuid::Uuid::new_v4()));
+    fs::create_dir(&dir).unwrap();
+    icacls(&dir, &["/setowner", "*S-1-5-32-544"]);
+    icacls(&dir, &["/inheritance:r", "/grant:r", "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F"]);
+    let path = dir.join("license_cache.json");
+    fs::write(&path, b"synthetic cache").unwrap();
+    icacls(&path, &["/setowner", "*S-1-5-32-544"]);
+    let journal = super::super::release_gate::PreparedRelease { context: [1; 32], licence_id: "licence".into(),
+        device_hash: "device".into(), credential_id: [2; 32], generation: 1, cache: b"synthetic cache".to_vec() };
+    icacls(&path, &["/grant:r", "*S-1-1-0:F"]);
+    assert!(remove_prepared_cache_with(&path, &journal, true, || Ok(())).is_err());
+    assert_eq!(fs::read(&path).unwrap(), b"synthetic cache");
+    icacls(&path, &["/remove:g", "*S-1-1-0"]);
+    let linked_file = dir.join("linked-cache.json");
+    std::os::windows::fs::symlink_file(&path, &linked_file).unwrap();
+    assert!(remove_prepared_cache_with(&linked_file, &journal, true, || Ok(())).is_err());
+    fs::remove_file(&linked_file).unwrap();
+    let linked_dir = dir.join("linked-parent");
+    std::os::windows::fs::symlink_dir(&dir, &linked_dir).unwrap();
+    assert!(remove_prepared_cache_with(&linked_dir.join("license_cache.json"), &journal, true, || Ok(())).is_err());
+    fs::remove_dir(&linked_dir).unwrap();
+    remove_prepared_cache_with(&path, &journal, true, || Ok(())).unwrap();
+    assert!(!path.exists());
+    remove_prepared_cache_with(&path, &journal, true, || Ok(())).unwrap();
     fs::remove_dir(dir).unwrap();
 }

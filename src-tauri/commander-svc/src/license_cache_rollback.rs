@@ -525,6 +525,79 @@ fn with_prepared_release_recovery_at<T>(
     operation(&journal, &snapshot, wire).map(Some)
 }
 
+/// Caller holds the licence locks and has just reverified the prepared journal,
+/// released floor, bound credential and durable acknowledgement. Only the exact
+/// journalled cache may be removed. An absent file is an idempotent retry.
+pub(super) fn remove_prepared_cache_locked(
+    path: &Path, journal: &super::release_gate::PreparedRelease,
+) -> Result<(), &'static str> {
+    remove_prepared_cache_with(path, journal, true, || Ok(()))
+}
+
+fn remove_prepared_cache_with(
+    path: &Path, journal: &super::release_gate::PreparedRelease, require_trusted_acl: bool,
+    before_delete: impl FnOnce() -> Result<(), &'static str>,
+) -> Result<(), &'static str> {
+    use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
+    use windows_sys::Win32::Storage::FileSystem::{GetFileInformationByHandle, SetFileInformationByHandle,
+        BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_DIRECTORY, FILE_DISPOSITION_INFO, FILE_FLAG_BACKUP_SEMANTICS,
+        FILE_FLAG_OPEN_REPARSE_POINT, FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE, FileDispositionInfo};
+    const ACCESS: u32 = 0x8000_0000 | 0x0001_0000 | 0x0002_0000; // GENERIC_READ | DELETE | READ_CONTROL
+    // Hold all non-reparse ancestors without delete sharing so the parent path
+    // cannot be replaced while the opened file is checked and removed.
+    let parent = path.parent().ok_or("license cache is unavailable")?;
+    if !parent.is_absolute() { return Err("license cache is unavailable"); }
+    let mut parents = Vec::new();
+    for ancestor in parent.ancestors().collect::<Vec<_>>().into_iter().rev() {
+        let directory = fs::OpenOptions::new().access_mode(FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | 0x0002_0000)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(ancestor).map_err(|_| "license cache is unavailable")?;
+        let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+        if unsafe { GetFileInformationByHandle(directory.as_raw_handle(), &mut info) } == 0
+            || info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+            || info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0 {
+            return Err("license cache is unavailable");
+        }
+        parents.push(directory);
+    }
+    if require_trusted_acl {
+        let parent = parents.last().ok_or("license cache is unavailable")?;
+        crate::peer_auth_deployment_acl::verify_file_handle(parent).map_err(|_| "license cache is unavailable")?;
+    }
+    let mut file = match fs::OpenOptions::new().access_mode(ACCESS).share_mode(FILE_SHARE_READ)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT).open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(_) => return Err("license cache is unavailable"),
+    };
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0
+        || info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT) != 0
+        || info.nNumberOfLinks != 1 {
+        return Err("license cache is unavailable");
+    }
+    if require_trusted_acl {
+        crate::peer_auth_deployment_acl::verify_file_handle(&file).map_err(|_| "license cache is unavailable")?;
+    }
+    let mut actual = Vec::new();
+    std::io::Read::by_ref(&mut file).take(CACHE_LIMIT + 1).read_to_end(&mut actual)
+        .map_err(|_| "license cache is unavailable")?;
+    if actual.len() as u64 > CACHE_LIMIT { return Err("license cache is unavailable"); }
+    if actual != journal.cache { return Err("license cache changed during release"); }
+    before_delete()?;
+    let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
+    if unsafe { SetFileInformationByHandle(file.as_raw_handle(), FileDispositionInfo,
+        (&disposition as *const FILE_DISPOSITION_INFO).cast(), std::mem::size_of::<FILE_DISPOSITION_INFO>() as u32) } == 0 {
+        return Err("license cache is unavailable");
+    }
+    drop(file);
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        _ => Err("license cache is unavailable"),
+    }
+}
+
 #[cfg(test)]
 fn check_previous(
     bytes: &[u8],

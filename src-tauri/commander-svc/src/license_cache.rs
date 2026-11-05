@@ -422,6 +422,12 @@ pub(crate) fn with_prepared_release_recovery<T>(
     rollback::with_prepared_release_recovery(public, &trust.policy(), operation)
 }
 
+/// Only call from verified release recovery while all licence locks are held.
+#[cfg(feature = "experimental-pq-licence")]
+pub(crate) fn remove_prepared_cache_locked(journal: &release_gate::PreparedRelease) -> Result<(), &'static str> {
+    rollback::remove_prepared_cache_locked(&machine_license_cache_path()?, journal)
+}
+
 #[cfg(feature = "experimental-pq-licence")]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
