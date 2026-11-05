@@ -190,10 +190,18 @@ impl SearchEngine {
     }
 
     fn from_index(
-        config: IndexConfig,
+        mut config: IndexConfig,
         ci: Arc<ContentIndex>,
         path_policy: PathPolicy,
     ) -> Result<Self> {
+        // Index metadata changes on every commit. Never crawl or watch the
+        // index itself, even when an allowed root contains it.
+        config.skip_paths.push(config.index_dir.clone());
+        if let Ok(physical) = config.index_dir.canonicalize() {
+            if physical != config.index_dir {
+                config.skip_paths.push(physical);
+            }
+        }
         let status = Arc::new(Mutex::new(IndexStatus::default()));
         Ok(Self {
             path_policy,
@@ -230,7 +238,7 @@ impl SearchEngine {
             s.pending_docs = files.len() as u64;
         }
         for meta in files {
-            if !(self.path_policy)(&meta.path) {
+            if crawler::path_is_skipped(&meta.path, &self.config.skip_paths) || !(self.path_policy)(&meta.path) {
                 let mut status = self.status.lock().unwrap();
                 status.pending_docs = status.pending_docs.saturating_sub(1);
                 continue;
@@ -590,6 +598,27 @@ mod tests {
             max_file_bytes: 10_000_000,
             index_dir,
         }
+    }
+
+    #[test]
+    fn index_inside_root_is_excluded_from_crawl_and_events() {
+        let root = TempDir::new().unwrap();
+        let index_dir = root.path().join("index");
+        let document = root.path().join("document.json");
+        fs::write(&document, "ordinary document").unwrap();
+        let engine = SearchEngine::open(make_config(index_dir.clone(), vec![root.path().to_path_buf()])).unwrap();
+        let exclusions = build_globset(&[]).unwrap();
+        let files = collect_files(&engine.config.roots, &exclusions, &engine.config.skip_paths, u64::MAX);
+        assert!(files.iter().any(|file| file.path == document));
+        assert!(!files.iter().any(|file| file.path.starts_with(&index_dir)));
+        let event = notify::Event {
+            kind: notify::EventKind::Modify(notify::event::ModifyKind::Data(notify::event::DataChange::Content)),
+            paths: vec![index_dir.join("meta.json")],
+            attrs: Default::default(),
+        };
+        assert!(watch::apply_fs_event(&event, &engine.config.skip_paths, &exclusions, u64::MAX).is_none());
+        let ordinary = notify::Event { paths: vec![document], ..event };
+        assert!(watch::apply_fs_event(&ordinary, &engine.config.skip_paths, &exclusions, u64::MAX).is_some());
     }
 
     /// Build a small tempdir tree, index it synchronously, then search.
