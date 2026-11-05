@@ -1072,6 +1072,13 @@ mod tests {
         engine.rebuild_experimental_candidate().unwrap();
         engine.select_experimental_candidate(&selector).unwrap();
         let expected_backup = engine.experimental_legacy_backup_path().unwrap();
+        // A concurrent cooperating maintenance process must prevent the move.
+        let maintenance = std::fs::OpenOptions::new().read(true).write(true).create(true)
+            .truncate(false).open(root.path().join(".encrypted-search-maintenance.lock")).unwrap();
+        maintenance.lock().unwrap();
+        assert!(engine.quarantine_experimental_legacy_cache().is_err());
+        assert_eq!(fs::read(old.join("meta.json")).unwrap(), b"legacy retained");
+        drop(maintenance);
         let backup = engine.quarantine_experimental_legacy_cache().unwrap();
         assert_eq!(backup, expected_backup);
         assert!(!old.exists());
