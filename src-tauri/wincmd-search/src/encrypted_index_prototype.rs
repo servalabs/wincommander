@@ -508,6 +508,17 @@ mod tantivy_trial {
             }
             let mut encrypted = Vec::new();
             encrypt(&mut encrypted, &self.key, name(path)?, data)?;
+            // Windows can briefly refuse atomic replacement while a shared
+            // reader has the old manifest open. Preserve a permanent failure.
+            #[cfg(windows)]
+            for delay in [2, 4, 8, 16, 32, 64, 128] {
+                match self.inner.atomic_write(path, &encrypted) {
+                    Err(e) if e.raw_os_error() == Some(5) => {
+                        std::thread::sleep(std::time::Duration::from_millis(delay))
+                    }
+                    result => return result,
+                }
+            }
             self.inner.atomic_write(path, &encrypted)
         }
         fn sync_directory(&self) -> io::Result<()> {
@@ -747,6 +758,57 @@ mod tantivy_trial {
         drop(held);
         assert!(rx.recv_timeout(Duration::from_secs(5)).unwrap());
         handle.join().unwrap();
+    }
+
+    #[test]
+    fn checked_shared_reader_waits_for_writer_in_another_process() {
+        use std::{
+            process::Command,
+            thread,
+            time::{Duration, Instant},
+        };
+        use tantivy::directory::META_LOCK;
+        const ENV: &str = "WINCOM_SEARCH_METADATA_LOCK_TEST";
+        if let Some(path) = std::env::var_os(ENV) {
+            let root = std::path::PathBuf::from(path);
+            let reader = TrialDirectory {
+                inner: CheckedDirectory::open(&root, AccessMode::SharedReader).unwrap(),
+                key: [31; 32],
+            };
+            std::fs::write(root.join("child-started"), b"ready").unwrap();
+            let _lock = reader.acquire_lock(&META_LOCK).unwrap();
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let writer = TrialDirectory {
+            inner: CheckedDirectory::open(dir.path(), AccessMode::Writable).unwrap(),
+            key: [31; 32],
+        };
+        let held = writer.acquire_lock(&META_LOCK).unwrap();
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "encrypted_index_prototype::tantivy_trial::checked_shared_reader_waits_for_writer_in_another_process"])
+            .env(ENV, dir.path()).spawn().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while !dir.path().join("child-started").exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+        let started = dir.path().join("child-started").exists();
+        thread::sleep(Duration::from_millis(150));
+        let was_blocked = child.try_wait().unwrap().is_none();
+        drop(held);
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let result = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break Some(status);
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            thread::sleep(Duration::from_millis(20));
+        };
+        assert!(started && was_blocked && result.is_some_and(|s| s.success()));
     }
 
     #[test]
