@@ -25,7 +25,7 @@ impl Drop for KeyState {
 }
 
 fn digest(raw: &str) -> String {
-    format!("{:x}", Sha256::digest(raw.as_bytes()))
+    hex::encode(Sha256::digest(raw.as_bytes()))
 }
 
 fn save_key(path: &Path, state: &KeyState, new: bool) -> Result<(), String> {
@@ -129,32 +129,37 @@ pub(super) fn write(
     finish(key_path, &mut key)
 }
 
+fn empty_or_missing(key_path: &Path) -> Result<Vec<EvidenceEntry>, String> {
+    match fs::symlink_metadata(key_path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) => Err(format!("Cannot inspect evidence key: {error}")),
+        Ok(_) => {
+            let state = key(key_path, None)?;
+            if state.pending_digest.as_deref() == Some(digest("").as_str()) {
+                Ok(Vec::new())
+            } else {
+                Err("Evidence ledger is missing; existing key preserved".into())
+            }
+        }
+    }
+}
+
 pub(super) fn read(
     path: &Path,
-    legacy: &impl Fn() -> Result<PathBuf, String>,
+    legacy: &impl Fn() -> Result<Option<PathBuf>, String>,
     key_path: &Path,
     persist: &impl Fn(&Path, &[u8]) -> Result<(), String>,
 ) -> Result<Vec<EvidenceEntry>, String> {
     let (raw, imported) = match fs::read_to_string(path) {
         Ok(raw) => (raw, None),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let old = legacy()?;
+            let Some(old) = legacy()? else {
+                return empty_or_missing(key_path);
+            };
             match fs::read_to_string(&old) {
                 Ok(raw) => (raw, Some(old)),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    match fs::symlink_metadata(key_path) {
-                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                            return Ok(Vec::new())
-                        }
-                        Err(error) => return Err(format!("Cannot inspect evidence key: {error}")),
-                        Ok(_) => {
-                            let state = key(key_path, None)?;
-                            if state.pending_digest.as_deref() == Some(digest("").as_str()) {
-                                return Ok(Vec::new());
-                            }
-                            return Err("Evidence ledger is missing; existing key preserved".into());
-                        }
-                    }
+                    return empty_or_missing(key_path)
                 }
                 Err(error) => return Err(format!("Cannot read old evidence ledger: {error}")),
             }
@@ -214,7 +219,7 @@ mod tests {
         .unwrap();
         let entries = read(
             &path,
-            &|| Ok(legacy.clone()),
+            &|| Ok(Some(legacy.clone())),
             &key_path,
             &crate::datastore_io::atomic_write,
         )
@@ -225,7 +230,7 @@ mod tests {
         assert!(!disk.contains("private summary") && !disk.contains("private detail"));
         let reopened = read(
             &path,
-            &|| Ok(legacy.clone()),
+            &|| Ok(Some(legacy.clone())),
             &key_path,
             &crate::datastore_io::atomic_write,
         )
@@ -241,15 +246,17 @@ mod tests {
         let key_path = dir.path().join("key");
         let original = format!("{}\n", serde_json::to_string(&entry()).unwrap());
         fs::write(&legacy, &original).unwrap();
-        assert!(read(&path, &|| Ok(legacy.clone()), &key_path, &|_, _| Err(
-            "injected failure".into()
-        ))
-        .is_err());
+        assert!(
+            read(&path, &|| Ok(Some(legacy.clone())), &key_path, &|_, _| Err(
+                "injected failure".into()
+            ))
+            .is_err()
+        );
         assert_eq!(fs::read_to_string(&legacy).unwrap(), original);
         assert!(!path.exists());
         read(
             &path,
-            &|| Ok(legacy.clone()),
+            &|| Ok(Some(legacy.clone())),
             &key_path,
             &crate::datastore_io::atomic_write,
         )
@@ -261,7 +268,7 @@ mod tests {
         fs::write(&path, &bytes).unwrap();
         assert!(read(
             &path,
-            &|| Ok(legacy.clone()),
+            &|| Ok(Some(legacy.clone())),
             &key_path,
             &crate::datastore_io::atomic_write
         )
@@ -286,7 +293,7 @@ mod tests {
         fs::remove_file(&key_path).unwrap();
         assert!(read(
             &path,
-            &|| Ok(legacy.clone()),
+            &|| Ok(Some(legacy.clone())),
             &key_path,
             &crate::datastore_io::atomic_write
         )
@@ -304,14 +311,16 @@ mod tests {
         let key_path = dir.path().join("key");
         let original = format!("{}\n", serde_json::to_string(&entry()).unwrap());
         fs::write(&path, &original).unwrap();
-        assert!(read(&path, &|| Ok(legacy.clone()), &key_path, &|_, _| Err(
-            "failed".into()
-        ))
-        .is_err());
+        assert!(
+            read(&path, &|| Ok(Some(legacy.clone())), &key_path, &|_, _| Err(
+                "failed".into()
+            ))
+            .is_err()
+        );
         fs::write(&path, "{}\n").unwrap();
         assert!(read(
             &path,
-            &|| Ok(legacy.clone()),
+            &|| Ok(Some(legacy.clone())),
             &key_path,
             &crate::datastore_io::atomic_write
         )
@@ -323,7 +332,7 @@ mod tests {
         fs::write(&path, sealed).unwrap();
         read(
             &path,
-            &|| Ok(legacy.clone()),
+            &|| Ok(Some(legacy.clone())),
             &key_path,
             &crate::datastore_io::atomic_write,
         )
@@ -331,7 +340,7 @@ mod tests {
         fs::write(&path, &original).unwrap();
         assert!(read(
             &path,
-            &|| Ok(legacy.clone()),
+            &|| Ok(Some(legacy.clone())),
             &key_path,
             &crate::datastore_io::atomic_write
         )
@@ -354,7 +363,7 @@ mod tests {
         fs::remove_file(&path).unwrap();
         assert!(read(
             &path,
-            &|| Ok(legacy.clone()),
+            &|| Ok(Some(legacy.clone())),
             &key_path,
             &crate::datastore_io::atomic_write
         )
@@ -381,5 +390,38 @@ mod tests {
         )
         .unwrap();
         assert_eq!(entries[0].summary, "private summary");
+    }
+
+    #[test]
+    fn no_profile_first_run_creates_and_reads_machine_ledger() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger");
+        let key_path = dir.path().join("key");
+        assert!(read(
+            &path,
+            &|| Ok(None),
+            &key_path,
+            &crate::datastore_io::atomic_write
+        )
+        .unwrap()
+        .is_empty());
+        write(
+            &path,
+            &key_path,
+            &[entry()],
+            &crate::datastore_io::atomic_write,
+        )
+        .unwrap();
+        assert_eq!(
+            read(
+                &path,
+                &|| Ok(None),
+                &key_path,
+                &crate::datastore_io::atomic_write
+            )
+            .unwrap()[0]
+                .summary,
+            "private summary"
+        );
     }
 }

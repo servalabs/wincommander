@@ -54,10 +54,9 @@ fn ledger_path() -> Result<PathBuf, String> {
     crate::paths::machine_state_file(LEDGER_FILENAME)
 }
 
-fn legacy_ledger_path() -> Result<PathBuf, String> {
-    Ok(crate::paths::user_data_dir()?
-        .join("evidence")
-        .join("ledger.jsonl"))
+fn legacy_ledger_path() -> Result<Option<PathBuf>, String> {
+    Ok(crate::paths::optional_user_data_location()?
+        .map(|local| local.join("evidence").join("ledger.jsonl")))
 }
 
 fn key_path() -> Result<PathBuf, String> {
