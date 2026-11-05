@@ -80,3 +80,33 @@ jobs:
           & pwsh -NoProfile -NonInteractive -File 'src-tauri/commander-free/nsis/stage-original-user-settings.ps1' -ExecutablePath $env:ComSpec -InstallDirectory $root
           if ($LASTEXITCODE -eq 0) { throw 'Directory masquerading as app unexpectedly passed.' }
           $global:LASTEXITCODE = 0
+      - name: Compile gated installer hook fixture
+        shell: pwsh
+        run: |
+          $nsis = Join-Path ${env:ProgramFiles(x86)} 'NSIS/makensis.exe'
+          if (-not (Test-Path -LiteralPath $nsis)) {
+            choco install nsis --no-progress -y
+            if ($LASTEXITCODE -ne 0) { throw 'NSIS installation failed.' }
+          }
+          $hook = (Resolve-Path 'src-tauri/commander-free/nsis/hooks.nsh').Path
+          $payload = Join-Path $env:WINDIR 'System32/cmd.exe'
+          $output = Join-Path $env:RUNNER_TEMP 'settings-hook-fixture.exe'
+          $fixture = Join-Path $env:RUNNER_TEMP 'settings-hook-fixture.nsi'
+          @"
+          Unicode true
+          Name "Settings hook fixture"
+          OutFile "$output"
+          InstallDir "`$PROGRAMFILES\WinCommander"
+          RequestExecutionLevel user
+          !include "LogicLib.nsh"
+          !define INSTALLMODE "currentUser"
+          !define MAINBINARYSRCPATH "$payload"
+          !define WC_EXPERIMENTAL_USER_STAGE_ONLY
+          !include "$hook"
+          Section
+          !insertmacro NSIS_HOOK_PREINSTALL
+          !insertmacro NSIS_HOOK_POSTINSTALL
+          SectionEnd
+          "@ | Set-Content -Encoding ascii -LiteralPath $fixture
+          & $nsis $fixture
+          if ($LASTEXITCODE -ne 0) { throw 'Gated NSIS hook fixture failed to compile.' }
