@@ -3163,6 +3163,7 @@ pub fn run() {
             system_metrics::get_top_processes,
             system_metrics::get_drive_smart_health,
             system_metrics::get_wipe_drive_list,
+            system_metrics::get_scan_drive_list,
             // ── Storage capability probe (free, READ-ONLY secure-erase detection) ──
             storage_probe::probe_drive_capabilities,
             // ── Flow Engine ──

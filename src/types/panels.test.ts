@@ -63,11 +63,12 @@ describe("panel IA manifest", () => {
       "Productivity",
       "Secure Storage",
       "Flows",
-      "Fleet",
       "Secret Settings",
       "Settings",
     ]);
     expect(getSidebarManifests(network).map((panel) => panel.label)).toContain("Private Network");
+    expect(getSidebarManifests(expert).map((panel) => panel.label)).not.toContain("Fleet");
+    expect(PANEL_MANIFESTS.some((panel) => panel.id === "fleet")).toBe(true);
     // AI Advisor + Search Files are right-sidebar launchers (navTier "hidden"),
     // so neither appears on the left rail even at expert density (owner 2026-06-09).
     expect(getSidebarManifests(expert).map((panel) => panel.label)).not.toContain("AI Advisor");

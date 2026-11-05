@@ -6,8 +6,7 @@ import { Icon } from "@/components/ui/bp";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../components/ui/tooltip";
 import type { ReactNode } from "react";
 import SectionCard from "../../components/shared/SectionCard";
-import MonitoringCard from "./MonitoringCard";
-import "./MonitoringCard.css";
+import CleanupTraceCard from "../../components/cleanup/CleanupTraceCard";
 import RunOnceButton from "../../components/cleanup/RunOnceButton";
 import { ACTION_CATEGORIES, VIEW_ONLY_CATEGORIES, type CleanupCategory } from "./cleanupCategories";
 import type { CardData } from "./useCleanupScan";
@@ -47,7 +46,7 @@ export default function CleanupActionsMonitoring({
                         <div className="flex-1 h-px bg-[var(--color-border)] opacity-50" />
                         <span className="text-[9px] italic opacity-60 whitespace-nowrap" style={{ color: 'var(--color-text-muted)' }}>run on demand</span>
                     </div>
-                    <div className="cleanup-action-grid grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
+                    <div className="cleanup-action-grid grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4">
                         {ACTION_CATEGORIES.map(cat => {
                             const d = cardDataMap[cat.id] || { count: -1, items: [], loading: false, clearing: false };
                             const label = cleanupDisplayName(cat, displayMode ?? "advanced");
@@ -66,9 +65,8 @@ export default function CleanupActionsMonitoring({
                                         <span className="font-bold" style={{ fontSize: 12, color: 'var(--color-text-primary)' }}>
                                             {label}
                                         </span>
-                                        {cat.confirmMessage ? <span style={{ fontSize: 11, color: 'var(--color-warning)' }}>{cat.confirmMessage}</span> : null}
                                     </div>
-                                    <Tooltip><TooltipTrigger asChild><button type="button" className="grid h-8 w-8 shrink-0 place-items-center rounded" aria-label={`About ${label}`}><Icon icon="info-sign" size={14} /></button></TooltipTrigger><TooltipContent side="bottom" className="max-w-[260px] text-xs">{cat.description}</TooltipContent></Tooltip>
+                                    <Tooltip><TooltipTrigger asChild><button type="button" className="grid h-8 w-8 shrink-0 place-items-center rounded" aria-label={`About ${label}`}><Icon icon="info-sign" size={14} /></button></TooltipTrigger><TooltipContent side="bottom" className="max-w-[260px] text-xs">{cat.description}{cat.confirmMessage && <p>{cat.confirmMessage}</p>}</TooltipContent></Tooltip>
                                     <RunOnceButton
                                         isRunning={d.clearing}
                                         disabled={isInvestigator}
@@ -85,7 +83,7 @@ export default function CleanupActionsMonitoring({
                         <h4 className="text-[10px] font-semibold uppercase tracking-wider whitespace-nowrap" style={{ color: 'var(--color-text-muted)' }}>Windows repair</h4>
                         <div className="flex-1 h-px bg-[var(--color-border)] opacity-50" />
                     </div>
-                    {repairActions}
+                    <div className="cleanup-action-grid grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4">{repairActions}</div>
                 </section>
 
                 {/* System Monitoring */}
@@ -95,16 +93,23 @@ export default function CleanupActionsMonitoring({
                         <div className="flex-1 h-px bg-[var(--color-border)] opacity-50" />
                         <span className="text-[9px] italic opacity-60 whitespace-nowrap" style={{ color: 'var(--color-text-muted)' }}>view only</span>
                     </div>
-                    <div className="monitoring-grid">
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
                         {VIEW_ONLY_CATEGORIES.map(cat => {
                             const d = cardDataMap[cat.id] || { count: -1, items: [], loading: false, clearing: false };
                             return (
-                                <MonitoringCard
+                                <CleanupTraceCard
                                     key={cat.id}
                                     category={cat}
-                                    data={d}
+                                    count={d.count}
+                                    preview={d.items}
+                                    loading={d.loading}
+                                    clearing={d.clearing}
+                                    error={d.error}
+                                    rawData={d.raw}
+                                    onClear={() => handleCardClear(cat)}
+                                    clearDisabled={isInvestigator}
                                     onViewDetails={detailOpenerMap[cat.id]}
-                                    onScan={() => handleCardLoad(cat)}
+                                    onLoad={() => handleCardLoad(cat)}
                                 />
                             );
                         })}

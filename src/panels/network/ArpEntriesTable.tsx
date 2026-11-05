@@ -78,6 +78,7 @@ export function ArpEntriesTable({ entries }: { entries: ArpEntry[] }) {
         <table className="wc-net-table">
           <thead>
             <tr>
+              <th scope="col">#</th>
               <SortHeader
                 label="IP address"
                 active={sortKey === "address"}
@@ -121,11 +122,12 @@ export function ArpEntriesTable({ entries }: { entries: ArpEntry[] }) {
             </tr>
           </thead>
           <tbody>
-            {visible.map((entry) => {
+            {visible.map((entry, index) => {
               const flagged = suspicious.has(arpMacKey(entry));
               const isDynamic = entry.entryType.toLowerCase() === "dynamic";
               return (
                 <tr key={arpRowKey(entry)} className={flagged ? "is-flagged" : undefined}>
+                  <td>{index + 1}</td>
                   <td className="wc-net-mono">{entry.address}</td>
                   <td className="wc-net-mono">
                     <span className="inline-flex items-center gap-1.5">

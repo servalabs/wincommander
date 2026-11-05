@@ -9653,6 +9653,16 @@
       ]
     },
     {
+      "id": "tauri:get_scan_drive_list",
+      "name": "get_scan_drive_list",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
+      ]
+    },
+    {
       "id": "tauri:get_scrub_context_menu_status",
       "name": "get_scrub_context_menu_status",
       "transport": "tauri",

@@ -206,7 +206,7 @@ function mergeObservedPolicyCapabilities(
   return changed ? { ...draft, entries } : draft;
 }
 
-export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolean; directory: FleetAccessDirectory }) {
+export default function VaultAccessTab({ isAdmin, directory, onVisibilityChange }: { isAdmin: boolean; directory: FleetAccessDirectory; onVisibilityChange?: (visible: boolean) => void }) {
   const initialDraft = useMemo(() => readVaultAccessDraftSnapshot(), []);
   const [policy, setPolicy] = useState<VaultAccessPolicy | null>(initialDraft?.policy ?? null);
   const [status, setStatus] = useState<VaultPolicyStatus | null>(null);
@@ -1078,6 +1078,8 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
       if (!result.success) throw new Error(result.error);
     } catch (error) { setOperationFeedback(vaultOperationError(error, "open")); }
   };
+
+  useEffect(() => { onVisibilityChange?.(loading || policyLoadUnavailable || statusLoadUnavailable || authorizedEntries.length > 0); }, [onVisibilityChange, loading, policyLoadUnavailable, statusLoadUnavailable, authorizedEntries.length]);
 
   if (loading) return <div className="fleet-admin-stack">Loading your Vault access…</div>;
   const activePolicy = policy;

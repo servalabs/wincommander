@@ -284,7 +284,7 @@ describe("System Cleanup panel reconstruction contracts", () => {
     const legacyDialogs = await read("src/panels/cleanup/useCleanupLegacyDialogs.tsx");
 
     expect(actions).toContain("grid grid-cols-1 gap-2");
-    expect(actions).toContain("grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3");
+    expect(actions).toContain("grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4");
     expect(actions).toContain('aria-labelledby="cleanup-one-time-actions-heading"');
     expect(actions).toContain('aria-labelledby="cleanup-system-monitoring-heading"');
     expect(legacyDialogs).toContain("grid grid-cols-1 gap-3 pb-1.5 lg:grid-cols-2");

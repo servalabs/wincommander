@@ -3,7 +3,7 @@ import { Button, Classes, Dialog, Icon } from "@/components/ui/bp";
 import { useAppState } from "../../context/AppContext";
 import { isPrivilegedWriteBlocked, MACHINE_SCOPE_ELEVATION_MESSAGE } from "../../lib/machineScopeElevation";
 import type { PhysicalNetworkAdapter } from "../../hooks/useBackend";
-import { adapterMacDescription, formatAdapterMac, isInactiveAdapter, shouldGroupInactiveAdapter, type AdapterAction } from "./adapterState";
+import { adapterMacDescription, formatAdapterMac, isInactiveAdapter, type AdapterAction } from "./adapterState";
 import { useAdapterInventory } from "./useAdapterInventory";
 
 export default function AdapterControls() {
@@ -12,8 +12,9 @@ export default function AdapterControls() {
     const { inventory, error, loading, busyId, operationMessage, refresh, change } = useAdapterInventory();
     const [pending, setPending] = useState<{ adapter: PhysicalNetworkAdapter; action: AdapterAction } | null>(null);
     const adapters = inventory?.adapters ?? [];
-    const visibleAdapters = adapters.filter(adapter => !shouldGroupInactiveAdapter(adapter));
-    const inactiveAdapters = adapters.filter(shouldGroupInactiveAdapter);
+    const visibleAdapters = adapters.filter(adapter => !isInactiveAdapter(adapter.status));
+    const inactiveRecovery = adapters.filter(adapter => isInactiveAdapter(adapter.status) && adapter.recoveryPending);
+    const inactiveErrors = adapters.some(adapter => isInactiveAdapter(adapter.status) && adapter.configurationError);
     const disabled = needsElevation || !!busyId || !!error || !inventory;
 
     const renderAdapter = (adapter: PhysicalNetworkAdapter) => (
@@ -42,7 +43,7 @@ export default function AdapterControls() {
                 <Icon icon="globe-network" size={11} />
                 <span className="merged-segment__title">Network Adapters</span>
                 <span className="merged-segment__count">{error ? "Unavailable" : inventory ? `${adapters.filter(a => a.status === "Up").length} up` : "—"}</span>
-                <Button small minimal icon="refresh" disabled={loading || !!busyId} onClick={() => void refresh()}>Refresh</Button>
+                <Button small minimal icon="refresh" aria-label="Refresh network adapters" title="Refresh network adapters" disabled={loading || !!busyId} onClick={() => void refresh()} />
             </header>
             <p className="merged-segment__blurb">Change the address visible to your local network. Driver support varies; this does not prevent all tracking.</p>
             <div className="merged-segment__body">
@@ -52,10 +53,14 @@ export default function AdapterControls() {
                 {inventory?.checkedAt && <p className="text-xs text-[var(--color-text-muted)]">Last checked: {new Date(inventory.checkedAt).toLocaleTimeString()}</p>}
                 {!error && inventory && adapters.length === 0 && <p className="text-xs">No physical network adapters are present.</p>}
                 {!error && adapters.length > 0 && adapters.every(a => isInactiveAdapter(a.status)) && <p className="text-xs">Adapters are present; none currently has an active link.</p>}
+                {inactiveErrors && <p role="alert" className="text-xs">Configuration is unavailable for an inactive adapter.</p>}
+                {inactiveRecovery.map(adapter => <div key={adapter.id} role="alert" className="flex flex-wrap items-center gap-2 text-xs">
+                    <span>{adapter.name}: an interrupted address change needs recovery.</span>
+                    <Button small intent="warning" disabled={disabled} onClick={() => setPending({ adapter, action: "recover" })}>Undo interrupted change</Button>
+                </div>)}
                 <div className="adapter-list">
                     {visibleAdapters.map(renderAdapter)}
                 </div>
-                {inactiveAdapters.length > 0 && <details className="mt-2"><summary className="cursor-pointer text-xs">Inactive adapters ({inactiveAdapters.length})</summary><div className="adapter-list mt-2">{inactiveAdapters.map(renderAdapter)}</div></details>}
                 {operationMessage && <p role="status" className="text-xs mt-2">{operationMessage}</p>}
             </div>
             <Dialog isOpen={!!pending} onClose={() => setPending(null)} title="Change adapter address" style={{ width: 460 }}>

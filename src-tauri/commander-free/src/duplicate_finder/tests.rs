@@ -450,15 +450,56 @@ fn selection_uses_whole_group_and_rejects_stale_ids() {
         .map(|file| file.id.clone())
         .collect();
     assert_eq!(all.len(), 205);
-    assert!(index.removal_selection(&all).is_err());
+    assert!(index.removal_selection(&all, None).is_err());
     let mut retained = all;
     retained.remove(&group.files[0].id);
-    assert_eq!(index.removal_selection(&retained).unwrap().0.len(), 204);
+    assert_eq!(index.removal_selection(&retained, None).unwrap().0.len(), 204);
     assert!(index
-        .removal_selection(&HashSet::from(["stale-id".to_string()]))
+        .removal_selection(&HashSet::from(["stale-id".to_string()]), None)
         .is_err());
     assert!(index.group("stale-group", 0).is_err());
     assert!(index.page(2).is_err());
+}
+
+#[test]
+fn explicit_keeper_must_match_group_and_remain_unchanged() {
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["a", "b", "c"] { std::fs::write(dir.path().join(name), b"same").unwrap(); }
+    let index = fixture_index(&[std::fs::canonicalize(dir.path()).unwrap()], &AtomicBool::new(false));
+    let group = index.page(0).unwrap().groups.remove(0);
+    let selected = HashSet::from([group.files[0].id.clone()]);
+    let requested = HashSet::from([group.files[1].id.clone()]);
+    assert!(index.removal_selection(&selected, Some(&HashSet::new())).is_err());
+    assert!(index.removal_selection(&selected, Some(&selected)).is_err());
+    assert!(index.removal_selection(&selected, Some(&HashSet::from(["stale".into()]))).is_err());
+    let (candidates, keepers) = index.removal_selection(&selected, Some(&requested)).unwrap();
+    assert_eq!(keepers[0].path, index.file(&group.files[1].id).unwrap().path);
+    std::fs::write(&keepers[0].path, b"different").unwrap();
+    let result = safety::remove_files(candidates.clone(), keepers, &AtomicBool::new(false));
+    assert_eq!(result.files_removed, 0);
+    assert!(candidates[0].path.exists());
+}
+
+#[test]
+fn explicit_keepers_must_cover_each_selected_group_once() {
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["a1", "a2", "a3"] { std::fs::write(dir.path().join(name), b"same").unwrap(); }
+    for name in ["b1", "b2"] { std::fs::write(dir.path().join(name), b"diff").unwrap(); }
+    let index = fixture_index(&[std::fs::canonicalize(dir.path()).unwrap()], &AtomicBool::new(false));
+    let groups = index.page(0).unwrap().groups;
+    assert_eq!(groups.len(), 2);
+    let a = groups.iter().find(|group| group.file_count == 3).unwrap();
+    let b = groups.iter().find(|group| group.file_count == 2).unwrap();
+    let selected = HashSet::from([a.files[0].id.clone(), b.files[0].id.clone()]);
+    let correct = HashSet::from([a.files[1].id.clone(), b.files[1].id.clone()]);
+    let (candidates, keepers) = index.removal_selection(&selected, Some(&correct)).unwrap();
+    assert_eq!(candidates.len(), 2);
+    assert_eq!(keepers.len(), 2);
+    assert!(index.removal_selection(&selected, Some(&HashSet::from([a.files[1].id.clone()]))).is_err());
+    let duplicate_group = HashSet::from([a.files[1].id.clone(), a.files[2].id.clone()]);
+    assert!(index.removal_selection(&selected, Some(&duplicate_group)).is_err());
+    let only_a = HashSet::from([a.files[0].id.clone()]);
+    assert!(index.removal_selection(&only_a, Some(&HashSet::from([b.files[1].id.clone()]))).is_err());
 }
 
 #[test]

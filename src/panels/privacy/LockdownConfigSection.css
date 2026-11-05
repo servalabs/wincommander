@@ -731,3 +731,8 @@ html.light .sd-shred-folder-row {
         margin-left: 0;
     }
 }
+
+/* Stack target panels so a short folder list does not reserve empty space beside users. */
+.sd-targets-row { grid-template-columns: minmax(0, 1fr); }
+
+.lockdown-checkin-details p { margin: 0; font-size: 12px; line-height: 1.4; color: var(--color-text-secondary); }

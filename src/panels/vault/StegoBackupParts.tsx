@@ -45,18 +45,20 @@ export function FilePick({
   onPick,
   onClear,
   disabled,
+  icon = "folder-open",
 }: {
   label: string;
   value: string;
   onPick: () => void;
   onClear: () => void;
   disabled?: boolean;
+  icon?: string;
 }) {
   const name = value.replace(/\//g, "\\").split("\\").pop() ?? "";
   return (
     <div className={`stego-pick${value ? " stego-pick--selected" : ""}`}>
       <button type="button" className="stego-pick__choose" aria-label={label} onClick={onPick} disabled={disabled}>
-        <span className="stego-pick__icon"><Icon icon="folder-open" size={20} /></span>
+        <span className="stego-pick__icon"><Icon icon={icon} size={20} /></span>
         <span className="stego-pick__content">
           <strong>{label.replace(/…/g, "")}</strong>
           {value ? <span className="stego-pick__name" title={value}>{name}</span> : <span className="stego-pick__empty">Choose a file or folder</span>}

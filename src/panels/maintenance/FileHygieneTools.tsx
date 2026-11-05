@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -11,7 +11,7 @@ import { CheckboxControl } from "../../components/ui/bp";
 import { Icon, type IconName } from "../../components/ui/icon";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import SharedEmptyState from "../../components/shared/EmptyState";
-import type { DuplicateRemoveResult, EmptyFolderRemoveResult } from "../../hooks/useBackend";
+import { useBackend, type DuplicateRemoveResult, type EmptyFolderRemoveResult } from "../../hooks/useBackend";
 import { getDuplicateSelectedBytes } from "../../lib/maintenanceSelection";
 import { formatBytes } from "./routineCleanerHelpers";
 import { useFileHygiene } from "./useFileHygiene";
@@ -30,7 +30,19 @@ function describeRemoveResult(result: DuplicateRemoveResult | EmptyFolderRemoveR
 
 export function FileHygieneTools() {
   const tools = useFileHygiene();
+  const backend = useBackend();
+  const driveLoader = useRef(backend.getScanDriveList);
+  driveLoader.current = backend.getScanDriveList;
+  const [drives, setDrives] = useState<string[]>([]);
+  const [driveError, setDriveError] = useState("");
+  useEffect(() => {
+    if (tools.tool !== "empty") return;
+    let active = true;
+    void driveLoader.current().then(value => { if (active) { setDrives(value); setDriveError(""); } }).catch(() => { if (active) setDriveError("Drive list unavailable. Choose a folder instead."); });
+    return () => { active = false; };
+  }, [tools.tool]);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [singleRemovalId, setSingleRemovalId] = useState<string | undefined>();
   const [rootsOpen, setRootsOpen] = useState(false);
   const [groupsFiltered, setGroupsFiltered] = useState(false);
   // Notices are dismissible rather than floating indefinitely: dismissal
@@ -64,7 +76,7 @@ export function FileHygieneTools() {
     return tools.duplicateScan.totalDuplicateBytes;
   }, [tools.tool, tools.duplicateScan]);
   const selectedReview = tools.tool === "duplicates"
-    ? tools.duplicateScan?.groups.flatMap((group) => group.files.filter((file) => tools.selected.has(file.id)).map((file) => ({ id: file.id, path: file.path, detail: formatBytes(file.size) }))) ?? []
+    ? tools.duplicateScan?.groups.flatMap((group) => group.files.filter((file) => singleRemovalId ? file.id === singleRemovalId : tools.selected.has(file.id)).map((file) => ({ id: file.id, path: file.path, detail: formatBytes(file.size) }))) ?? []
     : tools.emptyScan?.folders.filter((folder) => tools.selected.has(folder.id)).map((folder) => ({ id: folder.id, path: folder.path, detail: "Empty folder" })) ?? [];
   const resetDuplicateResultScroll = useCallback(() => {
     const results = document.querySelector<HTMLDivElement>(".maintenance-file-hygiene-results--duplicates > .maintenance-file-hygiene-content");
@@ -106,13 +118,14 @@ export function FileHygieneTools() {
               <TabsTrigger value="empty">Empty folders</TabsTrigger>
             </TabsList>
           </Tabs>
-          {tools.tool === "duplicates" && <div className="duplicate-scan-options"><label htmlFor="duplicate-minimum-size">Minimum size</label><select id="duplicate-minimum-size" aria-label="Minimum duplicate file size" value={tools.minimumSizeBytes} disabled={tools.busy} onChange={(event) => tools.changeMinimumSize(Number(event.target.value))}><option value={200 * 1024}>200 KB (recommended)</option><option value={1024 * 1024}>1 MB</option><option value={10 * 1024 * 1024}>10 MB</option><option value={100 * 1024 * 1024}>100 MB</option><option value={0}>Any size (slower)</option></select><span>Changing this requires a new scan. Protected application files and other profiles are review-only.</span></div>}
+          {tools.tool === "empty" && <div className="duplicate-scan-options" aria-label="Choose drives to scan"><strong>Drives</strong>{drives.map(root => { return <label key={root}><input type="checkbox" checked={tools.roots.includes(root)} disabled={tools.busy} onChange={() => tools.toggleDrive(root)} /> {root.slice(0, 2)}</label>; })}{driveError && <span role="status">{driveError}</span>}</div>}
+          {tools.tool === "duplicates" && <div className="duplicate-scan-options"><label htmlFor="duplicate-minimum-size">Minimum size</label><select id="duplicate-minimum-size" aria-label="Minimum duplicate file size" value={tools.minimumSizeBytes} disabled={tools.busy} onChange={(event) => tools.changeMinimumSize(Number(event.target.value))}><option value={200 * 1024}>200 KB (recommended)</option><option value={1024 * 1024}>1 MB</option><option value={10 * 1024 * 1024}>10 MB</option><option value={100 * 1024 * 1024}>100 MB</option><option value={0}>Any size (slower)</option></select><span>Changing this requires a new scan. Protected files and other profiles are hidden.</span></div>}
           {hasScan && (
             <div className="flex flex-wrap items-center gap-2 pt-1">
               {tools.tool === "duplicates" ? (
                 <>
-                  <Badge tone="accent">{formatBytes(totalReclaimableBytes)} potential duplicate data</Badge>
-                  <Badge tone="neutral">{count} group{count === 1 ? "" : "s"}</Badge>
+                  <Badge tone="accent">{formatBytes(totalReclaimableBytes)} potential duplicate data including protected copies</Badge>
+                  <Badge tone="neutral">{count} verified group{count === 1 ? "" : "s"} including protected copies</Badge>
                 </>
               ) : (
                 <Badge tone="accent">{count} empty folder{count === 1 ? "" : "s"}</Badge>
@@ -162,9 +175,9 @@ export function FileHygieneTools() {
 
           {tools.tool === "duplicates" && tools.duplicateScan && (
             <>
-              <DuplicateGroups tools={tools} onFilterChange={setGroupsFiltered} />
+              <DuplicateGroups tools={tools} onFilterChange={setGroupsFiltered} onRemoveFile={(id) => { setSingleRemovalId(id); setConfirmOpen(true); }} />
               <nav aria-label="Duplicate result pages" className="flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--text-dim)]"><span>Groups {count ? tools.duplicateScan.groupOffset + 1 : 0}–{tools.duplicateScan.groupOffset + tools.duplicateScan.groups.length} of {count.toLocaleString()}</span><div className="flex gap-2"><Button size="sm" variant="outline" disabled={tools.busy || tools.duplicateScan.groupOffset === 0} onClick={() => loadDuplicateGroupPage(Math.max(0, tools.duplicateScan!.groupOffset - 100))}>Previous groups</Button><Button size="sm" variant="outline" disabled={tools.busy || !tools.duplicateScan.hasMoreGroups} onClick={() => loadDuplicateGroupPage(tools.duplicateScan!.groupOffset + 100)}>Next groups</Button></div></nav>
-              <SelectionActionBar disabled={tools.busy} count={tools.selected.size} bytesLabel={selectedBytes > 0 ? `${formatBytes(selectedBytes)} logical bytes selected` : undefined} onRemove={() => setConfirmOpen(true)} />
+              <SelectionActionBar disabled={tools.busy} count={tools.selected.size} bytesLabel={selectedBytes > 0 ? `${formatBytes(selectedBytes)} logical bytes selected` : undefined} onRemove={() => { setSingleRemovalId(undefined); setConfirmOpen(true); }} />
             </>
           )}
 
@@ -174,7 +187,7 @@ export function FileHygieneTools() {
                 {tools.emptyScan.folders.map((folder) => <SelectionRow key={folder.id} checked={tools.selected.has(folder.id)} disabled={tools.busy} onClick={() => tools.select(folder.id)} icon="folder-close" label={folder.name} detail={folder.path} />)}
                 {!count && <SharedEmptyState icon="confirm" title="No empty folders found" hint="No empty folders were returned within the completed scan scope." />}
               </div>
-              <SelectionActionBar disabled={tools.busy} count={tools.selected.size} onRemove={() => setConfirmOpen(true)} />
+              <SelectionActionBar disabled={tools.busy} count={tools.selected.size} onRemove={() => { setSingleRemovalId(undefined); setConfirmOpen(true); }} />
             </>
           )}
         </div>
@@ -182,9 +195,9 @@ export function FileHygieneTools() {
 
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <AlertDialogContent>
-          <AlertDialogHeader><AlertDialogTitle>Permanently remove {selectedReview.length} selected items?</AlertDialogTitle><AlertDialogDescription>{tools.tool === "duplicates" ? `${formatBytes(selectedBytes)} of logical duplicate data selected. At least one unchanged, content-verified copy must remain per group. ` : "Only folders still empty are removed. "}The backend revalidates every selection. This cannot be undone.</AlertDialogDescription></AlertDialogHeader>
+          <AlertDialogHeader><AlertDialogTitle>Permanently remove {selectedReview.length} selected items?</AlertDialogTitle><AlertDialogDescription>{tools.tool === "duplicates" ? `${singleRemovalId ? "The selected file" : `${formatBytes(selectedBytes)} of duplicate data`} will be removed. At least one unchanged, content-verified copy must remain per group. ` : "Only folders still empty are removed. "}The backend revalidates every selection. This cannot be undone.</AlertDialogDescription></AlertDialogHeader>
           <CleanupReviewItems items={selectedReview} />
-          <AlertDialogFooter><AlertDialogCancel>Back</AlertDialogCancel><AlertDialogAction onClick={() => { setConfirmOpen(false); void tools.remove(); }}>Remove selected</AlertDialogAction></AlertDialogFooter>
+          <AlertDialogFooter><AlertDialogCancel>Back</AlertDialogCancel><AlertDialogAction disabled={!selectedReview.length} onClick={() => { setConfirmOpen(false); void tools.remove(singleRemovalId); }}>Remove selected</AlertDialogAction></AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
 

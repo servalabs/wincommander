@@ -63,8 +63,8 @@ export function TrustStoreAuditCard() {
     [baseline, currentIds],
   );
   const outsideWindowsReference = useMemo(
-    () => roots.filter((cert) => !cert.inWindowsAuthRoot),
-    [roots],
+    () => audit?.referenceAvailable ? roots.filter((cert) => !cert.inWindowsAuthRoot) : [],
+    [audit?.referenceAvailable, roots],
   );
   const notable = useMemo(() => {
     const map = new Map<string, TrustCertificate>();
@@ -93,11 +93,34 @@ export function TrustStoreAuditCard() {
               See who can add TLS trust to this PC, and what changed since your saved baseline.
             </CardDescription>
           </div>
-          {audit ? (
-            <Button variant="ghost" size="icon" onClick={() => void inspect()} title="Rescan trust stores">
-              <Icon icon="refresh" />
-            </Button>
-          ) : null}
+          <div className="flex flex-wrap items-center gap-2">
+            {audit && !busy && <>
+              <Button variant="outline" size="sm" onClick={() => setShowAll((value) => !value)}>
+                {showAll ? "Show notable only" : "Show all trusted roots"}
+              </Button>
+              <Button variant="outline" size="sm" onClick={saveBaseline}>
+                <Icon icon="floppy-disk" />{baseline ? "Replace baseline" : "Save baseline"}
+              </Button>
+              <Button variant="ghost" size="icon" onClick={() => void inspect()} title="Rescan trust stores" aria-label="Rescan trust stores">
+                <Icon icon="refresh" />
+              </Button>
+            </>}
+            <InfoPopover iconOnly title="Certificate trust transparency">
+          <p>Security software, enterprise policy, and local tools can add legitimate trusted certificates.</p>
+          <p>
+            <strong className="text-[var(--text)]">Root:</strong> certificates that can anchor TLS
+            trust for this user or machine.
+          </p>
+          <p>
+            <strong className="text-[var(--text)]">Windows AuthRoot:</strong> the Windows-maintained
+            third-party root reference. A mismatch deserves review but is not proof of compromise.
+          </p>
+          <p>
+            <strong className="text-[var(--text)]">Baseline:</strong> your locally saved snapshot.
+            WinCommander never deletes certificates from this audit screen.
+          </p>
+        </InfoPopover>
+          </div>
         </div>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
@@ -153,15 +176,16 @@ export function TrustStoreAuditCard() {
             ) : null}
 
             {visible.length === 0 ? (
-              <MaintenanceNotice tone="success" headline="No notable trust changes">
-                No new roots were found since the saved baseline, and no machine roots fall outside
-                the current Windows AuthRoot reference.
+              <MaintenanceNotice tone={baseline && audit.referenceAvailable ? "success" : "primary"} headline={baseline && audit.referenceAvailable ? "No notable trust changes" : "No notable roots found"}>
+                {baseline ? "No new roots were found since the saved baseline. " : "Save a baseline to compare future scans. "}
+                {audit.referenceAvailable ? "No roots fall outside the Windows AuthRoot reference." : "Windows AuthRoot comparison is unavailable."}
               </MaintenanceNotice>
             ) : (
               <div className="overflow-x-auto rounded-md border border-[var(--border)]">
                 <table className="w-full min-w-[760px] border-collapse text-left text-[11px]">
                   <thead className="bg-[var(--surface-2)] text-[var(--text-mute)]">
                     <tr>
+                      <th scope="col" className="px-3 py-2 font-semibold">#</th>
                       <th className="px-3 py-2 font-semibold">Certificate</th>
                       <th className="px-3 py-2 font-semibold">Scope</th>
                       <th className="px-3 py-2 font-semibold">Why shown</th>
@@ -170,10 +194,10 @@ export function TrustStoreAuditCard() {
                     </tr>
                   </thead>
                   <tbody>
-                    {visible.map((cert) => {
+                    {visible.map((cert, index) => {
                       const owner = likelyOwner(cert.subject);
                       const isAdded = baselineIds.size > 0 && !baselineIds.has(identity(cert));
-                      const outsideRef = !cert.inWindowsAuthRoot;
+                      const outsideRef = audit.referenceAvailable && !cert.inWindowsAuthRoot;
                       const why = [
                         isAdded ? "added since baseline" : null,
                         outsideRef ? "outside Windows AuthRoot" : null,
@@ -181,6 +205,7 @@ export function TrustStoreAuditCard() {
                       ].filter(Boolean).join(" · ") || "trusted root";
                       return (
                         <tr key={identity(cert)} className="border-t border-[var(--border)] align-top">
+                          <td className="px-3 py-2">{index + 1}</td>
                           <td className="px-3 py-2">
                             <div className="font-semibold text-[var(--text)]">{simpleName(cert.subject)}</div>
                             <div className="mt-0.5 max-w-[340px] break-words text-[10px] text-[var(--text-mute)]">{cert.issuer}</div>
@@ -206,39 +231,11 @@ export function TrustStoreAuditCard() {
               </MaintenanceNotice>
             ) : null}
 
-            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border)] pt-3">
-              <p className="max-w-[620px] text-[10px] leading-relaxed text-[var(--text-mute)]">
-                The Windows AuthRoot comparison is a transparency hint, not a verdict. Enterprise
-                roots, HTTPS inspection tools, VPN/security software, and private PKI can be legitimate.
-              </p>
-              <div className="flex flex-wrap gap-2">
-                <Button variant="outline" size="sm" onClick={() => setShowAll((value) => !value)}>
-                  {showAll ? "Show notable only" : "Show all trusted roots"}
-                </Button>
-                <Button variant="outline" size="sm" onClick={saveBaseline}>
-                  <Icon icon="floppy-disk" />
-                  {baseline ? "Replace baseline" : "Save baseline"}
-                </Button>
-              </div>
-            </div>
+
           </>
         ) : null}
 
-        <InfoPopover iconOnly title="Certificate trust transparency">
-          <p>Security software, enterprise policy, and local tools can add legitimate trusted certificates.</p>
-          <p>
-            <strong className="text-[var(--text)]">Root:</strong> certificates that can anchor TLS
-            trust for this user or machine.
-          </p>
-          <p>
-            <strong className="text-[var(--text)]">Windows AuthRoot:</strong> the Windows-maintained
-            third-party root reference. A mismatch deserves review but is not proof of compromise.
-          </p>
-          <p>
-            <strong className="text-[var(--text)]">Baseline:</strong> your locally saved snapshot.
-            WinCommander never deletes certificates from this audit screen.
-          </p>
-        </InfoPopover>
+
       </CardContent>
     </Card>
   );

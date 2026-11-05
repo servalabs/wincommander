@@ -4,11 +4,7 @@ export type AdapterAction = "randomize" | "factory" | "recover";
 
 /** Unknown or newly introduced states stay visible rather than being called inactive. */
 export function isInactiveAdapter(status: string | null | undefined): boolean {
-    return ["down", "disconnected", "disabled", "not present", "notpresent", "lowerlayerdown"].includes((status ?? "").trim().toLowerCase());
-}
-
-export function shouldGroupInactiveAdapter(adapter: Pick<PhysicalNetworkAdapter, "status" | "recoveryPending" | "configurationError">): boolean {
-    return isInactiveAdapter(adapter.status) && !adapter.recoveryPending && !adapter.configurationError;
+    return ["down", "disconnected", "disabled", "dormant", "not present", "notpresent", "lowerlayerdown"].includes((status ?? "").trim().toLowerCase());
 }
 
 export function formatAdapterMac(value: string | null | undefined): string {

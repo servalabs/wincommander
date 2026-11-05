@@ -62,6 +62,7 @@ type VaultVolume = NonNullable<EncryptionStatus["volumes"]>[number];
 function VaultPanel() {
   const { encryptionStatus, refreshVault, loading, vaultStatusError, vaultManualRefreshing } = useAppState();
   const { state: processElevation } = useProcessElevation();
+  const [showAssignedVaults, setShowAssignedVaults] = useState(true);
 
   const volumes = encryptionStatus?.volumes || [];
 
@@ -87,9 +88,9 @@ function VaultPanel() {
           </div>
           <BackupRecoverySection />
           <StegoBackupSection />
-          {processElevation !== "administrator" && <section aria-label="My vaults">
+          {processElevation !== "administrator" && <section aria-label="My vaults" hidden={!showAssignedVaults}>
             <SectionCard title="My vaults" icon="lock">
-              <div className="fleet-panel"><VaultAccessTab isAdmin={false} directory={DEFAULT_ACCESS_DIRECTORY} /></div>
+              <div className="fleet-panel"><VaultAccessTab isAdmin={false} directory={DEFAULT_ACCESS_DIRECTORY} onVisibilityChange={setShowAssignedVaults} /></div>
             </SectionCard>
           </section>}
           {processElevation === "administrator" && <section aria-label="Vault permissions">

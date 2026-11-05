@@ -233,6 +233,7 @@ impl ScanIndex {
     pub fn removal_selection(
         &self,
         selected: &HashSet<String>,
+        requested_keepers: Option<&HashSet<String>>,
     ) -> Result<(Vec<CachedFile>, Vec<CachedFile>), String> {
         let mut candidates = Vec::new();
         let mut groups: HashMap<String, usize> = HashMap::new();
@@ -240,6 +241,17 @@ impl ScanIndex {
             let file = self.file(id)?;
             *groups.entry(file.group_id.clone()).or_default() += 1;
             candidates.push(file);
+        }
+        let mut explicit = HashMap::new();
+        if let Some(ids) = requested_keepers {
+            for id in ids {
+                if selected.contains(id) { return Err("The kept copy cannot also be removed".into()); }
+                let keeper = self.file(id)?;
+                if !groups.contains_key(&keeper.group_id) || explicit.insert(keeper.group_id.clone(), keeper).is_some() {
+                    return Err("Invalid kept copy for duplicate selection".into());
+                }
+            }
+            if explicit.len() != groups.len() { return Err("Choose one kept copy for each group".into()); }
         }
         let mut keepers = Vec::new();
         for (group, selected_count) in groups {
@@ -251,6 +263,12 @@ impl ScanIndex {
                 .map_err(|error| error.to_string())?;
             if selected_count >= count {
                 return Err("Every group must retain at least one verified copy".into());
+            }
+            if requested_keepers.is_some() {
+                let keeper = explicit.remove(&group).ok_or("Choose one kept copy for each group")?;
+                if super::safety::validated_file(&keeper).is_err() { return Err("The chosen kept copy changed; scan again".into()); }
+                keepers.push(keeper);
+                continue;
             }
             let mut statement = self
                 .connection

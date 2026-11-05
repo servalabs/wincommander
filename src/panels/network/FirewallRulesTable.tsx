@@ -97,6 +97,7 @@ export function FirewallRulesTable({
         <table className="wc-net-table">
           <thead>
             <tr>
+              <th scope="col">#</th>
               <th scope="col" className="wc-net-col-check">
                 <span className="sr-only">Selected</span>
               </th>
@@ -126,7 +127,7 @@ export function FirewallRulesTable({
             </tr>
           </thead>
           <tbody>
-            {visible.map((rule) => {
+            {visible.map((rule, index) => {
               const reading = readFirewallRule(rule);
               const checked = selected.has(rule.id);
               return (
@@ -135,6 +136,7 @@ export function FirewallRulesTable({
                   className={`wc-net-row-selectable${checked ? " is-selected" : ""}`}
                   onClick={() => !disabled && onToggle(rule.id)}
                 >
+                  <td>{index + 1}</td>
                   <td>
                     <CheckboxControl
                       checked={checked}

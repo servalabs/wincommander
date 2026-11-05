@@ -1510,6 +1510,7 @@ export function useBackend(retainCleanupScanErrors = false) {
     getLiveMetrics: () => invoke<LiveMetricsResult>("get_live_metrics"),
     getDriveSmartHealth: () => invoke<DriveSmartHealthResult>("get_drive_smart_health"),
     getWipeDriveList: () => invoke<WipeDriveEntry[]>("get_wipe_drive_list"),
+    getScanDriveList: () => invoke<string[]>("get_scan_drive_list"),
     getStorageStats: () => execute<StorageStats>("Get-StorageStats"),
     getStartupStatus: () => execute<StartupStatus>("Get-StartupStatus"),
     getAIControlStatus: () => execute<AIControlStatus>("Get-AIControlStatus"),
@@ -2521,8 +2522,8 @@ export function useBackend(retainCleanupScanErrors = false) {
       invoke<DuplicateGroup>("duplicate_finder_group_page", { scanId, groupId, offset }),
     duplicateFinderOpen: (scanId: string, fileId: string) =>
       invoke<void>("duplicate_finder_open", { scanId, fileId }),
-    duplicateFinderRemove: (fileIds: string[]) =>
-      invoke<DuplicateRemoveResult>("duplicate_finder_remove", { fileIds }),
+    duplicateFinderRemove: (fileIds: string[], keeperIds?: string[]) =>
+      invoke<DuplicateRemoveResult>("duplicate_finder_remove", { fileIds, keeperIds }),
     duplicateFinderCancel: () => invoke<void>("duplicate_finder_cancel"),
     emptyFolderCleanerScan: (roots: string[]) =>
       invoke<EmptyFolderScan>("empty_folder_cleaner_scan", { roots }),

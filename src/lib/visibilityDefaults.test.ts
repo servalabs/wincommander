@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   DEFAULT_ALWAYS_HIDDEN_SIDEBAR_ACTIONS,
   DEFAULT_BORROWED_EXTRAS,
+  sidebarHiddenActions,
 } from "./visibilityDefaults";
 
 describe("visibility defaults", () => {
@@ -27,5 +28,8 @@ describe("visibility defaults", () => {
 
   test("starts AI Advisor hidden until the user enables it", () => {
     expect(DEFAULT_ALWAYS_HIDDEN_SIDEBAR_ACTIONS).toEqual(["ai-advisor"]);
+    expect(sidebarHiddenActions([], undefined)).toContain("ai-advisor");
+    expect(sidebarHiddenActions([], true)).not.toContain("ai-advisor");
+    expect(sidebarHiddenActions(["ai-advisor"], true)).toContain("ai-advisor");
   });
 });

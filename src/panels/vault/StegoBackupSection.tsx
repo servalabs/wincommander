@@ -49,12 +49,20 @@ export default function StegoBackupSection() {
             <section className="stego-block" aria-labelledby="stego-attach-title" hidden={mode !== "attach"}>
               <span id="stego-attach-title" className="stego-block__title">Create or update a video backup</span>
               <p className="stego-intro">Choose a carrier video and the container you already use. Its filename can have any extension or none at all; an extensionless NTFS container is accepted. Its password is never requested or stored.</p>
-              <FilePick label="Carrier video or existing backup…" value={fields.carrierPath} onPick={() => void stego.pickCarrier()} onClear={() => set.setCarrierPath("")} disabled={locked} />
+              <div className="stego-pick-grid">
+                <div className="stego-pick-group">
+                <FilePick icon="video" label="Carrier video or existing backup…" value={fields.carrierPath} onPick={() => void stego.pickCarrier()} onClear={() => set.setCarrierPath("")} disabled={locked} />
               <IssueLine issues={stego.attachErrors} field="carrier" /><IssueLine issues={stego.attachWarnings} field="carrier" tone="warn" />
-              <FilePick label="Existing container…" value={fields.containerPath} onPick={() => void stego.pickContainer()} onClear={() => set.setContainerPath("")} disabled={locked} />
+                </div>
+                <div className="stego-pick-group">
+                <FilePick icon="lock" label="Existing container…" value={fields.containerPath} onPick={() => void stego.pickContainer()} onClear={() => set.setContainerPath("")} disabled={locked} />
               <IssueLine issues={stego.attachErrors} field="container" /><IssueLine issues={stego.attachWarnings} field="container" tone="warn" />
-              <FilePick label="Save new backup video as… (optional)" value={fields.outputPath} onPick={() => void stego.pickOutput()} onClear={() => set.setOutputPath("")} disabled={locked} />
+                </div>
+                <div className="stego-pick-group">
+                <FilePick icon="floppy-disk" label="Save new backup video as… (optional)" value={fields.outputPath} onPick={() => void stego.pickOutput()} onClear={() => set.setOutputPath("")} disabled={locked} />
               <IssueLine issues={stego.attachErrors} field="output" /><IssueLine issues={stego.attachWarnings} field="output" tone="warn" />
+                </div>
+              </div>
               <Checkbox checked={fields.replacementConfirmed} disabled={locked} label="If no new path is chosen, update the selected existing backup video after verification." onChange={(event) => set.setReplacementConfirmed(event.currentTarget.checked)} />
               <IssueLine issues={stego.attachErrors} field="confirmation" />
               {busy === "attach" && <BusyBar label="Copying and verifying the sealed container; an existing backup is replaced only after this succeeds." />}

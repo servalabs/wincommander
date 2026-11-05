@@ -1,3 +1,4 @@
+import { createCountdownSaver } from "./countdownSaver";
 // src/panels/secret/index.tsx
 //
 // Secret Settings — rebuilt 2026-06-13, retabbed 2026-07-27.
@@ -244,9 +245,10 @@ function AutoStartTile() {
             : "Auto Start change could not be completed";
 
     return (
+        <>
         <DgzTile
             icon="time"
-            title="Start WinCommander at sign-in"
+            title="Auto start WinCommander"
             desc={description}
             checked={autostartEnabled === true}
             onChange={handleToggleAutostart}
@@ -257,11 +259,10 @@ function AutoStartTile() {
                     {errorHeading}: {autostartError.message}
                 </p>
             )}
-            <p className="dgz-autostart-note">
-                {autostartPolicyLocked ? "Set by your administrator." : "Windows will ask for approval if needed."}
-            </p>
-            <SilentStartSetting autostartEnabled={autostartEnabled === true} />
+            {autostartPolicyLocked && <p className="dgz-autostart-note">Set by your administrator.</p>}
         </DgzTile>
+        <SilentStartSetting autostartEnabled={autostartEnabled === true} />
+        </>
     );
 }
 
@@ -767,20 +768,24 @@ function LockdownTimerRow() {
     const { appSettings, patchAppSettings } = useAppState();
     const persisted = appSettings?.app?.lockdownTimerSec ?? 4;
     const [timerSec, setTimerSec] = useState(persisted);
+    const [timerInput, setTimerInput] = useState(String(persisted));
     // Re-sync local value if the persisted value changes elsewhere.
-    useEffect(() => { setTimerSec(persisted); }, [persisted]);
-    // Debounce the disk write: range onChange fires per pixel; without this each
-    // pixel was a full patch_settings_cmd IPC + disk write (a UI-freeze cause).
-    const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    useEffect(() => { setTimerSec(persisted); setTimerInput(String(persisted)); }, [persisted]);
+    const patchRef = useRef(patchAppSettings);
+    patchRef.current = patchAppSettings;
+    const saverRef = useRef<ReturnType<typeof createCountdownSaver> | null>(null);
+    if (!saverRef.current) {
+        saverRef.current = createCountdownSaver((v) => {
+            patchRef.current({ app: { lockdownTimerSec: v } } as any).catch(reportSettingsWriteFailure);
+        });
+    }
     const handleChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-        const v = Math.max(3, Math.min(30, parseInt(e.target.value, 10) || 4));
-        setTimerSec(v); // instant visual feedback, no IPC
-        if (debounceRef.current) clearTimeout(debounceRef.current);
-        debounceRef.current = setTimeout(() => {
-            patchAppSettings({ app: { lockdownTimerSec: v } } as any).catch(reportSettingsWriteFailure);
-        }, 250);
-    }, [patchAppSettings]);
-    useEffect(() => () => { if (debounceRef.current) clearTimeout(debounceRef.current); }, []);
+        const v = Math.max(3, Math.min(86400, parseInt(e.target.value, 10) || 4));
+        setTimerSec(v);
+        setTimerInput(String(v));
+        saverRef.current?.queue(v);
+    }, []);
+    useEffect(() => () => saverRef.current?.flush(), []);
 
     return (
         <div className="sec-timer-row">
@@ -794,14 +799,14 @@ function LockdownTimerRow() {
                     min={3}
                     max={30}
                     step={1}
-                    value={timerSec}
+                    value={Math.min(30, timerSec)}
                     onChange={handleChange}
                     className="sec-timer-slider"
                     aria-label="Lockdown countdown seconds"
                 />
-                <span className="sec-timer-value">{timerSec}s</span>
+                <input type="number" min={3} max={86400} step={1} value={timerInput} onChange={(e) => { const raw = e.currentTarget.value; setTimerInput(raw); const value = Number(raw); if (/^\d+$/.test(raw) && value >= 3 && value <= 86400) { setTimerSec(value); saverRef.current?.queue(value); } }} onBlur={(e) => handleChange(e)} onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }} aria-label="Custom lockdown countdown in seconds" className="sec-timer-input" /> <span>sec</span>
             </div>
-            <p className="dgz-hint">Seconds before the sidebar Lockdown button fires (3–30). Default: 4.</p>
+            <p className="dgz-hint">Seconds before Lockdown fires (3–86400). Default: 4.</p>
         </div>
     );
 }

@@ -118,11 +118,6 @@ export default function AppsPanel() {
           title="Packages & Apps"
           description="Install, update, and remove software in bulk — and strip out the bloatware that ships with Windows."
         />
-        <div className="flex flex-wrap items-center justify-end gap-2 pb-2">
-          {refreshMessage && <span role="status" className="text-xs text-[var(--text-dim)]">{refreshMessage}</span>}
-          {refreshPhase === "managers" && <Button variant="outline" size="sm" onClick={cancelRefreshCheck} aria-label="Cancel refresh package check"><Icon icon="stop" />Cancel check</Button>}
-          <Button variant="outline" size="sm" disabled={refreshing} onClick={() => void refreshInventory()} aria-label="Refresh installed apps and package updates"><Icon icon="refresh" />{refreshing ? "Refreshing…" : "Refresh"}</Button>
-        </div>
         <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList className="apps-panel-tabs w-full flex-wrap justify-start">
             <TabsTrigger value="install">Install software</TabsTrigger>
@@ -141,7 +136,11 @@ export default function AppsPanel() {
               </span>
             </div>
           </TabsList>
-          <TabsContent value="install"><AppInstallerPanel onStatusChange={setInstallerStatus} updatesTools={<PackageUpdateTools />} /></TabsContent>
+          <TabsContent value="install"><AppInstallerPanel onStatusChange={setInstallerStatus} updatesTools={<PackageUpdateTools />} refreshControls={<>
+            {refreshMessage && <span role="status" className="text-xs text-[var(--text-dim)]">{refreshMessage}</span>}
+            {refreshPhase === "managers" && <Button variant="outline" size="sm" onClick={cancelRefreshCheck} aria-label="Cancel refresh package check"><Icon icon="stop" />Cancel check</Button>}
+            <Button variant="outline" size="sm" disabled={refreshing} onClick={() => void refreshInventory()} aria-label="Refresh installed apps and package updates"><Icon icon="refresh" />{refreshing ? "Refreshing…" : "Refresh"}</Button>
+          </>} /></TabsContent>
           <TabsContent value="debloat"><DebloatPanel /></TabsContent>
         </Tabs>
       </div>

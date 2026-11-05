@@ -281,6 +281,7 @@ fn explorer_select_argument(path: &std::path::Path) -> Result<std::ffi::OsString
 #[tauri::command]
 pub async fn duplicate_finder_remove(
     file_ids: Vec<String>,
+    keeper_ids: Option<Vec<String>>,
 ) -> Result<DuplicateRemoveResult, String> {
     safety::ensure_mutation_allowed()?;
     if file_ids.is_empty()
@@ -289,8 +290,12 @@ pub async fn duplicate_finder_remove(
     {
         return Err("invalid duplicate selection".into());
     }
+    if keeper_ids.as_ref().is_some_and(|ids| ids.len() > MAX_SELECTION || ids.iter().any(|id| id.len() > 64)) {
+        return Err("invalid kept copy selection".into());
+    }
     let running = RunningGuard::acquire()?;
     let selected: HashSet<String> = file_ids.into_iter().collect();
+    let requested_keepers: Option<HashSet<String>> = keeper_ids.map(|ids| ids.into_iter().collect());
     let (candidates, keepers) = {
         let guard = cache()
             .lock()
@@ -301,7 +306,7 @@ pub async fn duplicate_finder_remove(
         if index.created_at.elapsed() > CACHE_TTL {
             return Err("duplicate scan expired; scan again".into());
         }
-        index.removal_selection(&selected)?
+        index.removal_selection(&selected, requested_keepers.as_ref())?
     };
     tokio::task::spawn_blocking(move || {
         let _running = running;

@@ -1,14 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import type { AdapterMacResult, PhysicalNetworkAdapter } from "../../hooks/useBackend";
-import { adapterMacDescription, adapterOperationMessage, isInactiveAdapter, shouldGroupInactiveAdapter } from "./adapterState";
+import { adapterMacDescription, adapterOperationMessage, isInactiveAdapter } from "./adapterState";
 
 describe("adapter observed state", () => {
     test("groups only known inactive states, keeping unknown adapter status visible", () => {
-        for (const state of ["Down", "Disconnected", "Disabled", "Not Present", "LowerLayerDown"]) expect(isInactiveAdapter(state)).toBe(true);
-        for (const state of ["Up", "Unknown", "Dormant", "", undefined]) expect(isInactiveAdapter(state)).toBe(false);
-        expect(shouldGroupInactiveAdapter({ status: "Down", recoveryPending: true })).toBe(false);
-        expect(shouldGroupInactiveAdapter({ status: "Down", configurationError: "unavailable" })).toBe(false);
-        expect(shouldGroupInactiveAdapter({ status: "Down", recoveryPending: false })).toBe(true);
+        for (const state of ["Down", "Disconnected", "Disabled", "Dormant", "Not Present", "LowerLayerDown"]) expect(isInactiveAdapter(state)).toBe(true);
+        for (const state of ["Up", "Unknown", "", undefined]) expect(isInactiveAdapter(state)).toBe(false);
     });
     test("a partial or older backend success cannot become a verified toast", () => {
         for (const status of ["partial", "ok", "unverified", "rolled_back", "failed", "blocked"]) {

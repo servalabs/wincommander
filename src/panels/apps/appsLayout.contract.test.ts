@@ -7,6 +7,13 @@ declare const Bun: {
 const read = (path: string) => Bun.file(path).text();
 
 describe("Packages and Apps layout", () => {
+  test("labels the Winget-only bulk action separately from the combined update count", async () => {
+    const installer = await read("src/panels/apps/components/AppInstallerPanel.tsx");
+    expect(installer).toContain('collectUnifiedPackageUpdates(packageSnapshot.inventory?.managers ?? []');
+    expect(installer).toContain('aria-label="Update all Winget app inventory updates"');
+    expect(installer).toContain('Other package managers are updated in the Updates list.');
+    expect(installer).not.toContain('installer-batch-action-label">UPDATE<br />ALL</span>');
+  });
   test("keeps package updates inside Install software's Updates view", async () => {
     const panel = await read("src/panels/apps/index.tsx");
     const installer = await read("src/panels/apps/components/AppInstallerPanel.tsx");
