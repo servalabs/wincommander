@@ -669,7 +669,7 @@ async fn dispatch_verb(
         "svc.policy.install_epoch" => handle_install_epoch(policy_store, args),
 
 
-        "svc.fleet.begin_enrollment" | "svc.fleet.provision_trust" | "svc.fleet.replace_trust" | "svc.fleet.bind_origins" | "svc.fleet.get_trust" | "svc.fleet.provision_hybrid_trust" | "svc.fleet.get_hybrid_trust" | "svc.fleet.read_hybrid_trust" | "svc.fleet.install_policy" | "svc.fleet.get_policy" =>
+        "svc.fleet.begin_enrollment" | "svc.fleet.provision_trust" | "svc.fleet.replace_trust" | "svc.fleet.bind_origins" | "svc.fleet.get_trust" | "svc.fleet.provision_hybrid_trust" | "svc.fleet.get_hybrid_trust" | "svc.fleet.read_hybrid_trust" | "svc.fleet.begin_hybrid_enrollment" | "svc.fleet.cancel_hybrid_enrollment" | "svc.fleet.install_policy" | "svc.fleet.get_policy" =>
             handle_fleet_machine_policy(&feature_id, args, peer),
 
         "svc.fleet.contact_observation" => fleet_machine_policy_store().and_then(|store|
@@ -3603,17 +3603,43 @@ fn handle_fleet_machine_policy(verb: &str, args: serde_json::Value, peer: Option
                 None => Ok(serde_json::json!({"trust": null, "audit": [], "origins": [], "transport_profile": null, "service_enabled": false})),
             }
         },
-        "svc.fleet.get_hybrid_trust" | "svc.fleet.read_hybrid_trust" => {
+        "svc.fleet.get_hybrid_trust" => {
             if args != serde_json::json!({}) { return Err(VerbError::new("bad_request", "unexpected arguments")); }
-            let snapshot = if verb == "svc.fleet.read_hybrid_trust" {
-                store.hybrid_trust_for_helper()
-            } else {
-                store.hybrid_trust_snapshot()
-            }.map_err(|kind| VerbError::new("fleet_policy_unavailable", kind))?;
+            let snapshot = store.hybrid_trust_snapshot().map_err(|kind| VerbError::new("fleet_policy_unavailable", kind))?;
             match snapshot {
                 Some((binding, hybrid)) => Ok(serde_json::json!({"trust": binding, "hybrid_trust": hybrid})),
                 None => Ok(serde_json::json!({"trust": null, "hybrid_trust": null})),
             }
+        },
+        "svc.fleet.read_hybrid_trust" => {
+            if args != serde_json::json!({}) { return Err(VerbError::new("bad_request", "unexpected arguments")); }
+            let peer = peer.ok_or_else(|| VerbError::new("forbidden", "authenticated caller required"))?;
+            let snapshot = store.hybrid_trust_for_helper(peer.caller_sid(), peer.session_id())
+                .map_err(|kind| VerbError::new("fleet_policy_unavailable", kind))?;
+            match snapshot {
+                Some((binding, hybrid, authorization)) => Ok(serde_json::json!({"trust": binding, "hybrid_trust": hybrid, "authorization": authorization})),
+                None => Ok(serde_json::json!({"trust": null, "hybrid_trust": null, "authorization": null})),
+            }
+        },
+        "svc.fleet.begin_hybrid_enrollment" => {
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Request { trust: FleetTrust, origin: String }
+            let request: Request = serde_json::from_value(args).map_err(|_| VerbError::new("bad_request", "invalid enrollment authorization"))?;
+            let peer = peer.ok_or_else(|| VerbError::new("forbidden", "authenticated caller required"))?;
+            let offer = store.begin_hybrid_enrollment(&request.trust, &request.origin, peer.caller_sid(), peer.session_id())
+                .map_err(|kind| VerbError::new("fleet_policy_rejected", kind))?;
+            serde_json::to_value(offer).map_err(|_| VerbError::new("fleet_policy_unavailable", "authorization encoding failed"))
+        },
+        "svc.fleet.cancel_hybrid_enrollment" => {
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Request { authorization_id: String }
+            let request: Request = serde_json::from_value(args).map_err(|_| VerbError::new("bad_request", "invalid enrollment authorization"))?;
+            let peer = peer.ok_or_else(|| VerbError::new("forbidden", "authenticated caller required"))?;
+            let cancelled = store.cancel_hybrid_enrollment(&request.authorization_id, peer.caller_sid(), peer.session_id())
+                .map_err(|kind| VerbError::new("fleet_policy_unavailable", kind))?;
+            Ok(serde_json::json!({"cancelled": cancelled}))
         },
         "svc.fleet.provision_hybrid_trust" => {
             #[derive(serde::Deserialize)]
@@ -5556,7 +5582,7 @@ mod tests {
 
     #[tokio::test]
     async fn fleet_trust_mutations_require_admin_and_policy_requires_pinned_peer() {
-        for verb in ["svc.fleet.begin_enrollment", "svc.fleet.provision_trust", "svc.fleet.replace_trust", "svc.fleet.bind_origins", "svc.fleet.get_trust", "svc.fleet.provision_hybrid_trust", "svc.fleet.get_hybrid_trust"] {
+        for verb in ["svc.fleet.begin_enrollment", "svc.fleet.provision_trust", "svc.fleet.replace_trust", "svc.fleet.bind_origins", "svc.fleet.get_trust", "svc.fleet.provision_hybrid_trust", "svc.fleet.get_hybrid_trust", "svc.fleet.begin_hybrid_enrollment", "svc.fleet.cancel_hybrid_enrollment"] {
             assert!(authorize(verb, false, 1234, &passing_gate()).await.is_err());
             assert_eq!(authorize(verb, true, 1234, &passing_gate()).await, Ok(None));
         }

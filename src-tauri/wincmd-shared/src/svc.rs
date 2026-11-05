@@ -135,6 +135,8 @@ pub fn is_known_verb(feature_id: &str) -> bool {
             | "svc.fleet.provision_hybrid_trust"
             | "svc.fleet.get_hybrid_trust"
             | "svc.fleet.read_hybrid_trust"
+            | "svc.fleet.begin_hybrid_enrollment"
+            | "svc.fleet.cancel_hybrid_enrollment"
             | "svc.fleet.install_policy"
             | "svc.fleet.get_policy"
             | "svc.fleet.contact_observation"
@@ -372,7 +374,7 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         // the active ruleset — SessionHelper only says "a pinned, in-session
         // peer may call this verb", not "trust its payload".
         "svc.policy.install_epoch" => CapabilityClass::SessionHelper,
-        "svc.fleet.begin_enrollment" | "svc.fleet.provision_trust" | "svc.fleet.replace_trust" | "svc.fleet.bind_origins" | "svc.fleet.get_trust" | "svc.fleet.provision_hybrid_trust" | "svc.fleet.get_hybrid_trust" => CapabilityClass::Privileged,
+        "svc.fleet.begin_enrollment" | "svc.fleet.provision_trust" | "svc.fleet.replace_trust" | "svc.fleet.bind_origins" | "svc.fleet.get_trust" | "svc.fleet.provision_hybrid_trust" | "svc.fleet.get_hybrid_trust" | "svc.fleet.begin_hybrid_enrollment" | "svc.fleet.cancel_hybrid_enrollment" => CapabilityClass::Privileged,
         "svc.fleet.install_policy" | "svc.fleet.get_policy" | "svc.fleet.contact_observation" | "svc.fleet.read_hybrid_trust" => CapabilityClass::SessionHelper,
         "svc.shared_shortcuts.set_claim" => CapabilityClass::SessionHelper,
 
@@ -729,7 +731,7 @@ mod tests {
 
     #[test]
     fn machine_fleet_trust_requires_admin_and_policy_requires_pinned_helper() {
-        for verb in ["svc.fleet.begin_enrollment", "svc.fleet.provision_trust", "svc.fleet.replace_trust", "svc.fleet.bind_origins", "svc.fleet.get_trust", "svc.fleet.provision_hybrid_trust", "svc.fleet.get_hybrid_trust"] {
+        for verb in ["svc.fleet.begin_enrollment", "svc.fleet.provision_trust", "svc.fleet.replace_trust", "svc.fleet.bind_origins", "svc.fleet.get_trust", "svc.fleet.provision_hybrid_trust", "svc.fleet.get_hybrid_trust", "svc.fleet.begin_hybrid_enrollment", "svc.fleet.cancel_hybrid_enrollment"] {
             assert!(is_known_verb(verb));
             assert_eq!(classify_verb(verb), CapabilityClass::Privileged);
         }

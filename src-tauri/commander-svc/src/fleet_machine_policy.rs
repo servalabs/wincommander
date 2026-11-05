@@ -232,6 +232,27 @@ struct PendingEnrollment {
     transport_profile: Option<TransportProfile>,
 }
 
+/// An administrator's short-lived grant. Deliberately never serialized: a
+/// service restart invalidates every in-flight enrollment authorization.
+#[derive(Clone)]
+struct PendingHybridEnrollment {
+    id: String,
+    challenge: String,
+    origin: String,
+    caller_sid: String,
+    session_id: u32,
+    trust: FleetTrust,
+    connection_revision: u64,
+    expires: std::time::Instant,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct HybridEnrollmentOffer {
+    pub authorization_id: String,
+    pub challenge: String,
+    pub origin: String,
+}
+
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct State {
@@ -239,6 +260,8 @@ struct State {
     pending: Option<PendingEnrollment>,
     #[serde(skip)]
     contact_challenge: Option<contact::PendingContact>,
+    #[serde(skip)]
+    hybrid_enrollment: Option<PendingHybridEnrollment>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -436,6 +459,7 @@ impl FleetMachinePolicy {
             &hex[20..]
         );
         let mut guard = self.state.lock().map_err(|_| "store_unavailable")?;
+        guard.hybrid_enrollment = None;
         let mut next = guard.clone();
         next.pending = Some(PendingEnrollment {
             device_id,
@@ -520,6 +544,7 @@ impl FleetMachinePolicy {
             }),
             pending: None,
             contact_challenge: None,
+            hybrid_enrollment: None,
         };
         self.persist(&next)?;
         *guard = next;
@@ -581,14 +606,80 @@ impl FleetMachinePolicy {
             .map(|hybrid| (record.trust.clone(), hybrid.clone()))))
     }
 
-    /// A trust pin alone does not authorize a connection. The helper-facing
-    /// enrollment path remains closed while the machine service is disabled.
-    pub fn hybrid_trust_for_helper(&self) -> Result<Option<(FleetTrust, FleetHybridTrust)>, &'static str> {
+    /// An explicit administrator grant is scoped to an actual Windows user,
+    /// session, existing trust, and already-authorized HTTPS origin.
+    pub fn begin_hybrid_enrollment(&self, expected: &FleetTrust, origin: &str, actor: &str, session: u32)
+        -> Result<HybridEnrollmentOffer, &'static str> {
+        use rand::RngCore;
+        validate_trust(expected)?;
+        let audit = trust_audit("hybrid_enrollment_begin", actor, &expected.enrollment_generation)?;
+        if session == 0 { return Err("invalid_session"); }
+        let normalized = origins::normalize(&[origin.to_owned()])?;
+        let origin = normalized.first().filter(|value| value.starts_with("https://"))
+            .ok_or("invalid_origin")?.clone();
+        let mut random = [0u8; 32];
+        rand::rngs::OsRng.try_fill_bytes(&mut random).map_err(|_| "random_unavailable")?;
+        random[6] = (random[6] & 0x0f) | 0x40;
+        random[8] = (random[8] & 0x3f) | 0x80;
+        random[22] = (random[22] & 0x0f) | 0x40;
+        random[24] = (random[24] & 0x3f) | 0x80;
+        let id = uuid::Uuid::from_slice(&random[..16]).map_err(|_| "random_unavailable")?.to_string();
+        let challenge = uuid::Uuid::from_slice(&random[16..]).map_err(|_| "random_unavailable")?.to_string();
+        let expires = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let mut guard = self.state.lock().map_err(|_| "store_unavailable")?;
+        let current = guard.record.as_ref().ok_or("not_provisioned")?;
+        if current.trust != *expected { return Err("binding_changed"); }
+        if current.hybrid_unconfirmed || current.hybrid_trust.is_none() { return Err("hybrid_trust_unavailable"); }
+        if current.service_enabled || current.credential.is_some() || !current.origins.contains(&origin) {
+            return Err("origin_not_authorized");
+        }
+        // A failed replacement or persistence never leaves the old grant live.
+        guard.hybrid_enrollment = None;
+        let mut next = guard.clone();
+        let record = next.record.as_mut().ok_or("not_provisioned")?;
+        record.connection_revision = record.connection_revision.checked_add(1).ok_or("revision_exhausted")?;
+        record.credential_revision = record.credential_revision.checked_add(1).ok_or("revision_exhausted")?;
+        record.cleared = None;
+        if record.audit.len() >= 64 { record.audit.remove(0); }
+        record.audit.push(audit);
+        let revision = record.connection_revision;
+        next.pending = None;
+        next.contact_challenge = None;
+        self.persist(&next)?;
+        if std::time::Instant::now() >= expires {
+            *guard = next;
+            return Err("hybrid_enrollment_expired");
+        }
+        next.hybrid_enrollment = Some(PendingHybridEnrollment { id: id.clone(), challenge: challenge.clone(),
+            origin: origin.clone(), caller_sid: actor.into(), session_id: session,
+            trust: expected.clone(), connection_revision: revision, expires });
+        *guard = next;
+        Ok(HybridEnrollmentOffer { authorization_id: id, challenge, origin })
+    }
+
+    pub fn cancel_hybrid_enrollment(&self, id: &str, actor: &str, session: u32) -> Result<bool, &'static str> {
+        let mut guard = self.state.lock().map_err(|_| "store_unavailable")?;
+        if guard.hybrid_enrollment.as_ref().is_some_and(|pending|
+            pending.id == id && pending.caller_sid == actor && pending.session_id == session) {
+            guard.hybrid_enrollment = None;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    /// The helper reads only the live grant for its captured SID and session.
+    pub fn hybrid_trust_for_helper(&self, actor: &str, session: u32) -> Result<Option<(FleetTrust, FleetHybridTrust, HybridEnrollmentOffer)>, &'static str> {
         let guard = self.state.lock().map_err(|_| "store_unavailable")?;
         let Some(record) = guard.record.as_ref() else { return Ok(None); };
         if record.hybrid_unconfirmed { return Err("store_unavailable"); }
-        if !record.service_enabled { return Err("service_disabled"); }
-        Ok(record.hybrid_trust.as_ref().map(|hybrid| (record.trust.clone(), hybrid.clone())))
+        let pending = guard.hybrid_enrollment.as_ref().ok_or("hybrid_enrollment_not_authorized")?;
+        if pending.caller_sid != actor || session == 0 || pending.session_id != session
+            || pending.trust != record.trust || pending.connection_revision != record.connection_revision
+            || std::time::Instant::now() >= pending.expires || record.service_enabled || record.credential.is_some() {
+            return Err("hybrid_enrollment_not_authorized");
+        }
+        Ok(record.hybrid_trust.as_ref().map(|hybrid| (record.trust.clone(), hybrid.clone(),
+            HybridEnrollmentOffer { authorization_id: pending.id.clone(), challenge: pending.challenge.clone(), origin: pending.origin.clone() })))
     }
 
     /// Explicit administrator-authorized re-enrollment. Comparing the full
@@ -647,6 +738,7 @@ impl FleetMachinePolicy {
             }),
             pending: None,
             contact_challenge: None,
+            hybrid_enrollment: None,
         };
         self.persist(&next)?;
         *guard = next;
@@ -780,6 +872,7 @@ impl FleetMachinePolicy {
             }),
             pending: guard.pending.clone(),
             contact_challenge: guard.contact_challenge.clone(),
+            hybrid_enrollment: guard.hybrid_enrollment.clone(),
         };
         self.persist(&next)?;
         *guard = next;
@@ -1086,6 +1179,7 @@ impl FleetMachinePolicy {
             || Self::connection_token_for(current)? != connection_token {
             return Err("binding_changed");
         }
+        guard.hybrid_enrollment = None;
         let mut next = guard.clone();
         let record = next.record.as_mut().ok_or("not_provisioned")?;
         record.credential_revision = record.credential_revision.checked_add(1).ok_or("revision_exhausted")?;
@@ -1122,6 +1216,7 @@ impl FleetMachinePolicy {
         if Self::clear_token(record)? != token || Self::connection_token_for(record)? != connection_token {
             return Ok(false);
         }
+        guard.hybrid_enrollment = None;
         let mut next = guard.clone();
         let record = next.record.as_mut().ok_or("not_provisioned")?;
         record.credential = None;
@@ -1281,7 +1376,7 @@ mod tests {
         assert_eq!(store.provision_hybrid_trust(trust(), hybrid(), "bad"), Err("invalid_actor"));
         assert_eq!(store.provision_hybrid_trust(trust(), hybrid(), "S-1-5-18"), Ok(()));
         assert!(!store.trust_with_origins().unwrap().unwrap().4);
-        assert_eq!(store.hybrid_trust_for_helper(), Err("service_disabled"));
+        assert_eq!(store.hybrid_trust_for_helper("S-1-5-18", 1), Err("hybrid_enrollment_not_authorized"));
         assert_eq!(store.snapshot().unwrap(), Some(policy(1)));
         assert_eq!(store.provision_hybrid_trust(trust(), hybrid(), "S-1-5-18"), Ok(()));
         let mut changed = hybrid(); changed.minimum_epoch = 8;
@@ -1293,7 +1388,7 @@ mod tests {
         let reopened = FleetMachinePolicy::open(Box::new(fs), PathBuf::from("test")).unwrap();
         assert_eq!(reopened.hybrid_trust_snapshot().unwrap(), Some((trust(), hybrid())));
         assert!(!reopened.trust_with_origins().unwrap().unwrap().4);
-        assert_eq!(reopened.hybrid_trust_for_helper(), Err("service_disabled"));
+        assert_eq!(reopened.hybrid_trust_for_helper("S-1-5-18", 1), Err("hybrid_enrollment_not_authorized"));
         assert_eq!(reopened.snapshot().unwrap(), Some(policy(1)));
     }
 
@@ -1351,6 +1446,61 @@ mod tests {
             assert_eq!(reopened.hybrid_trust_snapshot().unwrap(), Some((trust(), hybrid())));
             assert!(!reopened.trust_with_origins().unwrap().unwrap().4);
         }
+    }
+
+    #[test]
+    fn hybrid_enrollment_grant_is_bound_revocable_and_lost_on_restart() {
+        let fs = MemoryFs::default();
+        let store = store(fs.clone());
+        let signature = proof_with_origins(&store, &trust(), vec!["https://fleet.example".into()]);
+        store.provision(trust(), &signature, "S-1-5-18").unwrap();
+        assert_eq!(store.begin_hybrid_enrollment(&trust(), "https://fleet.example", "S-1-5-21-7", 7), Err("hybrid_trust_unavailable"));
+        store.provision_hybrid_trust(trust(), hybrid(), "S-1-5-18").unwrap();
+        assert_eq!(store.hybrid_trust_for_helper("S-1-5-21-7", 7), Err("hybrid_enrollment_not_authorized"));
+        assert_eq!(store.begin_hybrid_enrollment(&trust(), "http://fleet.example", "S-1-5-21-7", 7), Err("invalid_origin"));
+        assert_eq!(store.begin_hybrid_enrollment(&trust(), "https://wrong.example", "S-1-5-21-7", 7), Err("origin_not_authorized"));
+        assert_eq!(store.begin_hybrid_enrollment(&trust(), "https://fleet.example", "S-1-5-21-7", 0), Err("invalid_session"));
+        let first = store.begin_hybrid_enrollment(&trust(), "https://fleet.example", "S-1-5-21-7", 7).unwrap();
+        assert_eq!(store.hybrid_trust_for_helper("S-1-5-21-8", 7), Err("hybrid_enrollment_not_authorized"));
+        assert_eq!(store.hybrid_trust_for_helper("S-1-5-21-7", 8), Err("hybrid_enrollment_not_authorized"));
+        assert_eq!(store.hybrid_trust_for_helper("S-1-5-21-7", 7).unwrap().unwrap().2, first);
+        assert!(!store.cancel_hybrid_enrollment(&first.authorization_id, "S-1-5-21-8", 7).unwrap());
+        assert!(store.cancel_hybrid_enrollment(&first.authorization_id, "S-1-5-21-7", 7).unwrap());
+        assert_eq!(store.hybrid_trust_for_helper("S-1-5-21-7", 7), Err("hybrid_enrollment_not_authorized"));
+        let second = store.begin_hybrid_enrollment(&trust(), "https://fleet.example", "S-1-5-21-7", 7).unwrap();
+        assert_ne!(first.authorization_id, second.authorization_id);
+        assert!(!store.cancel_hybrid_enrollment(&first.authorization_id, "S-1-5-21-7", 7).unwrap());
+        {
+            let mut state = store.state.lock().unwrap();
+            state.hybrid_enrollment.as_mut().unwrap().expires = std::time::Instant::now();
+        }
+        assert_eq!(store.hybrid_trust_for_helper("S-1-5-21-7", 7), Err("hybrid_enrollment_not_authorized"));
+        store.begin_hybrid_enrollment(&trust(), "https://fleet.example", "S-1-5-21-7", 7).unwrap();
+        let reopened = FleetMachinePolicy::open(Box::new(fs), PathBuf::from("test")).unwrap();
+        assert_eq!(reopened.hybrid_trust_for_helper("S-1-5-21-7", 7), Err("hybrid_enrollment_not_authorized"));
+    }
+
+    #[test]
+    fn hybrid_enrollment_grant_is_cancelled_by_disconnect_and_failed_replacement() {
+      for commit_first in [false, true] {
+        let fs = FailingFs::default();
+        let store = FleetMachinePolicy::open(Box::new(fs.clone()), PathBuf::from("test")).unwrap();
+        let signature = proof_with_origins(&store, &trust(), vec!["https://fleet.example".into()]);
+        store.provision(trust(), &signature, "S-1-5-18").unwrap();
+        store.provision_hybrid_trust(trust(), hybrid(), "S-1-5-18").unwrap();
+        store.begin_hybrid_enrollment(&trust(), "https://fleet.example", "S-1-5-21-7", 7).unwrap();
+        let (_, _, clear, connection, _) = store.contact_state().unwrap().unwrap();
+        assert!(store.clear_credential(&clear.unwrap(), &connection).unwrap());
+        assert_eq!(store.hybrid_trust_for_helper("S-1-5-21-7", 7), Err("hybrid_enrollment_not_authorized"));
+        store.begin_hybrid_enrollment(&trust(), "https://fleet.example", "S-1-5-21-7", 7).unwrap();
+        fs.commit_first.store(commit_first, std::sync::atomic::Ordering::SeqCst);
+        fs.fail.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(store.begin_hybrid_enrollment(&trust(), "https://fleet.example", "S-1-5-21-7", 7).is_err());
+        assert_eq!(store.hybrid_trust_for_helper("S-1-5-21-7", 7), Err("hybrid_enrollment_not_authorized"));
+        fs.fail.store(false, std::sync::atomic::Ordering::SeqCst);
+        let reopened = FleetMachinePolicy::open(Box::new(fs), PathBuf::from("test")).unwrap();
+        assert_eq!(reopened.hybrid_trust_for_helper("S-1-5-21-7", 7), Err("hybrid_enrollment_not_authorized"));
+      }
     }
 
     #[test]
