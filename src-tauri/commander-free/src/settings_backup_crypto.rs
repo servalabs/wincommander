@@ -140,7 +140,7 @@ pub(super) fn decrypt(input: &str, password: &str) -> Result<String, String> {
     if envelope.format != FORMAT
         || envelope.salt.len() > 24
         || envelope.nonce.len() > 16
-        || envelope.ciphertext.len() > ((MAX_PLAINTEXT + 16 + 2) / 3) * 4
+        || envelope.ciphertext.len() > (MAX_PLAINTEXT + 16).div_ceil(3) * 4
     {
         return Err(AUTH_ERROR.into());
     }
