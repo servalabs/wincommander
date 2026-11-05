@@ -321,6 +321,8 @@ fn replace_existing(path: &Path, temporary: &Path) -> Result<(), String> {
 }
 
 pub(super) fn clear(path: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    let _ancestors = hold_ordinary_ancestors(path)?;
     let _guard = lock(path)?;
     let mut options = OpenOptions::new();
     options.write(true).create(true).truncate(false);
@@ -341,9 +343,15 @@ pub(super) fn clear(path: &Path) -> Result<(), String> {
     }
     #[cfg(windows)]
     {
-        use std::os::windows::fs::MetadataExt;
-        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
-        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        use std::os::windows::{fs::MetadataExt, io::AsRawHandle};
+        use windows_sys::Win32::Storage::FileSystem::{
+            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_REPARSE_POINT,
+        };
+        let mut information: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+            || unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut information) } == 0
+            || information.nNumberOfLinks != 1
+        {
             return Err("invalid log file".into());
         }
     }
@@ -370,6 +378,30 @@ mod tests {
         assert!(std::fs::rename(&parent, &moved).is_err());
         drop(held);
         std::fs::rename(&parent, &moved).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn clear_refuses_hard_links_and_directory_links() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("target.txt");
+        let path = directory.path().join("wincommander.log");
+        std::fs::write(&target, b"target remains unchanged").unwrap();
+        std::fs::hard_link(&target, &path).unwrap();
+        assert!(clear(&path).is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"target remains unchanged");
+        let actual_dir = directory.path().join("actual");
+        let redirected = directory.path().join("redirected");
+        std::fs::create_dir(&actual_dir).unwrap();
+        let actual_log = actual_dir.join("wincommander.log");
+        std::fs::write(&actual_log, b"other target unchanged").unwrap();
+        std::os::windows::fs::symlink_dir(&actual_dir, &redirected)
+            .expect("test requires symlink privilege");
+        assert!(clear(&redirected.join("wincommander.log")).is_err());
+        assert_eq!(
+            std::fs::read(actual_log).unwrap(),
+            b"other target unchanged"
+        );
     }
 
     #[cfg(windows)]
