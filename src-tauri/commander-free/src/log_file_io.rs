@@ -355,6 +355,19 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn held_ancestor_cannot_be_replaced_during_append() {
+        let directory = tempfile::tempdir().unwrap();
+        let parent = directory.path().join("logs");
+        let moved = directory.path().join("moved");
+        std::fs::create_dir(&parent).unwrap();
+        let held = hold_ordinary_ancestors(&parent.join("wincommander.log")).unwrap();
+        assert!(std::fs::rename(&parent, &moved).is_err());
+        drop(held);
+        std::fs::rename(&parent, &moved).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn append_rejects_directory_links_without_touching_target() {
         let directory = tempfile::tempdir().unwrap();
         let target = directory.path().join("target");
