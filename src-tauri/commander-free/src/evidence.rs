@@ -8,12 +8,12 @@
 // Records what WinCommander itself detected/did — defensive detections
 // (decoy/paste/ransomware monitor fires, network honeypot hits, wifi-guard
 // alerts), protective actions (lockdown runs, metadata scrubs), and flow
-// executions — as plain JSONL at
+// executions — in an authenticated encrypted ledger at
 //   %ProgramData%\WinCommander\machine-state\evidence-ledger.jsonl
 //
 // Single-sink shape per the Track-2 mandate: everything flows through
 // `evidence_record(source, severity, summary, detail)`. This is the FREE
-// tier — plain, unsigned, local. The PAID `evidence.vault` upgrade
+// tier — encrypted, unsigned, local. The PAID `evidence.vault` upgrade
 // (commander-pro) adds the court-admissible layer (Ed25519 signing +
 // RFC 3161 timestamps + WORM export); that lives Pro-side and the timeline
 // UI prefers it when present. Diagnostic debug logs (app.log) stay separate.
@@ -24,8 +24,10 @@
 // AV-clean.
 
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::path::PathBuf;
+
+#[path = "evidence_storage.rs"]
+mod storage;
 
 /// Hard cap on retained entries — the ledger is a rolling recent-activity
 /// feed, not the permanent court record (that's the paid vault).
@@ -58,58 +60,12 @@ fn legacy_ledger_path() -> Result<PathBuf, String> {
         .join("ledger.jsonl"))
 }
 
-fn read_lines(path: &PathBuf) -> Vec<String> {
-    match fs::read_to_string(path) {
-        Ok(c) => c
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .map(|s| s.to_string())
-            .collect(),
-        Err(_) => Vec::new(),
-    }
+fn key_path() -> Result<PathBuf, String> {
+    crate::paths::machine_state_file("evidence-ledger.key")
 }
 
-fn write_ledger_atomic(path: &std::path::Path, body: &str) -> Result<(), String> {
-    crate::paths::atomic_write_machine_state(path, body.as_bytes())
-}
-
-fn migrate_legacy_ledger_if_needed(path: &std::path::Path) {
-    if path.exists() {
-        return;
-    }
-    let Ok(legacy) = legacy_ledger_path() else {
-        return;
-    };
-    let Ok(raw) = fs::read_to_string(&legacy) else {
-        return;
-    };
-    // Preserve only parseable entries and apply the current retention cap
-    // before a user-owned historical file becomes the device-wide ledger.
-    let mut lines: Vec<String> = raw
-        .lines()
-        .filter(|line| serde_json::from_str::<EvidenceEntry>(line).is_ok())
-        .map(str::to_string)
-        .collect();
-    if lines.len() > MAX_ENTRIES {
-        lines.drain(..lines.len() - MAX_ENTRIES);
-    }
-    if lines.is_empty() && !raw.trim().is_empty() {
-        return;
-    }
-    let body = if lines.is_empty() {
-        String::new()
-    } else {
-        format!("{}\n", lines.join("\n"))
-    };
-    if write_ledger_atomic(path, &body).is_ok() {
-        let _ = fs::remove_file(legacy);
-    }
-}
-
-fn read_machine_ledger_path() -> Result<PathBuf, String> {
-    let path = ledger_path()?;
-    migrate_legacy_ledger_if_needed(&path);
-    Ok(path)
+fn read_ledger(path: &std::path::Path, key: &std::path::Path) -> Result<Vec<EvidenceEntry>, String> {
+    storage::read(path, &legacy_ledger_path, key, &crate::paths::atomic_write_machine_state)
 }
 
 /// Append one entry to the device ledger, trimming to MAX_ENTRIES. Security
@@ -129,33 +85,26 @@ pub fn evidence_record(
         summary,
         detail,
     };
-    let line = serde_json::to_string(&entry).map_err(|e| format!("encode evidence: {}", e))?;
-
     let _lock = crate::paths::acquire_machine_state_lock("evidence-ledger")?;
-    let path = read_machine_ledger_path()?;
-    let mut lines = read_lines(&path);
-    lines.push(line);
-    if lines.len() > MAX_ENTRIES {
-        let excess = lines.len() - MAX_ENTRIES;
-        lines.drain(0..excess);
+    let path = ledger_path()?;
+    let key = key_path()?;
+    let mut entries = read_ledger(&path, &key)?;
+    entries.push(entry);
+    if entries.len() > MAX_ENTRIES {
+        let excess = entries.len() - MAX_ENTRIES;
+        entries.drain(0..excess);
     }
-    let mut body = lines.join("\n");
-    body.push('\n');
-    write_ledger_atomic(&path, &body)?;
+    storage::write(&path, &key, &entries, &crate::paths::atomic_write_machine_state)?;
     Ok(())
 }
 
-/// Read the most recent `limit` entries, newest first. Malformed lines are
-/// skipped so a torn write never breaks the feed.
+/// Read the most recent `limit` entries, newest first.
 #[tauri::command]
 pub fn evidence_read(limit: Option<u32>) -> Result<Vec<EvidenceEntry>, String> {
     let n = limit.unwrap_or(200).min(MAX_ENTRIES as u32) as usize;
     let _lock = crate::paths::acquire_machine_state_lock("evidence-ledger")?;
-    let path = read_machine_ledger_path()?;
-    let mut entries: Vec<EvidenceEntry> = read_lines(&path)
-        .iter()
-        .filter_map(|l| serde_json::from_str::<EvidenceEntry>(l).ok())
-        .collect();
+    let path = ledger_path()?;
+    let mut entries = read_ledger(&path, &key_path()?)?;
     entries.reverse();
     entries.truncate(n);
     Ok(entries)
@@ -173,10 +122,10 @@ pub fn evidence_read_all() -> Result<Vec<EvidenceEntry>, String> {
 #[tauri::command]
 pub fn evidence_clear() -> Result<(), String> {
     let _lock = crate::paths::acquire_machine_state_lock("evidence-ledger")?;
-    let path = read_machine_ledger_path()?;
-    if path.exists() {
-        write_ledger_atomic(&path, "")?;
-    }
+    let path = ledger_path()?;
+    let key = key_path()?;
+    read_ledger(&path, &key)?;
+    storage::write(&path, &key, &[], &crate::paths::atomic_write_machine_state)?;
     Ok(())
 }
 
