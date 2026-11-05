@@ -302,13 +302,14 @@ $detector = [System.Diagnostics.Process]::Start($info)
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "run in isolation; the CI workspace suite saturates process launch"]
     async fn failed_shield_runner_returns_without_waiting_for_descendant() {
-        use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+        use std::os::windows::io::{AsHandle, AsRawHandle, FromRawHandle, OwnedHandle};
         use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
         use windows_sys::Win32::System::JobObjects::{
             AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
             SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
             JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
         };
+        use windows_sys::Win32::System::Pipes::PeekNamedPipe;
         use windows_sys::Win32::System::Threading::{
             OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
             PROCESS_TERMINATE,
@@ -338,6 +339,20 @@ $detector = [System.Diagnostics.Process]::Start($info)
             let _ = child.wait();
             panic!("could not assign fixture to cleanup job");
         }
+        let stdout_pipe = child
+            .stdout
+            .as_ref()
+            .unwrap()
+            .as_handle()
+            .try_clone_to_owned()
+            .unwrap();
+        let stderr_pipe = child
+            .stderr
+            .as_ref()
+            .unwrap()
+            .as_handle()
+            .try_clone_to_owned()
+            .unwrap();
         let script = r#"
 $info = New-Object System.Diagnostics.ProcessStartInfo
 $info.FileName = 'powershell.exe'
@@ -374,6 +389,17 @@ exit 7
         assert!(!raw.is_null(), "detector process must still exist");
         let process = unsafe { OwnedHandle::from_raw_handle(raw) };
         let alive = unsafe { WaitForSingleObject(process.as_raw_handle(), 0) } == WAIT_TIMEOUT;
+        let is_open = |pipe: &OwnedHandle| unsafe {
+            PeekNamedPipe(
+                pipe.as_raw_handle(),
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            ) != 0
+        };
+        let pipe_open = is_open(&stdout_pipe) || is_open(&stderr_pipe);
         // Clean up even if an assertion below fails.
         let terminated = unsafe { TerminateProcess(process.as_raw_handle(), 0) } != 0;
         let stopped =
@@ -383,6 +409,7 @@ exit 7
             "failure must return while the detector is still running"
         );
         assert!(terminated && stopped, "detector fixture must be cleaned up");
+        assert!(pipe_open, "detector must keep a launcher output pipe open");
         assert_eq!(output.status.code(), Some(7));
         assert!(output.stdout.is_empty());
     }
