@@ -400,6 +400,16 @@ impl SearchEngine {
                 else { Self::experimental_scope_only(&config.index_dir)? }
             },
         };
+        if fresh {
+            for entry in std::fs::read_dir(parent)? {
+                let name = entry?.file_name();
+                let name = name.to_string_lossy();
+                if name.starts_with(".wincommander-legacy-index-backup-")
+                    || name.strip_prefix(".wincommander-encrypted-").is_some_and(|id| id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit())) {
+                    return Err(SearchError::Config("Prior encrypted search data needs recovery; no fresh origin was created.".into()));
+                }
+            }
+        }
         let mut identity = [0u8; 16];
         OsRng.fill_bytes(&mut identity);
         if identity == [0; 16] { return Err(SearchError::Config("cannot create encrypted index identity".into())); }
@@ -1424,6 +1434,18 @@ mod tests {
         assert!(SearchEngine::abort_search_migration(&old, &selection, tx, &fence).is_err());
         SearchEngine::commit_search_migration(&old, &selection, tx, &fence).unwrap();
         assert!(SearchEngine::inspect_search_migration(&selection).unwrap().is_none());
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    #[test]
+    fn missing_selector_with_prior_backup_cannot_be_marked_fresh() {
+        let root = TempDir::new().unwrap();
+        let old = root.path().join("fts");
+        let backup = root.path().join(".wincommander-legacy-index-backup-11111111111111111111111111111111");
+        fs::create_dir(&backup).unwrap(); fs::write(backup.join("old.txt"), b"preserve").unwrap();
+        let config = make_config(old, vec![]);
+        assert!(SearchEngine::open_or_rebuild_experimental_with_policy(config, Arc::new(|_| true)).is_err());
+        assert_eq!(fs::read(backup.join("old.txt")).unwrap(), b"preserve");
+        assert!(!root.path().join(".wincommander-encrypted-selection").join("origin-proof.v1").exists());
     }
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     #[test]
