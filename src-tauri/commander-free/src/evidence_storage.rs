@@ -6,7 +6,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use super::{EvidenceEntry, MAX_ENTRIES};
 
@@ -28,7 +28,7 @@ pub(super) struct Ledger {
 }
 impl Drop for KeyState {
     fn drop(&mut self) {
-        self.material.fill(0);
+        self.material.zeroize();
     }
 }
 
@@ -66,7 +66,7 @@ fn key(
                 },
                 persist,
             )?;
-            material.fill(0);
+            material.zeroize();
             fs::read(path).map_err(|e| format!("Cannot read evidence key: {e}"))?
         }
         Err(error) => {
@@ -168,10 +168,8 @@ pub(super) fn read(
     key_path: &Path,
     persist: &impl Fn(&Path, &[u8]) -> Result<(), String>,
 ) -> Result<Ledger, String> {
-    let mut loaded_machine = false;
     let mut ledger = match fs::read_to_string(path) {
         Ok(raw) if raw.starts_with(PREFIX) => {
-            loaded_machine = true;
             let mut key = key(key_path, None, persist)?;
             let bytes = crate::datastore::decode_section(&key.material, raw.trim(), SCOPE)
                 .map_err(|_| {
@@ -183,7 +181,6 @@ pub(super) fn read(
             value
         }
         Ok(raw) => {
-            loaded_machine = true;
             let entries = parse_legacy(&raw)?;
             let fingerprint = digest(&raw);
             let mut state = key(key_path, Some(fingerprint.clone()), persist)?;
@@ -240,7 +237,7 @@ pub(super) fn read(
     })();
     let candidate = match candidate {
         Ok(value) => value,
-        Err(_) if loaded_machine => {
+        Err(_) => {
             #[cfg(not(test))]
             crate::log::log_message(
                 "warn",
@@ -248,7 +245,6 @@ pub(super) fn read(
             );
             None
         }
-        Err(error) => return Err(error),
     };
     if let Some((identity, mut prior)) = candidate {
         prior.append(&mut ledger.entries);
@@ -258,7 +254,29 @@ pub(super) fn read(
         }
         ledger.entries = prior;
         ledger.imported_profiles.push(identity);
-        write(path, key_path, &ledger, persist)?;
+        if let Err(error) = write(path, key_path, &ledger, persist) {
+            let recovered = (|| -> Result<Ledger, String> {
+                let encoded =
+                    fs::read_to_string(path).map_err(|_| "Cannot reread evidence ledger")?;
+                let state = key(key_path, None, persist)?;
+                if state.pending_digest.is_some() {
+                    return Err("Evidence commit is incomplete".into());
+                }
+                let bytes =
+                    crate::datastore::decode_section(&state.material, encoded.trim(), SCOPE)
+                        .map_err(|_| "Cannot authenticate evidence ledger")?;
+                serde_json::from_slice(&bytes).map_err(|_| "Evidence ledger is malformed".into())
+            })();
+            if let Ok(actual) = recovered {
+                #[cfg(not(test))]
+                crate::log::log_message(
+                    "warn",
+                    "Legacy evidence import could not be published; retry pending",
+                );
+                return Ok(actual);
+            }
+            return Err(error);
+        }
     }
     Ok(ledger)
 }
@@ -392,7 +410,7 @@ mod tests {
         let key_path = dir.path().join("key");
         let original = format!("{}\n", serde_json::to_string(&entry()).unwrap());
         fs::write(&path, &original).unwrap();
-        assert!(read(
+        let deferred = read(
             &path,
             &|| Ok(Some(legacy.clone())),
             &key_path,
@@ -402,9 +420,10 @@ mod tests {
                 } else {
                     crate::datastore_io::atomic_write(target, bytes)
                 }
-            }
+            },
         )
-        .is_err());
+        .unwrap();
+        assert_eq!(deferred.entries.len(), 1);
         fs::write(&path, "{}\n").unwrap();
         assert!(read(
             &path,
@@ -711,5 +730,89 @@ mod tests {
         assert_eq!(ledger.entries.len(), 1);
         assert!(ledger.imported_profiles.is_empty());
         assert_eq!(fs::read(&legacy).unwrap(), b"malformed old data");
+    }
+
+    #[test]
+    fn uncertain_import_outcome_is_reread_and_never_duplicated() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger");
+        let key_path = dir.path().join("key");
+        let legacy = dir.path().join("profile-ledger");
+        let mut current = entry();
+        current.summary = "current".into();
+        write(
+            &path,
+            &key_path,
+            &Ledger {
+                entries: vec![current],
+                ..Ledger::default()
+            },
+            &crate::datastore_io::atomic_write,
+        )
+        .unwrap();
+        fs::write(
+            &legacy,
+            format!("{}\n", serde_json::to_string(&entry()).unwrap()),
+        )
+        .unwrap();
+        let actual = read(
+            &path,
+            &|| Ok(Some(legacy.clone())),
+            &key_path,
+            &|target, bytes| {
+                crate::datastore_io::atomic_write(target, bytes)?;
+                if target == path {
+                    Err("unknown outcome".into())
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .unwrap();
+        assert_eq!(actual.entries.len(), 2);
+        assert_eq!(actual.imported_profiles.len(), 1);
+        assert_eq!(
+            read(
+                &path,
+                &|| Ok(Some(legacy.clone())),
+                &key_path,
+                &crate::datastore_io::atomic_write
+            )
+            .unwrap()
+            .entries
+            .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn malformed_old_profile_does_not_block_fresh_machine_recording() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger");
+        let key_path = dir.path().join("key");
+        let legacy = dir.path().join("profile-ledger");
+        fs::write(&legacy, b"malformed old data").unwrap();
+        let mut fresh = read(
+            &path,
+            &|| Ok(Some(legacy.clone())),
+            &key_path,
+            &crate::datastore_io::atomic_write,
+        )
+        .unwrap();
+        fresh.entries.push(entry());
+        write(&path, &key_path, &fresh, &crate::datastore_io::atomic_write).unwrap();
+        assert_eq!(
+            read(
+                &path,
+                &|| Ok(Some(legacy.clone())),
+                &key_path,
+                &crate::datastore_io::atomic_write
+            )
+            .unwrap()
+            .entries
+            .len(),
+            1
+        );
+        assert_eq!(fs::read(legacy).unwrap(), b"malformed old data");
     }
 }
