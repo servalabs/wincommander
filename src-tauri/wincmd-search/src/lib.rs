@@ -455,6 +455,7 @@ impl SearchEngine {
             .map_err(|e| std::io::Error::other(e.to_string()))?;
         let _: serde_json::Value = serde_json::from_slice(&manifest)
             .map_err(|_| SearchError::Config("encrypted index manifest invalid".into()))?;
+        tantivy::Index::open(directory).map_err(|_| SearchError::Config("encrypted index cannot be opened".into()))?;
         Ok(crate::encrypted_legacy_quarantine::quarantine_with_fence(old, &selected.index_id, fence)?)
     }
     /// Read-only post-handoff check. The installer must hold its exclusive
@@ -483,12 +484,15 @@ impl SearchEngine {
         let mut selection = PinnedSelectionStore::open(selection_dir)?;
         let selected = inspect(&mut selection, &UserProtector)?
             .ok_or_else(|| SearchError::Config("encrypted selection missing".into()))?;
+        let backup = parent.join(crate::encrypted_legacy_quarantine::backup_name(&selected.index_id)?);
+        let _backup_pins = CheckedDirectory::pin_root_path(&backup)?;
         let generation = parent.join(format!(".wincommander-encrypted-{}", hex::encode(selected.index_id)));
         let directory = TrialDirectory::open_protected(&generation, AccessMode::GuardedReader, &selected.index_id, true)?;
         let manifest = directory.atomic_read(std::path::Path::new("meta.json"))
             .map_err(|e| std::io::Error::other(e.to_string()))?;
         let _: serde_json::Value = serde_json::from_slice(&manifest)
             .map_err(|_| SearchError::Config("encrypted index manifest invalid".into()))?;
+        tantivy::Index::open(directory).map_err(|_| SearchError::Config("encrypted index cannot be opened".into()))?;
         absent()?;
         Ok(())
     }
