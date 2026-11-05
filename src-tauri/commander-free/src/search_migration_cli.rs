@@ -51,12 +51,18 @@ pub fn run(phase: &str) -> Result<String, String> {
             match classify(&parent, &old, &selection)? {
                 State::Fresh => Ok("fresh".into()),
                 State::NeedsRebuild => {
-                    let (config, policy) = crate::file_search::offline_index_plan()?;
-                    if config.index_dir != old { return Err("Search profile changed during migration.".into()); }
+                    // No settings are read from this temporary executable: it
+                    // prepares an empty cache, then the normal app reconciles
+                    // using the live user's authoritative privacy plan.
+                    let config = wincmd_search::types::IndexConfig {
+                        roots: Vec::new(), exclusions: Vec::new(), skip_paths: Vec::new(),
+                        max_file_bytes: 50 * 1024 * 1024, index_dir: old.clone(),
+                    };
+                    let policy: wincmd_search::PathPolicy = std::sync::Arc::new(|_| false);
                     let report = SearchEngine::rebuild_offline_and_select(config, policy, &selection, &guard)
                         .map_err(|e| e.to_string())?;
                     SearchEngine::quarantine_selected_with_fence(&old, &selection, &guard)
-                        .map(|_| format!("moved indexed={} omitted={} links={}", report.indexed, report.omitted, report.skipped_links)).map_err(|e| e.to_string())
+                        .map(|_| format!("moved indexed={} omitted={} links={} reconciliation=pending", report.indexed, report.omitted, report.skipped_links)).map_err(|e| e.to_string())
                 },
                 State::NeedsQuarantine => SearchEngine::quarantine_selected_with_fence(&old, &selection, &guard)
                     .map(|_| "moved".into()).map_err(|e| e.to_string()),
