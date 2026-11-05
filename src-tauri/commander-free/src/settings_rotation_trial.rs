@@ -525,6 +525,24 @@ impl LockedSelectedGeneration {
         open(&self.read_reconciled(false)?)
     }
 
+    /// The exclusive owner covers the read, generation, write and readback.
+    fn get_or_create_f6(&self, create: impl FnOnce() -> Result<Value, String>) -> Result<Value, String> {
+        let current = open_generation(&self.read_reconciled(false)?)?;
+        if let Some(name) = matching_section(&current.sections, "f6-keystore") {
+            let value = current.sections[name].clone();
+            if !valid_f6(&value) { return Err("device signing key is invalid; existing data preserved".into()); }
+            return Ok(value);
+        }
+        if current.f6_initialized { return Err("device signing key is missing; existing data preserved".into()); }
+        let created = create()?;
+        if !valid_f6(&created) { return Err("new device signing key is invalid".into()); }
+        self.write_section("f6-keystore", created.clone())?;
+        let committed = open_generation(&self.read_reconciled(false)?)?;
+        let name = matching_section(&committed.sections, "f6-keystore").ok_or("committed device signing key missing")?;
+        if committed.sections[name] != created { return Err("committed device signing key did not verify".into()); }
+        Ok(created)
+    }
+
     pub(super) fn write_section(&self, section: &str, value: Value) -> Result<(), String> {
         let current = self.read_reconciled(false)?;
         let candidate = updated_generation(&current, section, value)?;
@@ -627,6 +645,10 @@ pub(super) struct RuntimeWriteGuard {
 #[cfg(all(windows, feature = "experimental-settings-generation"))]
 impl RuntimeWriteGuard {
     pub(super) fn selected(&self) -> bool { self.selected }
+    pub(super) fn get_or_create_f6(&self, create: impl FnOnce() -> Result<Value, String>) -> Result<Value, String> {
+        if !self.selected { return Err("settings generation is not selected".into()); }
+        self.owner.get_or_create_f6(create)
+    }
     pub(super) fn write(&self, section: &str, value: &Value) -> Result<(), String> {
         if !self.selected { return Err("settings generation is not selected".into()); }
         self.owner.write_section(section, value.clone())
@@ -700,6 +722,11 @@ fn updated_generation(input: &[u8], section: &str, value: Value) -> Result<Vec<u
     if existing.is_none() && generation.sections.len() >= MAX_SECTIONS { return Err("excessive settings sections".into()); }
     if section.eq_ignore_ascii_case("f6-keystore") {
         if !valid_f6(&value) { return Err("device signing key is empty or invalid; existing key preserved".into()); }
+        if let Some(name) = existing.as_ref() {
+            let old_seed = generation.sections[name]["signing_seed_hex"].as_str().ok_or("device signing key is invalid")?;
+            let new_seed = value["signing_seed_hex"].as_str().ok_or("device signing key is invalid")?;
+            if !old_seed.eq_ignore_ascii_case(new_seed) { return Err("replacing an existing device signing key is not allowed".into()); }
+        }
         generation.f6_initialized = true;
     }
     generation.sections.insert(existing.unwrap_or_else(|| section.to_owned()), value);

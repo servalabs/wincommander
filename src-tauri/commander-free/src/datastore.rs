@@ -637,7 +637,7 @@ pub fn load(section: &str) -> Result<Value, String> {
 }
 
 #[cfg(all(windows, feature = "experimental-settings-generation"))]
-fn experimental_generation_routing_enabled() -> bool {
+pub(crate) fn experimental_generation_routing_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var_os("WINCOMMANDER_EXPERIMENTAL_SETTINGS_GENERATION").is_some_and(|value| value == "1"))
 }
@@ -795,9 +795,35 @@ pub(crate) fn save_with_material(
     #[cfg(all(windows, feature = "experimental-settings-generation"))]
     if let Some(runtime) = &material.runtime {
         if runtime.selected() { return runtime.write(section, data); }
+        if section.eq_ignore_ascii_case("f6-keystore") {
+            if !settings_rotation_trial::valid_f6(data) { return Err("device signing key is empty or invalid; existing key preserved".into()); }
+            let previous = load_legacy_guarded(section)?;
+            if settings_rotation_trial::valid_f6(&previous)
+                && !previous["signing_seed_hex"].as_str().unwrap_or("").eq_ignore_ascii_case(data["signing_seed_hex"].as_str().unwrap_or("")) {
+                return Err("replacing an existing device signing key is not allowed".into());
+            }
+        }
         // The same runtime guard remains held throughout this legacy write.
     }
     save_legacy_with_material(section, data, material)
+}
+
+/// The experimental F6 path holds the same exclusive guard while inspecting,
+/// generating, saving and reopening the committed value in either generation.
+#[cfg(all(windows, feature = "experimental-settings-generation"))]
+pub(crate) fn guarded_f6_get_or_create(create: impl FnOnce() -> Result<Value, String>) -> Result<Value, String> {
+    let material = settings_write_material()?;
+    let runtime = material.runtime.as_ref().ok_or("settings generation ownership unavailable")?;
+    if runtime.selected() { return runtime.get_or_create_f6(create); }
+    let current = load_legacy_guarded("f6-keystore")?;
+    if settings_rotation_trial::valid_f6(&current) { return Ok(current); }
+    if current != Value::Object(Default::default()) { return Err("device signing key is invalid; existing data preserved".into()); }
+    let created = create()?;
+    if !settings_rotation_trial::valid_f6(&created) { return Err("new device signing key is invalid".into()); }
+    save_legacy_with_material("f6-keystore", &created, &material)?;
+    let observed = load_legacy_guarded("f6-keystore")?;
+    if observed != created { return Err("committed device signing key did not verify".into()); }
+    Ok(created)
 }
 
 fn save_legacy_with_material(section: &str, data: &Value, material: &SettingsWriteMaterial) -> Result<(), String> {

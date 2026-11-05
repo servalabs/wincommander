@@ -621,3 +621,45 @@ fn invalid_preexisting_or_initialized_f6_fails_closed() {
     state.f6_initialized = true;
     assert!(open_generation(&seal_generation(&state).unwrap()).is_err());
 }
+
+#[test]
+#[cfg_attr(windows, ignore = "requires elevated machine-lock ACL provisioning; run explicitly in Windows acceptance")]
+fn concurrent_first_f6_creation_returns_one_committed_winner() {
+    use std::sync::{Arc, Barrier, atomic::{AtomicUsize, Ordering}};
+    let root = tempfile::tempdir().unwrap();
+    provision_test_lock(root.path());
+    let old = [42; 32];
+    let input = sections(&old);
+    let candidate = prepare(&old, &input).unwrap();
+    let pending = crate::datastore::settings_generation_authority::pending(None, &candidate, &dpapi_protect, &dpapi_unprotect).unwrap();
+    std::fs::write(root.path().join(".settings-generation.authority.v1"), pending).unwrap();
+    std::fs::write(root.path().join(".settings-generation.v1"), candidate).unwrap();
+    let owner = LockedSelectedGeneration::acquire(root.path()).unwrap();
+    owner.read_reconciled(true).unwrap(); // fixture stands in for guarded source verification
+    drop(owner);
+    let barrier = Arc::new(Barrier::new(2));
+    let created = Arc::new(AtomicUsize::new(0));
+    let workers: Vec<_> = (1..=2).map(|index| {
+        let path = root.path().to_path_buf();
+        let barrier = barrier.clone();
+        let created = created.clone();
+        std::thread::spawn(move || {
+            barrier.wait();
+            let owner = (0..15).find_map(|_| match LockedSelectedGeneration::acquire(&path) {
+                Ok(owner) => Some(owner),
+                Err(_) => None,
+            }).expect("could not acquire generation ownership");
+            owner.get_or_create_f6(|| {
+                created.fetch_add(1, Ordering::SeqCst);
+                Ok(json!({"signing_seed_hex": format!("{index:02x}").repeat(32)}))
+            }).unwrap()
+        })
+    }).collect();
+    let values: Vec<_> = workers.into_iter().map(|w| w.join().unwrap()).collect();
+    assert_eq!(values[0], values[1]);
+    assert_eq!(created.load(Ordering::SeqCst), 1);
+    let owner = LockedSelectedGeneration::try_open(root.path()).unwrap();
+    assert_eq!(owner.read_all().unwrap()["f6-keystore"], values[0]);
+    assert!(owner.write_section("f6-keystore", json!({"signing_seed_hex":"ff".repeat(32)})).is_err());
+    assert_eq!(owner.read_all().unwrap()["f6-keystore"], values[0]);
+}
