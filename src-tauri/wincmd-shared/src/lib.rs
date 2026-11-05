@@ -21,8 +21,8 @@
 // All payloads are one of {Hello, Request, Response, Error, Notification, Bye}.
 
 use serde::{Deserialize, Serialize};
-pub mod vault_sync;
 pub mod managed_deployment;
+pub mod vault_sync;
 
 /// Magic string in the Hello frame so a connecting peer can spot a
 /// protocol-mismatch immediately. Bumped on incompatible wire-format
@@ -911,12 +911,12 @@ pub mod diagnostics;
 /// compiling without modification.
 pub use fleet_proto as fleet;
 
+pub mod fleet_transport_profile;
 pub mod personal_settings;
 /// UI ↔ SYSTEM-service RPC namespace (`svc.*`). Defines the pipe name,
 /// protocol version, capability-class enum, and `classify_verb` — the shared
 /// contract that both the desktop UI and `commander-svc` import. See `svc.rs`.
 pub mod svc;
-pub mod fleet_transport_profile;
 pub mod vault_access;
 pub mod vault_display_path;
 pub mod vault_inventory;

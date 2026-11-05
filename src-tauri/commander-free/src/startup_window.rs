@@ -233,7 +233,11 @@ async fn reveal_armed_startup_window(window: &tauri::WebviewWindow) -> Result<bo
             return window.is_visible().map_err(|error| error.to_string());
         }
         state.arm();
-        crate::log_message_src("error", "core", &format!("[Startup] window reveal failed: {error}"));
+        crate::log_message_src(
+            "error",
+            "core",
+            &format!("[Startup] window reveal failed: {error}"),
+        );
         #[cfg(debug_assertions)]
         eprintln!("[wincommander-dev-startup] window reveal failed: {error}");
         if !state.warned.swap(true, Ordering::AcqRel) {

@@ -660,9 +660,17 @@ pub async fn get_vault_available_drive_letters(
 /// owner's entries; a renderer cannot remove another owner's entry by
 /// omission.
 #[tauri::command]
-pub async fn apply_vault_owner_policy_fragment(policy: Value, diagnostic_operation_id: Option<String>) -> Result<Value, String> {
+pub async fn apply_vault_owner_policy_fragment(
+    policy: Value,
+    diagnostic_operation_id: Option<String>,
+) -> Result<Value, String> {
     let operation_id = requested_operation_id(diagnostic_operation_id, "apply_policy");
-    crate::svc_client::call_with_diagnostic_operation(APPLY_OWNER_FRAGMENT, policy, Some(operation_id)).await
+    crate::svc_client::call_with_diagnostic_operation(
+        APPLY_OWNER_FRAGMENT,
+        policy,
+        Some(operation_id),
+    )
+    .await
 }
 
 /// Lists service-validated local users for the Primary owner selector.  The
@@ -879,9 +887,18 @@ mod tests {
     #[test]
     fn vault_transport_failures_map_to_safe_stable_codes() {
         for (error, expected) in [
-            ("vault_policy_commit_unconfirmed", "VLT.POLICY.OUTCOME_UNKNOWN"),
-            ("vault_policy_rollback_unverified", "VLT.POLICY.ROLLBACK_UNVERIFIED"),
-            ("vault_policy_state_unavailable", "VLT.POLICY.STATE_UNAVAILABLE"),
+            (
+                "vault_policy_commit_unconfirmed",
+                "VLT.POLICY.OUTCOME_UNKNOWN",
+            ),
+            (
+                "vault_policy_rollback_unverified",
+                "VLT.POLICY.ROLLBACK_UNVERIFIED",
+            ),
+            (
+                "vault_policy_state_unavailable",
+                "VLT.POLICY.STATE_UNAVAILABLE",
+            ),
             (
                 "vault_administrator_required",
                 "VLT.AUTH.ADMINISTRATOR_REQUIRED",

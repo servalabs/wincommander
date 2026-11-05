@@ -31,9 +31,12 @@ pub async fn bluetooth_control_set(
         &confirmation_args(blocked),
     )?;
     // A timeout is an unknown outcome. Never automatically replay a mutation.
-    crate::svc_client::call("svc.bluetooth.policy.set_blocked", json!({ "blocked": blocked }))
-        .await
-        .map_err(|error| failure::describe(&error).to_string())
+    crate::svc_client::call(
+        "svc.bluetooth.policy.set_blocked",
+        json!({ "blocked": blocked }),
+    )
+    .await
+    .map_err(|error| failure::describe(&error).to_string())
 }
 
 #[cfg(test)]

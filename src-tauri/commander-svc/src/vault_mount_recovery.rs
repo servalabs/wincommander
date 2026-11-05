@@ -46,7 +46,10 @@ impl VaultMountBroker {
         }
         let authorization = (self.policy_authorizer)(store, request.entry_id, request.caller_token);
         let Some(entry) = store.policy().and_then(|policy| {
-            policy.entries.into_iter().find(|entry| entry.id == request.entry_id)
+            policy
+                .entries
+                .into_iter()
+                .find(|entry| entry.id == request.entry_id)
         }) else {
             return uncertain();
         };
@@ -55,14 +58,19 @@ impl VaultMountBroker {
         }
         if entry.mount.presentation == VaultPresentation::PerUser
             && entry.primary_owner_sid.as_deref() != Some(request.caller_sid)
-            && !store.is_shared_per_user_policy_for_authorized_caller(request.entry_id,
-                entry.container_identity.as_deref(), request.caller_sid)
+            && !store.is_shared_per_user_policy_for_authorized_caller(
+                request.entry_id,
+                entry.container_identity.as_deref(),
+                request.caller_sid,
+            )
         {
             return uncertain();
         }
         if self.recovery.lock().map_or(true, |state| {
-            state.registry_untrusted || state.recoverable_registry
-                || !state.persistence_pending.is_empty() || !state.removal_pending.is_empty()
+            state.registry_untrusted
+                || state.recoverable_registry
+                || !state.persistence_pending.is_empty()
+                || !state.removal_pending.is_empty()
         }) {
             return uncertain();
         }
@@ -72,14 +80,20 @@ impl VaultMountBroker {
         let Ok(active) = self.active.lock() else {
             return uncertain();
         };
-        if active.contains_key(request.entry_id) || slots.iter().any(|(slot, identity)| {
-            let mut matches = active.values().filter(|mount| mount.internal_drive == *slot);
-            match (matches.next(), matches.next()) {
-                (Some(mount), None) => mount.driver_slot_absent
-                    || mount.engine_mount_identity.as_ref() != Some(identity),
-                _ => true,
-            }
-        }) {
+        if active.contains_key(request.entry_id)
+            || slots.iter().any(|(slot, identity)| {
+                let mut matches = active
+                    .values()
+                    .filter(|mount| mount.internal_drive == *slot);
+                match (matches.next(), matches.next()) {
+                    (Some(mount), None) => {
+                        mount.driver_slot_absent
+                            || mount.engine_mount_identity.as_ref() != Some(identity)
+                    }
+                    _ => true,
+                }
+            })
+        {
             return uncertain();
         }
         if self.snapshot().ok().as_ref() != Some(&slots) {
@@ -104,9 +118,7 @@ impl VaultMountBroker {
         _owner_logon_ended: bool,
         mut pause: impl FnMut(&ActiveMount) -> Result<SyncthingLifecycleResult, VaultMountReason>,
     ) -> Result<(), VaultMountReason> {
-        if mount.caller_sid != request.caller_sid
-            || !requires_syncthing_pause(mount)
-        {
+        if mount.caller_sid != request.caller_sid || !requires_syncthing_pause(mount) {
             return Ok(());
         }
         let mut current_owner_context = mount.clone();
@@ -221,22 +233,31 @@ impl VaultMountBroker {
 
 fn private_alias_operation(mount: &ActiveMount, cleanup: bool) -> Result<bool, ()> {
     let authentication_id = mount.authentication_id.ok_or(())?;
-    let letter = mount.drive_letter.strip_suffix(':').unwrap_or(&mount.drive_letter);
+    let letter = mount
+        .drive_letter
+        .strip_suffix(':')
+        .unwrap_or(&mount.drive_letter);
     if letter.len() != 1 || !letter.as_bytes()[0].is_ascii_alphabetic() {
         return Err(());
     }
     let letter = letter.as_bytes()[0].to_ascii_uppercase() as char;
     if !cleanup {
         return crate::vault_drive_letters::ended_logon_encrypted_link_absent(
-            authentication_id, letter, mount.internal_drive,
-            &mount.caller_sid, mount.session_id,
+            authentication_id,
+            letter,
+            mount.internal_drive,
+            &mount.caller_sid,
+            mount.session_id,
         );
     }
     use crate::vault_drive_letters::GlobalEncryptedLinkCleanup;
     Ok(matches!(
         crate::vault_drive_letters::cleanup_ended_logon_encrypted_link(
-            authentication_id, letter, mount.internal_drive,
-            &mount.caller_sid, mount.session_id,
+            authentication_id,
+            letter,
+            mount.internal_drive,
+            &mount.caller_sid,
+            mount.session_id,
         )?,
         GlobalEncryptedLinkCleanup::Absent | GlobalEncryptedLinkCleanup::Removed
     ))
@@ -254,10 +275,18 @@ pub(super) fn cleanup_private_alias(mount: &ActiveMount) -> Result<bool, ()> {
 pub(super) fn cleanup_owned_private_alias(mount: &ActiveMount) -> Result<bool, ()> {
     let logon = mount.authentication_id.ok_or(())?;
     let letter = mount.drive_letter.strip_suffix(':').ok_or(())?;
-    if letter.len() != 1 || !letter.as_bytes()[0].is_ascii_alphabetic() { return Err(()); }
+    if letter.len() != 1 || !letter.as_bytes()[0].is_ascii_alphabetic() {
+        return Err(());
+    }
     use crate::vault_drive_letters::GlobalEncryptedLinkCleanup;
-    Ok(matches!(crate::vault_drive_letters::cleanup_owned_logon_encrypted_link(
-        logon, letter.as_bytes()[0].to_ascii_uppercase() as char, mount.internal_drive,
-        &mount.caller_sid, mount.session_id,
-    )?, GlobalEncryptedLinkCleanup::Absent | GlobalEncryptedLinkCleanup::Removed))
+    Ok(matches!(
+        crate::vault_drive_letters::cleanup_owned_logon_encrypted_link(
+            logon,
+            letter.as_bytes()[0].to_ascii_uppercase() as char,
+            mount.internal_drive,
+            &mount.caller_sid,
+            mount.session_id,
+        )?,
+        GlobalEncryptedLinkCleanup::Absent | GlobalEncryptedLinkCleanup::Removed
+    ))
 }

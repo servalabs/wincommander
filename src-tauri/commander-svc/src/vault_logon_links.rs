@@ -172,14 +172,25 @@ pub(crate) fn cleanup_ended_logon_encrypted_link(
 
 #[cfg_attr(test, allow(dead_code))]
 pub(crate) fn cleanup_owned_logon_encrypted_link(
-    logon: LogonId, letter: char, internal_drive: u8, caller_sid: &str, session: u32,
+    logon: LogonId,
+    letter: char,
+    internal_drive: u8,
+    caller_sid: &str,
+    session: u32,
 ) -> Result<GlobalEncryptedLinkCleanup, ()> {
-    if !('D'..='Z').contains(&letter) || internal_drive > 25 { return Err(()); }
+    if !('D'..='Z').contains(&letter) || internal_drive > 25 {
+        return Err(());
+    }
     let owned = scope::owned_logons(logon, caller_sid, session)?;
     let native = native::LinkApi::load()?;
-    let expected = format!(r"\Device\VeraCryptVolume{}", char::from(b'A' + internal_drive));
+    let expected = format!(
+        r"\Device\VeraCryptVolume{}",
+        char::from(b'A' + internal_drive)
+    );
     for other in scope::related_logons(logon, caller_sid, session)? {
-        if owned.contains(&other) { continue; }
+        if owned.contains(&other) {
+            continue;
+        }
         if let Some(link) = native.open(&link_path(other, letter)?, false)? {
             if native.target(&link)?.eq_ignore_ascii_case(&expected) {
                 return Ok(GlobalEncryptedLinkCleanup::Retained);
@@ -191,13 +202,26 @@ pub(crate) fn cleanup_owned_logon_encrypted_link(
         let cleanup = cleanup_link(&link_path(owner, letter)?, Some(internal_drive), || {
             scope::verified_owner(owner, caller_sid, session)
         })?;
-        if cleanup == GlobalEncryptedLinkCleanup::Retained { return Ok(cleanup); }
-        if cleanup == GlobalEncryptedLinkCleanup::Removed { result = cleanup; }
+        if cleanup == GlobalEncryptedLinkCleanup::Retained {
+            return Ok(cleanup);
+        }
+        if cleanup == GlobalEncryptedLinkCleanup::Removed {
+            result = cleanup;
+        }
     }
-    if !related_links_absent(logon, &scope::related_logons(logon, caller_sid, session)?, &expected, |other| {
-        let Some(link) = native.open(&link_path(other, letter)?, false)? else { return Ok(None); };
-        native.target(&link).map(Some)
-    })? { return Ok(GlobalEncryptedLinkCleanup::Retained); }
+    if !related_links_absent(
+        logon,
+        &scope::related_logons(logon, caller_sid, session)?,
+        &expected,
+        |other| {
+            let Some(link) = native.open(&link_path(other, letter)?, false)? else {
+                return Ok(None);
+            };
+            native.target(&link).map(Some)
+        },
+    )? {
+        return Ok(GlobalEncryptedLinkCleanup::Retained);
+    }
     Ok(result)
 }
 
@@ -248,12 +272,23 @@ fn related_links_absent(
     Ok(true)
 }
 
-pub(crate) fn cleanup_owned_caller_link(logon: LogonId, letter: char, slot: u8) -> Result<GlobalEncryptedLinkCleanup, ()> {
-    if !('D'..='Z').contains(&letter) || slot > 25 { return Err(()); }
+pub(crate) fn cleanup_owned_caller_link(
+    logon: LogonId,
+    letter: char,
+    slot: u8,
+) -> Result<GlobalEncryptedLinkCleanup, ()> {
+    if !('D'..='Z').contains(&letter) || slot > 25 {
+        return Err(());
+    }
     cleanup_link(&link_path(logon, letter)?, Some(slot), || Ok(true))
 }
 
-pub(super) fn cleanup_global_link(letter: char, slot: u8) -> Result<GlobalEncryptedLinkCleanup, ()> {
-    if !('D'..='Z').contains(&letter) || slot > 25 { return Err(()); }
+pub(super) fn cleanup_global_link(
+    letter: char,
+    slot: u8,
+) -> Result<GlobalEncryptedLinkCleanup, ()> {
+    if !('D'..='Z').contains(&letter) || slot > 25 {
+        return Err(());
+    }
     cleanup_link(&format!(r"\GLOBAL??\{letter}:"), Some(slot), || Ok(true))
 }

@@ -74,7 +74,9 @@ impl DestructiveRequest {
             Self::DiskDeleteItem { path } => disk_delete_args(path),
             Self::DeleteDecoy { path } => decoy_delete_args(path),
             Self::InternetKillSwitchSet { enable } => kill_switch_args(*enable),
-            Self::BluetoothControlSet { blocked } => crate::bluetooth_control::confirmation_args(*blocked),
+            Self::BluetoothControlSet { blocked } => {
+                crate::bluetooth_control::confirmation_args(*blocked)
+            }
             Self::SecureErase { path } => secure_erase_args(path),
             Self::FreeSpaceErase {
                 drive_letter,

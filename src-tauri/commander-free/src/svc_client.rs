@@ -190,8 +190,20 @@ async fn call_via_with_timeout(
     // Clear it immediately after the pipe write, including timeout/error.
     zeroize_envelope(&mut request);
     write_result
-        .map_err(|_| if may_still_be_completing(feature_id) { "vault_operation_unconfirmed".into() } else { "service request write timed out".to_string() })?
-        .map_err(|e| if may_still_be_completing(feature_id) { "vault_operation_unconfirmed".into() } else { format!("service request write failed: {e}") })?;
+        .map_err(|_| {
+            if may_still_be_completing(feature_id) {
+                "vault_operation_unconfirmed".into()
+            } else {
+                "service request write timed out".to_string()
+            }
+        })?
+        .map_err(|e| {
+            if may_still_be_completing(feature_id) {
+                "vault_operation_unconfirmed".into()
+            } else {
+                format!("service request write failed: {e}")
+            }
+        })?;
     let reply = timeout(request_timeout, wincmd_shared::read_envelope(&mut client))
         .await
         .map_err(|_| {
@@ -204,9 +216,12 @@ async fn call_via_with_timeout(
         })?
         .map_err(|e| if may_still_be_completing(feature_id) { "vault_operation_unconfirmed".into() } else { format!("service reply read failed: {e}") })?;
     let reply = if matches!(reply, wincmd_shared::Envelope::Signed(_)) {
-        reply
-            .verify_and_unwrap(&session_token)
-            .map_err(|e| unverified_management_reply(feature_id, format!("service reply signature check failed: {e}")))?
+        reply.verify_and_unwrap(&session_token).map_err(|e| {
+            unverified_management_reply(
+                feature_id,
+                format!("service reply signature check failed: {e}"),
+            )
+        })?
     } else {
         reply
     };
@@ -222,9 +237,10 @@ async fn call_via_with_timeout(
         wincmd_shared::Envelope::Response(response) if response.request_id == request_id => {
             Ok(response.result)
         }
-        wincmd_shared::Envelope::Response(_) => {
-            Err(unverified_management_reply(feature_id, "service reply did not match the request".to_string()))
-        }
+        wincmd_shared::Envelope::Response(_) => Err(unverified_management_reply(
+            feature_id,
+            "service reply did not match the request".to_string(),
+        )),
         wincmd_shared::Envelope::Error(error) if error.request_id == request_id => {
             // `error.message` already respects the service's privacy boundary
             // (admin-typed principal names only — never a SID, path, or ACL
@@ -237,10 +253,14 @@ async fn call_via_with_timeout(
                 error.kind, error.message, request_id
             ))
         }
-        wincmd_shared::Envelope::Error(_) => {
-            Err(unverified_management_reply(feature_id, "service reply did not match the request".to_string()))
-        }
-        _ => Err(unverified_management_reply(feature_id, "service returned an unexpected reply".to_string())),
+        wincmd_shared::Envelope::Error(_) => Err(unverified_management_reply(
+            feature_id,
+            "service reply did not match the request".to_string(),
+        )),
+        _ => Err(unverified_management_reply(
+            feature_id,
+            "service returned an unexpected reply".to_string(),
+        )),
     }
 }
 
@@ -457,28 +477,66 @@ mod tests {
     async fn owner_policy_save_accepts_a_reply_after_the_short_probe_deadline_without_restart() {
         use tokio::net::windows::named_pipe::ServerOptions;
         let pipe_name = format!(r"\\.\pipe\wincmd-save-fixture-{}", uuid::Uuid::new_v4());
-        let mut server = ServerOptions::new().first_pipe_instance(true).create(&pipe_name).unwrap();
+        let mut server = ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&pipe_name)
+            .unwrap();
         let worker = tokio::spawn(async move {
             server.connect().await.unwrap();
-            let wincmd_shared::Envelope::Hello(hello) = wincmd_shared::read_envelope(&mut server).await.unwrap() else { panic!("Hello required") };
-            wincmd_shared::write_envelope(&mut server, &wincmd_shared::Envelope::Hello(wincmd_shared::svc::hello_from_ui(&hello.session_token))).await.unwrap();
-            let frame = wincmd_shared::read_envelope(&mut server).await.unwrap().verify_and_unwrap(&hello.session_token).unwrap();
-            let wincmd_shared::Envelope::Request(request) = frame else { panic!("signed request required") };
+            let wincmd_shared::Envelope::Hello(hello) =
+                wincmd_shared::read_envelope(&mut server).await.unwrap()
+            else {
+                panic!("Hello required")
+            };
+            wincmd_shared::write_envelope(
+                &mut server,
+                &wincmd_shared::Envelope::Hello(wincmd_shared::svc::hello_from_ui(
+                    &hello.session_token,
+                )),
+            )
+            .await
+            .unwrap();
+            let frame = wincmd_shared::read_envelope(&mut server)
+                .await
+                .unwrap()
+                .verify_and_unwrap(&hello.session_token)
+                .unwrap();
+            let wincmd_shared::Envelope::Request(request) = frame else {
+                panic!("signed request required")
+            };
             assert_eq!(request.feature_id, "svc.vault.apply_owner_fragment");
             tokio::time::sleep(SVC_TRANSPORT_TIMEOUT + std::time::Duration::from_millis(100)).await;
-            wincmd_shared::write_envelope(&mut server, &wincmd_shared::Envelope::Response(wincmd_shared::Response {
-                request_id: request.request_id, result: serde_json::json!({"fixture_confirmed":true}),
-            })).await.unwrap();
-            assert!(matches!(wincmd_shared::read_envelope(&mut server).await.unwrap(), wincmd_shared::Envelope::Bye));
+            wincmd_shared::write_envelope(
+                &mut server,
+                &wincmd_shared::Envelope::Response(wincmd_shared::Response {
+                    request_id: request.request_id,
+                    result: serde_json::json!({"fixture_confirmed":true}),
+                }),
+            )
+            .await
+            .unwrap();
+            assert!(matches!(
+                wincmd_shared::read_envelope(&mut server).await.unwrap(),
+                wincmd_shared::Envelope::Bye
+            ));
         });
-        let response = call_via(&pipe_name, "svc.vault.apply_owner_fragment", serde_json::json!({"fixture_only":true})).await.unwrap();
+        let response = call_via(
+            &pipe_name,
+            "svc.vault.apply_owner_fragment",
+            serde_json::json!({"fixture_only":true}),
+        )
+        .await
+        .unwrap();
         assert_eq!(response["fixture_confirmed"], true);
         worker.await.unwrap();
     }
 
     #[test]
     fn long_deadlines_are_reserved_for_vault_mutations() {
-        assert_eq!(request_timeout_for("svc.vault.apply_owner_fragment"), VAULT_MUTATION_TIMEOUT);
+        assert_eq!(
+            request_timeout_for("svc.vault.apply_owner_fragment"),
+            VAULT_MUTATION_TIMEOUT
+        );
         assert!(may_still_be_completing("svc.vault.apply_owner_fragment"));
         assert_eq!(request_timeout_for("svc.vault.mount"), VAULT_MOUNT_TIMEOUT);
         assert_eq!(
@@ -505,17 +563,28 @@ mod tests {
 
     #[test]
     fn shield_policy_read_allows_debug_hash_verification_without_changing_release_timeout() {
-        let expected = if cfg!(debug_assertions) { std::time::Duration::from_secs(30) } else { SVC_TRANSPORT_TIMEOUT };
+        let expected = if cfg!(debug_assertions) {
+            std::time::Duration::from_secs(30)
+        } else {
+            SVC_TRANSPORT_TIMEOUT
+        };
         assert_eq!(request_timeout_for("svc.fleet.get_policy"), expected);
-        assert_eq!(request_timeout_for("svc.vault.get_policy"), SVC_TRANSPORT_TIMEOUT);
+        assert_eq!(
+            request_timeout_for("svc.vault.get_policy"),
+            SVC_TRANSPORT_TIMEOUT
+        );
     }
 
     #[test]
     fn hybrid_licence_renewal_allows_two_network_exchanges() {
-        assert_eq!(request_timeout_for(wincmd_shared::svc::RENEW_HYBRID_LICENSE_VERB),
-            std::time::Duration::from_secs(90));
-        assert_eq!(request_timeout_for(wincmd_shared::svc::ENROL_HYBRID_LICENSE_VERB),
-            std::time::Duration::from_secs(90));
+        assert_eq!(
+            request_timeout_for(wincmd_shared::svc::RENEW_HYBRID_LICENSE_VERB),
+            std::time::Duration::from_secs(90)
+        );
+        assert_eq!(
+            request_timeout_for(wincmd_shared::svc::ENROL_HYBRID_LICENSE_VERB),
+            std::time::Duration::from_secs(90)
+        );
     }
 
     #[test]
@@ -524,7 +593,10 @@ mod tests {
             request_timeout_for("svc.shared_shortcuts.set_claim"),
             std::time::Duration::from_secs(30)
         );
-        assert_eq!(request_timeout_for("svc.vault.get_policy"), SVC_TRANSPORT_TIMEOUT);
+        assert_eq!(
+            request_timeout_for("svc.vault.get_policy"),
+            SVC_TRANSPORT_TIMEOUT
+        );
     }
 
     #[test]

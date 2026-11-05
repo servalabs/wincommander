@@ -494,15 +494,51 @@ pub(crate) fn record_vault_create_success(operation_id: &str, started: Instant) 
     ));
 }
 
-pub(crate) fn record_vault_policy_save(operation_id: &str, stage: &'static str, succeeded: bool, started: Instant) {
-    let unconfirmed = matches!(stage, "policy_commit_unconfirmed" | "permission_rollback" | "policy_state");
-    let mut event = vault_event(operation_id, "apply_policy",
-        if succeeded { DiagnosticOutcome::Succeeded } else if unconfirmed { DiagnosticOutcome::Degraded } else { DiagnosticOutcome::Failed },
-        if succeeded { "VLT.POLICY.SAVED" } else if stage == "policy_commit_unconfirmed" { "VLT.POLICY.COMMIT_UNCONFIRMED" }
-        else if stage == "permission_rollback" { "VLT.POLICY.ROLLBACK_UNVERIFIED" }
-        else if stage == "policy_state" { "VLT.POLICY.STATE_UNAVAILABLE" } else { "VLT.POLICY.SAVE_FAILED" },
-        if succeeded { DiagnosticSeverity::Info } else { DiagnosticSeverity::Error }, false,
-        if succeeded { "none" } else { "review_saved_policy" }, started, BTreeMap::new());
+pub(crate) fn record_vault_policy_save(
+    operation_id: &str,
+    stage: &'static str,
+    succeeded: bool,
+    started: Instant,
+) {
+    let unconfirmed = matches!(
+        stage,
+        "policy_commit_unconfirmed" | "permission_rollback" | "policy_state"
+    );
+    let mut event = vault_event(
+        operation_id,
+        "apply_policy",
+        if succeeded {
+            DiagnosticOutcome::Succeeded
+        } else if unconfirmed {
+            DiagnosticOutcome::Degraded
+        } else {
+            DiagnosticOutcome::Failed
+        },
+        if succeeded {
+            "VLT.POLICY.SAVED"
+        } else if stage == "policy_commit_unconfirmed" {
+            "VLT.POLICY.COMMIT_UNCONFIRMED"
+        } else if stage == "permission_rollback" {
+            "VLT.POLICY.ROLLBACK_UNVERIFIED"
+        } else if stage == "policy_state" {
+            "VLT.POLICY.STATE_UNAVAILABLE"
+        } else {
+            "VLT.POLICY.SAVE_FAILED"
+        },
+        if succeeded {
+            DiagnosticSeverity::Info
+        } else {
+            DiagnosticSeverity::Error
+        },
+        false,
+        if succeeded {
+            "none"
+        } else {
+            "review_saved_policy"
+        },
+        started,
+        BTreeMap::new(),
+    );
     event.stage = stage.into();
     let _ = record_event(event);
 }
@@ -510,15 +546,28 @@ pub(crate) fn record_vault_policy_save(operation_id: &str, stage: &'static str, 
 #[cfg(debug_assertions)]
 pub(crate) fn record_shield_policy_stage(stage: &'static str, started: Instant) {
     static EVENTS: AtomicU64 = AtomicU64::new(0);
-    if EVENTS.fetch_add(1, Ordering::Relaxed) >= 32 { return; }
+    if EVENTS.fetch_add(1, Ordering::Relaxed) >= 32 {
+        return;
+    }
     let event = shield_policy_stage_event(stage, started);
-    std::thread::spawn(move || { let _ = record_event(event); });
+    std::thread::spawn(move || {
+        let _ = record_event(event);
+    });
 }
 
 #[cfg(debug_assertions)]
 fn shield_policy_stage_event(stage: &'static str, started: Instant) -> DiagnosticEvent {
-    let mut event = vault_event("shield-policy-probe", "read_policy", DiagnosticOutcome::Succeeded,
-        "PSH.POLICY.TRACE", DiagnosticSeverity::Info, false, "none", started, BTreeMap::new());
+    let mut event = vault_event(
+        "shield-policy-probe",
+        "read_policy",
+        DiagnosticOutcome::Succeeded,
+        "PSH.POLICY.TRACE",
+        DiagnosticSeverity::Info,
+        false,
+        "none",
+        started,
+        BTreeMap::new(),
+    );
     event.feature = "privacy_shield".into();
     event.stage = stage.into();
     event
@@ -527,16 +576,28 @@ fn shield_policy_stage_event(stage: &'static str, started: Instant) -> Diagnosti
 #[cfg(debug_assertions)]
 pub(crate) fn record_shared_shortcut_stage(stage: &'static str, started: Instant) {
     static EVENTS: AtomicU64 = AtomicU64::new(0);
-    if EVENTS.fetch_add(1, Ordering::Relaxed) >= 32 { return; }
+    if EVENTS.fetch_add(1, Ordering::Relaxed) >= 32 {
+        return;
+    }
     let event = shared_shortcut_stage_event(stage, started);
-    std::thread::spawn(move || { let _ = record_event(event); });
+    std::thread::spawn(move || {
+        let _ = record_event(event);
+    });
 }
 
 #[cfg(debug_assertions)]
 fn shared_shortcut_stage_event(stage: &'static str, started: Instant) -> DiagnosticEvent {
-    let mut event = vault_event("shared-shortcut-probe", "set_claim",
-        DiagnosticOutcome::Succeeded, "SHARED.SHORTCUT.TRACE", DiagnosticSeverity::Info,
-        false, "none", started, BTreeMap::new());
+    let mut event = vault_event(
+        "shared-shortcut-probe",
+        "set_claim",
+        DiagnosticOutcome::Succeeded,
+        "SHARED.SHORTCUT.TRACE",
+        DiagnosticSeverity::Info,
+        false,
+        "none",
+        started,
+        BTreeMap::new(),
+    );
     event.feature = "shared_shortcuts".into();
     event.stage = stage.into();
     event
@@ -982,8 +1043,16 @@ mod tests {
     #[cfg(debug_assertions)]
     #[test]
     fn shared_shortcut_trace_contains_only_fixed_stage_and_duration() {
-        for stage in ["auth_start", "auth_end", "store_start", "store_lock",
-            "store_open", "store_journal", "store_reconcile", "store_end"] {
+        for stage in [
+            "auth_start",
+            "auth_end",
+            "store_start",
+            "store_lock",
+            "store_open",
+            "store_journal",
+            "store_reconcile",
+            "store_end",
+        ] {
             let event = shared_shortcut_stage_event(stage, Instant::now());
             assert!(event.validate().is_ok());
             assert_eq!(event.feature, "shared_shortcuts");

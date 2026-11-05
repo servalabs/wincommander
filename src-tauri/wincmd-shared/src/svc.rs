@@ -467,10 +467,22 @@ mod tests {
         assert!(!is_known_verb("svc.bluetooth.set_blocked"));
         assert!(is_known_verb("svc.bluetooth.policy.status"));
         assert!(is_known_verb("svc.bluetooth.policy.set_blocked"));
-        assert_eq!(classify_verb("svc.bluetooth.policy.status"), CapabilityClass::ReadOnly);
-        assert_eq!(classify_verb("svc.bluetooth.policy.set_blocked"), CapabilityClass::Privileged);
-        assert!(serde_json::from_value::<BluetoothSetBlockedRequest>(serde_json::json!({"blocked":true,"path":"arbitrary"})).is_err());
-        assert!(serde_json::from_value::<BluetoothSetBlockedRequest>(serde_json::json!({"blocked":"false"})).is_err());
+        assert_eq!(
+            classify_verb("svc.bluetooth.policy.status"),
+            CapabilityClass::ReadOnly
+        );
+        assert_eq!(
+            classify_verb("svc.bluetooth.policy.set_blocked"),
+            CapabilityClass::Privileged
+        );
+        assert!(serde_json::from_value::<BluetoothSetBlockedRequest>(
+            serde_json::json!({"blocked":true,"path":"arbitrary"})
+        )
+        .is_err());
+        assert!(serde_json::from_value::<BluetoothSetBlockedRequest>(
+            serde_json::json!({"blocked":"false"})
+        )
+        .is_err());
     }
 
     // ── classify_verb: read-only verbs ───────────────────────────────────────
@@ -517,9 +529,15 @@ mod tests {
             CapabilityClass::InteractiveSession
         );
         assert!(is_known_verb(VERIFY_LICENSE_CACHE_VERB));
-        assert_eq!(classify_verb(RENEW_HYBRID_LICENSE_VERB), CapabilityClass::SessionHelper);
+        assert_eq!(
+            classify_verb(RENEW_HYBRID_LICENSE_VERB),
+            CapabilityClass::SessionHelper
+        );
         assert!(is_known_verb(RENEW_HYBRID_LICENSE_VERB));
-        assert_eq!(classify_verb(ENROL_HYBRID_LICENSE_VERB), CapabilityClass::SessionHelper);
+        assert_eq!(
+            classify_verb(ENROL_HYBRID_LICENSE_VERB),
+            CapabilityClass::SessionHelper
+        );
         assert!(is_known_verb(ENROL_HYBRID_LICENSE_VERB));
     }
 

@@ -218,7 +218,10 @@ pub(crate) fn migrate_logs_to_plaintext_for_debug(log_file: &Path) {
         Ok(content) => content,
         Err(_) => return,
     };
-    if !content.lines().any(|line| encrypted_log_payload(line).is_some()) {
+    if !content
+        .lines()
+        .any(|line| encrypted_log_payload(line).is_some())
+    {
         return;
     }
     let lines: Vec<String> = content
@@ -779,8 +782,14 @@ mod log_record_tests {
         let cutoff = chrono::NaiveDate::from_ymd_opt(2026, 10, 8).unwrap();
         for version in ["L:", "L2:"] {
             assert!(encrypted_log_payload(&format!("{version}2026-10-15:opaque")).is_some());
-            assert!(should_keep_log_record(&format!("{version}2026-10-08:opaque"), cutoff));
-            assert!(!should_keep_log_record(&format!("{version}2026-10-07:opaque"), cutoff));
+            assert!(should_keep_log_record(
+                &format!("{version}2026-10-08:opaque"),
+                cutoff
+            ));
+            assert!(!should_keep_log_record(
+                &format!("{version}2026-10-07:opaque"),
+                cutoff
+            ));
         }
         assert!(encrypted_log_payload("L20:not-a-supported-envelope").is_none());
         assert!(encrypted_log_payload("untrusted L2:payload").is_none());
