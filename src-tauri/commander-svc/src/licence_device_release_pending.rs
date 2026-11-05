@@ -161,15 +161,20 @@ pub(crate) fn remove_prepared_cache(
     trust: &wincmd_pq_experiment::jws::Trust<'_>, now: u64,
 ) -> Result<bool, &'static str> {
     let _guard = LOCK.lock().map_err(|_| INVALID)?;
-    let verified = crate::license_cache::with_prepared_release_recovery(|journal, _snapshot, body| {
+    let verified = crate::license_cache::with_prepared_release_recovery(|journal, snapshot, body| {
         let binding = Binding { licence_id: &journal.licence_id, device_hash: &journal.device_hash,
             issuer_origin: wire::LICENCE_ORIGIN };
         let credential_anchor = selected_machine_anchor_locked(&binding, trust, now)?;
         let bytes = credential_anchor.read().map_err(|_| INVALID)?.ok_or(INVALID)?;
         let credential = decode_confirmed(&MachineDpapi, &binding, trust, &bytes, now)?;
-        verify_prepared_ack(&release_anchor(&binding)?, &crate::license_cache::release_gate::machine(),
+        let release_store = release_anchor(&binding)?;
+        let before = release_store.read().map_err(|_| INVALID)?.ok_or(INVALID)?;
+        let saved = verify_prepared_ack(&release_store, &crate::license_cache::release_gate::machine(),
             &MachineDpapi, &binding, &credential, &body, journal)?;
-        crate::license_cache::remove_prepared_cache_locked(journal)
+        let after = release_store.read().map_err(|_| INVALID)?.ok_or(INVALID)?;
+        if before != after { return Err(INVALID); }
+        crate::license_cache::remove_prepared_cache_locked(journal)?;
+        crate::license_cache::mark_release_completed_locked(journal, snapshot, &saved.request, &after)
     })?;
     Ok(verified.is_some())
 }
@@ -177,14 +182,15 @@ pub(crate) fn remove_prepared_cache(
 fn verify_prepared_ack(
     store: &anchor::Anchor, gate: &anchor::Anchor, protector: &dyn Protector, binding: &Binding<'_>,
     credential: &ConfirmedCredential, body: &[u8], journal: &crate::license_cache::release_gate::PreparedRelease,
-) -> Result<(), &'static str> {
+) -> Result<SavedRelease, &'static str> {
     if credential.id != journal.credential_id || binding.licence_id != journal.licence_id
         || binding.device_hash != journal.device_hash || release_entropy(binding, credential, body)? != journal.context {
         return Err(INVALID);
     }
     let saved = load_locked(store, protector, binding, credential, body)?.ok_or(INVALID)?;
     if !saved.acknowledged { return Err(INVALID); }
-    crate::license_cache::release_gate::check_request_at(gate, &journal.context, Some(&saved.request))
+    crate::license_cache::release_gate::check_request_at(gate, &journal.context, Some(&saved.request))?;
+    Ok(saved)
 }
 
 /// Save and read back before any network send. Existing state cannot be replaced.

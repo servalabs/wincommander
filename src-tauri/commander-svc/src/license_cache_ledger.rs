@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Bounded signed licence history; no entry is silently evicted.
 use super::*;
+use sha2::{Digest, Sha256};
 
 const MAX_RECORDS: usize = 4;
 
@@ -19,11 +20,34 @@ struct ReleasedGeneration {
     license_id: String,
     device_hash: String,
     generation: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    completion: Option<ReleaseCompletion>,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct ReleaseCompletion {
+    context: String,
+    credential_id: String,
+    request_digest: String,
+    cache_digest: String,
+    acknowledgement_digest: String,
+}
+
+fn digest(bytes: &[u8]) -> String {
+    general_purpose::URL_SAFE_NO_PAD.encode(Sha256::digest(bytes))
+}
+
+fn canonical_digest(value: &str) -> bool {
+    general_purpose::URL_SAFE_NO_PAD.decode(value).ok()
+        .is_some_and(|bytes| bytes.len() == 32 && general_purpose::URL_SAFE_NO_PAD.encode(bytes) == value)
 }
 
 fn validate_ledger(ledger: &Ledger) -> Result<(), &'static str> {
-    if !matches!(ledger.version, 1 | 2) || (ledger.version == 1 && !ledger.released.is_empty())
-        || (ledger.version == 2 && ledger.released.is_empty())
+    if !matches!(ledger.version, 1 | 2 | 3) || (ledger.version == 1 && !ledger.released.is_empty())
+        || (ledger.version >= 2 && ledger.released.is_empty())
+        || (ledger.version < 3 && ledger.released.iter().any(|entry| entry.completion.is_some()))
+        || (ledger.version == 3 && ledger.released.iter().all(|entry| entry.completion.is_none()))
         || ledger.records.len() > MAX_RECORDS || ledger.released.len() > MAX_RECORDS {
         return Err("license security record is invalid");
     }
@@ -31,6 +55,12 @@ fn validate_ledger(ledger: &Ledger) -> Result<(), &'static str> {
         if entry.license_id.is_empty() || entry.license_id.len() > 512 || entry.device_hash.is_empty()
             || entry.device_hash.len() > 512 || entry.generation == 0 || entry.generation > 9_007_199_254_740_991
             || ledger.released[..i].iter().any(|previous| previous.license_id == entry.license_id && previous.device_hash == entry.device_hash) {
+            return Err("license security record is invalid");
+        }
+        if entry.completion.as_ref().is_some_and(|completion| ![
+            &completion.context, &completion.credential_id, &completion.request_digest,
+            &completion.cache_digest, &completion.acknowledgement_digest,
+        ].into_iter().all(|value| canonical_digest(value))) {
             return Err("license security record is invalid");
         }
     }
@@ -318,12 +348,47 @@ pub(super) fn mark_released(
         .ok_or("license activation generation is invalid")?;
     if let Some(entry) = ledger.released.iter_mut().find(|entry| entry.license_id == id && entry.device_hash == claims.device_hash) {
         if generation < entry.generation { return Err("license cache would restore a released activation"); }
+        if generation > entry.generation { entry.completion = None; }
         entry.generation = generation;
     } else {
         if ledger.released.len() >= MAX_RECORDS { return Err("license security history is full; recovery is required"); }
-        ledger.released.push(ReleasedGeneration { license_id: id, device_hash: claims.device_hash, generation });
+        ledger.released.push(ReleasedGeneration { license_id: id, device_hash: claims.device_hash, generation, completion: None });
     }
-    ledger.version = 2;
+    ledger.version = if ledger.released.iter().any(|entry| entry.completion.is_some()) { 3 } else { 2 };
+    let output = serde_json::to_vec(&ledger).map_err(|_| "license security record is invalid")?;
+    if output.len() > CACHE_LIMIT as usize { return Err("license security history is full; recovery is required"); }
+    Ok(output)
+}
+
+/// Record completion after the caller verifies the acknowledgement and removes
+/// the exact cache under the same locks. This does not itself clear the gate.
+pub(super) fn mark_release_completed(
+    retained: &[u8], candidate: &StoreLicenseCacheRequest, expected_time: u64, journal: &super::release_gate::PreparedRelease,
+    request: &[u8], acknowledgement: &[u8], public_key: &str,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>, old_trust: Option<&history::HistoricalTrust>,
+) -> Result<Vec<u8>, &'static str> {
+    if request.is_empty() || request.len() > 64 * 1024 || acknowledgement.is_empty() || acknowledgement.len() > 64 * 1024 {
+        return Err("license security record is invalid");
+    }
+    verify_released_current(retained, candidate, expected_time, &journal.cache, public_key, trust, old_trust)?;
+    let claims: SignedClaims = serde_json::from_str(&candidate.payload).map_err(|_| "license cache is invalid")?;
+    if claims.license_id.as_deref() != Some(journal.licence_id.as_str()) || claims.device_hash != journal.device_hash
+        || claims.activation_generation != Some(journal.generation) {
+        return Err("license release does not match security history");
+    }
+    let mut ledger = parse_ledger(retained)?;
+    let entry = ledger.released.iter_mut().find(|entry| entry.license_id == journal.licence_id
+        && entry.device_hash == journal.device_hash && entry.generation == journal.generation)
+        .ok_or("license release has no matching security record")?;
+    let completion = ReleaseCompletion { context: general_purpose::URL_SAFE_NO_PAD.encode(journal.context),
+        credential_id: general_purpose::URL_SAFE_NO_PAD.encode(journal.credential_id), request_digest: digest(request),
+        cache_digest: digest(&journal.cache), acknowledgement_digest: digest(acknowledgement) };
+    match &entry.completion {
+        Some(previous) if previous == &completion => {},
+        Some(_) => return Err("license release conflicts with security history"),
+        None => entry.completion = Some(completion),
+    }
+    ledger.version = 3;
     let output = serde_json::to_vec(&ledger).map_err(|_| "license security record is invalid")?;
     if output.len() > CACHE_LIMIT as usize { return Err("license security history is full; recovery is required"); }
     Ok(output)

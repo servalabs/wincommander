@@ -299,6 +299,31 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
     assert!(!retired_path.exists());
     // A reopened journal permits the exact operation to finish after a crash.
     assert!(matches!(remove_once(), Ok(Some(()))));
+    let complete = |request: &[u8], acknowledgement: &[u8]| with_prepared_release_recovery_at(&public, &current,
+        &anchor::Anchor::test_user(recovery_gate_path.clone()), &anchor::Anchor::test_user(retired_anchor_path.clone()),
+        |journal, snapshot, _| mark_release_completed_with_anchor(journal, snapshot, request, acknowledgement, &public, &current, &reopened_anchor));
+    assert!(matches!(complete(b"release", b"sealed acknowledgement"), Ok(Some(()))));
+    let completed_bytes = reopened_anchor.read().unwrap().unwrap();
+    assert!(matches!(complete(b"release", b"sealed acknowledgement"), Ok(Some(()))));
+    assert_eq!(reopened_anchor.read().unwrap().unwrap(), completed_bytes);
+    assert!(complete(b"other request", b"sealed acknowledgement").is_err());
+    assert!(complete(b"release", b"different acknowledgement").is_err());
+    let mut broken_completion: serde_json::Value = serde_json::from_slice(&completed_bytes).unwrap();
+    broken_completion["released"][0].as_object_mut().unwrap().remove("completion");
+    reopened_anchor.write(&serde_json::to_vec(&broken_completion).unwrap()).unwrap();
+    assert!(read_again().is_err());
+    let mut invalid_digest: serde_json::Value = serde_json::from_slice(&completed_bytes).unwrap();
+    invalid_digest["released"][0]["completion"]["request_digest"] = "invalid".into();
+    reopened_anchor.write(&serde_json::to_vec(&invalid_digest).unwrap()).unwrap();
+    assert!(read_again().is_err());
+    reopened_anchor.write(&completed_bytes).unwrap();
+    let next_activation = ledger::advance(Some(&completed_bytes), None, &generation_three_same_second,
+        &cache(&generation_three_same_second), &public, &current, None).unwrap();
+    let next_release = ledger::mark_released(&next_activation, &generation_three_same_second, 99,
+        &cache(&generation_three_same_second), &public, &current, None).unwrap();
+    let next_record: serde_json::Value = serde_json::from_slice(&next_release).unwrap();
+    assert_eq!(next_record["version"], 2);
+    assert!(next_record["released"][0].get("completion").is_none());
     fs::create_dir(&retired_path).unwrap();
     assert!(remove_once().is_err());
     fs::remove_dir(&retired_path).unwrap();

@@ -525,6 +525,35 @@ fn with_prepared_release_recovery_at<T>(
     operation(&journal, &snapshot, wire).map(Some)
 }
 
+/// Called inside the release recovery locks after the acknowledged cache is
+/// absent. The protected completion floor is written and read back before any
+/// later operation may consider clearing the release gate.
+pub(super) fn mark_release_completed_locked(
+    journal: &super::release_gate::PreparedRelease, snapshot: &DeviceLicenceSnapshot,
+    request: &[u8], acknowledgement: &[u8], public_key: &str, trust: &wincmd_pq_experiment::jws::Trust<'_>,
+) -> Result<(), &'static str> {
+    let anchor = anchor::Anchor::machine_named(r"SOFTWARE\ServaLabs\WinCommander\HybridLicence");
+    mark_release_completed_with_anchor(journal, snapshot, request, acknowledgement, public_key, trust, &anchor)
+}
+
+fn mark_release_completed_with_anchor(
+    journal: &super::release_gate::PreparedRelease, snapshot: &DeviceLicenceSnapshot,
+    request: &[u8], acknowledgement: &[u8], public_key: &str, trust: &wincmd_pq_experiment::jws::Trust<'_>, anchor: &anchor::Anchor,
+) -> Result<(), &'static str> {
+    let old_trust = history::configured(trust)?;
+    let retained = anchor.read().map_err(|_| "license security record is unavailable")?
+        .ok_or("license security record is unavailable")?;
+    let candidate = StoreLicenseCacheRequest { payload: snapshot.payload.clone(), signature: snapshot.signature.clone(),
+        hybrid: Some(snapshot.hybrid.clone()), seats_used: None, seat_limit: None };
+    let next = ledger::mark_release_completed(&retained, &candidate, snapshot.last_verified_at, journal,
+        request, acknowledgement, public_key, trust, old_trust.as_ref())?;
+    anchor.write(&next).map_err(|_| "license security record is unavailable")?;
+    if anchor.read().map_err(|_| "license security record is unavailable")?.as_deref() != Some(next.as_slice()) {
+        return Err("license security record is unavailable");
+    }
+    Ok(())
+}
+
 /// Caller holds the licence locks and has just reverified the prepared journal,
 /// released floor, bound credential and durable acknowledgement. Only the exact
 /// journalled cache may be removed. An absent file is an idempotent retry.

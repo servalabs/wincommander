@@ -429,6 +429,14 @@ pub(crate) fn remove_prepared_cache_locked(journal: &release_gate::PreparedRelea
 }
 
 #[cfg(feature = "experimental-pq-licence")]
+pub(crate) fn mark_release_completed_locked(journal: &release_gate::PreparedRelease, snapshot: &DeviceLicenceSnapshot,
+    request: &[u8], acknowledgement: &[u8]) -> Result<(), &'static str> {
+    let public = service_public_key().ok_or("license verification is unavailable")?;
+    let trust = hybrid_trust::configured()?;
+    rollback::mark_release_completed_locked(journal, snapshot, request, acknowledgement, public, &trust.policy())
+}
+
+#[cfg(feature = "experimental-pq-licence")]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DeviceRenewalResponse {
