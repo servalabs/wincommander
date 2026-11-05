@@ -158,6 +158,15 @@ impl SearchEngine {
                 config.skip_paths.push(physical);
             }
         }
+        // Re-evaluate immediately before and after extraction, including aliases
+        // that changed since a crawl or watcher event was queued.
+        let skips = config.skip_paths.clone();
+        let original_policy = path_policy;
+        let path_policy: PathPolicy = Arc::new(move |path| {
+            path.canonicalize().is_ok()
+                && !crawler::path_is_skipped(path, &skips)
+                && original_policy(path)
+        });
         let status = Arc::new(Mutex::new(IndexStatus::default()));
         Ok(Self {
             path_policy,
