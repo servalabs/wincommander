@@ -4,6 +4,11 @@
 ; WinCommanderSvc only when a Vault operation needs it.  This prevents an
 ; ordinary app update or uninstall from leaving a kernel driver unloading.
 
+!ifdef WC_EXPERIMENTAL_SEARCH_FENCE
+!ifndef WC_EXPERIMENTAL_USER_STAGE_ONLY
+!error "Search maintenance fencing requires the gated current-user staging installer"
+!endif
+!endif
 !include "StrFunc.nsh"
 ${Using:StrFunc} StrStr
 ${Using:StrFunc} UnStrStr
@@ -27,6 +32,9 @@ ${Using:StrFunc} UnStrStr
 !endif
 !define WC_STAGE_ORIGINAL_USER_SETTINGS "${__FILEDIR__}\stage-original-user-settings.ps1"
 !define WC_SETTINGS_STAGE_SERVICE "${__FILEDIR__}\settings-stage-service.ps1"
+!ifdef WC_EXPERIMENTAL_SEARCH_FENCE
+!define WC_HOLD_SEARCH_MAINTENANCE "${__FILEDIR__}\hold-search-maintenance.ps1"
+!endif
 Var WCUserStageServiceRunning
 !endif
 !define WC_REPAIR_SHARED_SETTINGS "${__FILEDIR__}\repair-shared-settings.ps1"
@@ -269,6 +277,27 @@ FunctionEnd
     ${EndIf}
   !else
     !insertmacro WC_STOP_OWNED_SERVICE_OR_ABORT "preinstall" ""
+  !endif
+  !ifdef WC_EXPERIMENTAL_SEARCH_FENCE
+    ; The child owns exclusive per-user search maintenance until this installer
+    ; exits, including any abort or crash. Readiness is received over its pipe.
+    InitPluginsDir
+    File /oname=$PLUGINSDIR\wincommander-search-fence.exe "${MAINBINARYSRCPATH}"
+    File /oname=$PLUGINSDIR\wincommander-hold-search-maintenance.ps1 "${WC_HOLD_SEARCH_MAINTENANCE}"
+    System::Call 'kernel32::GetCurrentProcessId() i .R6'
+    !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
+    nsExec::ExecToStack /TIMEOUT=90000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-hold-search-maintenance.ps1" -ExecutablePath "$PLUGINSDIR\wincommander-search-fence.exe" -InstallerProcessId $R6'
+    Pop $0
+    Pop $1
+    ${If} $0 != 0
+      ${If} $WCUserStageServiceRunning == 1
+        Call WC_RestoreUserStageService
+        ${If} $R6 != 1
+          Abort "Search maintenance failed and the service could not restart. Existing app and settings remain in place."
+        ${EndIf}
+      ${EndIf}
+      Abort "WinCommander could not establish search maintenance. Existing app and settings remain in place."
+    ${EndIf}
   !endif
   !ifdef WC_EXPERIMENTAL_USER_STAGE_ONLY
     ; The helper handles fresh installs and fails closed if an existing
