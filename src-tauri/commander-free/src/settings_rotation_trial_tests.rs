@@ -430,10 +430,10 @@ fn anchored_recovery_fails_closed_and_reopens_committed_generations() {
     let pending = AnchorState::Updating { prior: cutover::digest(&original), next: cutover::digest(&next) };
     anchor.write(&pending).unwrap();
     assert_eq!(inspect_startup_once(root.path(), StoreScope::Machine).unwrap(), StartupView::RecoveryRequired);
-    assert!(LockedSelectedGeneration::try_open(root.path()).unwrap().read_all().unwrap()["settings"].get("private_value").is_some());
+    assert!(read_with_legacy(root.path(), StoreScope::Machine, "settings", || panic!("must not fall back")).unwrap().get("private_value").is_some());
     anchor.write(&pending).unwrap();
     crate::datastore_io::atomic_write(&root.path().join(".settings-generation.v1"), &next).unwrap();
-    assert_eq!(LockedSelectedGeneration::try_open(root.path()).unwrap().read_all().unwrap()["settings"]["updated"], true);
+    assert_eq!(read_with_legacy(root.path(), StoreScope::Machine, "settings", || panic!("must not fall back")).unwrap()["updated"], true);
     std::fs::remove_file(root.path().join(".settings-cutover-anchor.v1")).unwrap();
     assert!(inspect_startup_once(root.path(), StoreScope::Machine).is_err());
 }
@@ -536,4 +536,16 @@ fn staged_initial_cutover_resumes_exact_candidate_and_preserves_source() {
     stage_and_select(&owner._ownership, &anchor, root.path(), || panic!("must use staged bytes"), &|bytes| verify_source_for(StoreScope::Machine, bytes, &old, &input)).unwrap();
     assert_eq!(std::fs::read(&stage).unwrap(), candidate);
     assert_eq!(owner.read_all().unwrap()["payments"]["token"], "second secret");
+}
+
+#[test]
+#[cfg_attr(windows, ignore = "requires elevated machine-lock ACL provisioning; run explicitly in Windows acceptance")]
+fn opted_in_runtime_never_provisions_a_missing_anchor_or_uses_legacy() {
+    let root = tempfile::tempdir().unwrap(); provision_test_lock(root.path());
+    let old_key = root.path().join(".install.material");
+    std::fs::write(&old_key, b"preserve existing material").unwrap();
+    assert!(read_with_legacy(root.path(), StoreScope::Machine, "settings", || panic!("must not use legacy")).is_err());
+    assert!(write_with_legacy(root.path(), StoreScope::Machine, "settings", &json!({}), || panic!("must not use legacy")).is_err());
+    assert!(!root.path().join(".settings-cutover-anchor.v1").exists());
+    assert_eq!(std::fs::read(old_key).unwrap(), b"preserve existing material");
 }

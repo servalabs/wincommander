@@ -596,17 +596,29 @@ pub(super) fn read_with_legacy(root: &Path, scope: StoreScope, section: &str, le
     let owner = ReadOnlySelectedGeneration::acquire(root, scope)?;
     match owner.inspect_startup()? {
         StartupView::Legacy => legacy(),
-        StartupView::Selected(mut sections) => {
-            let name = matching_section(&sections, section).map(str::to_owned);
-            match name.and_then(|name| sections.remove(&name)) {
-                Some(value) => Ok(value),
-                // Missing F6 is safe only because open_generation checked its
-                // authenticated never-initialized state; rollback remains open.
-                None => Ok(Value::Object(Default::default())),
+        StartupView::Selected(sections) => Ok(selected_section(sections, section)),
+        StartupView::RecoveryRequired => {
+            // Never upgrade in place: release shared ownership before asking
+            // for exclusive repair, then re-read the anchor under that guard.
+            drop(owner);
+            let exclusive = LockedSelectedGeneration::acquire_for(root, scope)
+                .map_err(|_| "Settings recovery requires an authorized administrator or the owning Windows account. Existing data was preserved.")?;
+            let anchor = ProtectedFileAnchor::new(root, scope);
+            match anchor.read()? {
+                Some(AnchorState::Updating { .. } | AnchorState::Active { .. }) => {
+                    let sections = exclusive.read_all()?;
+                    Ok(selected_section(sections, section))
+                },
+                _ => Err("Settings migration requires authorized recovery from the original source. Existing data was preserved.".into()),
             }
         },
-        StartupView::RecoveryRequired => Err("settings generation requires authorized recovery".into()),
     }
+}
+fn selected_section(mut sections: BTreeMap<String, Value>, section: &str) -> Value {
+    let name = matching_section(&sections, section).map(str::to_owned);
+    // Missing F6 is safe only because the authenticated generation has an
+    // explicit never-initialized state; whole-anchor rollback remains open.
+    name.and_then(|name| sections.remove(&name)).unwrap_or_else(|| Value::Object(Default::default()))
 }
 
 /// Read an existing F6 key with shared ownership. Only authenticated absence
@@ -663,7 +675,15 @@ pub(super) fn begin_experimental_write() -> Result<RuntimeWriteGuard, String> {
     let selected = match inspect_generation_files(&owner._ownership, &owner.path, &owner.authority, owner.scope)? {
         StartupView::Legacy => false,
         StartupView::Selected(_) => true,
-        StartupView::RecoveryRequired => return Err("settings generation requires authorized recovery".into()),
+        StartupView::RecoveryRequired => {
+            let anchor = ProtectedFileAnchor::new(&root, scope);
+            if matches!(anchor.read()?, Some(AnchorState::Updating { .. })) {
+                owner.read_reconciled()?;
+                true
+            } else {
+                return Err("Settings migration requires authorized recovery from the original source. Existing data was preserved.".into());
+            }
+        },
     };
     Ok(RuntimeWriteGuard { owner, _root_pins: pins, selected })
 }
@@ -759,6 +779,20 @@ pub(super) fn migrate_explicitly() -> Result<(), String> {
     stage_and_select(&owner._ownership, &anchor, &root,
         || held.borrow_mut().prepare(),
         &|bytes| held.borrow_mut().verify_generation(bytes))
+}
+
+/// Explicit installer-lab entry for a verified fresh install only. Never
+/// invoked automatically; the caller must establish fresh-install authority
+/// and prevent old executable launches before calling it.
+#[cfg(windows)]
+pub(super) fn provision_verified_fresh_install() -> Result<(), String> {
+    let (root, _pins, scope) = experimental_runtime_root()?;
+    super::settings_generation_bootstrap::provision_fresh(&root, scope, |path| {
+        match scope {
+            StoreScope::Machine => super::settings_generation_acl_windows::provision_or_verify(path),
+            StoreScope::CurrentUser => super::settings_generation_acl_windows::provision_user_or_verify(path),
+        }.map_err(|_| "cannot provision authorized settings lock".into())
+    })
 }
 
 /// Trial reader/writer for an already selected generation. The caller must

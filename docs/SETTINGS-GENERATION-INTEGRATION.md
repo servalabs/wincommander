@@ -73,3 +73,13 @@ candidate and a fresh source check. No installer or startup command invokes the
 migration. The current record is file-backed under the same data root and is
 not an independent anti-rollback anchor; it cannot detect restoration of an old
 matching record and generation. It must not be represented as rollback proof.
+
+A gated read encountering an interrupted update now releases its shared lock,
+acquires exclusive ownership, and reconciles only a verified old or new
+selected generation. If exclusive access is unavailable it reports that an
+authorized account or administrator must recover it. An interrupted initial
+selection still requires a fresh guarded source snapshot. A separate explicit
+fresh-install provisioning seam refuses existing data; it is not called by
+normal startup and is not proof that an installation is truly fresh. Existing
+stores with a missing cutover anchor fail closed and are never automatically
+reclassified as legacy.
