@@ -58,8 +58,8 @@ impl ScanIndex {
         let mut key = Zeroizing::new([0u8; 32]);
         rand::RngCore::try_fill_bytes(&mut rand::rngs::OsRng, &mut *key)
             .map_err(|_| "Cannot generate scan encryption key")?;
-        let key_hex = Zeroizing::new(hex::encode(&*key));
-        let raw_key = Zeroizing::new(format!("x'{}'", &*key_hex));
+        let key_hex = Zeroizing::new(hex::encode(key.as_slice()));
+        let raw_key = Zeroizing::new(format!("x'{}'", key_hex.as_str()));
         // The SQLCipher C API avoids making an additional SQL string containing
         // the key. The connection and key buffer stay valid throughout the call.
         let result = unsafe {
