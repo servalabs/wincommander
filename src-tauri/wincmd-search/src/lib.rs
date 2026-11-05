@@ -659,6 +659,10 @@ impl SearchEngine {
         Self::verify_quarantined_selection(old, selection_dir)?;
         let store = crate::encrypted_migration_transaction::Store::open(selection_dir)?;
         let intent = store.load()?.ok_or_else(|| SearchError::Config("search migration intent missing".into()))?;
+        let mut selection = crate::encrypted_generation_prototype::PinnedSelectionStore::open(selection_dir)?;
+        let selected = crate::encrypted_generation_prototype::inspect(&mut selection, &crate::encrypted_generation_prototype::UserProtector)?
+            .ok_or_else(|| SearchError::Config("encrypted selection missing".into()))?;
+        if selected.index_id != intent.generation { return Err(SearchError::Config("search generation changed; recovery required".into())); }
         let backup = old.parent().unwrap().join(crate::encrypted_legacy_quarantine::backup_name(&intent.generation)?);
         if intent.transaction != transaction || !intent.matches_path(&backup)? { return Err(SearchError::Config("search migration identity changed".into())); }
         store.mark_replacement(&transaction)?; Ok(())
@@ -672,6 +676,10 @@ impl SearchEngine {
         Self::verify_quarantined_selection(old, selection_dir)?;
         let store = crate::encrypted_migration_transaction::Store::open(selection_dir)?;
         let intent = store.load()?.ok_or_else(|| SearchError::Config("search migration intent missing".into()))?;
+        let mut selection = crate::encrypted_generation_prototype::PinnedSelectionStore::open(selection_dir)?;
+        let selected = crate::encrypted_generation_prototype::inspect(&mut selection, &crate::encrypted_generation_prototype::UserProtector)?
+            .ok_or_else(|| SearchError::Config("encrypted selection missing".into()))?;
+        if selected.index_id != intent.generation { return Err(SearchError::Config("search generation changed; recovery required".into())); }
         let backup = old.parent().unwrap().join(crate::encrypted_legacy_quarantine::backup_name(&intent.generation)?);
         if intent.transaction != transaction || !intent.replacement_pending || !intent.matches_path(&backup)? {
             return Err(SearchError::Config("search migration is not ready to commit".into()));
@@ -688,6 +696,10 @@ impl SearchEngine {
         fence.require_exclusive_for(parent)?;
         let store = crate::encrypted_migration_transaction::Store::open(selection_dir)?;
         let intent = store.load()?.ok_or_else(|| SearchError::Config("search migration intent missing".into()))?;
+        let mut selection = crate::encrypted_generation_prototype::PinnedSelectionStore::open(selection_dir)?;
+        let selected = crate::encrypted_generation_prototype::inspect(&mut selection, &crate::encrypted_generation_prototype::UserProtector)?
+            .ok_or_else(|| SearchError::Config("encrypted selection missing".into()))?;
+        if selected.index_id != intent.generation { return Err(SearchError::Config("search generation changed; recovery required".into())); }
         if intent.transaction != transaction || intent.replacement_pending { return Err(SearchError::Config("search migration must roll forward".into())); }
         let backup = parent.join(crate::encrypted_legacy_quarantine::backup_name(&intent.generation)?);
         match (old.try_exists()?, backup.try_exists()?) {
