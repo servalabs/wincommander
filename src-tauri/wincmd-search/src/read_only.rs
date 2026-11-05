@@ -103,6 +103,94 @@ fn validate_storage_once(root: &Path) -> io::Result<()> {
 
 impl CheckedDirectory {
     #[cfg(all(test, windows))]
+    fn pin_mutation_root(&self, path: &Path) -> io::Result<Vec<std::fs::File>> {
+        use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+            FILE_SHARE_READ, FILE_SHARE_WRITE,
+        };
+        self.check(path, true)?;
+        if !self.root.is_absolute() {
+            return Err(denied());
+        }
+        let mut ancestors: Vec<_> = self.root.ancestors().collect();
+        ancestors.reverse();
+        let mut pins = Vec::with_capacity(ancestors.len());
+        for ancestor in ancestors {
+            let pin = std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+                .open(ancestor)?;
+            let meta = pin.metadata()?;
+            if !meta.is_dir() || meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                return Err(denied());
+            }
+            pins.push(pin);
+        }
+        Ok(pins)
+    }
+
+    #[cfg(all(test, windows))]
+    pub(crate) fn open_write_pinned(&self, path: &Path) -> Result<WritePtr, OpenWriteError> {
+        let _pins = self
+            .pin_mutation_root(path)
+            .map_err(|e| OpenWriteError::wrap_io_error(e, path.into()))?;
+        self.check(path, true)
+            .map_err(|e| OpenWriteError::wrap_io_error(e, path.into()))?;
+        self.inner.open_write(path)
+    }
+
+    #[cfg(all(test, windows))]
+    pub(crate) fn delete_pinned(&self, path: &Path) -> Result<(), DeleteError> {
+        use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
+        use windows_sys::Win32::Storage::FileSystem::{
+            FileDispositionInfo, GetFileInformationByHandle, SetFileInformationByHandle,
+            BY_HANDLE_FILE_INFORMATION, DELETE, FILE_ATTRIBUTE_REPARSE_POINT,
+            FILE_DISPOSITION_INFO, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ, FILE_SHARE_WRITE,
+        };
+        let wrap = |error| DeleteError::IoError {
+            io_error: Arc::new(error),
+            filepath: path.into(),
+        };
+        let _pins = self.pin_mutation_root(path).map_err(wrap)?;
+        let file = std::fs::OpenOptions::new()
+            .access_mode(DELETE | FILE_READ_ATTRIBUTES)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(self.root.join(path))
+            .map_err(|e| {
+                if e.kind() == io::ErrorKind::NotFound {
+                    DeleteError::FileDoesNotExist(path.into())
+                } else {
+                    wrap(e)
+                }
+            })?;
+        let mut info = BY_HANDLE_FILE_INFORMATION::default();
+        // SAFETY: the owned file handle and info buffer remain live for the call.
+        if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
+            return Err(wrap(io::Error::last_os_error()));
+        }
+        if info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 || info.nNumberOfLinks != 1 {
+            return Err(wrap(denied()));
+        }
+        let mut disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
+        // SAFETY: the verified handle and disposition buffer remain live for the call.
+        if unsafe {
+            SetFileInformationByHandle(
+                file.as_raw_handle(),
+                FileDispositionInfo,
+                std::ptr::from_mut(&mut disposition).cast(),
+                std::mem::size_of::<FILE_DISPOSITION_INFO>() as u32,
+            )
+        } == 0
+        {
+            return Err(wrap(io::Error::last_os_error()));
+        }
+        Ok(())
+    }
+    #[cfg(all(test, windows))]
     pub(crate) fn open_read_pinned(&self, path: &Path) -> Result<std::fs::File, OpenReadError> {
         self.open_read_pinned_after_guard(path, || {})
     }
@@ -319,6 +407,42 @@ impl Directory for CheckedDirectory {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn mutation_pins_prevent_ancestor_replacement() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("index");
+        std::fs::create_dir(&root).unwrap();
+        let directory = CheckedDirectory::open(&root, AccessMode::Writable).unwrap();
+        let pins = directory.pin_mutation_root(Path::new("new-file")).unwrap();
+        assert!(std::fs::rename(&root, dir.path().join("moved")).is_err());
+        drop(pins);
+        std::fs::rename(&root, dir.path().join("moved")).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn pinned_delete_rejects_links_and_preserves_other_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("index");
+        std::fs::create_dir(&root).unwrap();
+        let outside = dir.path().join("other");
+        std::fs::write(&outside, b"do not delete").unwrap();
+        let directory = CheckedDirectory::open(&root, AccessMode::Writable).unwrap();
+        let link = root.join("segment");
+        std::fs::hard_link(&outside, &link).unwrap();
+        assert!(directory.delete_pinned(Path::new("segment")).is_err());
+        assert_eq!(std::fs::read(&outside).unwrap(), b"do not delete");
+        std::fs::remove_file(&link).unwrap();
+        std::os::windows::fs::symlink_file(&outside, &link).unwrap();
+        assert!(directory.delete_pinned(Path::new("segment")).is_err());
+        assert_eq!(std::fs::read(&outside).unwrap(), b"do not delete");
+        std::fs::remove_file(&link).unwrap();
+        std::fs::write(&link, b"valid index segment").unwrap();
+        directory.delete_pinned(Path::new("segment")).unwrap();
+        assert!(!link.exists());
+    }
 
     #[cfg(windows)]
     #[test]

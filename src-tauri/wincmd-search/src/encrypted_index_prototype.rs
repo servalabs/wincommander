@@ -484,7 +484,7 @@ mod tantivy_trial {
             }))
         }
         fn delete(&self, path: &Path) -> Result<(), DeleteError> {
-            self.inner.delete(path)
+            self.inner.delete_pinned(path)
         }
         fn exists(&self, path: &Path) -> Result<bool, OpenReadError> {
             self.inner.exists(path)
@@ -493,7 +493,7 @@ mod tantivy_trial {
             let path_name = name(path)
                 .map_err(|e| OpenWriteError::wrap_io_error(e, path.into()))?
                 .to_owned();
-            let sink = self.inner.open_write(path)?;
+            let sink = self.inner.open_write_pinned(path)?;
             let writer = TrialWriter::new(sink, &self.key, path_name)
                 .map_err(|e| OpenWriteError::wrap_io_error(e, path.into()))?;
             Ok(BufWriter::new(Box::new(writer)))
