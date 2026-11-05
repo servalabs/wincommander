@@ -446,6 +446,18 @@ impl SearchEngine {
         fence.require_exclusive_for(parent)?;
         let _pins = CheckedDirectory::pin_root_path(parent)?;
         crate::encrypted_search_maintenance::verify_known_writers_stopped().map_err(SearchError::Config)?;
+        // Do not accumulate a new full cache after an interrupted attempt.
+        // Existing candidates are retained for explicit recovery/cleanup.
+        for entry in std::fs::read_dir(parent)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if let Some(id) = name.strip_prefix(".wincommander-encrypted-") {
+                if id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    return Err(SearchError::Config("A previous encrypted search rebuild needs recovery before retry; existing files were retained.".into()));
+                }
+            }
+        }
         match std::fs::create_dir(selection_dir) {
             Ok(()) => {}, Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}, Err(e) => return Err(e.into()),
         }

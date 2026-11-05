@@ -14,7 +14,10 @@ fn main() {
             let result = if enabled && args.len() == 2 {
                 wincommander_lib::search_migration_cli::run(&args[1])
             } else { Err("Search migration lab is disabled or its arguments are invalid.".into()) };
-            if let Err(error) = result { eprintln!("{error}"); std::process::exit(1); }
+            match result {
+                Ok(outcome) => println!("WINCOMMANDER_SEARCH_MIGRATION_OUTCOME:{outcome}"),
+                Err(error) => { eprintln!("{error}"); std::process::exit(1); },
+            }
             return;
         }
         #[cfg(not(feature = "experimental-encrypted-search"))]
