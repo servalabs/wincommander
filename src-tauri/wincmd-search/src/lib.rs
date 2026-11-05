@@ -1380,6 +1380,13 @@ mod tests {
         let empty_config = make_config(old.clone(), vec![]);
         let report = SearchEngine::rebuild_offline_and_select(empty_config, Arc::new(|_| false), &selection, &guard).unwrap();
         assert_eq!(report.indexed, 0);
+        let generation = fs::read_dir(root.path()).unwrap().map(|e| e.unwrap().path())
+            .find(|p| p.file_name().unwrap().to_string_lossy().starts_with(".wincommander-encrypted-")).unwrap();
+        for entry in fs::read_dir(generation).unwrap() {
+            let bytes = fs::read(entry.unwrap().path()).unwrap();
+            assert!(!bytes.windows(b"privatecatchupneedle".len()).any(|part| part == b"privatecatchupneedle"));
+            assert!(!bytes.windows(b"doc.txt".len()).any(|part| part == b"doc.txt"));
+        }
         let backup = SearchEngine::quarantine_selected_with_fence(&old, &selection, &guard).unwrap();
         assert_eq!(fs::read(backup.join("meta.json")).unwrap(), b"legacy saved");
         drop(guard);
