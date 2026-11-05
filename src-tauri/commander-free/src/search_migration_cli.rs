@@ -50,7 +50,11 @@ fn reject_pending(selection: &Path) -> Result<(), String> {
 /// Run from the temporary early CLI helper, before normal application startup.
 /// The verify phase is read-only and the installer must hold its exclusive lock.
 pub fn run(phase: &str) -> Result<String, String> {
-    let parent = crate::file_search::runtime_fence::verified_parent()?;
+    let parent = if phase == "stage" {
+        crate::file_search::runtime_fence::prepare_verified_parent()?
+    } else {
+        crate::file_search::runtime_fence::verified_parent()?
+    };
     let old = parent.join("fts");
     let selection = parent.join(".wincommander-encrypted-selection");
     match phase {
