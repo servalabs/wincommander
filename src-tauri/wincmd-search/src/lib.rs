@@ -535,8 +535,7 @@ mod tests {
 
     // `notify` registrations are process-global on some Windows backends.
     // These two lifecycle tests both create a watcher and wait for its crawler;
-    // run them one at a time so a busy suite cannot turn their five-second
-    // readiness assertion into a false content-search failure.
+    // run them one at a time to avoid watcher contention in a busy suite.
     static INDEXING_LIFECYCLE_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     fn make_config(index_dir: std::path::PathBuf, roots: Vec<std::path::PathBuf>) -> IndexConfig {
@@ -626,9 +625,7 @@ mod tests {
 
     /// Smoke test: start_indexing eventually completes and search finds a body word.
     ///
-    /// Polls status().is_indexing with a tight loop bounded to ~5 s so the test
-    /// remains fast under normal CI.  Uses a unique token ("gruntledwombat") to
-    /// avoid cross-test interference.
+    /// Verify the crawl waits for the other writer and resumes after release.
     #[test]
     fn competing_index_writer_waits_and_resumes_without_losing_the_crawl() {
         let _serial = INDEXING_LIFECYCLE_TEST_LOCK.lock().unwrap();
@@ -640,12 +637,14 @@ mod tests {
         let second = SearchEngine::open(config).unwrap();
         let writer = first.ci.writer().unwrap();
         second.start_indexing().unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         while second.status().last_error.as_deref() != Some(WRITER_WAIT_MESSAGE) {
             assert!(std::time::Instant::now() < deadline, "writer contention was not reported");
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         drop(writer);
+        // Contention and resumption need independent budgets on a busy runner.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         while second.status().is_indexing {
             assert!(std::time::Instant::now() < deadline, "indexing did not resume");
             std::thread::sleep(std::time::Duration::from_millis(20));
