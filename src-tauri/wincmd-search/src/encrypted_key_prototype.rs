@@ -13,7 +13,7 @@ trait Protector {
 }
 trait KeyStore {
     // Errors (including access denied or corrupted file) are not absence.
-    fn read(&self) -> io::Result<Option<Vec<u8>>>;
+    fn read(&mut self) -> io::Result<Option<Vec<u8>>>;
     // Must atomically create only when absent and never overwrite.
     fn create_new(&mut self, value: &[u8]) -> io::Result<()>;
 }
@@ -59,6 +59,8 @@ fn load_or_create(store: &mut impl KeyStore, protector: &impl Protector, index_i
 struct PinnedKeyFile {
     directory: crate::read_only::CheckedDirectory,
     _pins: Vec<std::fs::File>,
+    root: std::path::PathBuf,
+    held_key: Option<std::fs::File>,
 }
 #[cfg(windows)]
 impl PinnedKeyFile {
@@ -67,25 +69,36 @@ impl PinnedKeyFile {
         let pins = CheckedDirectory::pin_root_path(root)?;
         let directory = CheckedDirectory::open(root, AccessMode::Writable)
             .map_err(|e| io::Error::other(e.to_string()))?;
-        Ok(Self { directory, _pins: pins })
+        Ok(Self { directory, _pins: pins, root: root.to_path_buf(), held_key: None })
     }
 }
 #[cfg(windows)]
 impl KeyStore for PinnedKeyFile {
-    fn read(&self) -> io::Result<Option<Vec<u8>>> {
-        use std::{io::Read, os::windows::io::AsRawHandle, path::Path};
-        use tantivy::directory::error::OpenReadError;
-        use windows_sys::Win32::Storage::FileSystem::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION};
-        let path = Path::new("protected-search-key.v1");
-        let file = match self.directory.open_read_pinned(path) {
-            Ok(file) => file,
-            Err(OpenReadError::FileDoesNotExist(_)) => return Ok(None),
-            Err(error) => return Err(io::Error::other(error.to_string())),
-        };
-        let mut info = BY_HANDLE_FILE_INFORMATION::default();
-        // SAFETY: file and output struct remain valid for the call.
-        if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0
-            || info.nNumberOfLinks != 1 { return Err(invalid()); }
+    fn read(&mut self) -> io::Result<Option<Vec<u8>>> {
+        use std::{io::{Read, Seek, SeekFrom}, os::windows::{fs::{MetadataExt, OpenOptionsExt}, io::AsRawHandle}};
+        use windows_sys::Win32::Storage::FileSystem::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+            FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ};
+        if self.held_key.is_none() {
+            let opened = std::fs::OpenOptions::new().read(true)
+                .share_mode(FILE_SHARE_READ).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+                .open(self.root.join("protected-search-key.v1"));
+            let file = match opened {
+                Ok(file) => file,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+                Err(error) => return Err(error),
+            };
+            let metadata = file.metadata()?;
+            if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                return Err(invalid());
+            }
+            let mut info = BY_HANDLE_FILE_INFORMATION::default();
+            // SAFETY: file and output struct remain valid for the call.
+            if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0
+                || info.nNumberOfLinks != 1 { return Err(invalid()); }
+            self.held_key = Some(file);
+        }
+        let file = self.held_key.as_mut().ok_or_else(invalid)?;
+        file.seek(SeekFrom::Start(0))?;
         let mut bytes = Vec::new();
         file.take(MAX_PROTECTED as u64 + 1).read_to_end(&mut bytes)?;
         if bytes.is_empty() || bytes.len() > MAX_PROTECTED { return Err(invalid()); }
@@ -95,6 +108,22 @@ impl KeyStore for PinnedKeyFile {
         if value.is_empty() || value.len() > MAX_PROTECTED { return Err(invalid()); }
         self.directory.atomic_create_pinned(std::path::Path::new("protected-search-key.v1"), value)
     }
+}
+// Future reader/writer integration must retain this owner for the full index
+// lifetime instead of copying the key into an independently-lived object.
+#[cfg(windows)]
+struct PinnedIndexKey {
+    _file: PinnedKeyFile,
+    key: Zeroizing<[u8; 32]>,
+}
+#[cfg(windows)]
+impl PinnedIndexKey {
+    fn open(root: &std::path::Path, index_id: &[u8; 16], has_index: bool) -> io::Result<Self> {
+        let mut file = PinnedKeyFile::open(root)?;
+        let key = load_or_create(&mut file, &UserDpapi, index_id, has_index)?;
+        Ok(Self { _file: file, key })
+    }
+    fn key(&self) -> &[u8; 32] { &self.key }
 }
 // DPAPI user scope: do not set CRYPTPROTECT_LOCAL_MACHINE. Not yet wired to a
 // real key store. No runtime fallback or new-key creation on unprotect failure.
@@ -145,7 +174,7 @@ mod tests {
     #[derive(Default)]
     struct Memory { value: Option<Vec<u8>>, fail_read: bool, conflict: bool, bad_readback: bool }
     impl KeyStore for Memory {
-        fn read(&self) -> io::Result<Option<Vec<u8>>> {
+        fn read(&mut self) -> io::Result<Option<Vec<u8>>> {
             if self.fail_read { return Err(io::Error::new(io::ErrorKind::PermissionDenied, "denied")); }
             if self.bad_readback && self.value.is_some() { return Ok(Some(vec![0])); }
             Ok(self.value.clone())
@@ -217,6 +246,21 @@ mod tests {
         assert!(!protected.windows(32).any(|part| part == first.as_ref()));
         assert!(file.create_new(b"replacement").is_err());
         assert_eq!(std::fs::read(path).unwrap(), protected);
+    }
+    #[cfg(windows)]
+    #[test]
+    fn key_handle_blocks_replacement_and_writes_but_allows_another_reader() {
+        let root = tempfile::tempdir().unwrap();
+        let first = PinnedIndexKey::open(root.path(), &[1; 16], false).unwrap();
+        let second = PinnedIndexKey::open(root.path(), &[1; 16], true).unwrap();
+        assert_eq!(first.key(), second.key());
+        let path = root.path().join("protected-search-key.v1");
+        assert!(std::fs::write(&path, b"replace").is_err());
+        assert!(std::fs::remove_file(&path).is_err());
+        drop(first);
+        assert!(std::fs::remove_file(&path).is_err());
+        drop(second);
+        std::fs::remove_file(&path).unwrap();
     }
     #[cfg(windows)]
     #[test]
