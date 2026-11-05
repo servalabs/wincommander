@@ -595,7 +595,9 @@ pub fn load(section: &str) -> Result<Value, String> {
     };
     let encoded = raw.trim();
     let bytes = if encoded.starts_with(settings_section_envelope::PREFIX) {
-        settings_section_envelope::open(section, encoded, dpapi_unprotect)?
+        let user_install = crate::paths::current_user_install_uses_local_datastore();
+        let scope = format!("{}:{section}", if user_install { "user-install" } else { "machine" });
+        settings_section_envelope::open(&scope, encoded, if user_install { user_dpapi_unprotect } else { dpapi_unprotect })?
     } else {
         let material = install_material()?;
         let key = derive_section_key(&material, None)?;
@@ -616,7 +618,7 @@ fn read_section_file(path: &std::path::Path, section: &str) -> Result<Option<Str
 // not be written unless the material used for it has been protected and can
 // still be reopened; otherwise a copied disk exposes both ciphertext and key.
 pub(crate) struct SettingsWriteMaterial {
-    material: zeroize::Zeroizing<[u8; 32]>,
+    _material: zeroize::Zeroizing<[u8; 32]>,
     _material_guard: Option<std::fs::File>,
 }
 
@@ -624,7 +626,7 @@ pub(crate) fn settings_write_material() -> Result<SettingsWriteMaterial, String>
     let material = install_material()?;
     #[cfg(not(windows))]
     return Ok(SettingsWriteMaterial {
-        material: zeroize::Zeroizing::new(material),
+        _material: zeroize::Zeroizing::new(material),
         _material_guard: None,
     });
 
@@ -644,7 +646,7 @@ pub(crate) fn settings_write_material() -> Result<SettingsWriteMaterial, String>
             }
         })?;
         Ok(SettingsWriteMaterial {
-            material: zeroize::Zeroizing::new(material),
+            _material: zeroize::Zeroizing::new(material),
             _material_guard: Some(file),
         })
     }
@@ -720,7 +722,13 @@ pub(crate) fn save_with_material(
     let _material_guard = material;
     let bytes = serde_json::to_vec(data)
         .map_err(|e| format!("Failed to serialise section '{section}': {e}"))?;
-    let encoded = settings_section_envelope::seal(section, &bytes, dpapi_protect, dpapi_unprotect)?;
+    let user_install = crate::paths::current_user_install_uses_local_datastore();
+    let scope = format!("{}:{section}", if user_install { "user-install" } else { "machine" });
+    let encoded = if user_install {
+        settings_section_envelope::seal(&scope, &bytes, user_dpapi_protect, user_dpapi_unprotect)?
+    } else {
+        settings_section_envelope::seal(&scope, &bytes, dpapi_protect, dpapi_unprotect)?
+    };
     atomic_write_bytes(&path, encoded.as_bytes())
         .map_err(|e| format!("Failed to write section '{section}': {e}"))
 }

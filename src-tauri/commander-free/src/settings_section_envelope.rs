@@ -18,7 +18,7 @@ pub(super) fn seal(section: &str, data: &[u8], protect: impl Fn(&[u8]) -> Result
     if wrapped.is_empty() || wrapped.len() > MAX_WRAPPED { return Err("invalid protected section key".into()); }
     let check = Zeroizing::new(unprotect(&wrapped)?);
     if check.as_slice() != key.as_ref() { return Err("protected section key did not reopen".into()); }
-    let ciphertext = encode_section(&key, data, &format!("machine:{section}"))?;
+    let ciphertext = encode_section(&key, data, &format!("section-v3:{section}"))?;
     let envelope = Envelope { wrapped_key: B64.encode(wrapped), ciphertext };
     Ok(format!("{PREFIX}{}", serde_json::to_string(&envelope).map_err(|_| "invalid section envelope")?))
 }
@@ -31,7 +31,7 @@ pub(super) fn open(section: &str, value: &str, unprotect: impl Fn(&[u8]) -> Resu
     if wrapped.is_empty() || wrapped.len() > MAX_WRAPPED { return Err("invalid section key".into()); }
     let key = Zeroizing::new(unprotect(&wrapped)?);
     let key: &[u8; 32] = key.as_slice().try_into().map_err(|_| "invalid section key")?;
-    decode_section(key, &envelope.ciphertext, &format!("machine:{section}"))
+    decode_section(key, &envelope.ciphertext, &format!("section-v3:{section}"))
 }
 
 #[cfg(test)]
@@ -45,6 +45,8 @@ mod tests {
         assert_ne!(first, next);
         assert_eq!(open("settings", &first, identity).unwrap(), b"private");
         assert!(open("other", &first, identity).is_err());
+        let user = seal("user-install:settings", b"private", identity, identity).unwrap();
+        assert!(open("machine:settings", &user, identity).is_err());
     }
     #[test]
     fn corrupted_keys_and_ciphertext_fail_closed() {
