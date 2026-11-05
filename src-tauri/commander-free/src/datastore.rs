@@ -1457,3 +1457,7 @@ mod tests {
         assert_eq!(decrypted, plaintext);
     }
 }
+
+#[cfg(test)]
+#[path = "settings_rotation_trial.rs"]
+mod settings_rotation_trial;
