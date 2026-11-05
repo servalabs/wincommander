@@ -55,6 +55,19 @@ describe("hybrid Free stage verification", () => {
     expect(publish).toBeGreaterThan(gate);
     expect(workflow.slice(gate, publish)).toContain("run: throw 'Free publication is disabled");
   });
+
+  test("beta promotion and legacy rollback stop before checkout or pointer changes", () => {
+    const promotion = readFileSync(resolve(import.meta.dirname, "../.github/workflows/promote-beta.yml"), "utf8");
+    const rollback = readFileSync(resolve(import.meta.dirname, "../.github/workflows/restore-free-3.6.1.yml"), "utf8");
+    const promoteGate = promotion.indexOf("- name: Block incomplete hybrid Free promotion");
+    const rollbackGate = rollback.indexOf("- name: Block classical Free rollback");
+    expect(promoteGate).toBeGreaterThan(-1);
+    expect(rollbackGate).toBeGreaterThan(-1);
+    expect(promotion.indexOf("- uses: actions/checkout")).toBeGreaterThan(promoteGate);
+    expect(rollback.indexOf("- uses: actions/checkout")).toBeGreaterThan(rollbackGate);
+    expect(promotion.slice(promoteGate, promotion.indexOf("- uses: actions/checkout"))).toContain("exit 1");
+    expect(rollback.slice(rollbackGate, rollback.indexOf("- uses: actions/checkout"))).toContain("run: throw");
+  });
   test("uses approved verifier trust and forces the verifier offline", () => {
     const { root, env } = preparedRoot();
     let proofs = 0, checks = 0, trustPath = "";
