@@ -185,6 +185,76 @@ fn verify_source(input: &[u8], old_material: &[u8; 32], sections: &[(String, Str
     Ok(())
 }
 
+/// Stage only to an absent path, hold the newly created file, and verify an
+/// independently opened, bounded readback. This does not activate a generation
+/// or protect against a later path replacement after the handles are dropped.
+fn stage_new_with_hook(
+    path: &Path,
+    candidate: &[u8],
+    old_material: &[u8; 32],
+    sections: &[(String, String)],
+    after_write: &impl Fn(&Path, &mut std::fs::File) -> Result<(), String>,
+) -> Result<(), String> {
+    use std::io::{Read, Write};
+    let limit = MAX_TOTAL * 2 + 65536;
+    if candidate.len() > limit { return Err("settings generation too large".into()); }
+    verify_source(candidate, old_material, sections)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.share_mode(windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ);
+    }
+    let mut written = options.open(path).map_err(|_| "settings stage already exists or is unavailable")?;
+    written.write_all(candidate).and_then(|_| written.sync_all())
+        .map_err(|_| "settings stage write failed; inspect destination")?;
+    after_write(path, &mut written)?;
+
+    let mut read_options = std::fs::OpenOptions::new();
+    read_options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE};
+        read_options.share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let readback = read_options.open(path).map_err(|_| "cannot reopen settings stage")?;
+    if !same_stage_file(&written, &readback)? { return Err("settings stage identity changed".into()); }
+    let metadata = readback.metadata().map_err(|_| "cannot inspect settings stage")?;
+    if !metadata.is_file() || metadata.len() > limit as u64 { return Err("invalid settings stage".into()); }
+    let mut actual = Vec::new();
+    readback.take(limit as u64 + 1).read_to_end(&mut actual).map_err(|_| "cannot read settings stage")?;
+    if actual.len() > limit || actual != candidate { return Err("settings stage readback mismatch".into()); }
+    verify_source(&actual, old_material, sections)
+}
+
+#[cfg(windows)]
+fn same_stage_file(first: &std::fs::File, second: &std::fs::File) -> Result<bool, String> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_REPARSE_POINT};
+    let mut a = BY_HANDLE_FILE_INFORMATION::default();
+    let mut b = BY_HANDLE_FILE_INFORMATION::default();
+    // SAFETY: both handles and output structs remain valid throughout the calls.
+    if unsafe { GetFileInformationByHandle(first.as_raw_handle(), &mut a) } == 0
+        || unsafe { GetFileInformationByHandle(second.as_raw_handle(), &mut b) } == 0 {
+        return Err("cannot verify settings stage identity".into());
+    }
+    Ok(a.nNumberOfLinks == 1 && b.nNumberOfLinks == 1
+        && a.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT == 0
+        && b.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT == 0
+        && a.dwVolumeSerialNumber == b.dwVolumeSerialNumber
+        && a.nFileIndexHigh == b.nFileIndexHigh && a.nFileIndexLow == b.nFileIndexLow)
+}
+
+#[cfg(unix)]
+fn same_stage_file(first: &std::fs::File, second: &std::fs::File) -> Result<bool, String> {
+    use std::os::unix::fs::MetadataExt;
+    let a = first.metadata().map_err(|_| "cannot verify settings stage identity")?;
+    let b = second.metadata().map_err(|_| "cannot verify settings stage identity")?;
+    Ok(a.nlink() == 1 && b.nlink() == 1 && a.dev() == b.dev() && a.ino() == b.ino())
+}
+
 /// A single file contains both protected key material and all encrypted
 /// sections. Publication must be atomic; an ambiguous error requires readback.
 fn publish(

@@ -217,3 +217,56 @@ fn validly_resealed_candidate_cannot_change_values_with_original_manifest() {
     assert!(publish(&path, &forged, &old, &input, &crate::datastore_io::atomic_write).is_err());
     assert_eq!(std::fs::read(path).unwrap(), candidate);
 }
+
+#[test]
+fn staged_readback_rejects_corruption_and_preserves_existing_destination() {
+    use std::io::{Seek, SeekFrom, Write};
+    let dir = tempfile::tempdir().unwrap();
+    let old = [42; 32];
+    let input = sections(&old);
+    let candidate = prepare(&old, &input).unwrap();
+    let existing = dir.path().join("existing");
+    std::fs::write(&existing, b"do not replace").unwrap();
+    assert!(stage_new_with_hook(&existing, &candidate, &old, &input, &|_, _| Ok(())).is_err());
+    assert_eq!(std::fs::read(&existing).unwrap(), b"do not replace");
+    let staged = dir.path().join("staged");
+    let result = stage_new_with_hook(&staged, &candidate, &old, &input, &|_, file| {
+        file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+        file.write_all(b"X").map_err(|e| e.to_string())?;
+        file.sync_all().map_err(|e| e.to_string())
+    });
+    assert!(result.is_err());
+    assert!(staged.exists());
+    assert_eq!(std::fs::read(existing).unwrap(), b"do not replace");
+}
+
+#[test]
+fn staged_readback_rejects_swapped_file_and_oversized_data() {
+    let dir = tempfile::tempdir().unwrap();
+    let old = [42; 32];
+    let input = sections(&old);
+    let candidate = prepare(&old, &input).unwrap();
+    let staged = dir.path().join("staged");
+    let moved = dir.path().join("moved");
+    let swapped = stage_new_with_hook(&staged, &candidate, &old, &input, &|path, _| {
+        std::fs::rename(path, &moved).map_err(|e| e.to_string())?;
+        std::fs::write(path, &candidate).map_err(|e| e.to_string())
+    });
+    assert!(swapped.is_err());
+    let oversized = dir.path().join("oversized");
+    let result = stage_new_with_hook(&oversized, &candidate, &old, &input, &|_, file| {
+        file.set_len((MAX_TOTAL * 2 + 65537) as u64).map_err(|e| e.to_string())
+    });
+    assert!(result.is_err());
+}
+
+#[test]
+fn staged_readback_succeeds_for_an_unchanged_new_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let old = [42; 32];
+    let input = sections(&old);
+    let candidate = prepare(&old, &input).unwrap();
+    let staged = dir.path().join("staged");
+    stage_new_with_hook(&staged, &candidate, &old, &input, &|_, _| Ok(())).unwrap();
+    assert_eq!(std::fs::read(staged).unwrap(), candidate);
+}

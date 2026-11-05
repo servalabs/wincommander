@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Test-only source snapshot. This does not provide a production cutover.
-use super::{prepare, validate_section_name, verify_source, MAX_SECTIONS, MAX_TOTAL};
+use super::{prepare, stage_new_with_hook, validate_section_name, verify_source, MAX_SECTIONS, MAX_TOTAL};
 use crate::datastore::dpapi_unprotect;
 use sha2::{Digest, Sha256};
 use std::{fs::{self, File, OpenOptions}, io::{Read, Seek, SeekFrom}, path::{Path, PathBuf}};
@@ -174,17 +174,21 @@ impl Snapshot {
         self.verify_unchanged()
     }
 
-    /// Stage only an unactivated candidate while all source guards stay alive.
-    /// The callback must not overwrite an active generation. Even success is
-    /// not cutover authorization: a later old writer can still change sources.
-    /// On any error the staged destination may exist and needs inspection.
-    pub(super) fn stage_unactivated(
+    /// Stage at a new path and independently verify its contents while all
+    /// source guards stay alive. It does not activate or fence old writers.
+    pub(super) fn stage_unactivated(&mut self, path: &Path) -> Result<(), String> {
+        self.stage_unactivated_with_hook(path, &|_, _| Ok(()))
+    }
+
+    fn stage_unactivated_with_hook(
         &mut self,
-        stage: &impl Fn(&[u8]) -> Result<(), String>,
+        path: &Path,
+        after_write: &impl Fn(&Path, &mut File) -> Result<(), String>,
     ) -> Result<(), String> {
         let output = self.prepare()?;
         self.verify_generation(&output)?;
-        stage(&output)?;
+        let sections: Vec<_> = self.sections.iter().map(|s| (s.name.clone(), s.encoded.clone())).collect();
+        stage_new_with_hook(path, &output, &self.material, &sections, after_write)?;
         self.verify_generation(&output)?;
         Ok(())
     }

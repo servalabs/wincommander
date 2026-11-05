@@ -65,7 +65,8 @@ fn staging_does_not_accept_new_section_created_during_publication() {
     let original = fs::read(dir.path().join("store").join("settings.dat")).unwrap();
     let mut snapshot = Snapshot::capture(dir.path()).unwrap();
     let later = dir.path().join("store").join("later.dat");
-    let result = snapshot.stage_unactivated(&|_| {
+    let staged = dir.path().join("unactivated-generation");
+    let result = snapshot.stage_unactivated_with_hook(&staged, &|_, _| {
         fs::write(&later, b"late old-writer data").map_err(|_| "old writer blocked".to_string())
     });
     assert!(result.is_err());
@@ -80,8 +81,7 @@ fn failure_after_staging_does_not_authorize_cutover_or_modify_sources() {
     let original = fs::read(&section).unwrap();
     let staged = dir.path().join("unactivated-generation");
     let mut snapshot = Snapshot::capture(dir.path()).unwrap();
-    let result = snapshot.stage_unactivated(&|candidate| {
-        fs::write(&staged, candidate).map_err(|e| e.to_string())?;
+    let result = snapshot.stage_unactivated_with_hook(&staged, &|_, _| {
         Err("publication outcome unknown".into())
     });
     assert!(result.is_err());
@@ -114,7 +114,7 @@ fn successful_staging_does_not_fence_a_later_old_writer() {
     let dir = tempfile::tempdir().unwrap();
     fixture(dir.path());
     let mut snapshot = Snapshot::capture(dir.path()).unwrap();
-    snapshot.stage_unactivated(&|_| Ok(())).unwrap();
+    snapshot.stage_unactivated(&dir.path().join("unactivated-generation")).unwrap();
     let late = dir.path().join("store").join("late.dat");
     if fs::write(&late, b"post-check old writer").is_ok() {
         // The previous success did not authorize activation. The caller can
