@@ -40,7 +40,7 @@ fn classify(parent: &Path, old: &Path, selection: &Path) -> Result<State, String
 
 /// Run from the temporary early CLI helper, before normal application startup.
 /// The verify phase is read-only and the installer must hold its exclusive lock.
-pub fn run(phase: &str) -> Result<(), String> {
+pub fn run(phase: &str) -> Result<String, String> {
     let parent = crate::file_search::runtime_fence::verified_parent()?;
     let old = parent.join("fts");
     let selection = parent.join(".wincommander-encrypted-selection");
@@ -49,31 +49,31 @@ pub fn run(phase: &str) -> Result<(), String> {
             let guard = SearchOperationFence::acquire_exclusive(&parent)
                 .map_err(|_| "Cannot acquire offline search maintenance lock.")?;
             match classify(&parent, &old, &selection)? {
-                State::Fresh => Ok(()),
+                State::Fresh => Ok("fresh".into()),
                 State::NeedsRebuild => {
                     let (config, policy) = crate::file_search::offline_index_plan()?;
                     if config.index_dir != old { return Err("Search profile changed during migration.".into()); }
-                    SearchEngine::rebuild_offline_and_select(config, policy, &selection, &guard)
+                    let report = SearchEngine::rebuild_offline_and_select(config, policy, &selection, &guard)
                         .map_err(|e| e.to_string())?;
                     SearchEngine::quarantine_selected_with_fence(&old, &selection, &guard)
-                        .map(|_| ()).map_err(|e| e.to_string())
+                        .map(|_| format!("moved indexed={} omitted={} links={}", report.indexed, report.omitted, report.skipped_links)).map_err(|e| e.to_string())
                 },
                 State::NeedsQuarantine => SearchEngine::quarantine_selected_with_fence(&old, &selection, &guard)
-                    .map(|_| ()).map_err(|e| e.to_string()),
+                    .map(|_| "moved".into()).map_err(|e| e.to_string()),
                 State::Quarantined => SearchEngine::verify_quarantined_selection(&old, &selection)
-                    .map_err(|e| e.to_string()),
+                    .map(|_| "already-quarantined".into()).map_err(|e| e.to_string()),
             }
         }
         "restore" => {
             let guard = SearchOperationFence::acquire_exclusive(&parent)
                 .map_err(|_| "Cannot acquire offline search maintenance lock.")?;
             SearchEngine::restore_quarantined_with_fence(&old, &selection, &guard)
-                .map(|_| ()).map_err(|e| e.to_string())
+                .map(|_| "restored".into()).map_err(|e| e.to_string())
         }
         "verify" => match classify(&parent, &old, &selection)? {
-            State::Fresh => Ok(()),
+            State::Fresh => Ok("fresh".into()),
             State::Quarantined => SearchEngine::verify_quarantined_selection(&old, &selection)
-                .map_err(|e| e.to_string()),
+                .map(|_| "verified".into()).map_err(|e| e.to_string()),
             State::NeedsRebuild | State::NeedsQuarantine => Err("The old search index is still present.".into()),
         },
         _ => Err("Invalid search migration phase.".into()),
