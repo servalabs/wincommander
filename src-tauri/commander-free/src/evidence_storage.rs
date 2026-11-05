@@ -443,7 +443,9 @@ pub(super) fn read_with_machine_source(
                     })?;
                     let mut combined = std::mem::take(&mut ledger.entries);
                     combined.append(&mut prior);
-                    combined.sort_by(|a, b| a.time.cmp(&b.time));
+                    if ledger.machine_source_digest.is_none() {
+                        combined.sort_by(|a, b| a.time.cmp(&b.time));
+                    }
                     if combined.len() > MAX_ENTRIES {
                         combined.drain(..combined.len() - MAX_ENTRIES);
                     }
@@ -1183,7 +1185,7 @@ mod tests {
         )
         .unwrap();
         let protected = fs::read(&path).unwrap();
-        fs::write(&old, "{}\n").unwrap();
+        fs::write(&old, numbered_line(8)).unwrap();
         assert!(read_with_machine_source(
             &path,
             &old,
@@ -1225,6 +1227,9 @@ mod tests {
     fn numbered_line(number: usize) -> String {
         let mut value = entry();
         value.summary = format!("event-{number:04}");
+        if number == 1000 {
+            value.time = "2020-01-01T00:00:00Z".into();
+        }
         format!("{}\n", serde_json::to_string(&value).unwrap())
     }
 
