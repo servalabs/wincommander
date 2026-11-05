@@ -173,4 +173,30 @@ mod tests {
             assert!(checked_allowed_ace(header.cast()).is_none());
         }
     }
+    // Requires an elevated Windows test process; run separately as an elevated
+    // Administrator and as LocalSystem before the installer can use this seam.
+    #[test]
+    fn elevated_provision_is_idempotent_and_rejects_foreign_acl_without_modification() {
+        use std::io::Write;
+        let root = tempfile::tempdir().unwrap();
+        provision_or_verify(root.path()).unwrap();
+        provision_or_verify(root.path()).unwrap();
+        let file = std::fs::File::open(root.path().join(".settings-generation.lock")).unwrap();
+        verify_machine_handle(&file).unwrap();
+        drop(file);
+        let other = tempfile::tempdir().unwrap();
+        let name: Vec<u16> = other.path().join(".settings-generation.lock").as_os_str().encode_wide().chain(Some(0)).collect();
+        let descriptor = Descriptor::from_sddl("D:P(A;;FA;;;WD)").unwrap();
+        let mut attrs = descriptor.attributes();
+        let handle = unsafe { CreateFileW(name.as_ptr(), GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE, &mut attrs, CREATE_NEW,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, std::ptr::null_mut()) };
+        assert_ne!(handle, INVALID_HANDLE_VALUE);
+        let mut foreign = unsafe { File::from_raw_handle(handle) };
+        foreign.write_all(b"preserve foreign bytes").unwrap();
+        drop(foreign);
+        assert!(provision_or_verify(other.path()).is_err());
+        assert_eq!(std::fs::read(other.path().join(".settings-generation.lock")).unwrap(), b"preserve foreign bytes");
+    }
+
 }

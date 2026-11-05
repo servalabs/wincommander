@@ -2,6 +2,15 @@
 use super::*;
 use serde_json::json;
 
+// Machine-lock fixture requires an elevated Windows test process; it creates
+// only a disposable test file and never repairs an existing descriptor.
+fn provision_test_lock(root: &std::path::Path) {
+    #[cfg(windows)]
+    crate::datastore::settings_generation_acl_windows::provision_or_verify(root).unwrap();
+    #[cfg(not(windows))]
+    std::fs::write(root.join(".settings-generation.lock"), b"").unwrap();
+}
+
 fn sections(key: &[u8; 32]) -> Vec<(String, String)> {
     let old = derive_section_key(key, None).unwrap();
     [
@@ -382,7 +391,7 @@ fn selected_generation_update_preserves_other_sections_and_fails_closed() {
 #[test]
 fn locked_selected_generation_serializes_owners_and_never_falls_back() {
     let root = tempfile::tempdir().unwrap();
-    std::fs::write(root.path().join(".settings-generation.lock"), b"").unwrap();
+    provision_test_lock(root.path());
     assert!(LockedSelectedGeneration::try_open(root.path()).is_err());
     let old = [42; 32];
     let input = sections(&old);
@@ -409,7 +418,7 @@ fn locked_selected_generation_serializes_owners_and_never_falls_back() {
 #[test]
 fn selected_store_recovers_real_pending_files_at_each_publish_boundary() {
     let root = tempfile::tempdir().unwrap();
-    std::fs::write(root.path().join(".settings-generation.lock"), b"").unwrap();
+    provision_test_lock(root.path());
     let old = [42; 32];
     let input = sections(&old);
     let original = prepare(&old, &input).unwrap();
@@ -459,7 +468,7 @@ fn current_user_generation_preserves_mixed_sections_and_rejects_machine_scope() 
     assert!(verify_source_for(StoreScope::Machine, &candidate, &old, &input).is_err());
     assert_eq!(open(&candidate).unwrap()["f6-keystore"]["signing_seed_hex"], "userseed");
     let root = tempfile::tempdir().unwrap();
-    std::fs::write(root.path().join(".settings-generation.lock"), b"").unwrap();
+    provision_test_lock(root.path());
     let selected = root.path().join(".settings-generation.v1");
     let authority = root.path().join(".settings-generation.authority.v1");
     std::fs::write(&selected, &candidate).unwrap();
@@ -477,7 +486,7 @@ fn current_user_generation_preserves_mixed_sections_and_rejects_machine_scope() 
 #[test]
 fn shared_readers_never_repair_pending_authority_and_exclude_writers() {
     let root = tempfile::tempdir().unwrap();
-    std::fs::write(root.path().join(".settings-generation.lock"), b"").unwrap();
+    provision_test_lock(root.path());
     let old = [42; 32];
     let input = sections(&old);
     let candidate = prepare(&old, &input).unwrap();
