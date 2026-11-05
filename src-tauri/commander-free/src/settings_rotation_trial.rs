@@ -225,6 +225,38 @@ impl StagedFile {
     }
 }
 
+/// Reopen an existing unactivated stage after restart, without modifying it.
+/// The caller must hold and authenticate the complete source snapshot and
+/// authorize the containing directory before considering any activation.
+fn recover_stage(path: &Path, old_material: &[u8; 32], sections: &[(String, String)]) -> Result<(StagedFile, Vec<u8>), String> {
+    use std::io::Read;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ};
+        options.share_mode(FILE_SHARE_READ).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    #[cfg(unix)]
+    if std::fs::symlink_metadata(path).map_err(|_| "cannot inspect settings stage")?.file_type().is_symlink() {
+        return Err("linked settings stage refused".into());
+    }
+    let written = options.open(path).map_err(|_| "cannot open settings stage for recovery")?;
+    let reader = open_stage_reader(path)?;
+    if !same_stage_file(&written, &reader)? { return Err("settings stage identity changed".into()); }
+    let limit = MAX_TOTAL * 2 + 65536;
+    let metadata = reader.metadata().map_err(|_| "cannot inspect settings stage")?;
+    if !metadata.is_file() || metadata.len() > limit as u64 { return Err("invalid settings stage".into()); }
+    let mut candidate = Vec::new();
+    (&reader).take(limit as u64 + 1).read_to_end(&mut candidate).map_err(|_| "cannot read settings stage")?;
+    if candidate.len() > limit { return Err("invalid settings stage".into()); }
+    verify_source(&candidate, old_material, sections)?;
+    let guard = StagedFile { path: path.to_path_buf(), written, _reader: reader };
+    guard.verify(&candidate, old_material, sections)?;
+    Ok((guard, candidate))
+}
+
 /// Create a new stage without overwrite and hold it through readback. A failed
 /// attempt may leave an unactivated file that must be inspected, not activated.
 fn stage_new_with_hook(

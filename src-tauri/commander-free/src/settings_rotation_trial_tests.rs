@@ -286,3 +286,24 @@ fn held_stage_guard_detects_path_swap_after_first_readback() {
     assert!(stage.verify(&candidate, &old, &input).is_err());
     assert_eq!(std::fs::read(moved).unwrap(), candidate);
 }
+
+#[test]
+fn restart_recovery_authenticates_stage_and_leaves_partial_or_stale_files_untouched() {
+    let dir = tempfile::tempdir().unwrap();
+    let old = [42; 32];
+    let input = sections(&old);
+    let candidate = prepare(&old, &input).unwrap();
+    let path = dir.path().join("stage");
+    drop(stage_new_with_hook(&path, &candidate, &old, &input, &|_, _| Ok(())).unwrap());
+    let (guard, recovered) = recover_stage(&path, &old, &input).unwrap();
+    assert_eq!(recovered, candidate);
+    guard.verify(&candidate, &old, &input).unwrap();
+    drop(guard);
+    let changed = sections(&[43; 32]);
+    assert!(recover_stage(&path, &old, &changed).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), candidate);
+    std::fs::write(&path, &candidate[..candidate.len()/2]).unwrap();
+    let partial = std::fs::read(&path).unwrap();
+    assert!(recover_stage(&path, &old, &input).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), partial);
+}

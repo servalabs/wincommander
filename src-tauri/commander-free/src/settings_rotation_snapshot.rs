@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Test-only source snapshot. This does not provide a production cutover.
-use super::{prepare, stage_new_with_hook, validate_section_name, verify_source, StagedFile, MAX_SECTIONS, MAX_TOTAL};
+use super::{prepare, recover_stage, stage_new_with_hook, validate_section_name, verify_source, StagedFile, MAX_SECTIONS, MAX_TOTAL};
 use crate::datastore::dpapi_unprotect;
 use sha2::{Digest, Sha256};
 use std::{fs::{self, File, OpenOptions}, io::{Read, Seek, SeekFrom}, path::{Path, PathBuf}};
@@ -97,15 +97,44 @@ fn enumerate(store: &Path) -> Result<Vec<(String, PathBuf)>, String> {
     Ok(found)
 }
 
+// Resolve the machine root independently of process environment variables. This
+// does not establish directory ACL ownership or authorize activation.
+fn known_machine_root() -> Result<PathBuf, String> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::{System::Com::CoTaskMemFree, UI::Shell::{FOLDERID_ProgramData, SHGetKnownFolderPath}};
+    let app = Path::new(crate::paths::APP_DIR_NAME);
+    let mut components = app.components();
+    if !matches!(components.next(), Some(std::path::Component::Normal(_))) || components.next().is_some() {
+        return Err(UNAVAILABLE.into());
+    }
+    let mut raw = std::ptr::null_mut();
+    // SAFETY: SHGetKnownFolderPath initializes an allocated null-terminated path.
+    let result = unsafe { SHGetKnownFolderPath(&FOLDERID_ProgramData, 0, std::ptr::null_mut(), &mut raw) };
+    if result < 0 || raw.is_null() {
+        if !raw.is_null() { unsafe { CoTaskMemFree(raw.cast()) }; }
+        return Err(UNAVAILABLE.into());
+    }
+    let mut len = 0usize;
+    // SAFETY: Windows returned a null-terminated allocation, freed below.
+    let base = unsafe {
+        while *raw.add(len) != 0 { len += 1; }
+        let value = std::ffi::OsString::from_wide(std::slice::from_raw_parts(raw, len));
+        CoTaskMemFree(raw.cast());
+        PathBuf::from(value)
+    };
+    if !base.is_absolute() { return Err(UNAVAILABLE.into()); }
+    Ok(base.join(app))
+}
+
 impl Snapshot {
     /// Machine-only entry point. The inherited machine-data resolver uses the
-    /// process environment; trustworthy root authorization remains required
+    /// Windows known-folder API; directory ACL authorization remains required
     /// before any production integration.
     pub(super) fn capture_machine() -> Result<Self, String> {
         if crate::paths::current_user_install_uses_local_datastore() {
             return Err("machine settings rotation is unavailable for a current-user install".into());
         }
-        let root = crate::paths::machine_data_dir().map_err(|_| UNAVAILABLE)?;
+        let root = known_machine_root()?;
         Self::capture(&root)
     }
 
@@ -180,6 +209,17 @@ impl Snapshot {
     /// it does not activate or authorize a production cutover.
     pub(super) fn stage_unactivated(&mut self) -> Result<GuardedStage<'_>, String> {
         self.stage_unactivated_with_hook(&|_, _| Ok(()))
+    }
+
+    /// Inspect a prior stage after restart against the complete current source.
+    /// A mismatch or partial write is left untouched for manual investigation.
+    pub(super) fn recover_unactivated(&mut self) -> Result<GuardedStage<'_>, String> {
+        self.verify_unchanged()?;
+        let sections: Vec<_> = self.sections.iter().map(|s| (s.name.clone(), s.encoded.clone())).collect();
+        let stage_path = self.store.parent().ok_or(UNAVAILABLE)?.join(STAGED_NAME);
+        let (stage, output) = recover_stage(&stage_path, &self.material, &sections)?;
+        self.verify_generation(&output)?;
+        Ok(GuardedStage { snapshot: self, stage, output })
     }
 
     fn stage_unactivated_with_hook(

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 // build overrides it at compile time via the WINCMD_APP_DIR env var. Changing it
 // relocates %LOCALAPPDATA%\<name>, %ProgramData%\<name>, the roaming fallback,
 // logs, settings.json and the icon cache. Build-time only.
-const APP_DIR_NAME: &str = match option_env!("WINCMD_APP_DIR") {
+pub(crate) const APP_DIR_NAME: &str = match option_env!("WINCMD_APP_DIR") {
     Some(v) => v,
     None => "WinCommander",
 };
