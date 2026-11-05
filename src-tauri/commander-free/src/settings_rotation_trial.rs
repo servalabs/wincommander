@@ -818,22 +818,25 @@ pub(super) fn migrate_explicitly() -> Result<(), String> {
 
 /// Pre-replacement staging only. It never provisions a cutover anchor or
 /// selects a generation, so the original installation remains authoritative.
-/// This isolated lab path stages machine settings only. The caller must establish
-/// the intended installation identity; it is not suitable for installer use.
+/// User staging additionally requires an expected SID checked by the caller.
+/// Installer handoff and reliable identity capture are not yet implemented.
 #[cfg(windows)]
-pub(super) fn stage_existing_explicitly() -> Result<(), String> {
+pub(super) fn stage_existing_explicitly(expected_scope: StoreScope) -> Result<(), String> {
     super::settings_generation_maintenance::verify_known_writers_stopped()?;
-    if crate::paths::current_user_install_uses_local_datastore() {
-        return Err("Per-user settings preflight requires original-user identity support; existing data preserved.".into());
+    let actual_scope = if crate::paths::current_user_install_uses_local_datastore() { StoreScope::CurrentUser } else { StoreScope::Machine };
+    if actual_scope != expected_scope {
+        return Err("Settings installation scope does not match the running application; existing data preserved.".into());
     }
-    let root = source_snapshot::known_root(StoreScope::Machine)?;
+    let root = source_snapshot::known_root(expected_scope)?;
     match std::fs::symlink_metadata(&root) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && expected_scope == StoreScope::Machine => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Err("Original user settings root is missing; no migration was performed.".into()),
         Err(_) => return Err("Cannot inspect settings root; existing data preserved.".into()),
         Ok(_) => {},
     }
     let (root, _pins, scope) = experimental_runtime_root()?;
-    let key = read_generation_file(&root.join(".install.material"), 65_536)?;
+    let key_name = match scope { StoreScope::Machine => ".install.material", StoreScope::CurrentUser => ".user-store.material" };
+    let key = read_generation_file(&root.join(key_name), 65_536)?;
     if key.is_none() {
         let store = root.join("store");
         match std::fs::read_dir(&store) {
@@ -845,8 +848,10 @@ pub(super) fn stage_existing_explicitly() -> Result<(), String> {
             _ => return Err("Settings key is missing or store cannot be inspected; existing data preserved.".into()),
         }
     }
-    super::settings_generation_acl_windows::provision_or_verify(&root)
-        .map_err(|_| "Cannot provision settings lock; existing data preserved.")?;
+    match scope {
+        StoreScope::Machine => super::settings_generation_acl_windows::provision_or_verify(&root),
+        StoreScope::CurrentUser => super::settings_generation_acl_windows::provision_user_or_verify(&root),
+    }.map_err(|_| "Cannot provision settings lock; existing data preserved.")?;
     let owner = LockedSelectedGeneration::acquire_for(&root, scope)?;
     let anchor = ProtectedFileAnchor::new(&root, scope);
     match anchor.read()? {
@@ -854,7 +859,10 @@ pub(super) fn stage_existing_explicitly() -> Result<(), String> {
         Some(AnchorState::Updating { .. }) => return Err("Settings update requires recovery; existing data preserved.".into()),
         Some(AnchorState::Legacy | AnchorState::Preparing { .. }) | None => {},
     }
-    let mut snapshot = source_snapshot::Snapshot::capture_machine()?;
+    let mut snapshot = match scope {
+        StoreScope::Machine => source_snapshot::Snapshot::capture_machine()?,
+        StoreScope::CurrentUser => source_snapshot::Snapshot::capture_user()?,
+    };
     let stage = root.join(".settings-cutover-candidate.v1");
     let candidate = match read_generation_file(&stage, MAX_TOTAL * 2 + 65_536)? {
         Some(existing) => existing,
