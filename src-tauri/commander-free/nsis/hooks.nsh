@@ -22,6 +22,9 @@ ${Using:StrFunc} UnStrStr
 !define WC_MIGRATE_SYSTEM_MAINTENANCE_TASKS "${__FILEDIR__}\migrate-system-maintenance-tasks.ps1"
 !define WC_WIPE_TASK_MODULE "${__FILEDIR__}\..\..\wincmd-shared\scripts\auto-erase.ps1"
 !define WC_REPAIR_SHARED_SETTINGS "${__FILEDIR__}\repair-shared-settings.ps1"
+!ifdef WC_EXPERIMENTAL_SETTINGS_MIGRATION
+!define WC_INSTALL_SETTINGS_GENERATION "${__FILEDIR__}\install-settings-generation.ps1"
+!endif
 !define WC_REPAIR_VAULT_DRIVER_ACCESS "${__FILEDIR__}\..\..\..\tools\repair-vault-driver-access.ps1"
 !define WC_UPGRADE_LICENSE_BACKUP "$R5\WinCommander-license_cache.upgrade-backup.json"
 ; The service advertises this same bounded cleanup interval to SCM while it
@@ -312,6 +315,23 @@ ${Using:StrFunc} UnStrStr
   ; separately entitled Pro helper is installed on demand and is never bundled
   ; into, replaced by, or required for a Free installer update.
   !insertmacro WC_STOP_OWNED_SERVICE_OR_ABORT "install" ""
+  !ifdef WC_EXPERIMENTAL_SETTINGS_MIGRATION
+    ; Explicit custom NSIS build only; standard installers do not execute this.
+    ; Recheck immediately before migration; the Rust helper independently scans
+    ; known writers/service while snapshotting and fails visibly on ambiguity.
+    !insertmacro WC_CLOSE_OWNED_DESKTOP_APP_OR_ABORT "settings-migration"
+    !insertmacro WC_STOP_OWNED_SERVICE_OR_ABORT "settings-migration" ""
+    InitPluginsDir
+    File /oname=$PLUGINSDIR\wincommander-install-settings-generation.ps1 "${WC_INSTALL_SETTINGS_GENERATION}"
+    !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
+    nsExec::ExecToStack /TIMEOUT=600000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-install-settings-generation.ps1" -ExecutablePath "$INSTDIR\wincommander-free.exe"'
+    Pop $0
+    Pop $1
+    !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "settings-migration" "$0" "$1"
+    ${If} $0 != 0
+      Abort "WinCommander could not migrate settings safely. Close other WinCommander sessions and retry; existing files were preserved."
+    ${EndIf}
+  !endif
   ; Keep the service beside the protected app executable. The service's peer
   ; authorization derives this exact install root, so do not run it from a
   ; mutable user profile or ProgramData download directory.

@@ -2,9 +2,9 @@
 
 The migration implementation is experimental. Normal builds retain the current
 main-branch format and guarded-key writes. A Windows build with the non-default
-`experimental-settings-generation` feature AND process environment variable
-`WINCOMMANDER_EXPERIMENTAL_SETTINGS_GENERATION=1` routes machine-section reads
-and writes through the experimental lock and authority guard. It does not
+`experimental-settings-generation` feature routes section reads and writes
+through the experimental lock and anchor in release builds. Debug builds also
+require `WINCOMMANDER_EXPERIMENTAL_SETTINGS_GENERATION=1`. It does not
 provision the lock or initialize a generation during normal startup. Current-user installations use
 user-scoped DPAPI for the new generation and fail with an account/profile
 recovery message if Windows cannot unlock it; they never retry the new generation
@@ -89,9 +89,10 @@ first securely create or verify the actual known-folder root and its owner and
 DACL, pin its ancestors, prove that the install is fresh, and fence older
 writers. After those prerequisites, the seam can provision the lock and anchor,
 then select a protected empty generation; a Legacy anchor alone is not proof of
-protected settings. A debug-only explicit lab command exists, but no installer invokes it.
+protected settings. A separately opted-in NSIS build can invoke the maintenance command after
+stopping the known desktop and service; standard installers do not invoke it.
 
-A Windows debug build with the feature and the environment opt-in can invoke
+A Windows build with the feature and the environment opt-in can invoke
 `--settings-generation-lab status`, or `fresh --offline-confirmed` / `migrate
 --offline-confirmed` after the command name. These commands can modify the
 actual resolved settings root; they have not been executed as part of this
@@ -107,10 +108,19 @@ This assumes a first rollout: deletion or restoration of all prior cutover
 artifacts remains indistinguishable from no prior migration. An independent
 rollback anchor is still needed for stronger protection.
 
-The debug migration rechecks known executable names and the named service while
+The gated migration rechecks known executable names and the named service while
 validating the held source and fails visibly if they are running or cannot be
 inspected. Process scans do not prevent a new launch after the scan and do not
 identify renamed copies. The rollout must stop autostart/service routes and
 require all clients to upgrade before migration; these checks are not a
 substitute for enforced maintenance mode. Original settings and the signing
 key remain in place, and the staged encrypted candidate is retained.
+
+The optional NSIS block requires the explicit `WC_EXPERIMENTAL_SETTINGS_MIGRATION`
+define and a binary built with the matching Cargo feature. It stops/checks the
+installed desktop and service before calling the maintenance helper, aborts on
+failure, and starts no service until afterward. A feature-enabled release routes
+future reads/writes through the guarded generation; a missing anchor is an
+error. Feature and installer define must be paired in the release process. This
+path has not yet been compiled as an installer or exercised in Windows
+acceptance, and must not be enabled by default before that work is complete.

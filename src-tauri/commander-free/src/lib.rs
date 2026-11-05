@@ -49,7 +49,7 @@ mod context_scrub_failure;
 mod context_scrub_notification;
 mod context_scrub_outcome;
 mod datastore;
-#[cfg(all(windows, debug_assertions, feature = "experimental-settings-generation"))]
+#[cfg(all(windows, feature = "experimental-settings-generation"))]
 pub mod settings_generation_lab;
 mod datastore_io;
 mod devtools;

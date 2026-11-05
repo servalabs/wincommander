@@ -816,6 +816,34 @@ pub(super) fn migrate_explicitly() -> Result<(), String> {
         })
 }
 
+/// Installer decision under the same maintenance checks. A protected Active
+/// generation is reused; an existing legacy key is migrated; otherwise the
+/// conservative fresh path rejects any unexpected existing file or directory.
+#[cfg(windows)]
+pub(super) fn install_migration_explicitly() -> Result<(), String> {
+    super::settings_generation_maintenance::verify_known_writers_stopped()?;
+    let scope = if crate::paths::current_user_install_uses_local_datastore() { StoreScope::CurrentUser } else { StoreScope::Machine };
+    let root = source_snapshot::known_root(scope)?;
+    match std::fs::symlink_metadata(&root) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return provision_verified_fresh_install(),
+        Err(_) => return Err("Cannot inspect settings root; existing data was preserved.".into()),
+        Ok(_) => {},
+    }
+    let (root, _pins, scope) = experimental_runtime_root()?;
+    let anchor = ProtectedFileAnchor::new(&root, scope);
+    if matches!(anchor.read()?, Some(AnchorState::Active { .. } | AnchorState::Updating { .. })) {
+        let owner = LockedSelectedGeneration::acquire_for(&root, scope)?;
+        owner.read_reconciled()?;
+        return Ok(());
+    }
+    let key_name = match scope { StoreScope::Machine => ".install.material", StoreScope::CurrentUser => ".user-store.material" };
+    if read_generation_file(&root.join(key_name), 65_536)?.is_some() {
+        migrate_explicitly()
+    } else {
+        provision_verified_fresh_install()
+    }
+}
+
 // Fresh installs have no legacy key or sections to migrate. The marker and
 // candidate still go through the same interrupted-selection protocol.
 fn prepare_fresh_generation(scope: StoreScope) -> Result<Vec<u8>, String> {
