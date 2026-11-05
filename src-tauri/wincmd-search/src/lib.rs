@@ -431,6 +431,76 @@ impl SearchEngine {
         self.config.skip_paths.push(backup.clone());
         Ok(backup)
     }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    fn check_offline_rebuild_space(old: &std::path::Path, parent: &std::path::Path) -> Result<()> {
+        use std::os::windows::{ffi::OsStrExt, fs::MetadataExt};
+        use windows_sys::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_REPARSE_POINT, GetDiskFreeSpaceExW};
+        let _pins = crate::read_only::CheckedDirectory::pin_root_path(old)?;
+        let mut old_bytes = 0u64;
+        for entry in std::fs::read_dir(old)? {
+            let entry = entry?;
+            let meta = std::fs::symlink_metadata(entry.path())?;
+            if !meta.is_file() || meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                return Err(SearchError::Config("Old search index contains unsupported entries; existing files were retained.".into()));
+            }
+            old_bytes = old_bytes.checked_add(meta.len())
+                .ok_or_else(|| SearchError::Config("Cannot estimate search rebuild size.".into()))?;
+        }
+        let required = old_bytes.checked_mul(2).and_then(|n| n.checked_add(512 * 1024 * 1024))
+            .ok_or_else(|| SearchError::Config("Cannot estimate search rebuild size.".into()))?;
+        let wide: Vec<u16> = parent.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+        let mut available = 0u64;
+        // SAFETY: the UTF-16 path is terminated and output pointers are valid.
+        if unsafe { GetDiskFreeSpaceExW(wide.as_ptr(), &mut available, std::ptr::null_mut(), std::ptr::null_mut()) } == 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        if available < required {
+            return Err(SearchError::Config("Not enough free space to rebuild the search cache; existing files were retained.".into()));
+        }
+        Ok(())
+    }
+    /// Rebuild a disposable encrypted cache under an offline exclusive fence.
+    /// Failed candidates remain in place and the original cache is untouched.
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    pub fn rebuild_offline_and_select(config: IndexConfig, policy: PathPolicy,
+        selection_dir: &std::path::Path, fence: &crate::encrypted_search_fence::SearchOperationFence) -> Result<ExperimentalRebuildReport> {
+        use rand::{rngs::OsRng, RngCore};
+        use crate::read_only::CheckedDirectory;
+        let old = &config.index_dir;
+        let parent = old.parent().ok_or_else(|| SearchError::Config("invalid legacy index path".into()))?;
+        if !old.is_absolute() || selection_dir.parent() != Some(parent) {
+            return Err(SearchError::Config("invalid search selection parent".into()));
+        }
+        fence.require_exclusive_for(parent)?;
+        let _pins = CheckedDirectory::pin_root_path(parent)?;
+        crate::encrypted_search_maintenance::verify_known_writers_stopped().map_err(SearchError::Config)?;
+        // Do not accumulate a new full cache after an interrupted attempt.
+        // Existing candidates are retained for explicit recovery/cleanup.
+        for entry in std::fs::read_dir(parent)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if let Some(id) = name.strip_prefix(".wincommander-encrypted-") {
+                if id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    return Err(SearchError::Config("A previous encrypted search rebuild needs recovery before retry; existing files were retained.".into()));
+                }
+            }
+        }
+        Self::check_offline_rebuild_space(old, parent)?;
+        match std::fs::create_dir(selection_dir) {
+            Ok(()) => {}, Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}, Err(e) => return Err(e.into()),
+        }
+        let _selection_pins = CheckedDirectory::pin_root_path(selection_dir)?;
+        if std::fs::read_dir(selection_dir)?.next().transpose()?.is_some() {
+            return Err(SearchError::Config("search selection already exists; recovery required".into()));
+        }
+        let mut id = [0u8; 16]; OsRng.fill_bytes(&mut id);
+        if id == [0; 16] { return Err(SearchError::Config("cannot create encrypted index identity".into())); }
+        let mut engine = Self::open_experimental_encrypted_with_policy(config, policy, id, false)?;
+        let report = engine.rebuild_experimental_candidate()?;
+        engine.select_experimental_candidate(selection_dir)?;
+        Ok(report)
+    }
     /// Offline phase: authenticate the selected encrypted generation before
     /// moving the legacy cache under the helper's own exclusive fence.
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
@@ -495,6 +565,20 @@ impl SearchEngine {
         tantivy::Index::open(directory).map_err(|_| SearchError::Config("encrypted index cannot be opened".into()))?;
         absent()?;
         Ok(())
+    }
+    /// Restore only the authenticated generation's backup, never overwriting
+    /// an existing legacy path. The helper must own the exclusive fence.
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    pub fn restore_quarantined_with_fence(old: &std::path::Path, selection_dir: &std::path::Path,
+        fence: &crate::encrypted_search_fence::SearchOperationFence) -> Result<std::path::PathBuf> {
+        use crate::encrypted_generation_prototype::{inspect, PinnedSelectionStore, UserProtector};
+        let parent = old.parent().ok_or_else(|| SearchError::Config("invalid legacy index path".into()))?;
+        fence.require_exclusive_for(parent)?;
+        Self::verify_quarantined_selection(old, selection_dir)?;
+        let mut selection = PinnedSelectionStore::open(selection_dir)?;
+        let selected = inspect(&mut selection, &UserProtector)?
+            .ok_or_else(|| SearchError::Config("encrypted selection missing".into()))?;
+        Ok(crate::encrypted_legacy_quarantine::restore_with_fence(old, &selected.index_id, fence)?)
     }
     /// Locate the generation-specific quarantine path for inspection after an
     /// interrupted move. Existence alone is not proof of successful migration.
@@ -1121,6 +1205,50 @@ mod tests {
     }
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     #[test]
+    fn offline_empty_cache_reconciles_with_live_roots_after_restart() {
+        let root = TempDir::new().unwrap();
+        let old = root.path().join("legacy");
+        let data = root.path().join("data");
+        let selection = root.path().join("selector");
+        fs::create_dir(&old).unwrap(); fs::create_dir(&data).unwrap();
+        fs::write(old.join("meta.json"), b"legacy saved").unwrap();
+        fs::write(data.join("doc.txt"), b"privatecatchupneedle").unwrap();
+        let guard = crate::encrypted_search_fence::SearchOperationFence::acquire_exclusive(root.path()).unwrap();
+        let empty_config = make_config(old.clone(), vec![]);
+        let report = SearchEngine::rebuild_offline_and_select(empty_config, Arc::new(|_| false), &selection, &guard).unwrap();
+        assert_eq!(report.indexed, 0);
+        let backup = SearchEngine::quarantine_selected_with_fence(&old, &selection, &guard).unwrap();
+        assert_eq!(fs::read(backup.join("meta.json")).unwrap(), b"legacy saved");
+        drop(guard);
+        // The helper has exited. The selected-open path must reconcile using
+        // the real current-user roots before returning a searchable engine.
+        let live_config = make_config(old, vec![data]);
+        let live = SearchEngine::open_experimental_selected_with_policy(live_config, Arc::new(|_| true), &selection).unwrap();
+        let query = ContentQuery { terms: "privatecatchupneedle".into(), roots: vec![], limit: 10, offset: 0, keyword_only: true };
+        assert_eq!(live.search(&query).unwrap().len(), 1);
+        live.stop();
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    #[test]
+    fn offline_rebuild_selects_encrypted_generation_and_preserves_old_cache() {
+        let root = TempDir::new().unwrap();
+        let old = root.path().join("legacy");
+        let data = root.path().join("data");
+        let selection = root.path().join("selector");
+        fs::create_dir(&old).unwrap(); fs::create_dir(&data).unwrap();
+        fs::write(old.join("meta.json"), b"old cache preserved").unwrap();
+        fs::write(data.join("doc.txt"), b"confidentialofflinerebuild").unwrap();
+        let guard = crate::encrypted_search_fence::SearchOperationFence::acquire_exclusive(root.path()).unwrap();
+        let config = make_config(old.clone(), vec![data]);
+        let report = SearchEngine::rebuild_offline_and_select(config, Arc::new(|_| true), &selection, &guard).unwrap();
+        assert_eq!(report.indexed, 1);
+        assert_eq!(fs::read(old.join("meta.json")).unwrap(), b"old cache preserved");
+        let backup = SearchEngine::quarantine_selected_with_fence(&old, &selection, &guard).unwrap();
+        SearchEngine::verify_quarantined_selection(&old, &selection).unwrap();
+        assert_eq!(fs::read(backup.join("meta.json")).unwrap(), b"old cache preserved");
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    #[test]
     fn experimental_scope_publication_requires_validated_pinned_root() {
         let root = TempDir::new().unwrap();
         let dir = root.path().join("file-search").join("fts");
@@ -1197,7 +1325,9 @@ mod tests {
         assert!(restore_experimental_legacy_backup(&old, &[90; 16]).is_err());
         assert_eq!(fs::read(backup.join("meta.json")).unwrap(), b"legacy retained");
         fs::remove_dir(&old).unwrap();
-        assert_eq!(restore_experimental_legacy_backup(&old, &[90; 16]).unwrap(), old);
+        let restore_guard = crate::encrypted_search_fence::SearchOperationFence::acquire_exclusive(root.path()).unwrap();
+        assert_eq!(SearchEngine::restore_quarantined_with_fence(&old, &selector, &restore_guard).unwrap(), old);
+        drop(restore_guard);
         assert_eq!(fs::read(old.join("meta.json")).unwrap(), b"legacy retained");
     }
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]

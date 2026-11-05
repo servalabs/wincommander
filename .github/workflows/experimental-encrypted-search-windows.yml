@@ -30,6 +30,8 @@ jobs:
             'encrypted_search_fence::',
             'experimental_scope_publication_requires_validated_pinned_root',
             'quarantine_requires_selected_cache_and_preserves_legacy_backup',
+            'offline_rebuild_selects_encrypted_generation_and_preserves_old_cache',
+            'offline_empty_cache_reconciles_with_live_roots_after_restart',
             'application_entry_rebuilds_then_refuses_corrupt_selector',
             'fresh_install_can_build_select_and_reopen_without_legacy_index',
             'candidate_holds_cooperating_legacy_writer_lock',
@@ -67,3 +69,4 @@ jobs:
       - run: bun run encrypt-backend
         working-directory: .
       - run: cargo check --locked -p commander-free --features experimental-encrypted-search
+      - run: cargo test --locked -p commander-free --lib --features experimental-encrypted-search search_migration_cli::tests::fresh_requires_no_legacy_selection_or_recovery_artifacts
