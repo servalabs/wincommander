@@ -12,11 +12,19 @@ use super::{EvidenceEntry, MAX_ENTRIES};
 
 const PREFIX: &str = "enc:v2:";
 const SCOPE: &str = "machine:evidence-ledger";
+const MAX_IMPORTED_PROFILES: usize = 256;
 
 #[derive(Serialize, Deserialize)]
 struct KeyState {
     material: [u8; 32],
     pending_digest: Option<String>,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+pub(super) struct Ledger {
+    pub entries: Vec<EvidenceEntry>,
+    imported_profiles: Vec<PathBuf>,
+    pub skip_future_imports: bool,
 }
 impl Drop for KeyState {
     fn drop(&mut self) {
@@ -28,19 +36,22 @@ fn digest(raw: &str) -> String {
     hex::encode(Sha256::digest(raw.as_bytes()))
 }
 
-fn save_key(path: &Path, state: &KeyState, new: bool) -> Result<(), String> {
+fn save_key(
+    path: &Path,
+    state: &KeyState,
+    persist: &impl Fn(&Path, &[u8]) -> Result<(), String>,
+) -> Result<(), String> {
     let bytes =
         Zeroizing::new(serde_json::to_vec(state).map_err(|_| "Cannot encode evidence key")?);
     let protected = crate::datastore::dpapi_protect(&bytes)?;
-    if new {
-        crate::datastore_io::publish_new(path, &protected)?;
-    } else {
-        crate::datastore_io::atomic_write(path, &protected)?;
-    }
-    Ok(())
+    persist(path, &protected)
 }
 
-fn key(path: &Path, initial: Option<String>) -> Result<KeyState, String> {
+fn key(
+    path: &Path,
+    initial: Option<String>,
+    persist: &impl Fn(&Path, &[u8]) -> Result<(), String>,
+) -> Result<KeyState, String> {
     let mut protected = match fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound && initial.is_some() => {
@@ -53,7 +64,7 @@ fn key(path: &Path, initial: Option<String>) -> Result<KeyState, String> {
                     material,
                     pending_digest: Some(pending),
                 },
-                true,
+                persist,
             )?;
             material.fill(0);
             fs::read(path).map_err(|e| format!("Cannot read evidence key: {e}"))?
@@ -72,10 +83,14 @@ fn key(path: &Path, initial: Option<String>) -> Result<KeyState, String> {
     serde_json::from_slice(&material).map_err(|_| "Invalid evidence key; ledger preserved".into())
 }
 
-fn finish(path: &Path, state: &mut KeyState) -> Result<(), String> {
+fn finish(
+    path: &Path,
+    state: &mut KeyState,
+    persist: &impl Fn(&Path, &[u8]) -> Result<(), String>,
+) -> Result<(), String> {
     if state.pending_digest.is_some() {
         state.pending_digest = None;
-        save_key(path, state, false)?;
+        save_key(path, state, persist)?;
     }
     Ok(())
 }
@@ -98,7 +113,7 @@ fn parse_legacy(raw: &str) -> Result<Vec<EvidenceEntry>, String> {
 pub(super) fn write(
     path: &Path,
     key_path: &Path,
-    entries: &[EvidenceEntry],
+    ledger: &Ledger,
     persist: &impl Fn(&Path, &[u8]) -> Result<(), String>,
 ) -> Result<(), String> {
     let existing = match fs::read_to_string(path) {
@@ -111,32 +126,35 @@ pub(super) fn write(
         Some(raw) => Some(digest(raw)),
         None => Some(digest("")),
     };
-    let mut key = key(key_path, initial)?;
+    let mut key = key(key_path, initial, persist)?;
     if let Some(raw) = existing.as_deref() {
         if raw.starts_with(PREFIX) {
             crate::datastore::decode_section(&key.material, raw.trim(), SCOPE)
                 .map_err(|_| "Cannot authenticate evidence ledger; original preserved")?;
-            finish(key_path, &mut key)?;
+            finish(key_path, &mut key, persist)?;
         } else if key.pending_digest.as_deref() != Some(digest(raw).as_str()) {
             return Err("Unexpected plaintext evidence; original preserved".into());
         }
     } else if key.pending_digest.as_deref() != Some(digest("").as_str()) {
         return Err("Evidence ledger is missing; existing key preserved".into());
     }
-    let bytes = serde_json::to_vec(entries).map_err(|e| format!("Cannot encode evidence: {e}"))?;
+    let bytes = serde_json::to_vec(ledger).map_err(|e| format!("Cannot encode evidence: {e}"))?;
     let sealed = crate::datastore::encode_section(&key.material, &bytes, SCOPE)?;
     persist(path, sealed.as_bytes())?;
-    finish(key_path, &mut key)
+    finish(key_path, &mut key, persist)
 }
 
-fn empty_or_missing(key_path: &Path) -> Result<Vec<EvidenceEntry>, String> {
+fn empty_or_missing(
+    key_path: &Path,
+    persist: &impl Fn(&Path, &[u8]) -> Result<(), String>,
+) -> Result<Ledger, String> {
     match fs::symlink_metadata(key_path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Ledger::default()),
         Err(error) => Err(format!("Cannot inspect evidence key: {error}")),
         Ok(_) => {
-            let state = key(key_path, None)?;
+            let state = key(key_path, None, persist)?;
             if state.pending_digest.as_deref() == Some(digest("").as_str()) {
-                Ok(Vec::new())
+                Ok(Ledger::default())
             } else {
                 Err("Evidence ledger is missing; existing key preserved".into())
             }
@@ -149,47 +167,99 @@ pub(super) fn read(
     legacy: &impl Fn() -> Result<Option<PathBuf>, String>,
     key_path: &Path,
     persist: &impl Fn(&Path, &[u8]) -> Result<(), String>,
-) -> Result<Vec<EvidenceEntry>, String> {
-    let (raw, imported) = match fs::read_to_string(path) {
-        Ok(raw) => (raw, None),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let Some(old) = legacy()? else {
-                return empty_or_missing(key_path);
-            };
-            match fs::read_to_string(&old) {
-                Ok(raw) => (raw, Some(old)),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    return empty_or_missing(key_path)
-                }
-                Err(error) => return Err(format!("Cannot read old evidence ledger: {error}")),
+) -> Result<Ledger, String> {
+    let mut loaded_machine = false;
+    let mut ledger = match fs::read_to_string(path) {
+        Ok(raw) if raw.starts_with(PREFIX) => {
+            loaded_machine = true;
+            let mut key = key(key_path, None, persist)?;
+            let bytes = crate::datastore::decode_section(&key.material, raw.trim(), SCOPE)
+                .map_err(|_| {
+                    "Cannot authenticate evidence ledger; original preserved".to_string()
+                })?;
+            let value = serde_json::from_slice(&bytes)
+                .map_err(|_| "Evidence ledger is malformed; original preserved")?;
+            finish(key_path, &mut key, persist)?;
+            value
+        }
+        Ok(raw) => {
+            loaded_machine = true;
+            let entries = parse_legacy(&raw)?;
+            let fingerprint = digest(&raw);
+            let mut state = key(key_path, Some(fingerprint.clone()), persist)?;
+            if state.pending_digest.as_deref() != Some(fingerprint.as_str()) {
+                return Err("Unexpected plaintext evidence; original preserved".into());
             }
+            let value = Ledger {
+                entries,
+                imported_profiles: Vec::new(),
+                skip_future_imports: false,
+            };
+            let bytes = serde_json::to_vec(&value).map_err(|_| "Cannot encode evidence")?;
+            let sealed = crate::datastore::encode_section(&state.material, &bytes, SCOPE)?;
+            persist(path, sealed.as_bytes())?;
+            finish(key_path, &mut state, persist)?;
+            value
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            empty_or_missing(key_path, persist)?
         }
         Err(error) => return Err(format!("Cannot read evidence ledger: {error}")),
     };
-    if raw.starts_with(PREFIX) {
-        if imported.is_some() {
-            return Err("Unexpected encrypted legacy evidence; original preserved".into());
+    if ledger.skip_future_imports {
+        return Ok(ledger);
+    }
+    let profile = match legacy() {
+        Ok(path) => path,
+        Err(_) if loaded_machine => {
+            #[cfg(not(test))]
+            crate::log::log_message(
+                "warn",
+                "Legacy evidence profile could not be inspected; import remains pending",
+            );
+            None
         }
-        let mut key = key(key_path, None)?;
-        let bytes = crate::datastore::decode_section(&key.material, raw.trim(), SCOPE)
-            .map_err(|_| "Cannot authenticate evidence ledger; original preserved".to_string())?;
-        let entries = serde_json::from_slice(&bytes)
-            .map_err(|_| "Evidence ledger is malformed; original preserved")?;
-        finish(key_path, &mut key)?;
-        return Ok(entries);
+        Err(error) => return Err(error),
+    };
+    if let Some(old) = profile {
+        match fs::canonicalize(&old) {
+            Ok(identity) => {
+                if !ledger.imported_profiles.contains(&identity) {
+                    if ledger.imported_profiles.len() >= MAX_IMPORTED_PROFILES {
+                        return Err("Too many evidence profile imports; originals preserved".into());
+                    }
+                    let raw = fs::read_to_string(&identity)
+                        .map_err(|_| "Cannot read old evidence ledger; original preserved")?;
+                    let mut counts = std::collections::HashMap::<Vec<u8>, usize>::new();
+                    for entry in &ledger.entries {
+                        let identity =
+                            serde_json::to_vec(entry).map_err(|_| "Cannot compare evidence")?;
+                        *counts.entry(identity).or_default() += 1;
+                    }
+                    let mut prior = Vec::new();
+                    for entry in parse_legacy(&raw)? {
+                        let identity =
+                            serde_json::to_vec(&entry).map_err(|_| "Cannot compare evidence")?;
+                        match counts.get_mut(&identity) {
+                            Some(count) if *count > 0 => *count -= 1,
+                            _ => prior.push(entry),
+                        }
+                    }
+                    prior.append(&mut ledger.entries);
+                    prior.sort_by(|a, b| a.time.cmp(&b.time));
+                    if prior.len() > MAX_ENTRIES {
+                        prior.drain(..prior.len() - MAX_ENTRIES);
+                    }
+                    ledger.entries = prior;
+                    ledger.imported_profiles.push(identity);
+                    write(path, key_path, &ledger, persist)?;
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("Cannot read old evidence ledger: {error}")),
+        }
     }
-    let entries = parse_legacy(&raw)?;
-    // A profile-owned source stays in place until ownership-safe cleanup is available.
-    let fingerprint = digest(&raw);
-    let mut state = key(key_path, Some(fingerprint.clone()))?;
-    if state.pending_digest.as_deref() != Some(fingerprint.as_str()) {
-        return Err("Unexpected plaintext evidence; original preserved".into());
-    }
-    let bytes = serde_json::to_vec(&entries).map_err(|_| "Cannot encode evidence")?;
-    let sealed = crate::datastore::encode_section(&state.material, &bytes, SCOPE)?;
-    persist(path, sealed.as_bytes())?;
-    finish(key_path, &mut state)?;
-    Ok(entries)
+    Ok(ledger)
 }
 
 #[cfg(all(test, windows))]
@@ -224,7 +294,7 @@ mod tests {
             &crate::datastore_io::atomic_write,
         )
         .unwrap();
-        assert_eq!(entries[0].detail.as_deref(), Some("private detail"));
+        assert_eq!(entries.entries[0].detail.as_deref(), Some("private detail"));
         let disk = fs::read_to_string(&path).unwrap();
         assert!(disk.starts_with(PREFIX));
         assert!(!disk.contains("private summary") && !disk.contains("private detail"));
@@ -235,7 +305,7 @@ mod tests {
             &crate::datastore_io::atomic_write,
         )
         .unwrap();
-        assert_eq!(reopened[0].summary, "private summary");
+        assert_eq!(reopened.entries[0].summary, "private summary");
     }
 
     #[test]
@@ -285,7 +355,11 @@ mod tests {
         write(
             &path,
             &key_path,
-            &[entry()],
+            &Ledger {
+                entries: vec![entry()],
+                imported_profiles: Vec::new(),
+                skip_future_imports: false,
+            },
             &crate::datastore_io::atomic_write,
         )
         .unwrap();
@@ -298,7 +372,13 @@ mod tests {
             &crate::datastore_io::atomic_write
         )
         .is_err());
-        assert!(write(&path, &key_path, &[], &crate::datastore_io::atomic_write).is_err());
+        assert!(write(
+            &path,
+            &key_path,
+            &Ledger::default(),
+            &crate::datastore_io::atomic_write
+        )
+        .is_err());
         assert!(!key_path.exists());
         assert_eq!(fs::read(&path).unwrap(), protected);
     }
@@ -311,12 +391,19 @@ mod tests {
         let key_path = dir.path().join("key");
         let original = format!("{}\n", serde_json::to_string(&entry()).unwrap());
         fs::write(&path, &original).unwrap();
-        assert!(
-            read(&path, &|| Ok(Some(legacy.clone())), &key_path, &|_, _| Err(
-                "failed".into()
-            ))
-            .is_err()
-        );
+        assert!(read(
+            &path,
+            &|| Ok(Some(legacy.clone())),
+            &key_path,
+            &|target, bytes| {
+                if target == path {
+                    Err("failed".into())
+                } else {
+                    crate::datastore_io::atomic_write(target, bytes)
+                }
+            }
+        )
+        .is_err());
         fs::write(&path, "{}\n").unwrap();
         assert!(read(
             &path,
@@ -326,8 +413,13 @@ mod tests {
         )
         .is_err());
         fs::write(&path, &original).unwrap();
-        let state = key(&key_path, None).unwrap();
-        let bytes = serde_json::to_vec(&vec![entry()]).unwrap();
+        let state = key(&key_path, None, &crate::datastore_io::atomic_write).unwrap();
+        let bytes = serde_json::to_vec(&Ledger {
+            entries: vec![entry()],
+            imported_profiles: Vec::new(),
+            skip_future_imports: false,
+        })
+        .unwrap();
         let sealed = crate::datastore::encode_section(&state.material, &bytes, SCOPE).unwrap();
         fs::write(&path, sealed).unwrap();
         read(
@@ -356,7 +448,11 @@ mod tests {
         write(
             &path,
             &key_path,
-            &[entry()],
+            &Ledger {
+                entries: vec![entry()],
+                imported_profiles: Vec::new(),
+                skip_future_imports: false,
+            },
             &crate::datastore_io::atomic_write,
         )
         .unwrap();
@@ -378,7 +474,11 @@ mod tests {
         write(
             &path,
             &key_path,
-            &[entry()],
+            &Ledger {
+                entries: vec![entry()],
+                imported_profiles: Vec::new(),
+                skip_future_imports: false,
+            },
             &crate::datastore_io::atomic_write,
         )
         .unwrap();
@@ -389,7 +489,7 @@ mod tests {
             &crate::datastore_io::atomic_write,
         )
         .unwrap();
-        assert_eq!(entries[0].summary, "private summary");
+        assert_eq!(entries.entries[0].summary, "private summary");
     }
 
     #[test]
@@ -404,11 +504,16 @@ mod tests {
             &crate::datastore_io::atomic_write
         )
         .unwrap()
+        .entries
         .is_empty());
         write(
             &path,
             &key_path,
-            &[entry()],
+            &Ledger {
+                entries: vec![entry()],
+                imported_profiles: Vec::new(),
+                skip_future_imports: false,
+            },
             &crate::datastore_io::atomic_write,
         )
         .unwrap();
@@ -419,9 +524,162 @@ mod tests {
                 &key_path,
                 &crate::datastore_io::atomic_write
             )
-            .unwrap()[0]
+            .unwrap()
+            .entries[0]
                 .summary,
             "private summary"
         );
+    }
+
+    #[test]
+    fn later_profile_import_is_atomic_and_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger");
+        let key_path = dir.path().join("key");
+        let legacy = dir.path().join("profile-ledger");
+        let mut current = entry();
+        current.time = "2026-02-01T00:00:00Z".into();
+        current.summary = "current".into();
+        write(
+            &path,
+            &key_path,
+            &Ledger {
+                entries: vec![current],
+                imported_profiles: Vec::new(),
+                skip_future_imports: false,
+            },
+            &crate::datastore_io::atomic_write,
+        )
+        .unwrap();
+        let before = fs::read(&path).unwrap();
+        fs::write(
+            &legacy,
+            format!("{}\n", serde_json::to_string(&entry()).unwrap()),
+        )
+        .unwrap();
+        assert!(read(
+            &path,
+            &|| Ok(Some(legacy.clone())),
+            &key_path,
+            &|target, bytes| {
+                if target == path {
+                    Err("injected failure".into())
+                } else {
+                    crate::datastore_io::atomic_write(target, bytes)
+                }
+            }
+        )
+        .is_err());
+        assert_eq!(fs::read(&path).unwrap(), before);
+        let loaded = read(
+            &path,
+            &|| Ok(Some(legacy.clone())),
+            &key_path,
+            &crate::datastore_io::atomic_write,
+        )
+        .unwrap();
+        assert_eq!(loaded.entries.len(), 2);
+        assert_eq!(loaded.entries[0].summary, "private summary");
+        assert_eq!(loaded.entries[1].summary, "current");
+        let reloaded = read(
+            &path,
+            &|| Ok(Some(legacy.clone())),
+            &key_path,
+            &crate::datastore_io::atomic_write,
+        )
+        .unwrap();
+        assert_eq!(reloaded.entries.len(), 2);
+        assert!(legacy.exists());
+    }
+
+    #[test]
+    fn initial_key_and_commit_use_the_same_ordered_publisher_as_the_ledger() {
+        use std::sync::Mutex;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger");
+        let key_path = dir.path().join("key");
+        let published = Mutex::new(Vec::new());
+        write(
+            &path,
+            &key_path,
+            &Ledger {
+                entries: vec![entry()],
+                imported_profiles: Vec::new(),
+                skip_future_imports: false,
+            },
+            &|target, bytes| {
+                published.lock().unwrap().push(target.to_path_buf());
+                crate::datastore_io::atomic_write(target, bytes)
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            *published.lock().unwrap(),
+            vec![key_path.clone(), path.clone(), key_path]
+        );
+    }
+
+    #[test]
+    fn old_profile_already_present_is_not_imported_twice() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger");
+        let key_path = dir.path().join("key");
+        let legacy = dir.path().join("profile-ledger");
+        fs::write(
+            &legacy,
+            format!("{}\n", serde_json::to_string(&entry()).unwrap()),
+        )
+        .unwrap();
+        write(
+            &path,
+            &key_path,
+            &Ledger {
+                entries: vec![entry()],
+                ..Ledger::default()
+            },
+            &crate::datastore_io::atomic_write,
+        )
+        .unwrap();
+        let ledger = read(
+            &path,
+            &|| Ok(Some(legacy.clone())),
+            &key_path,
+            &crate::datastore_io::atomic_write,
+        )
+        .unwrap();
+        assert_eq!(ledger.entries.len(), 1);
+        assert_eq!(ledger.imported_profiles.len(), 1);
+    }
+
+    #[test]
+    fn cleared_ledger_never_resurrects_a_later_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger");
+        let key_path = dir.path().join("key");
+        let legacy = dir.path().join("profile-ledger");
+        fs::write(
+            &legacy,
+            format!("{}\n", serde_json::to_string(&entry()).unwrap()),
+        )
+        .unwrap();
+        write(
+            &path,
+            &key_path,
+            &Ledger {
+                skip_future_imports: true,
+                ..Ledger::default()
+            },
+            &crate::datastore_io::atomic_write,
+        )
+        .unwrap();
+        let ledger = read(
+            &path,
+            &|| Ok(Some(legacy.clone())),
+            &key_path,
+            &crate::datastore_io::atomic_write,
+        )
+        .unwrap();
+        assert!(ledger.entries.is_empty());
+        assert!(legacy.exists());
     }
 }

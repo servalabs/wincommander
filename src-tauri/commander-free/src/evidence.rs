@@ -63,7 +63,7 @@ fn key_path() -> Result<PathBuf, String> {
     crate::paths::machine_state_file("evidence-ledger.key")
 }
 
-fn read_ledger(path: &std::path::Path, key: &std::path::Path) -> Result<Vec<EvidenceEntry>, String> {
+fn read_ledger(path: &std::path::Path, key: &std::path::Path) -> Result<storage::Ledger, String> {
     storage::read(path, &legacy_ledger_path, key, &crate::paths::atomic_write_machine_state)
 }
 
@@ -87,13 +87,13 @@ pub fn evidence_record(
     let _lock = crate::paths::acquire_machine_state_lock("evidence-ledger")?;
     let path = ledger_path()?;
     let key = key_path()?;
-    let mut entries = read_ledger(&path, &key)?;
-    entries.push(entry);
-    if entries.len() > MAX_ENTRIES {
-        let excess = entries.len() - MAX_ENTRIES;
-        entries.drain(0..excess);
+    let mut ledger = read_ledger(&path, &key)?;
+    ledger.entries.push(entry);
+    if ledger.entries.len() > MAX_ENTRIES {
+        let excess = ledger.entries.len() - MAX_ENTRIES;
+        ledger.entries.drain(0..excess);
     }
-    storage::write(&path, &key, &entries, &crate::paths::atomic_write_machine_state)?;
+    storage::write(&path, &key, &ledger, &crate::paths::atomic_write_machine_state)?;
     Ok(())
 }
 
@@ -103,7 +103,7 @@ pub fn evidence_read(limit: Option<u32>) -> Result<Vec<EvidenceEntry>, String> {
     let n = limit.unwrap_or(200).min(MAX_ENTRIES as u32) as usize;
     let _lock = crate::paths::acquire_machine_state_lock("evidence-ledger")?;
     let path = ledger_path()?;
-    let mut entries = read_ledger(&path, &key_path()?)?;
+    let mut entries = read_ledger(&path, &key_path()?)?.entries;
     entries.reverse();
     entries.truncate(n);
     Ok(entries)
@@ -123,8 +123,10 @@ pub fn evidence_clear() -> Result<(), String> {
     let _lock = crate::paths::acquire_machine_state_lock("evidence-ledger")?;
     let path = ledger_path()?;
     let key = key_path()?;
-    read_ledger(&path, &key)?;
-    storage::write(&path, &key, &[], &crate::paths::atomic_write_machine_state)?;
+    let mut ledger = read_ledger(&path, &key)?;
+    ledger.entries.clear();
+    ledger.skip_future_imports = true;
+    storage::write(&path, &key, &ledger, &crate::paths::atomic_write_machine_state)?;
     Ok(())
 }
 
