@@ -49,7 +49,8 @@ fn request_timeout_for(feature_id: &str) -> std::time::Duration {
         "svc.bluetooth.policy.status" => std::time::Duration::from_secs(10),
         // Two bounded network exchanges plus local verified cache persistence.
         wincmd_shared::svc::RENEW_HYBRID_LICENSE_VERB
-        | wincmd_shared::svc::ENROL_HYBRID_LICENSE_VERB => std::time::Duration::from_secs(90),
+        | wincmd_shared::svc::ENROL_HYBRID_LICENSE_VERB
+        | wincmd_shared::svc::RELEASE_HYBRID_LICENSE_VERB => std::time::Duration::from_secs(90),
         // Policy saves resolve Windows principals and apply/read back permissions.
         // A short probe deadline does not cancel the exclusive mutation.
         "svc.vault.apply_policy"
@@ -585,6 +586,8 @@ mod tests {
             request_timeout_for(wincmd_shared::svc::ENROL_HYBRID_LICENSE_VERB),
             std::time::Duration::from_secs(90)
         );
+        assert_eq!(request_timeout_for(wincmd_shared::svc::RELEASE_HYBRID_LICENSE_VERB),
+            std::time::Duration::from_secs(90));
     }
 
     #[test]

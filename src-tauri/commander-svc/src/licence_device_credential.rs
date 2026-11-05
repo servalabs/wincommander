@@ -393,8 +393,8 @@ pub(crate) async fn request_release(
 }
 
 /// No caller-supplied licence identity, trust, cache or path is accepted.
-/// Success means acknowledgement is saved and the matching cache is removed.
-/// Credential, acknowledgement and gate finalization are still required before IPC use.
+/// Success means the release was confirmed and recovery completed. A missing
+/// cache alone cannot prove that a server seat is absent.
 pub(crate) async fn release_from_machine_cache() -> Result<(), &'static str> {
     let trust = crate::license_cache::configured_device_receipt_trust()?;
     let mut receipt_policy = trust.policy();

@@ -1832,6 +1832,13 @@ pub async fn refresh_license() -> Result<serde_json::Value, String> {
 
 #[tauri::command]
 pub async fn clear_license_cache() -> Result<(), String> {
+    #[cfg(all(windows, feature = "experimental-pq-licence"))]
+    {
+        require_license_removal_administrator()?;
+        return release_hybrid_from_service().await;
+    }
+    #[cfg(not(all(windows, feature = "experimental-pq-licence")))]
+    {
     let Some(cached) = load_cached_license()? else {
         return Ok(());
     };
@@ -1847,6 +1854,7 @@ pub async fn clear_license_cache() -> Result<(), String> {
         clear_cached_license_inner()
     } else {
         deactivate_license_internal().await
+    }
     }
 }
 
@@ -1979,15 +1987,34 @@ pub async fn start_trial() -> Result<serde_json::Value, String> {
     }
 }
 
-/// Internal async helper — can be called from other modules (e.g. lockdown).
+#[cfg(all(windows, feature = "experimental-pq-licence"))]
+fn parse_hybrid_release_reply(reply: serde_json::Value) -> Result<(), String> {
+    if reply == serde_json::json!({"released": true}) { Ok(()) }
+    else { Err("Licence release could not be confirmed. Check the service and connection, then retry.".into()) }
+}
+
+#[cfg(all(windows, feature = "experimental-pq-licence"))]
+async fn release_hybrid_from_service() -> Result<(), String> {
+    let reply = crate::svc_client::call(wincmd_shared::svc::RELEASE_HYBRID_LICENSE_VERB, serde_json::json!({}))
+        .await.map_err(|_| "Licence release could not be confirmed. Check the service and connection, then retry.".to_string())?;
+    parse_hybrid_release_reply(reply)
+}
+
 /// Contacts the server to release the seat, then removes the local cache.
-/// The server release is authoritative: if it cannot be confirmed, retain the
-/// local token so the user can retry instead of silently stranding a seat.
+/// If release cannot be confirmed, retain the protected recovery state.
 pub async fn deactivate_license_internal() -> Result<(), String> {
+    require_license_removal_administrator()?;
+    #[cfg(all(windows, feature = "experimental-pq-licence"))]
+    {
+        // Only the service can establish protected release history. A stale
+        // local trial token must not hide an outstanding paid activation.
+        release_hybrid_from_service().await
+    }
+    #[cfg(not(all(windows, feature = "experimental-pq-licence")))]
+    {
     let (api_base, public_key_b64) = get_config()?;
     let cached =
         load_cached_license()?.ok_or_else(|| "No license token to deactivate.".to_string())?;
-    require_license_removal_administrator()?;
     let device_hash = verify_token_for_removal(&cached.token, &public_key_b64)
     .ok()
     .filter(|claims| device_hash_matches(&claims.device_hash))
@@ -2030,17 +2057,26 @@ pub async fn deactivate_license_internal() -> Result<(), String> {
 
     clear_cached_license_inner()?;
     Ok(())
+    }
 }
 
 /// Used by the explicit uninstaller path. A device without a cached licence
-/// has no server seat to release; an existing cached licence must receive a
-/// confirmed server-side release before the uninstaller continues.
+/// must receive a confirmed server-side release before the uninstaller continues.
 pub async fn release_license_seat_if_present() -> Result<bool, String> {
+    #[cfg(all(windows, feature = "experimental-pq-licence"))]
+    {
+        require_license_removal_administrator()?;
+        release_hybrid_from_service().await?;
+        return Ok(true);
+    }
+    #[cfg(not(all(windows, feature = "experimental-pq-licence")))]
+    {
     if load_cached_license()?.is_none() {
         return Ok(false);
     }
     deactivate_license_internal().await?;
     Ok(true)
+    }
 }
 
 #[tauri::command]
@@ -2052,6 +2088,16 @@ pub async fn deactivate_license() -> Result<(), String> {
 mod tests {
     use super::*;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+
+    #[cfg(all(windows, feature = "experimental-pq-licence"))]
+    #[test]
+    fn hybrid_release_reply_requires_exact_service_result() {
+        assert_eq!(parse_hybrid_release_reply(serde_json::json!({"released": true})), Ok(()));
+        for reply in [serde_json::json!({}), serde_json::json!({"released": false}), serde_json::json!({"released": "true"}),
+            serde_json::json!({"released": true, "extra": 1})] {
+            assert!(parse_hybrid_release_reply(reply).is_err());
+        }
+    }
 
     #[tokio::test]
     async fn license_response_is_bounded_for_fixed_and_chunked_bodies() {

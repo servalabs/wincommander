@@ -37,7 +37,7 @@ use tokio::net::windows::named_pipe::{PipeMode, ServerOptions};
 use wincmd_shared::fleet::{Action, ClipboardEventReport};
 use wincmd_shared::svc::{
     classify_verb, is_known_verb, ApplyMachineSettingRequest, CapabilityClass,
-    APPLY_MACHINE_SETTING_VERB, ENROL_HYBRID_LICENSE_VERB, RENEW_HYBRID_LICENSE_VERB,
+    APPLY_MACHINE_SETTING_VERB, ENROL_HYBRID_LICENSE_VERB, RENEW_HYBRID_LICENSE_VERB, RELEASE_HYBRID_LICENSE_VERB,
     STORE_LICENSE_CACHE_VERB, SVC_PIPE_NAME, SVC_PROTOCOL_VERSION, VERIFY_LICENSE_CACHE_VERB,
 };
 use wincmd_shared::vault_access::VaultMountReason;
@@ -416,24 +416,28 @@ pub(crate) async fn handle_connection(
             }
         } else if matches!(
             req.feature_id.as_str(),
-            ENROL_HYBRID_LICENSE_VERB | RENEW_HYBRID_LICENSE_VERB
+            ENROL_HYBRID_LICENSE_VERB | RENEW_HYBRID_LICENSE_VERB | RELEASE_HYBRID_LICENSE_VERB
         ) {
-            let gate = Arc::clone(&session_helper_gate);
-            let verb = req.feature_id.clone();
-            let session = peer
-                .as_deref()
-                .map(AuthenticatedPipePeer::session_id)
-                .unwrap_or(0);
-            let active = peer
-                .as_deref()
-                .is_some_and(peer_has_active_interactive_session);
-            match tokio::task::spawn_blocking(move || {
-                gate.authorize_licence_relay(client_pid, &verb, session, active)
-            })
-            .await
-            {
-                Ok(result) => result.map(Some).map_err(|error| error.to_string()),
-                Err(_) => Err("licence peer authorization unavailable".into()),
+            if req.feature_id == RELEASE_HYBRID_LICENSE_VERB && !caller_privileged {
+                Err("licence release requires an elevated WinCommander session".into())
+            } else {
+                let gate = Arc::clone(&session_helper_gate);
+                let verb = req.feature_id.clone();
+                let session = peer
+                    .as_deref()
+                    .map(AuthenticatedPipePeer::session_id)
+                    .unwrap_or(0);
+                let active = peer
+                    .as_deref()
+                    .is_some_and(peer_has_active_interactive_session);
+                match tokio::task::spawn_blocking(move || {
+                    gate.authorize_licence_relay(client_pid, &verb, session, active)
+                })
+                .await
+                {
+                    Ok(result) => result.map(Some).map_err(|error| error.to_string()),
+                    Err(_) => Err("licence peer authorization unavailable".into()),
+                }
             }
         } else if matches!(req.feature_id.as_str(), "svc.fleet.install_policy" | "svc.fleet.get_policy" | "svc.fleet.read_hybrid_trust") {
             #[cfg(debug_assertions)]
@@ -712,6 +716,7 @@ async fn dispatch_verb(
 
         RENEW_HYBRID_LICENSE_VERB => handle_hybrid_license_renewal(args, trust_origin).await,
         ENROL_HYBRID_LICENSE_VERB => handle_hybrid_license_enrolment(args, trust_origin).await,
+        RELEASE_HYBRID_LICENSE_VERB => handle_hybrid_license_release(args, trust_origin, caller_privileged).await,
 
         "svc.clipboard.get_policy" => fleet_machine_policy_store().and_then(|store| {
             store
@@ -947,6 +952,31 @@ async fn handle_hybrid_license_renewal(
             "license renewal is unavailable",
         ))
     }
+}
+
+async fn handle_hybrid_license_release(
+    args: serde_json::Value, trust_origin: Option<TrustOrigin>, caller_privileged: bool,
+) -> Result<serde_json::Value, VerbError> {
+    handle_hybrid_license_release_with(args, trust_origin, caller_privileged, || async {
+        #[cfg(feature = "experimental-pq-licence")]
+        { crate::licence_device_credential::release_from_machine_cache().await }
+        #[cfg(not(feature = "experimental-pq-licence"))]
+        { Err("license release is unavailable") }
+    }).await
+}
+
+async fn handle_hybrid_license_release_with<F, Fut>(
+    args: serde_json::Value, trust_origin: Option<TrustOrigin>, caller_privileged: bool, release: F,
+) -> Result<serde_json::Value, VerbError>
+where F: FnOnce() -> Fut, Fut: std::future::Future<Output = Result<(), &'static str>> {
+    if !caller_privileged || trust_origin != Some(TrustOrigin::SessionHelperPinned) {
+        return Err(VerbError::new("forbidden", "elevated protected WinCommander session required"));
+    }
+    if !args.as_object().is_some_and(|object| object.is_empty()) {
+        return Err(VerbError::new("license_release_rejected", "license release accepts no parameters"));
+    }
+    release().await.map(|_| serde_json::json!({"released": true})).map_err(|_| VerbError::new(
+        "license_release_rejected", "License release could not be confirmed. Check the service and connection, then retry."))
 }
 
 async fn handle_hybrid_license_enrolment(
@@ -5893,6 +5923,29 @@ mod tests {
         assert!(authorize(RENEW_HYBRID_LICENSE_VERB, true, 1234, &gate)
             .await
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn hybrid_release_requires_elevated_pinned_peer_and_no_parameters() {
+        let pinned = Some(TrustOrigin::SessionHelperPinned);
+        for (args, peer, admin, kind) in [
+            (serde_json::json!({}), None, true, "forbidden"),
+            (serde_json::json!({}), pinned, false, "forbidden"),
+            (serde_json::json!({"deviceHash":"other"}), pinned, true, "license_release_rejected"),
+            (serde_json::json!(null), pinned, true, "license_release_rejected"),
+        ] {
+            let result = handle_hybrid_license_release_with(args, peer, admin,
+                || async { panic!("unauthorized release reached service") }).await.unwrap_err();
+            assert_eq!(result.kind, kind);
+        }
+        let ok = handle_hybrid_license_release_with(serde_json::json!({}), pinned, true,
+            || async { Ok(()) }).await.unwrap();
+        assert_eq!(ok, serde_json::json!({"released":true}));
+        let error = handle_hybrid_license_release_with(serde_json::json!({}), pinned, true,
+            || async { Err("private credential detail") }).await.unwrap_err();
+        assert_eq!(error.kind, "license_release_rejected");
+        assert!(!error.message.contains("private credential"));
+        assert!(authorize(RELEASE_HYBRID_LICENSE_VERB, false, 1234, &passing_gate()).await.is_err());
     }
 
     #[cfg(feature = "experimental-pq-licence")]
