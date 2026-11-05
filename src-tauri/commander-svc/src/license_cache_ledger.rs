@@ -94,6 +94,32 @@ fn parse_ledger(raw: &[u8]) -> Result<Ledger, &'static str> {
     Ok(ledger)
 }
 
+/// A successful removal must account for every retained paid licence, not just
+/// the currently displayed one. Missing generations remain ambiguous.
+pub(super) fn ensure_paid_history_released(
+    retained: &[u8], public_key: &str, trust: &wincmd_pq_experiment::jws::Trust<'_>,
+    old_trust: Option<&history::HistoricalTrust>,
+) -> Result<(), &'static str> {
+    let ledger = parse_ledger(retained)?;
+    for record in &ledger.records {
+        let cache: ExistingCache = serde_json::from_str(record).map_err(|_| "license security record is invalid")?;
+        let candidate = StoreLicenseCacheRequest { payload: cache.token.payload, signature: cache.token.signature,
+            hybrid: cache.token.hybrid, seats_used: None, seat_limit: None };
+        validate_request(&candidate, public_key)?;
+        history::verify_previous(&candidate, trust, old_trust)?;
+        let value: serde_json::Value = serde_json::from_str(&candidate.payload).map_err(|_| "license security record is invalid")?;
+        if value.get("plan").and_then(serde_json::Value::as_str) == Some("trial") { continue; }
+        let claims: SignedClaims = serde_json::from_str(&candidate.payload).map_err(|_| "license security record is invalid")?;
+        let generation = checked_activation_generation(claims.activation_generation)?
+            .ok_or("paid license history requires recovery")?;
+        if !ledger.released.iter().any(|item| claims.license_id.as_deref() == Some(item.license_id.as_str())
+            && claims.device_hash == item.device_hash && item.generation >= generation && item.completion.is_some()) {
+            return Err("paid license history requires recovery");
+        }
+    }
+    Ok(())
+}
+
 /// Locate the same device's protected candidate; callers must verify it before use.
 pub(super) fn pending_renewal(
     retained: &[u8],

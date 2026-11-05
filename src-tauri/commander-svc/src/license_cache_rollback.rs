@@ -13,6 +13,19 @@ mod ledger;
 const CACHE_LIMIT: u64 = 64 * 1024;
 static WRITE_LOCK: Mutex<()> = Mutex::new(());
 
+pub(super) fn ensure_paid_history_released(
+    public_key: &str, trust: &wincmd_pq_experiment::jws::Trust<'_>,
+) -> Result<(), &'static str> {
+    let historical = history::configured(trust)?;
+    let _lock = WRITE_LOCK.lock().map_err(|_| "license cache lock is unavailable")?;
+    let _process_lock = crate::licence_security_lock()?;
+    super::release_gate::ensure_idle()?;
+    let anchor = anchor::Anchor::machine_named(r"SOFTWARE\ServaLabs\WinCommander\HybridLicence");
+    let retained = anchor.read().map_err(|_| "license security record is unavailable")?
+        .ok_or("license security record is unavailable")?;
+    ledger::ensure_paid_history_released(&retained, public_key, trust, historical.as_ref())
+}
+
 #[derive(Deserialize)]
 struct ExistingCache {
     token: ExistingToken,

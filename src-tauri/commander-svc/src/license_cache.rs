@@ -309,6 +309,13 @@ pub(crate) fn load_release_licence_snapshot() -> Result<DeviceLicenceSnapshot, &
     rollback::load_release_snapshot(&machine_license_cache_path()?, public, &trust.policy())
 }
 
+#[cfg(feature = "experimental-pq-licence")]
+pub(crate) fn ensure_paid_history_released() -> Result<(), &'static str> {
+    let public = service_public_key().ok_or("license verification is unavailable")?;
+    let trust = hybrid_trust::configured()?;
+    rollback::ensure_paid_history_released(public, &trust.policy())
+}
+
 /// Receipt keys are supplied by the service build, never by a desktop caller.
 #[cfg(feature = "experimental-pq-licence")]
 pub(crate) fn configured_device_receipt_trust() -> Result<hybrid_trust::Trust, &'static str> {

@@ -401,8 +401,12 @@ pub(crate) async fn release_from_machine_cache() -> Result<(), &'static str> {
     receipt_policy.purpose = wincmd_pq_experiment::Purpose::LicenceEnrolment;
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
         .map_err(|_| INVALID)?.as_secs();
-    if release_pending::remove_prepared_cache(&receipt_policy, now)? { return Ok(()); }
-    if release_pending::verify_completed_recovery(&receipt_policy, now)? { return Ok(()); }
+    if release_pending::remove_prepared_cache(&receipt_policy, now)? {
+        return crate::license_cache::ensure_paid_history_released();
+    }
+    if release_pending::verify_completed_recovery(&receipt_policy, now)? {
+        return crate::license_cache::ensure_paid_history_released();
+    }
     let cache = crate::license_cache::load_release_licence_snapshot()?;
     let binding = Binding { licence_id: &cache.licence_id, device_hash: &cache.device_hash,
         issuer_origin: wire::LICENCE_ORIGIN };
@@ -411,7 +415,9 @@ pub(crate) async fn release_from_machine_cache() -> Result<(), &'static str> {
     request_release(&binding, &receipt_policy, &licence).await?;
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
         .map_err(|_| INVALID)?.as_secs();
-    if release_pending::remove_prepared_cache(&receipt_policy, now)? { Ok(()) } else { Err(INVALID) }
+    if release_pending::remove_prepared_cache(&receipt_policy, now)? {
+        crate::license_cache::ensure_paid_history_released()
+    } else { Err(INVALID) }
 }
 
 /// Resume only a protected confirmed release. On an uncertain send or write,
