@@ -21,7 +21,8 @@ try {
     try {
         $ready = $process.StandardOutput.ReadLineAsync()
         if (-not $ready.Wait(60000)) { throw 'Search maintenance ownership timed out.' }
-        if ($ready.Result -cne 'WINCOMMANDER_SEARCH_MAINTENANCE_READY_V1') { throw 'Search maintenance ownership was not confirmed.' }
+        if ($ready.Result -cnotmatch '^WINCOMMANDER_SEARCH_FENCE_HANDLE_V1:([0-9]+)$') { throw 'Search maintenance handle was not confirmed.' }
+        [Console]::Out.WriteLine($Matches[1])
     } finally { $process.Dispose() }
 } catch {
     [Console]::Error.WriteLine("Search maintenance could not be established. Existing data remains active. $($_.Exception.Message)")

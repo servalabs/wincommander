@@ -111,7 +111,7 @@ pub(crate) fn settings_generation_lab_stage_user(expected_sid: &str) -> Result<(
 
 #[cfg(all(windows, feature = "experimental-settings-generation"))]
 pub(crate) fn hold_search_fence_for_installer(pid: u32) -> Result<(), String> {
-    settings_rotation_trial::hold_search_fence_for_installer(pid)
+    settings_rotation_trial::prepare_installer_search_fence(pid)
 }
 
 const MATERIAL_FILENAME: &str = ".install.material";

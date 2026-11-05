@@ -724,25 +724,24 @@ fn experimental_runtime_root_for(scope: StoreScope) -> Result<(PathBuf, Vec<std:
     Ok((root, pins, scope))
 }
 
-/// Hold the search-maintenance fence for the lifetime of the installing
-/// process. The parent handle is acquired before readiness is sent, so normal
-/// installer exit and crash both release this cooperative user-profile lock.
+/// Prepare pinned handles in the installer process. The installer must acquire
+/// the exclusive byte-range lock itself before doing any protected work.
 #[cfg(windows)]
-pub(super) fn hold_search_fence_for_installer(pid: u32) -> Result<(), String> {
-    let (root, _root_pins, _) = experimental_runtime_root_for(StoreScope::CurrentUser)?;
-    hold_search_fence_at(&root.join("file-search"), pid)
+pub(super) fn prepare_installer_search_fence(pid: u32) -> Result<(), String> {
+    let (root, root_pins, _) = experimental_runtime_root_for(StoreScope::CurrentUser)?;
+    duplicate_search_fence_handles(&root.join("file-search"), pid, root_pins)
 }
 
 #[cfg(windows)]
-fn hold_search_fence_at(parent_dir: &std::path::Path, pid: u32) -> Result<(), String> {
+fn duplicate_search_fence_handles(parent_dir: &std::path::Path, pid: u32, mut pins: Vec<std::fs::File>) -> Result<(), String> {
     use std::{fs::OpenOptions, io::Write, os::windows::{fs::{MetadataExt, OpenOptionsExt}, io::AsRawHandle}};
-    use windows_sys::Win32::{Foundation::{CloseHandle, WAIT_OBJECT_0, WAIT_TIMEOUT},
+    use windows_sys::Win32::{Foundation::{CloseHandle, DuplicateHandle, DUPLICATE_SAME_ACCESS, WAIT_TIMEOUT},
         Storage::FileSystem::{BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE, GetFileInformationByHandle},
-        System::Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE, INFINITE}};
+        System::Threading::{GetCurrentProcess, OpenProcess, WaitForSingleObject, PROCESS_DUP_HANDLE, PROCESS_SYNCHRONIZE}};
     struct Process(*mut std::ffi::c_void);
     impl Drop for Process { fn drop(&mut self) { unsafe { CloseHandle(self.0); } } }
     if pid == 0 { return Err("Installer process is unavailable.".into()); }
-    let parent = Process(unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) });
+    let parent = Process(unsafe { OpenProcess(PROCESS_DUP_HANDLE | PROCESS_SYNCHRONIZE, 0, pid) });
     if parent.0.is_null() { return Err("Cannot verify installer process lifetime.".into()); }
     if unsafe { WaitForSingleObject(parent.0, 0) } != WAIT_TIMEOUT { return Err("Installer already exited.".into()); }
     match std::fs::create_dir(parent_dir) {
@@ -750,7 +749,7 @@ fn hold_search_fence_at(parent_dir: &std::path::Path, pid: u32) -> Result<(), St
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {},
         Err(_) => return Err("Cannot prepare search maintenance directory.".into()),
     }
-    let _search_pins = source_snapshot::pin_directories(parent_dir)?;
+    pins.extend(source_snapshot::pin_directories(parent_dir)?);
     let file = OpenOptions::new().read(true).write(true).create(true).truncate(false)
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
         .open(parent_dir.join(".encrypted-search-maintenance.lock")).map_err(|_| "Cannot open search maintenance fence.")?;
@@ -760,11 +759,23 @@ fn hold_search_fence_at(parent_dir: &std::path::Path, pid: u32) -> Result<(), St
         || unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 || info.nNumberOfLinks != 1 {
         return Err("Search maintenance fence is not a safe file.".into());
     }
-    file.try_lock().map_err(|_| "Close WinCommander search before installing the update.")?;
+    // Duplicated pin handles intentionally live until the installer exits. They
+    // prevent ancestor replacement while it owns the lock. A failure makes the
+    // installer abort, which closes any handles already duplicated into it.
+    let current = unsafe { GetCurrentProcess() };
+    for pin in &pins {
+        let mut duplicate = std::ptr::null_mut();
+        if unsafe { DuplicateHandle(current, pin.as_raw_handle(), parent.0, &mut duplicate, 0, 0, DUPLICATE_SAME_ACCESS) } == 0 {
+            return Err("Cannot pin search directory in installer.".into());
+        }
+    }
+    let mut duplicate = std::ptr::null_mut();
+    if unsafe { DuplicateHandle(current, file.as_raw_handle(), parent.0, &mut duplicate, 0, 0, DUPLICATE_SAME_ACCESS) } == 0 {
+        return Err("Cannot transfer search fence to installer.".into());
+    }
     if unsafe { WaitForSingleObject(parent.0, 0) } != WAIT_TIMEOUT { return Err("Installer exited before maintenance began.".into()); }
-    println!("WINCOMMANDER_SEARCH_MAINTENANCE_READY_V1");
-    std::io::stdout().flush().map_err(|_| "Cannot confirm search maintenance ownership.")?;
-    if unsafe { WaitForSingleObject(parent.0, INFINITE) } != WAIT_OBJECT_0 { return Err("Cannot track installer process lifetime.".into()); }
+    println!("WINCOMMANDER_SEARCH_FENCE_HANDLE_V1:{}", duplicate as usize);
+    std::io::stdout().flush().map_err(|_| "Cannot confirm search maintenance handle.")?;
     Ok(())
 }
 
