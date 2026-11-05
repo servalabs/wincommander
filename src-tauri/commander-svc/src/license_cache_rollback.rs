@@ -635,12 +635,21 @@ pub(super) fn can_replace_completed_release_locked(
     previous_record: &[u8], public_key: &str, trust: &wincmd_pq_experiment::jws::Trust<'_>,
 ) -> Result<bool, &'static str> {
     let old_trust = history::configured(trust)?;
-    let bytes = read_cache(path)?.ok_or("license cache is unavailable")?;
     let anchor = anchor::Anchor::machine_named(r"SOFTWARE\ServaLabs\WinCommander\HybridLicence");
+    can_replace_completed_release_with_anchor(path, candidate, expected_time, credential_id, previous_record,
+        public_key, trust, old_trust.as_ref(), &anchor)
+}
+
+fn can_replace_completed_release_with_anchor(
+    path: &Path, candidate: &StoreLicenseCacheRequest, expected_time: u64, credential_id: &[u8; 32],
+    previous_record: &[u8], public_key: &str, trust: &wincmd_pq_experiment::jws::Trust<'_>,
+    old_trust: Option<&history::HistoricalTrust>, anchor: &anchor::Anchor,
+) -> Result<bool, &'static str> {
     let retained = anchor.read().map_err(|_| "license security record is unavailable")?
         .ok_or("license security record is unavailable")?;
+    let bytes = release_cache_or_retained(path, &retained, candidate, expected_time)?;
     ledger::can_replace_completed_release(&retained, candidate, expected_time, &bytes, credential_id,
-        previous_record, public_key, trust, old_trust.as_ref())
+        previous_record, public_key, trust, old_trust)
 }
 
 fn mark_release_completed_with_anchor(

@@ -406,8 +406,18 @@ pub(crate) async fn release_from_machine_cache() -> Result<(), &'static str> {
     let completed = release_pending::remove_prepared_cache(&receipt_policy, now)?
         || release_pending::verify_completed_recovery(&receipt_policy, now)?;
     if completed && crate::license_cache::ensure_paid_history_released().is_ok() { return Ok(()); }
-    let cache = if completed { crate::license_cache::load_retained_release_snapshot()? }
-        else { crate::license_cache::load_release_licence_snapshot()? };
+    let cache = select_release_snapshot(
+        completed,
+        crate::license_cache::load_release_licence_snapshot,
+        crate::license_cache::load_retained_release_snapshot,
+        |cache| {
+            let binding = Binding { licence_id: &cache.licence_id, device_hash: &cache.device_hash,
+                issuer_origin: wire::LICENCE_ORIGIN };
+            let licence = RefreshLicence { payload: &cache.payload, signature: &cache.signature,
+                hybrid: &cache.hybrid, last_verified_at: cache.last_verified_at };
+            release_pending::matches_in_progress(&binding, &receipt_policy, &licence, now)
+        },
+    )?;
     let binding = Binding { licence_id: &cache.licence_id, device_hash: &cache.device_hash,
         issuer_origin: wire::LICENCE_ORIGIN };
     let licence = RefreshLicence { payload: &cache.payload, signature: &cache.signature,
@@ -418,6 +428,22 @@ pub(crate) async fn release_from_machine_cache() -> Result<(), &'static str> {
     if release_pending::remove_prepared_cache(&receipt_policy, now)? {
         crate::license_cache::ensure_paid_history_released()
     } else { Err(INVALID) }
+}
+
+fn select_release_snapshot<T>(
+    completed: bool,
+    current: impl FnOnce() -> Result<T, &'static str>,
+    retained: impl FnOnce() -> Result<T, &'static str>,
+    owns_pending: impl FnOnce(&T) -> Result<bool, &'static str>,
+) -> Result<T, &'static str> {
+    if completed { return retained(); }
+    match current() {
+        Ok(snapshot) => Ok(snapshot),
+        Err(original) => {
+            let snapshot = retained()?;
+            if owns_pending(&snapshot)? { Ok(snapshot) } else { Err(original) }
+        }
+    }
 }
 
 /// Resume only a protected confirmed release. On an uncertain send or write,
