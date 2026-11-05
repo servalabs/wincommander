@@ -12,7 +12,8 @@ pub struct SearchOperationFence { _pins: Vec<File>, _file: File }
 impl SearchOperationFence {
     /// The caller must supply its independently verified user-specific parent.
     pub fn acquire_shared(parent: &Path) -> io::Result<Self> { Self::acquire(parent, false) }
-    pub(crate) fn acquire_exclusive(parent: &Path) -> io::Result<Self> { Self::acquire(parent, true) }
+    /// Hold for the full offline installer lifetime; old binaries do not cooperate.
+    pub fn acquire_exclusive(parent: &Path) -> io::Result<Self> { Self::acquire(parent, true) }
     fn acquire(parent: &Path, exclusive: bool) -> io::Result<Self> {
         let denied = || io::Error::new(io::ErrorKind::PermissionDenied, "search fence refused");
         let pins = crate::read_only::CheckedDirectory::pin_root_path(parent)?;
