@@ -44,11 +44,58 @@ fn load_or_create(store: &mut impl KeyStore, protector: &impl Protector, index_i
             let protected = protector.protect(record.as_ref())?;
             if protected.is_empty() || protected.len() > MAX_PROTECTED { return Err(invalid()); }
             store.create_new(&protected)?;
+            // Treat missing, unreadable, or changed publication as an error.
+            // The caller must inspect an ambiguous outcome before retrying.
+            if store.read()?.as_deref() != Some(protected.as_slice()) { return Err(invalid()); }
             Ok(key)
         }
     }
 }
 
+// Windows experiment only. The caller must independently authorize the root,
+// hold a cross-process migration lease and provide a trusted index identity.
+// Pins deliberately remain alive for this store's lifetime.
+#[cfg(windows)]
+struct PinnedKeyFile {
+    directory: crate::read_only::CheckedDirectory,
+    _pins: Vec<std::fs::File>,
+}
+#[cfg(windows)]
+impl PinnedKeyFile {
+    fn open(root: &std::path::Path) -> io::Result<Self> {
+        use crate::read_only::{AccessMode, CheckedDirectory};
+        let pins = CheckedDirectory::pin_root_path(root)?;
+        let directory = CheckedDirectory::open(root, AccessMode::Writable)
+            .map_err(|e| io::Error::other(e.to_string()))?;
+        Ok(Self { directory, _pins: pins })
+    }
+}
+#[cfg(windows)]
+impl KeyStore for PinnedKeyFile {
+    fn read(&self) -> io::Result<Option<Vec<u8>>> {
+        use std::{io::Read, os::windows::io::AsRawHandle, path::Path};
+        use tantivy::directory::error::OpenReadError;
+        use windows_sys::Win32::Storage::FileSystem::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION};
+        let path = Path::new("protected-search-key.v1");
+        let file = match self.directory.open_read_pinned(path) {
+            Ok(file) => file,
+            Err(OpenReadError::FileDoesNotExist(_)) => return Ok(None),
+            Err(error) => return Err(io::Error::other(error.to_string())),
+        };
+        let mut info = BY_HANDLE_FILE_INFORMATION::default();
+        // SAFETY: file and output struct remain valid for the call.
+        if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0
+            || info.nNumberOfLinks != 1 { return Err(invalid()); }
+        let mut bytes = Vec::new();
+        file.take(MAX_PROTECTED as u64 + 1).read_to_end(&mut bytes)?;
+        if bytes.is_empty() || bytes.len() > MAX_PROTECTED { return Err(invalid()); }
+        Ok(Some(bytes))
+    }
+    fn create_new(&mut self, value: &[u8]) -> io::Result<()> {
+        if value.is_empty() || value.len() > MAX_PROTECTED { return Err(invalid()); }
+        self.directory.atomic_create_pinned(std::path::Path::new("protected-search-key.v1"), value)
+    }
+}
 // DPAPI user scope: do not set CRYPTPROTECT_LOCAL_MACHINE. Not yet wired to a
 // real key store. No runtime fallback or new-key creation on unprotect failure.
 #[cfg(windows)]
@@ -96,10 +143,11 @@ mod tests {
         fn unprotect(&self, value: &[u8]) -> io::Result<Zeroizing<Vec<u8>>> { Ok(Zeroizing::new(value.to_vec())) }
     }
     #[derive(Default)]
-    struct Memory { value: Option<Vec<u8>>, fail_read: bool, conflict: bool }
+    struct Memory { value: Option<Vec<u8>>, fail_read: bool, conflict: bool, bad_readback: bool }
     impl KeyStore for Memory {
         fn read(&self) -> io::Result<Option<Vec<u8>>> {
             if self.fail_read { return Err(io::Error::new(io::ErrorKind::PermissionDenied, "denied")); }
+            if self.bad_readback && self.value.is_some() { return Ok(Some(vec![0])); }
             Ok(self.value.clone())
         }
         fn create_new(&mut self, value: &[u8]) -> io::Result<()> {
@@ -133,6 +181,12 @@ mod tests {
         assert!(racing.value.is_none());
     }
     #[test]
+    fn readback_mismatch_does_not_report_creation_success() {
+        let mut store = Memory { bad_readback: true, ..Default::default() };
+        assert!(load_or_create(&mut store, &Stub, &[1; 16], false).is_err());
+        assert!(store.value.is_some()); // ambiguous publication is preserved for inspection
+    }
+    #[test]
     fn keys_are_bound_to_the_expected_index_and_bad_records_fail_closed() {
         let mut store = Memory::default();
         let key = load_or_create(&mut store, &Stub, &[1; 16], false).unwrap();
@@ -148,6 +202,33 @@ mod tests {
         wrong_format[0] ^= 1;
         store.value = Some(wrong_format);
         assert!(load_or_create(&mut store, &Stub, &[1; 16], true).is_err());
+    }
+    #[cfg(windows)]
+    #[test]
+    fn pinned_user_key_roundtrips_and_missing_existing_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let mut file = PinnedKeyFile::open(root.path()).unwrap();
+        assert!(load_or_create(&mut file, &UserDpapi, &[1; 16], true).is_err());
+        let first = load_or_create(&mut file, &UserDpapi, &[1; 16], false).unwrap();
+        assert_eq!(&*first, &*load_or_create(&mut file, &UserDpapi, &[1; 16], true).unwrap());
+        assert!(load_or_create(&mut file, &UserDpapi, &[2; 16], true).is_err());
+        let path = root.path().join("protected-search-key.v1");
+        let protected = std::fs::read(&path).unwrap();
+        assert!(!protected.windows(32).any(|part| part == first.as_ref()));
+        assert!(file.create_new(b"replacement").is_err());
+        assert_eq!(std::fs::read(path).unwrap(), protected);
+    }
+    #[cfg(windows)]
+    #[test]
+    fn pinned_user_key_rejects_hardlinks_without_modifying_them() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let source = outside.path().join("source");
+        std::fs::write(&source, b"outside key").unwrap();
+        std::fs::hard_link(&source, root.path().join("protected-search-key.v1")).unwrap();
+        let mut file = PinnedKeyFile::open(root.path()).unwrap();
+        assert!(load_or_create(&mut file, &UserDpapi, &[1; 16], true).is_err());
+        assert_eq!(std::fs::read(source).unwrap(), b"outside key");
     }
     #[cfg(windows)]
     #[test]
