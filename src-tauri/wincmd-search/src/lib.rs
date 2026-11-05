@@ -117,6 +117,35 @@ impl SearchEngine {
         Self::from_index(config, ci, path_policy)
     }
 
+    /// Opens a separate encrypted generation and rebuilds it through the normal
+    /// search engine. This does not select it for the app or delete old data.
+    /// The caller must authorize the parent and hold the cross-process lease
+    /// against every legacy and new writer, and protect the identity durably.
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    pub fn open_experimental_encrypted_with_policy(
+        mut config: IndexConfig,
+        path_policy: PathPolicy,
+        index_id: [u8; 16],
+        existing: bool,
+    ) -> Result<Self> {
+        use std::path::Component;
+        let old = config.index_dir.clone();
+        if !old.is_absolute() || old.components().any(|part| matches!(part, Component::ParentDir | Component::CurDir))
+            || index_id == [0; 16] {
+            return Err(SearchError::Config("invalid encrypted index generation".into()));
+        }
+        let parent = old.parent().ok_or_else(|| SearchError::Config("invalid old index path".into()))?;
+        let generation = parent.join(format!(".wincommander-encrypted-{}", hex::encode(index_id)));
+        if generation.to_string_lossy().eq_ignore_ascii_case(&old.to_string_lossy()) {
+            return Err(SearchError::Config("encrypted generation must differ from old index".into()));
+        }
+        // Avoid ingesting either index if a user's search root contains them.
+        config.skip_paths.push(old);
+        config.skip_paths.push(generation.clone());
+        config.index_dir = generation;
+        let ci = Arc::new(ContentIndex::open_experimental_encrypted(&config.index_dir, index_id, existing)?);
+        Self::from_index(config, ci, path_policy)
+    }
     /// Caller must hold its cross-process volume guard until this engine is dropped.
     pub fn open_existing(config: IndexConfig) -> Result<Self> {
         Self::open_existing_with_policy(config, Arc::new(|_| true))
@@ -557,6 +586,31 @@ mod tests {
     }
 
     /// Build a small tempdir tree, index it synchronously, then search.
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    #[test]
+    fn experimental_engine_rebuilds_separate_generation_without_touching_legacy() {
+        let root = TempDir::new().unwrap();
+        let old = root.path().join("legacy");
+        let data = root.path().join("documents");
+        fs::create_dir(&old).unwrap();
+        fs::create_dir(&data).unwrap();
+        fs::write(old.join("meta.json"), b"legacy unchanged").unwrap();
+        fs::write(data.join("memo.txt"), b"secret protectedenginetoken").unwrap();
+        let config = make_config(old.clone(), vec![data]);
+        let engine = SearchEngine::open_experimental_encrypted_with_policy(config.clone(), Arc::new(|_| true), [55; 16], false).unwrap();
+        let generation = engine.config.index_dir.clone();
+        assert_ne!(generation, old);
+        let exclusions = build_globset(&engine.config.exclusions).unwrap();
+        let files = collect_files(&engine.config.roots, &exclusions, &engine.config.skip_paths, engine.config.max_file_bytes);
+        engine.index_files_sync(files).unwrap();
+        let query = ContentQuery { terms: "protectedenginetoken".into(), roots: vec![], limit: 10, offset: 0, keyword_only: true };
+        assert_eq!(engine.search(&query).unwrap().len(), 1);
+        drop(engine);
+        assert_eq!(fs::read(old.join("meta.json")).unwrap(), b"legacy unchanged");
+        let reopened = SearchEngine::open_experimental_encrypted_with_policy(config, Arc::new(|_| true), [55; 16], true).unwrap();
+        assert_eq!(reopened.search(&query).unwrap().len(), 1);
+        assert!(generation.join("protected-search-key.v1").exists());
+    }
     #[test]
     fn search_engine_open_index_and_search() {
         let data_dir = TempDir::new().unwrap();
