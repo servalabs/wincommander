@@ -337,7 +337,8 @@ impl SearchEngine {
         let manifest = directory.atomic_read(std::path::Path::new("meta.json"))
             .map_err(|e| std::io::Error::other(e.to_string()))?;
         let digest: [u8; 32] = Sha256::digest(&manifest).into();
-        crate::encrypted_generation_prototype::record_origin(selection_dir, &id, fresh)?;
+        let source = self.experimental_legacy_path.as_ref().ok_or_else(|| SearchError::Config("legacy search source missing".into()))?;
+        crate::encrypted_generation_prototype::record_origin(selection_dir, &id, fresh, &digest, source)?;
         let mut selection = PinnedSelectionStore::open(selection_dir)?;
         crate::encrypted_generation_prototype::publish(&mut selection, &UserProtector, id, || Ok(digest))?;
         self.config.skip_paths.push(selection_dir.to_path_buf());
@@ -392,7 +393,10 @@ impl SearchEngine {
         // Recover a crash after protected origin publication but before the
         // selection record: reuse only its authenticated generation, after
         // opening and authenticating the existing candidate. Never rebuild it.
-        if let Some((id, fresh_origin)) = crate::encrypted_generation_prototype::read_origin(&selection)? {
+        if let Some(origin) = crate::encrypted_generation_prototype::read_origin(&selection)? {
+            let id = origin.id; let fresh_origin = origin.fresh;
+            let source_identity = crate::encrypted_migration_transaction::Intent::capture([1; 16], id, &config.index_dir)?.identity();
+            if source_identity != origin.source { return Err(SearchError::Config("Original search source changed; recovery required.".into())); }
             use sha2::{Digest, Sha256};
             use tantivy::directory::Directory;
             use crate::read_only::{AccessMode, CheckedDirectory};
@@ -413,10 +417,15 @@ impl SearchEngine {
                         let mut names = Vec::new();
                         for entry in std::fs::read_dir(&config.index_dir)? { names.push(entry?.file_name()); }
                         let only_empty_lock = if names.len() == 1 && names[0] == std::ffi::OsStr::new(".tantivy-writer.lock") {
-                            use std::os::windows::fs::MetadataExt;
-                            let meta = std::fs::symlink_metadata(config.index_dir.join(".tantivy-writer.lock"))?;
-                            meta.is_file() && meta.len() == 0
-                                && meta.file_attributes() & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT == 0
+                            use std::os::windows::io::AsRawHandle;
+                            use windows_sys::Win32::Storage::FileSystem::{BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle};
+                            let checked = CheckedDirectory::open(&config.index_dir, AccessMode::GuardedReader)?;
+                            let file = checked.open_read_pinned(std::path::Path::new(".tantivy-writer.lock"))
+                                .map_err(|e| std::io::Error::other(e.to_string()))?;
+                            let mut info = BY_HANDLE_FILE_INFORMATION::default();
+                            // SAFETY: the file and output remain valid through the call.
+                            (unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) }) != 0
+                                && info.nNumberOfLinks == 1 && file.metadata()?.len() == 0
                         } else { false };
                         if !names.is_empty() && !only_empty_lock && !Self::experimental_scope_only(&config.index_dir)? {
                             return Err(SearchError::Config("Legacy search data appeared during recovery.".into()));
@@ -429,6 +438,7 @@ impl SearchEngine {
             let manifest = directory.atomic_read(std::path::Path::new("meta.json")).map_err(|e| std::io::Error::other(e.to_string()))?;
             tantivy::Index::open(directory).map_err(|_| SearchError::Config("Interrupted encrypted search candidate is invalid.".into()))?;
             let digest: [u8; 32] = Sha256::digest(&manifest).into();
+            if digest != origin.digest { return Err(SearchError::Config("Interrupted search manifest changed; recovery required.".into())); }
             let mut recovered = PinnedSelectionStore::open(&selection)?;
             crate::encrypted_generation_prototype::publish(&mut recovered, &UserProtector, id, || Ok(digest))?;
             drop(recovered);
@@ -1490,7 +1500,15 @@ mod tests {
         let mut candidate = SearchEngine::open_experimental_encrypted_with_policy(config.clone(), Arc::new(|_| false), id, false).unwrap();
         candidate.rebuild_experimental_candidate().unwrap();
         // Simulate interruption immediately after origin publication.
-        crate::encrypted_generation_prototype::record_origin(&selection, &id, true).unwrap();
+        use sha2::{Digest, Sha256};
+        use tantivy::directory::Directory;
+        let generation = root.path().join(format!(".wincommander-encrypted-{}", hex::encode(id)));
+        let directory = crate::encrypted_index_prototype::tantivy_trial::TrialDirectory::open_protected(
+            &generation, crate::read_only::AccessMode::GuardedReader, &id, true).unwrap();
+        let manifest = directory.atomic_read(std::path::Path::new("meta.json")).unwrap();
+        let digest: [u8; 32] = Sha256::digest(&manifest).into();
+        crate::encrypted_generation_prototype::record_origin(&selection, &id, true, &digest, &root.path().join("fts")).unwrap();
+        drop(directory);
         drop(candidate);
         assert!(!selection.join("candidate-proof.v1").exists());
         let recovered = SearchEngine::open_or_rebuild_experimental_with_policy(config, Arc::new(|_| true)).unwrap();
@@ -1504,7 +1522,8 @@ mod tests {
         let root = TempDir::new().unwrap(); let old = root.path().join("fts");
         let selection = root.path().join(".wincommander-encrypted-selection");
         fs::create_dir(&selection).unwrap();
-        crate::encrypted_generation_prototype::record_origin(&selection, &[44; 16], true).unwrap();
+        fs::create_dir(&old).unwrap();
+        crate::encrypted_generation_prototype::record_origin(&selection, &[44; 16], true, &[1; 32], &old).unwrap();
         let original = fs::read(selection.join("origin-proof.v1")).unwrap();
         let config = make_config(old, vec![]);
         assert!(SearchEngine::open_or_rebuild_experimental_with_policy(config, Arc::new(|_| true)).is_err());

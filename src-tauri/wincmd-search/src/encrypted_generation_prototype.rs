@@ -169,10 +169,10 @@ mod tests {
     #[test]
     fn dpapi_origin_is_bound_to_generation_and_cannot_be_reclassified() {
         let root = tempfile::tempdir().unwrap();
-        record_origin(root.path(), &[7; 16], false).unwrap();
+        record_origin(root.path(), &[7; 16], false, &[3; 32], root.path()).unwrap();
         assert_eq!(inspect_origin(root.path(), &[7; 16]).unwrap(), Some(false));
         assert!(inspect_origin(root.path(), &[8; 16]).is_err());
-        assert!(record_origin(root.path(), &[7; 16], true).is_err());
+        assert!(record_origin(root.path(), &[7; 16], true, &[3; 32], root.path()).is_err());
     }
     #[cfg(windows)]
     #[test]
@@ -189,25 +189,34 @@ mod tests {
     }
 }
 
-/// Immutable, DPAPI-authenticated provenance for the selected generation.
-/// Missing/corrupt provenance never proves a fresh installation.
+/// DPAPI-authenticated origin binds generation, approved creation manifest,
+/// and the original index directory identity. Missing never proves fresh.
 #[cfg(windows)]
-pub(crate) fn record_origin(root: &std::path::Path, id: &[u8; 16], fresh: bool) -> io::Result<()> {
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Origin {
+    pub id: [u8; 16], pub fresh: bool, pub digest: [u8; 32], pub source: (u32, u32, u32),
+}
+#[cfg(windows)]
+pub(crate) fn record_origin(root: &std::path::Path, id: &[u8; 16], fresh: bool,
+    digest: &[u8; 32], source: &std::path::Path) -> io::Result<()> {
     use crate::read_only::{AccessMode, CheckedDirectory};
     let _pins = CheckedDirectory::pin_root_path(root)?;
-    if let Some(existing) = inspect_origin(root, id)? {
-        return if existing == fresh { Ok(()) } else { Err(invalid()) };
+    let identity = crate::encrypted_migration_transaction::Intent::capture([1; 16], *id, source)?.identity();
+    let origin = Origin { id: *id, fresh, digest: *digest, source: identity };
+    if let Some(existing) = read_origin(root)? {
+        return if existing == origin { Ok(()) } else { Err(invalid()) };
     }
     let dir = CheckedDirectory::open(root, AccessMode::Writable).map_err(|e| io::Error::other(e.to_string()))?;
-    let mut plain = b"WCORIG01".to_vec(); plain.extend_from_slice(id); plain.push(u8::from(fresh));
+    let mut plain = b"WCORIG02".to_vec(); plain.extend_from_slice(id); plain.push(u8::from(fresh));
+    plain.extend_from_slice(digest);
+    for part in [identity.0, identity.1, identity.2] { plain.extend_from_slice(&part.to_le_bytes()); }
     let protected = UserProtector.seal(&plain)?;
     dir.atomic_create_pinned(std::path::Path::new("origin-proof.v1"), &protected)?;
-    if inspect_origin(root, id)? != Some(fresh) { return Err(invalid()); }
+    if read_origin(root)?.as_ref() != Some(&origin) { return Err(invalid()); }
     Ok(())
 }
-
 #[cfg(windows)]
-pub(crate) fn read_origin(root: &std::path::Path) -> io::Result<Option<([u8; 16], bool)>> {
+pub(crate) fn read_origin(root: &std::path::Path) -> io::Result<Option<Origin>> {
     use crate::read_only::{AccessMode, CheckedDirectory};
     use tantivy::directory::error::OpenReadError;
     let _pins = CheckedDirectory::pin_root_path(root)?;
@@ -218,17 +227,19 @@ pub(crate) fn read_origin(root: &std::path::Path) -> io::Result<Option<([u8; 16]
         Err(e) => return Err(io::Error::other(e.to_string())),
     };
     let plain = UserProtector.open(&bytes)?;
-    if plain.len() != 25 || &plain[..8] != b"WCORIG01" { return Err(invalid()); }
+    if plain.len() != 69 || &plain[..8] != b"WCORIG02" { return Err(invalid()); }
     let id: [u8; 16] = plain[8..24].try_into().map_err(|_| invalid())?;
     if id == [0; 16] { return Err(invalid()); }
     let fresh = match plain[24] { 0 => false, 1 => true, _ => return Err(invalid()) };
-    Ok(Some((id, fresh)))
+    let digest = plain[25..57].try_into().map_err(|_| invalid())?;
+    let part = |start| -> io::Result<u32> { Ok(u32::from_le_bytes(plain[start..start + 4].try_into().map_err(|_| invalid())?)) };
+    Ok(Some(Origin { id, fresh, digest, source: (part(57)?, part(61)?, part(65)?) }))
 }
-
 #[cfg(windows)]
-pub(crate) fn inspect_origin(root: &std::path::Path, id: &[u8; 16]) -> io::Result<Option<bool>> {    match read_origin(root)? {
+pub(crate) fn inspect_origin(root: &std::path::Path, id: &[u8; 16]) -> io::Result<Option<bool>> {
+    match read_origin(root)? {
         None => Ok(None),
-        Some((actual, fresh)) if &actual == id => Ok(Some(fresh)),
+        Some(origin) if &origin.id == id => Ok(Some(origin.fresh)),
         Some(_) => Err(invalid()),
     }
 }
