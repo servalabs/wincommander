@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
-#[cfg(not(test))]
-use std::io::Write;
 use std::path::Path;
 use std::sync::Mutex;
+
+#[path = "log_file_io.rs"]
+mod log_file_io;
 
 /// Atomic flag keeping the current `app.loggingEnabled` state.
 /// Initialised to `true`; synced from the encrypted settings store by
@@ -132,21 +133,16 @@ pub fn purge_old_log_records(log_file: &Path, keep_days: u64) {
     let cutoff = chrono::Utc::now().date_naive()
         - chrono::Duration::days(keep_days.saturating_sub(1) as i64);
 
-    let content = match std::fs::read_to_string(log_file) {
-        Ok(c) => c,
-        Err(_) => return,
-    };
-
-    let total = content.lines().count();
-    let kept: Vec<&str> = content
-        .lines()
-        .filter(|line| should_keep_log_record(line, cutoff))
-        .collect();
-
-    if kept.len() < total {
-        let new_content = kept.join("\n") + if kept.is_empty() { "" } else { "\n" };
-        let _ = std::fs::write(log_file, new_content.as_bytes());
-    }
+    let _ = log_file_io::rewrite(log_file, |content| {
+        let total = content.lines().count();
+        let kept: Vec<&str> = content.lines()
+            .filter(|line| should_keep_log_record(line, cutoff)).collect();
+        #[cfg(not(debug_assertions))]
+        if kept.iter().any(|line| !line.is_empty() && encrypted_log_payload(line).is_none()) {
+            return Err("log migration is required before retention".into());
+        }
+        Ok((kept.len() < total).then(|| kept.join("\n") + if kept.is_empty() { "" } else { "\n" }))
+    });
 }
 
 #[allow(dead_code)] // Used by the scheduled log-maintenance entrypoint.
@@ -167,44 +163,29 @@ fn should_keep_log_record(line: &str, cutoff: chrono::NaiveDate) -> bool {
 /// local Tauri dev session can be inspected without app-side decryption.
 #[allow(dead_code)]
 pub(crate) fn migrate_plaintext_logs(log_file: &Path) {
-    let content = match std::fs::read_to_string(log_file) {
-        Ok(c) => c,
-        Err(_) => return,
-    };
-    // Short-circuit if every non-empty line is already encrypted.
-    if !content
-        .lines()
-        .any(|l| !l.is_empty() && encrypted_log_payload(l).is_none())
-    {
-        return;
+    if migrate_plaintext_logs_with(log_file, crate::datastore::log_encrypt_line).is_err() {
+        eprintln!("[Logging] Existing log could not be secured; original retained when possible.");
     }
+}
 
-    let new_lines: Vec<String> = content
-        .lines()
-        .filter(|l| !l.is_empty())
-        .map(|line| {
-            if encrypted_log_payload(line).is_some() {
-                return line.to_string();
-            }
-            // Legacy: [YYYY-MM-DD HH:MM:SS] [LEVEL] message
-            if let Some(rest) = line.strip_prefix('[') {
-                if rest.len() > 11
-                    && chrono::NaiveDate::parse_from_str(&rest[..10], "%Y-%m-%d").is_ok()
-                {
-                    let date = &rest[..10];
-                    // body becomes [HH:MM:SS] [LEVEL] message
-                    let body = format!("[{}", &rest[11..]);
-                    return crate::datastore::log_encrypt_line(date, &body);
-                }
-            }
-            // Unknown format: encrypt today-dated
-            let date = chrono::Local::now().format("%Y-%m-%d").to_string();
-            crate::datastore::log_encrypt_line(&date, line)
-        })
-        .collect();
+/// Migrate historical plaintext away from the UI startup thread. All appends
+/// and rewrites use the same cross-process lock while migration is running.
+pub(crate) fn start_encrypted_log_migration() {
+    #[cfg(all(not(debug_assertions), not(test)))]
+    if std::thread::Builder::new().name("log-migration".into()).spawn(|| {
+        if let Ok(directory) = crate::paths::user_logs_dir() {
+            migrate_plaintext_logs(&directory.join("wincommander.log"));
+        }
+    }).is_err() {
+        eprintln!("[Logging] Existing log migration could not start.");
+    }
+}
 
-    let new_content = new_lines.join("\n") + "\n";
-    let _ = std::fs::write(log_file, new_content.as_bytes());
+fn migrate_plaintext_logs_with(
+    log_file: &Path,
+    encrypt: impl Fn(&str, &str) -> Result<String, String>,
+) -> Result<(), String> {
+    log_file_io::migrate_with(log_file, encrypt)
 }
 
 /// Debug builds only: rewrite decryptable records as the legacy readable
@@ -214,12 +195,9 @@ pub(crate) fn migrate_plaintext_logs(log_file: &Path) {
 #[cfg(debug_assertions)]
 #[allow(dead_code)] // Explicitly opt-in recovery tool; never invoked automatically.
 pub(crate) fn migrate_logs_to_plaintext_for_debug(log_file: &Path) {
-    let content = match std::fs::read_to_string(log_file) {
-        Ok(content) => content,
-        Err(_) => return,
-    };
+    let _ = log_file_io::rewrite(log_file, |content| {
     if !content.lines().any(|line| encrypted_log_payload(line).is_some()) {
-        return;
+        return Ok(None);
     }
     let lines: Vec<String> = content
         .lines()
@@ -234,7 +212,8 @@ pub(crate) fn migrate_logs_to_plaintext_for_debug(log_file: &Path) {
             line.to_string()
         })
         .collect();
-    let _ = std::fs::write(log_file, lines.join("\n") + "\n");
+    Ok(Some(lines.join("\n") + "\n"))
+    });
 }
 
 // Log sources tagged into each record so the in-app Error Center can show
@@ -272,16 +251,10 @@ fn write_log_line(date: &str, body: &str) {
         }
         let log_file = log_dir.join("wincommander.log");
         #[cfg(debug_assertions)]
-        let line = format!("[{} {}", date, body.trim_start_matches('['));
+        let result = log_file_io::append_line(&log_file, &format!("[{} {}", date, body.trim_start_matches('[')));
         #[cfg(not(debug_assertions))]
-        let line = crate::datastore::log_encrypt_line(date, body);
-        if let Ok(mut file) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_file)
-        {
-            let _ = file.write_all(format!("{}\n", line).as_bytes());
-        }
+        let result = log_file_io::append_encrypted(&log_file, || crate::datastore::log_encrypt_line(date, body));
+        if result.is_err() { eprintln!("[Logging] Log record could not be saved securely."); }
     }
 }
 
@@ -733,7 +706,7 @@ pub(crate) fn clear_log_records() -> Result<(), String> {
     }
     let log_dir = crate::paths::user_logs_dir()?;
     let log_file = log_dir.join("wincommander.log");
-    let result = std::fs::write(&log_file, b"").map_err(|e| format!("Failed to clear log: {e}"));
+    let result = log_file_io::clear(&log_file);
     // Tamper hook: best-effort, spawn so we never block or panic.
     // Forwards a generic event label only — no AV-flagged strings here.
     // Pro side (tamper_monitor::record_event) validates and enqueues.
