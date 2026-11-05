@@ -302,11 +302,46 @@ $detector = [System.Diagnostics.Process]::Start($info)
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "run in isolation; the CI workspace suite saturates process launch"]
     async fn failed_shield_runner_returns_without_waiting_for_descendant() {
-        let child = fixture("$script = [Console]::In.ReadToEnd(); Invoke-Expression $script");
+        use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+        use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
+        use windows_sys::Win32::System::JobObjects::{
+            AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+            SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        };
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
+            PROCESS_TERMINATE,
+        };
+        // The job owns the complete fixture tree even if parsing or an assertion
+        // fails. Assign before sending stdin, so no descendant can escape it.
+        let raw_job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+        assert!(!raw_job.is_null(), "could not create fixture job");
+        let job = unsafe { OwnedHandle::from_raw_handle(raw_job) };
+        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        assert_ne!(
+            unsafe {
+                SetInformationJobObject(
+                    job.as_raw_handle(),
+                    JobObjectExtendedLimitInformation,
+                    (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                    std::mem::size_of_val(&limits) as u32,
+                )
+            },
+            0,
+            "could not set fixture job cleanup"
+        );
+        let mut child = fixture("$script = [Console]::In.ReadToEnd(); Invoke-Expression $script");
+        if unsafe { AssignProcessToJobObject(job.as_raw_handle(), child.as_raw_handle()) } == 0 {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("could not assign fixture to cleanup job");
+        }
         let script = r#"
 $info = New-Object System.Diagnostics.ProcessStartInfo
 $info.FileName = 'powershell.exe'
-$info.Arguments = '-NoProfile -NonInteractive -Command "Start-Sleep -Seconds 30"'
+$info.Arguments = '-NoProfile -NonInteractive -Command "Start-Sleep -Seconds 120"'
 $info.UseShellExecute = $false
 $info.CreateNoWindow = $true
 $info.RedirectStandardInput = $true
@@ -318,19 +353,37 @@ $detector.add_ErrorDataReceived({ param($sender, $eventArgs) })
 $detector.BeginOutputReadLine()
 $detector.BeginErrorReadLine()
 $detector.StandardInput.Close()
-[Console]::Error.Write('fixture failure')
+[Console]::Error.Write('fixture failure:' + $detector.Id)
 exit 7
 "#;
         let output = wait_for_script(
             child,
             script.into(),
             "Start-PrivacyShield",
-            Duration::from_secs(15),
+            Duration::from_secs(60),
         )
         .await
         .unwrap();
+        let error = std::str::from_utf8(&output.stderr).unwrap();
+        let pid: u32 = error
+            .strip_prefix("fixture failure:")
+            .unwrap()
+            .parse()
+            .unwrap();
+        let raw = unsafe { OpenProcess(PROCESS_SYNCHRONIZE | PROCESS_TERMINATE, 0, pid) };
+        assert!(!raw.is_null(), "detector process must still exist");
+        let process = unsafe { OwnedHandle::from_raw_handle(raw) };
+        let alive = unsafe { WaitForSingleObject(process.as_raw_handle(), 0) } == WAIT_TIMEOUT;
+        // Clean up even if an assertion below fails.
+        let terminated = unsafe { TerminateProcess(process.as_raw_handle(), 0) } != 0;
+        let stopped =
+            unsafe { WaitForSingleObject(process.as_raw_handle(), 5_000) } == WAIT_OBJECT_0;
+        assert!(
+            alive,
+            "failure must return while the detector is still running"
+        );
+        assert!(terminated && stopped, "detector fixture must be cleaned up");
         assert_eq!(output.status.code(), Some(7));
-        assert_eq!(output.stderr, b"fixture failure");
         assert!(output.stdout.is_empty());
     }
 }
