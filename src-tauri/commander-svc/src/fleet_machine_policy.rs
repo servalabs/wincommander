@@ -25,6 +25,9 @@ mod hybrid_store;
 
 #[cfg(windows)]
 use crate::peer_auth_deployment_acl as protected_acl;
+#[cfg(windows)]
+#[path = "fleet_machine_owner.rs"]
+mod machine_owner;
 
 /// Separate trust store. Existing directories and files are checked before
 /// any ACL change or read, preventing adoption of pre-planted trust.
@@ -40,9 +43,19 @@ pub(crate) fn system_store() -> Result<&'static FleetMachinePolicy, &'static str
     if let Some(store) = STORE.get() { return Ok(store); }
     let base = std::env::var_os("ProgramData").ok_or("store_unavailable")?;
     let dir = PathBuf::from(base).join("WinCommander").join("fleet-machine");
-    let store = FleetMachinePolicy::open(Box::new(WindowsFleetPolicyFs), dir)?;
+    let store = open_system_store(dir)?;
     let _ = STORE.set(store);
     STORE.get().ok_or("store_unavailable")
+}
+
+#[cfg(windows)]
+fn open_system_store(dir: PathBuf) -> Result<FleetMachinePolicy, &'static str> {
+    let fs = WindowsFleetPolicyFs;
+    fs.ensure_dir_secure(&dir).map_err(|_| "insecure_store")?;
+    let lease = machine_owner::acquire(&dir)?;
+    let mut store = FleetMachinePolicy::open(Box::new(fs), dir)?;
+    store._owner = Some(lease);
+    Ok(store)
 }
 
 #[cfg(windows)]
@@ -346,6 +359,8 @@ pub struct FleetMachinePolicy {
     fs: Box<dyn PolicyFs>,
     path: PathBuf,
     state: Mutex<State>,
+    #[cfg(windows)]
+    _owner: Option<machine_owner::OwnerLease>,
 }
 
 fn valid_uuid(value: &str) -> bool {
@@ -457,7 +472,7 @@ fn verify_policy(trust: &FleetTrust, policy: &PolicyEnvelope) -> Result<(), &'st
 impl FleetMachinePolicy {
     /// The supplied filesystem must validate existing owner/DACL and reject
     /// reparse points *before* loading any existing trust record.
-    pub fn open(fs: Box<dyn PolicyFs>, dir: PathBuf) -> Result<Self, &'static str> {
+    fn open(fs: Box<dyn PolicyFs>, dir: PathBuf) -> Result<Self, &'static str> {
         fs.ensure_dir_secure(&dir).map_err(|_| "insecure_store")?;
         let path = dir.join("fleet-machine-policy.json");
         let state: State = match fs.read(&path) {
@@ -476,7 +491,15 @@ impl FleetMachinePolicy {
             fs,
             path,
             state: Mutex::new(state),
+            #[cfg(windows)]
+            _owner: None,
         })
+    }
+
+    /// Test fixtures use in-memory storage and do not claim process ownership.
+    #[cfg(test)]
+    pub(crate) fn open_test(fs: Box<dyn PolicyFs>, dir: PathBuf) -> Result<Self, &'static str> {
+        Self::open(fs, dir)
     }
 
     pub fn begin_enrollment(

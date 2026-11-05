@@ -61,6 +61,12 @@ fn verify_component_with(
     inspect(file.as_raw_handle())
 }
 
+/// Inspect the already-open object. The caller retains the handle and checks
+/// its type and reparse status before relying on this access-control result.
+pub(crate) fn verify_file_handle(file: &std::fs::File) -> Result<(), PeerAuthError> {
+    unsafe { verify(file.as_raw_handle()) }
+}
+
 struct Descriptor(*mut core::ffi::c_void);
 impl Drop for Descriptor {
     fn drop(&mut self) {
