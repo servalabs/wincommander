@@ -296,7 +296,18 @@ fn install_material_with_policy(require_protected: bool) -> Result<[u8; 32], Str
 
     // Machine-wide alongside the store (see store_dir): the AES/Argon2 salt
     // must live where the sections it decrypts live, so all accounts share one key.
-    let path = crate::paths::datastore_data_dir()?.join(MATERIAL_FILENAME);
+    let directory = crate::paths::datastore_data_dir()?;
+    install_machine_material(&directory, require_protected)
+}
+
+fn install_machine_material(directory: &std::path::Path, require_protected: bool) -> Result<[u8; 32], String> {
+    // Readers never mutate a legacy key. All updated writers take the same
+    // process-wide file lock before inspecting or replacing machine material.
+    #[cfg(windows)]
+    let _writer_lock = if require_protected {
+        Some(legacy_material_guard::acquire_writer_lock(directory)?)
+    } else { None };
+    let path = directory.join(MATERIAL_FILENAME);
     let raw = match read_material_file(&path)? {
         Some(raw) => raw,
         None => {
@@ -322,13 +333,8 @@ fn install_material_with_policy(require_protected: bool) -> Result<[u8; 32], Str
         let mut buf = [0u8; 32];
         buf.copy_from_slice(&raw);
         #[cfg(windows)]
-        protect_legacy_material(&buf, require_protected, dpapi_protect, dpapi_unprotect, |protected| {
-            atomic_write_bytes(&path, protected)?;
-            let saved = fs::read(&path).map_err(|_| "Could not verify protected settings key".to_string())?;
-            let recovered = dpapi_unprotect(&saved)?;
-            if recovered.as_slice() != buf { return Err("Protected settings key did not match".to_string()); }
-            Ok(())
-        })?;
+        if require_protected { protect_legacy_material(&buf, dpapi_protect, dpapi_unprotect,
+            |protected| publish_protected_legacy_material(&path, &buf, protected))?; }
         #[cfg(not(windows))]
         let _ = require_protected;
         return Ok(buf);
@@ -351,6 +357,17 @@ fn install_material_with_policy(require_protected: bool) -> Result<[u8; 32], Str
     let mut buf = [0u8; 32];
     buf.copy_from_slice(&plain);
     Ok(buf)
+}
+
+#[cfg(windows)]
+fn publish_protected_legacy_material(path: &std::path::Path, expected: &[u8; 32], protected: &[u8]) -> Result<(), String> {
+    let current = fs::read(path).map_err(|_| "Could not recheck settings key".to_string())?;
+    if current.as_slice() != expected { return Err("Settings key changed during protection".to_string()); }
+    atomic_write_bytes(path, protected)?;
+    let saved = fs::read(path).map_err(|_| "Could not verify protected settings key".to_string())?;
+    let recovered = dpapi_unprotect(&saved)?;
+    if recovered.as_slice() != expected { return Err("Protected settings key did not match".to_string()); }
+    Ok(())
 }
 
 fn read_material_file(path: &std::path::Path) -> Result<Option<Vec<u8>>, String> {
@@ -894,16 +911,14 @@ mod tests {
         let material = [0x42; 32];
         let key = super::derive_section_key(&material, None).unwrap();
         let existing = super::encode_section(&key, b"existing settings", "machine:settings").unwrap();
-        for require_protected in [false, true] {
-            let result = super::protect_legacy_material(&material, require_protected,
-                |_| Err("protection failed".into()), |_| panic!("nothing to decrypt"),
-                |_| panic!("unprotected key must not be written"));
-            assert_eq!(result.is_err(), require_protected);
-            let result = super::protect_legacy_material(&material, require_protected,
-                |_| Ok(vec![9; 64]), |_| Ok(vec![7; 32]),
-                |_| panic!("mismatched key must not be written"));
-            assert_eq!(result.is_err(), require_protected);
-        }
+        let result = super::protect_legacy_material(&material,
+            |_| Err("protection failed".into()), |_| panic!("nothing to decrypt"),
+            |_| panic!("unprotected key must not be written"));
+        assert!(result.is_err());
+        let result = super::protect_legacy_material(&material,
+            |_| Ok(vec![9; 64]), |_| Ok(vec![7; 32]),
+            |_| panic!("mismatched key must not be written"));
+        assert!(result.is_err());
         assert_eq!(super::decode_section(&key, &existing, "machine:settings").unwrap(), b"existing settings");
     }
 
@@ -916,12 +931,12 @@ mod tests {
         let material = [0x42; 32];
         std::fs::write(&path, material).unwrap();
         let locked = std::fs::OpenOptions::new().read(true).share_mode(0).open(&path).unwrap();
-        let result = super::protect_legacy_material(&material, true, super::dpapi_protect, super::dpapi_unprotect,
+        let result = super::protect_legacy_material(&material, super::dpapi_protect, super::dpapi_unprotect,
             |wrapped| super::atomic_write_bytes(&path, wrapped));
         assert!(result.is_err());
         drop(locked);
         assert_eq!(std::fs::read(&path).unwrap(), material);
-        super::protect_legacy_material(&material, true, super::dpapi_protect, super::dpapi_unprotect,
+        super::protect_legacy_material(&material, super::dpapi_protect, super::dpapi_unprotect,
             |wrapped| super::atomic_write_bytes(&path, wrapped)).unwrap();
         let saved = std::fs::read(&path).unwrap();
         assert!(saved.len() > material.len());
@@ -935,10 +950,65 @@ mod tests {
         let path = directory.path().join("legacy.material");
         let material = [0x42; 32];
         std::fs::write(&path, material).unwrap();
-        assert!(super::protect_legacy_material(&material, true, super::dpapi_protect,
+        assert!(super::protect_legacy_material(&material, super::dpapi_protect,
             |_| super::dpapi_unprotect(b"invalid Windows DPAPI blob"),
             |_| panic!("a failed DPAPI check must not replace material")).is_err());
         assert_eq!(std::fs::read(path).unwrap(), material);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn legacy_machine_key_allows_read_during_sharing_failure_and_retries_write() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(super::MATERIAL_FILENAME);
+        let material = [0x42; 32];
+        std::fs::write(&path, material).unwrap();
+        let locked = std::fs::OpenOptions::new().read(true).share_mode(1).open(&path).unwrap();
+        assert_eq!(super::install_machine_material(directory.path(), false).unwrap(), material);
+        assert!(super::install_machine_material(directory.path(), true).is_err());
+        drop(locked);
+        assert_eq!(std::fs::read(&path).unwrap(), material);
+        assert_eq!(super::install_machine_material(directory.path(), true).unwrap(), material);
+        assert_eq!(super::dpapi_unprotect(&std::fs::read(path).unwrap()).unwrap(), material);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn changed_legacy_material_is_never_replaced_by_stale_writer() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(super::MATERIAL_FILENAME);
+        let old = [0x42; 32];
+        let new = [0x54; 32];
+        std::fs::write(&path, new).unwrap();
+        let protected_old = super::dpapi_protect(&old).unwrap();
+        assert!(super::publish_protected_legacy_material(&path, &old, &protected_old).is_err());
+        assert_eq!(std::fs::read(path).unwrap(), new);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn concurrent_processes_protect_the_same_legacy_key() {
+        const DIR: &str = "WINCOM_TEST_LEGACY_MATERIAL_DIRECTORY";
+        if let Some(directory) = std::env::var_os(DIR) {
+            let material = super::install_machine_material(std::path::Path::new(&directory), true).unwrap();
+            assert_eq!(material, [0x42; 32]);
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(super::MATERIAL_FILENAME);
+        std::fs::write(&path, [0x42; 32]).unwrap();
+        let spawn = || std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("concurrent_processes_protect_the_same_legacy_key")
+            .env(DIR, directory.path()).stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null()).spawn().unwrap();
+        let mut a = spawn();
+        let mut b = spawn();
+        assert!(a.wait().unwrap().success());
+        assert!(b.wait().unwrap().success());
+        let wrapped = std::fs::read(path).unwrap();
+        assert!(wrapped.len() > 32);
+        assert_eq!(super::dpapi_unprotect(&wrapped).unwrap(), [0x42; 32]);
     }
     #[test]
     fn missing_section_read_does_not_create_the_store() {
