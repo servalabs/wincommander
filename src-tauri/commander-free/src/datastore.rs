@@ -109,6 +109,11 @@ pub(crate) fn settings_generation_lab_stage_user(expected_sid: &str) -> Result<(
     settings_rotation_trial::stage_existing_explicitly(settings_rotation_trial::StoreScope::CurrentUser)
 }
 
+#[cfg(all(windows, feature = "experimental-settings-generation"))]
+pub(crate) fn hold_search_fence_for_installer(pid: u32) -> Result<(), String> {
+    settings_rotation_trial::hold_search_fence_for_installer(pid)
+}
+
 const MATERIAL_FILENAME: &str = ".install.material";
 const USER_MATERIAL_FILENAME: &str = ".user-store.material";
 const PERSONAL_SECRETS_KEY_MARKER: &str = "personal-secrets-key.in-use";

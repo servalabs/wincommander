@@ -724,6 +724,45 @@ fn experimental_runtime_root_for(scope: StoreScope) -> Result<(PathBuf, Vec<std:
     Ok((root, pins, scope))
 }
 
+/// Hold the search-maintenance fence for the lifetime of the installing
+/// process. The parent handle is acquired before readiness is sent, so normal
+/// installer exit and crash both release this cooperative user-profile lock.
+#[cfg(windows)]
+pub(super) fn hold_search_fence_for_installer(pid: u32) -> Result<(), String> {
+    let (root, _root_pins, _) = experimental_runtime_root_for(StoreScope::CurrentUser)?;
+    hold_search_fence_at(&root.join("file-search"), pid)
+}
+
+#[cfg(windows)]
+fn hold_search_fence_at(parent_dir: &std::path::Path, pid: u32) -> Result<(), String> {
+    use std::{fs::OpenOptions, io::Write, os::windows::{fs::{MetadataExt, OpenOptionsExt}, io::AsRawHandle}};
+    use windows_sys::Win32::{Foundation::{CloseHandle, WAIT_OBJECT_0, WAIT_TIMEOUT},
+        Storage::FileSystem::{BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE, GetFileInformationByHandle},
+        System::Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE, INFINITE}};
+    struct Process(*mut std::ffi::c_void);
+    impl Drop for Process { fn drop(&mut self) { unsafe { CloseHandle(self.0); } } }
+    if pid == 0 { return Err("Installer process is unavailable.".into()); }
+    let parent = Process(unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) });
+    if parent.0.is_null() { return Err("Cannot verify installer process lifetime.".into()); }
+    if unsafe { WaitForSingleObject(parent.0, 0) } != WAIT_TIMEOUT { return Err("Installer already exited.".into()); }
+    let _search_pins = source_snapshot::pin_directories(parent_dir)?;
+    let file = OpenOptions::new().read(true).write(true).create(true).truncate(false)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(parent_dir.join(".encrypted-search-maintenance.lock")).map_err(|_| "Cannot open search maintenance fence.")?;
+    let metadata = file.metadata().map_err(|_| "Cannot inspect search maintenance fence.")?;
+    let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+        || unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 || info.nNumberOfLinks != 1 {
+        return Err("Search maintenance fence is not a safe file.".into());
+    }
+    file.try_lock().map_err(|_| "Close WinCommander search before installing the update.")?;
+    if unsafe { WaitForSingleObject(parent.0, 0) } != WAIT_TIMEOUT { return Err("Installer exited before maintenance began.".into()); }
+    println!("WINCOMMANDER_SEARCH_MAINTENANCE_READY_V1");
+    std::io::stdout().flush().map_err(|_| "Cannot confirm search maintenance ownership.")?;
+    if unsafe { WaitForSingleObject(parent.0, INFINITE) } != WAIT_OBJECT_0 { return Err("Cannot track installer process lifetime.".into()); }
+    Ok(())
+}
+
 /// Read-only startup decision; callers must not fall back to legacy when this
 /// reports recovery or an error. The Windows lab route uses the same decision.
 #[derive(Debug, PartialEq)]

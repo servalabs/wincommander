@@ -7,6 +7,20 @@
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     #[cfg(windows)]
+    if args.first().map(String::as_str) == Some("--hold-search-maintenance-fence") {
+        #[cfg(feature = "experimental-settings-generation")]
+        {
+            let result = args.get(1).and_then(|value| value.parse::<u32>().ok())
+                .filter(|_| args.len() == 2)
+                .ok_or_else(|| "Invalid installer process.".to_string())
+                .and_then(wincommander_lib::settings_generation_lab::hold_search_maintenance_fence);
+            if let Err(error) = result { eprintln!("{error}"); std::process::exit(1); }
+            return;
+        }
+        #[cfg(not(feature = "experimental-settings-generation"))]
+        std::process::exit(1);
+    }
+    #[cfg(windows)]
     if args.first().map(String::as_str) == Some("--settings-generation-lab") {
         attach_parent_console();
         #[cfg(feature = "experimental-settings-generation")]

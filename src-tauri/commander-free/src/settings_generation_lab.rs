@@ -70,3 +70,8 @@ mod tests {
         assert_eq!(parse(&args(&["--settings-generation-lab", "stage", "--offline-confirmed"]), true).unwrap(), Ok(Action::Stage));
     }
 }
+
+#[cfg(windows)]
+pub fn hold_search_maintenance_fence(pid: u32) -> Result<(), String> {
+    crate::datastore::hold_search_fence_for_installer(pid)
+}

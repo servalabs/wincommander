@@ -621,3 +621,31 @@ fn first_migration_authenticates_preexisting_staged_candidate_before_anchor() {
     assert_eq!(std::fs::read(stage).unwrap(), candidate);
     assert_eq!(owner.read_all().unwrap()["payments"]["token"], "second secret");
 }
+
+#[test]
+#[cfg(windows)]
+fn search_fence_lasts_until_parent_process_exits() {
+    use std::{io::{BufRead, BufReader}, os::windows::fs::OpenOptionsExt, process::{Command, Stdio}};
+    use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
+    const DIR: &str = "WINCMD_TEST_SEARCH_FENCE_DIR";
+    const PID: &str = "WINCMD_TEST_SEARCH_FENCE_PID";
+    if let (Some(dir), Ok(pid)) = (std::env::var_os(DIR), std::env::var(PID)) {
+        hold_search_fence_at(std::path::Path::new(&dir), pid.parse().unwrap()).unwrap();
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let mut parent = Command::new("powershell.exe").args(["-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 30"]).stdout(Stdio::null()).spawn().unwrap();
+    let mut helper = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "datastore::settings_rotation_trial::tests::search_fence_lasts_until_parent_process_exits", "--nocapture"])
+        .env(DIR, dir.path()).env(PID, parent.id().to_string()).stdout(Stdio::piped()).spawn().unwrap();
+    let mut line = String::new();
+    let mut reader = BufReader::new(helper.stdout.take().unwrap());
+    while reader.read_line(&mut line).unwrap() != 0 && !line.contains("WINCOMMANDER_SEARCH_MAINTENANCE_READY_V1") { line.clear(); }
+    assert!(line.contains("WINCOMMANDER_SEARCH_MAINTENANCE_READY_V1"));
+    let fence = std::fs::OpenOptions::new().read(true).write(true).share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .open(dir.path().join(".encrypted-search-maintenance.lock")).unwrap();
+    assert!(fence.try_lock_shared().is_err());
+    parent.kill().unwrap(); parent.wait().unwrap();
+    assert!(helper.wait().unwrap().success());
+    fence.try_lock_shared().unwrap();
+}
