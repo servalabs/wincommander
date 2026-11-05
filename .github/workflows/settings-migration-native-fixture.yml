@@ -35,3 +35,13 @@ jobs:
             Write-Host $output
             if ($LASTEXITCODE -ne 0 -or $output -notmatch 'test result: ok\. 1 passed; 0 failed; 0 ignored') { throw "Fixture test failed or did not run: $case" }
           }
+      - name: Verify user identity gates
+        shell: pwsh
+        run: |
+          $env:RUSTFLAGS = '-D warnings'
+          $manifest = 'tools/settings-migration-ci/Cargo.toml'
+          foreach ($case in @('original_user_sid_must_match_exactly', 'user_stage_requires_explicit_nonempty_original_user_sid', 'another_user_is_rejected_before_any_store_access')) {
+            $output = cargo test --locked --manifest-path $manifest --features experimental-settings-generation $case -- --test-threads=1 2>&1 | Out-String
+            Write-Host $output
+            if ($LASTEXITCODE -ne 0 -or $output -notmatch 'test result: ok\. 1 passed; 0 failed; 0 ignored') { throw "Identity test failed or did not run: $case" }
+          }
