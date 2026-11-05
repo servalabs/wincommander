@@ -40,10 +40,17 @@ fn classify(parent: &Path, old: &Path, selection: &Path) -> Result<State, String
     }
 }
 
+fn reject_pending(selection: &Path) -> Result<(), String> {
+    if present(selection).map_err(|_| "Cannot inspect encrypted search selection.")?
+        && SearchEngine::inspect_search_migration(selection).map_err(|e| e.to_string())?.is_some() {
+        return Err("A previous search migration needs recovery before this update.".into());
+    }
+    Ok(())
+}
 /// Run from the temporary early CLI helper, before normal application startup.
 /// The verify phase is read-only and the installer must hold its exclusive lock.
 pub fn run(phase: &str) -> Result<String, String> {
-    let parent = if phase == "quarantine" {
+    let parent = if matches!(phase, "stage" | "quarantine") {
         crate::file_search::runtime_fence::prepare_installer_parent()?
     } else {
         crate::file_search::runtime_fence::verified_parent()?
@@ -51,6 +58,45 @@ pub fn run(phase: &str) -> Result<String, String> {
     let old = parent.join("fts");
     let selection = parent.join(".wincommander-encrypted-selection");
     match phase {
+        "stage" => {
+            let guard = SearchOperationFence::acquire_exclusive(&parent)
+                .map_err(|_| "Cannot acquire offline search maintenance lock.")?;
+            reject_pending(&selection)?;
+            match classify(&parent, &old, &selection)? {
+                State::Fresh => Ok("fresh".into()),
+                State::NeedsRebuild => {
+                    // No settings or user roots are read in the installer.
+                    let config = wincmd_search::types::IndexConfig {
+                        roots: Vec::new(), exclusions: Vec::new(), skip_paths: Vec::new(),
+                        max_file_bytes: 50 * 1024 * 1024, index_dir: old.clone(),
+                    };
+                    let policy: wincmd_search::PathPolicy = std::sync::Arc::new(|_| false);
+                    SearchEngine::rebuild_offline_and_select(config, policy, &selection, &guard)
+                        .map_err(|e| e.to_string())?;
+                    SearchEngine::verify_selected_generation(&old, &selection).map_err(|e| e.to_string())?;
+                    Ok("staged reconciliation=pending old-cache=retained".into())
+                },
+                State::NeedsQuarantine => {
+                    SearchEngine::verify_selected_generation(&old, &selection).map_err(|e| e.to_string())?;
+                    Ok("staged reconciliation=pending old-cache=retained".into())
+                },
+                State::Quarantined => {
+                    SearchEngine::verify_quarantined_selection(&old, &selection).map_err(|e| e.to_string())?;
+                    Ok("already-quarantined".into())
+                },
+            }
+        }
+        "verify-staged" => {
+            reject_pending(&selection)?;
+            match classify(&parent, &old, &selection)? {
+            State::Fresh => Ok("fresh".into()),
+            State::NeedsQuarantine => SearchEngine::verify_selected_generation(&old, &selection)
+                .map(|_| "staged old-cache=retained".into()).map_err(|e| e.to_string()),
+            State::Quarantined => SearchEngine::verify_quarantined_selection(&old, &selection)
+                .map(|_| "already-quarantined".into()).map_err(|e| e.to_string()),
+            State::NeedsRebuild => Err("The encrypted search generation is not ready.".into()),
+            }
+        },
         "quarantine" => {
             let guard = SearchOperationFence::acquire_exclusive(&parent)
                 .map_err(|_| "Cannot acquire offline search maintenance lock.")?;
@@ -159,7 +205,7 @@ pub fn run_transaction(phase: &str, token_hex: &str) -> Result<String, String> {
                 State::Quarantined => {
                     match SearchEngine::inspect_search_migration(&selection).map_err(|e| e.to_string())? {
                         Some((existing, true)) if existing == token => {
-                            SearchEngine::verify_quarantined_selection(&old, &selection).map_err(|e| e.to_string())?;
+                            SearchEngine::mark_search_replacement(&old, &selection, token, &guard).map_err(|e| e.to_string())?;
                             return Ok("replacement-pending reconciliation=pending".into());
                         },
                         None => {

@@ -504,6 +504,26 @@ impl SearchEngine {
         engine.select_experimental_candidate(selection_dir)?;
         Ok(report)
     }
+    /// Authenticate and open the selected encrypted index without moving or
+    /// changing the existing legacy cache.
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    pub fn verify_selected_generation(old: &std::path::Path, selection_dir: &std::path::Path) -> Result<()> {
+        use crate::encrypted_generation_prototype::{inspect, PinnedSelectionStore, UserProtector};
+        use crate::encrypted_index_prototype::tantivy_trial::TrialDirectory;
+        use crate::read_only::{AccessMode, CheckedDirectory};
+        let parent = old.parent().ok_or_else(|| SearchError::Config("invalid legacy index path".into()))?;
+        if !old.is_absolute() || selection_dir.parent() != Some(parent) {
+            return Err(SearchError::Config("invalid selection parent".into()));
+        }
+        let _pins = CheckedDirectory::pin_root_path(parent)?;
+        let mut selection = PinnedSelectionStore::open(selection_dir)?;
+        let selected = inspect(&mut selection, &UserProtector)?
+            .ok_or_else(|| SearchError::Config("encrypted selection missing".into()))?;
+        let generation = parent.join(format!(".wincommander-encrypted-{}", hex::encode(selected.index_id)));
+        let directory = TrialDirectory::open_protected(&generation, AccessMode::GuardedReader, &selected.index_id, true)?;
+        tantivy::Index::open(directory).map_err(|_| SearchError::Config("encrypted index cannot be opened".into()))?;
+        Ok(())
+    }
     /// Offline phase: authenticate the selected encrypted generation before
     /// moving the legacy cache under the helper's own exclusive fence.
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
@@ -1352,11 +1372,39 @@ mod tests {
         SearchEngine::abort_search_migration(&old, &selection, tx, &fence).unwrap();
         assert_eq!(fs::read(old.join("meta.json")).unwrap(), b"original cache");
         SearchEngine::begin_search_migration(&old, &selection, tx, &fence).unwrap();
+        let backup = fs::read_dir(root.path()).unwrap().map(|e| e.unwrap().path())
+            .find(|p| p.file_name().unwrap().to_string_lossy().starts_with(".wincommander-legacy-index-backup-")).unwrap();
+        let displaced = root.path().join("displaced-original");
+        fs::rename(&backup, &displaced).unwrap();
+        fs::create_dir(&backup).unwrap();
+        assert!(SearchEngine::mark_search_replacement(&old, &selection, tx, &fence).is_err());
+        fs::remove_dir(&backup).unwrap();
+        fs::rename(&displaced, &backup).unwrap();
         SearchEngine::mark_search_replacement(&old, &selection, tx, &fence).unwrap();
         assert_eq!(SearchEngine::inspect_search_migration(&selection).unwrap(), Some((tx, true)));
         assert!(SearchEngine::abort_search_migration(&old, &selection, tx, &fence).is_err());
         SearchEngine::commit_search_migration(&old, &selection, tx, &fence).unwrap();
         assert!(SearchEngine::inspect_search_migration(&selection).unwrap().is_none());
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    #[test]
+    fn staged_index_opens_after_restart_without_moving_old_cache() {
+        let root = TempDir::new().unwrap();
+        let old = root.path().join("legacy"); let data = root.path().join("data"); let selection = root.path().join("selector");
+        fs::create_dir(&old).unwrap(); fs::create_dir(&data).unwrap();
+        fs::write(old.join("meta.json"), b"old app cache").unwrap();
+        fs::write(data.join("doc.txt"), b"stagedrestartneedle").unwrap();
+        let guard = crate::encrypted_search_fence::SearchOperationFence::acquire_exclusive(root.path()).unwrap();
+        let config = make_config(old.clone(), vec![]);
+        SearchEngine::rebuild_offline_and_select(config, Arc::new(|_| false), &selection, &guard).unwrap();
+        SearchEngine::verify_selected_generation(&old, &selection).unwrap();
+        assert_eq!(fs::read(old.join("meta.json")).unwrap(), b"old app cache");
+        drop(guard);
+        let live = SearchEngine::open_experimental_selected_with_policy(make_config(old.clone(), vec![data]), Arc::new(|_| true), &selection).unwrap();
+        let query = ContentQuery { terms: "stagedrestartneedle".into(), roots: vec![], limit: 10, offset: 0, keyword_only: true };
+        assert_eq!(live.search(&query).unwrap().len(), 1);
+        assert_eq!(fs::read(old.join("meta.json")).unwrap(), b"old app cache");
+        live.stop();
     }
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     #[test]
@@ -1372,6 +1420,13 @@ mod tests {
         let empty_config = make_config(old.clone(), vec![]);
         let report = SearchEngine::rebuild_offline_and_select(empty_config, Arc::new(|_| false), &selection, &guard).unwrap();
         assert_eq!(report.indexed, 0);
+        let generation = fs::read_dir(root.path()).unwrap().map(|e| e.unwrap().path())
+            .find(|p| p.file_name().unwrap().to_string_lossy().starts_with(".wincommander-encrypted-")).unwrap();
+        for entry in fs::read_dir(generation).unwrap() {
+            let bytes = fs::read(entry.unwrap().path()).unwrap();
+            assert!(!bytes.windows(b"privatecatchupneedle".len()).any(|part| part == b"privatecatchupneedle"));
+            assert!(!bytes.windows(b"doc.txt".len()).any(|part| part == b"doc.txt"));
+        }
         let backup = SearchEngine::quarantine_selected_with_fence(&old, &selection, &guard).unwrap();
         assert_eq!(fs::read(backup.join("meta.json")).unwrap(), b"legacy saved");
         drop(guard);

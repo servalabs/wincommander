@@ -33,6 +33,7 @@ jobs:
             'quarantine_requires_selected_cache_and_preserves_legacy_backup',
             'offline_rebuild_selects_encrypted_generation_and_preserves_old_cache',
             'offline_empty_cache_reconciles_with_live_roots_after_restart',
+            'staged_index_opens_after_restart_without_moving_old_cache',
             'search_migration_intent_recovers_and_respects_replacement_boundary',
             'application_entry_rebuilds_then_refuses_corrupt_selector',
             'fresh_install_can_build_select_and_reopen_without_legacy_index',
