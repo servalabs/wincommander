@@ -112,18 +112,18 @@ impl KeyStore for PinnedKeyFile {
 // Future reader/writer integration must retain this owner for the full index
 // lifetime instead of copying the key into an independently-lived object.
 #[cfg(windows)]
-struct PinnedIndexKey {
+pub(crate) struct PinnedIndexKey {
     _file: PinnedKeyFile,
     key: Zeroizing<[u8; 32]>,
 }
 #[cfg(windows)]
 impl PinnedIndexKey {
-    fn open(root: &std::path::Path, index_id: &[u8; 16], has_index: bool) -> io::Result<Self> {
+    pub(crate) fn open(root: &std::path::Path, index_id: &[u8; 16], has_index: bool) -> io::Result<Self> {
         let mut file = PinnedKeyFile::open(root)?;
         let key = load_or_create(&mut file, &UserDpapi, index_id, has_index)?;
         Ok(Self { _file: file, key })
     }
-    fn key(&self) -> &[u8; 32] { &self.key }
+    pub(crate) fn key(&self) -> &[u8; 32] { &self.key }
 }
 // DPAPI user scope: do not set CRYPTPROTECT_LOCAL_MACHINE. Not yet wired to a
 // real key store. No runtime fallback or new-key creation on unprotect failure.

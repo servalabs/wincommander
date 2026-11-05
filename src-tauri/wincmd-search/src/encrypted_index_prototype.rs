@@ -283,10 +283,19 @@ mod tantivy_trial {
     const MAX_ATOMIC_CIPHERTEXT: usize =
         HEADER + MAX_ATOMIC_PLAINTEXT + MAX_ATOMIC_PLAINTEXT.div_ceil(CHUNK) * OVERHEAD + FOOTER;
 
+    enum KeyOwner {
+        Fixture([u8; 32]),
+        Protected(crate::encrypted_key_prototype::PinnedIndexKey),
+    }
+    impl KeyOwner {
+        fn key(&self) -> &[u8; 32] {
+            match self { Self::Fixture(key) => key, Self::Protected(key) => key.key() }
+        }
+    }
     #[derive(Clone)]
     struct TrialDirectory {
         inner: CheckedDirectory,
-        key: [u8; 32],
+        key: Arc<KeyOwner>,
         // Experimental lifetime pin: blocks rename of all ancestors while open.
         _root_anchor: Arc<Vec<std::fs::File>>,
     }
@@ -298,7 +307,17 @@ mod tantivy_trial {
             let anchor = CheckedDirectory::pin_root_path(root).unwrap();
             after_pin();
             let inner = CheckedDirectory::open(root, mode).unwrap();
-            Self { inner, key, _root_anchor: Arc::new(anchor) }
+            Self { inner, key: Arc::new(KeyOwner::Fixture(key)), _root_anchor: Arc::new(anchor) }
+        }
+    }
+    impl TrialDirectory {
+        // Caller must authorize root and hold the migration lease while
+        // determining the independently trusted index identity.
+        fn open_protected(root: &Path, mode: AccessMode, index_id: &[u8; 16], has_index: bool) -> io::Result<Self> {
+            let anchor = CheckedDirectory::pin_root_path(root)?;
+            let inner = CheckedDirectory::open(root, mode).map_err(|e| io::Error::other(e.to_string()))?;
+            let key = crate::encrypted_key_prototype::PinnedIndexKey::open(root, index_id, has_index)?;
+            Ok(Self { inner, key: Arc::new(KeyOwner::Protected(key)), _root_anchor: Arc::new(anchor) })
         }
     }
     impl fmt::Debug for TrialDirectory {
@@ -339,6 +358,7 @@ mod tantivy_trial {
     struct TrialHandle {
         file: Mutex<ProtectedFile<std::fs::File>>,
         len: usize,
+        _key_owner: Arc<KeyOwner>,
     }
     impl fmt::Debug for TrialHandle {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -359,6 +379,7 @@ mod tantivy_trial {
     }
     struct TrialWriter {
         sink: Option<WritePtr>,
+        _key_owner: Arc<KeyOwner>,
         cipher: Aes256Gcm,
         path: String,
         id: [u8; 16],
@@ -368,14 +389,15 @@ mod tantivy_trial {
         failed: bool,
     }
     impl TrialWriter {
-        fn new(mut sink: WritePtr, key: &[u8; 32], path: String) -> io::Result<Self> {
+        fn new(mut sink: WritePtr, owner: Arc<KeyOwner>, path: String) -> io::Result<Self> {
             let mut id = [0; 16];
             OsRng.fill_bytes(&mut id);
             sink.write_all(MAGIC)?;
             sink.write_all(&id)?;
             Ok(Self {
                 sink: Some(sink),
-                cipher: Aes256Gcm::new(key.into()),
+                cipher: Aes256Gcm::new(owner.key().into()),
+                _key_owner: owner,
                 path,
                 id,
                 chunks: 0,
@@ -486,7 +508,7 @@ mod tantivy_trial {
             let source = self.inner.open_read_pinned(path)?;
             let file = ProtectedFile::open(
                 source,
-                &self.key,
+                self.key.key(),
                 name(path).map_err(|e| OpenReadError::wrap_io_error(e, path.into()))?,
             )
             .map_err(|e| OpenReadError::wrap_io_error(e, path.into()))?;
@@ -494,6 +516,7 @@ mod tantivy_trial {
             Ok(Arc::new(TrialHandle {
                 file: Mutex::new(file),
                 len,
+                _key_owner: Arc::clone(&self.key),
             }))
         }
         fn delete(&self, path: &Path) -> Result<(), DeleteError> {
@@ -507,7 +530,7 @@ mod tantivy_trial {
                 .map_err(|e| OpenWriteError::wrap_io_error(e, path.into()))?
                 .to_owned();
             let sink = self.inner.open_write_pinned(path)?;
-            let writer = TrialWriter::new(sink, &self.key, path_name)
+            let writer = TrialWriter::new(sink, Arc::clone(&self.key), path_name)
                 .map_err(|e| OpenWriteError::wrap_io_error(e, path.into()))?;
             Ok(BufWriter::new(Box::new(writer)))
         }
@@ -517,7 +540,7 @@ mod tantivy_trial {
                 .atomic_read_bounded(path, MAX_ATOMIC_CIPHERTEXT)?;
             let mut f = ProtectedFile::open(
                 io::Cursor::new(bytes),
-                &self.key,
+                self.key.key(),
                 name(path).map_err(|e| OpenReadError::wrap_io_error(e, path.into()))?,
             )
             .map_err(|e| OpenReadError::wrap_io_error(e, path.into()))?;
@@ -535,7 +558,7 @@ mod tantivy_trial {
                 return Err(io::Error::other("index manifest exceeds limit"));
             }
             let mut encrypted = Vec::new();
-            encrypt(&mut encrypted, &self.key, name(path)?, data)?;
+            encrypt(&mut encrypted, self.key.key(), name(path)?, data)?;
             // Windows can briefly refuse atomic replacement while a shared
             // reader has the old manifest open. Preserve a permanent failure.
             #[cfg(windows)]
@@ -560,6 +583,24 @@ mod tantivy_trial {
         }
     }
 
+    #[test]
+    fn protected_key_remains_pinned_until_directory_clones_and_handles_close() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = TrialDirectory::open_protected(root.path(), AccessMode::Writable, &[6; 16], false).unwrap();
+        directory.atomic_write(Path::new("segment"), b"secret").unwrap();
+        let clone = directory.clone();
+        let reader = clone.get_file_handle(Path::new("segment")).unwrap();
+        let writer = clone.open_write(Path::new("other-segment")).unwrap();
+        let key_path = root.path().join("protected-search-key.v1");
+        assert!(std::fs::remove_file(&key_path).is_err());
+        drop(directory);
+        drop(clone);
+        assert!(std::fs::remove_file(&key_path).is_err());
+        drop(reader);
+        assert!(std::fs::remove_file(&key_path).is_err());
+        drop(writer);
+        std::fs::remove_file(&key_path).unwrap();
+    }
     #[test]
     fn real_tantivy_index_search_and_reopen_are_encrypted() {
         use tantivy::{
@@ -622,7 +663,7 @@ mod tantivy_trial {
         let path = Path::new("stream.idx");
         let key = [11; 32];
         let mut writer =
-            TrialWriter::new(inner.open_write(path).unwrap(), &key, "stream.idx".into()).unwrap();
+            TrialWriter::new(inner.open_write(path).unwrap(), Arc::new(KeyOwner::Fixture(key)), "stream.idx".into()).unwrap();
         let bytes = vec![42; CHUNK * 8 + 333];
         for part in bytes.chunks(971) {
             writer.write_all(part).unwrap();
@@ -684,7 +725,7 @@ mod tantivy_trial {
             limit: 100,
         }));
         let key = [17; 32];
-        let mut writer = TrialWriter::new(sink, &key, "failed.idx".into()).unwrap();
+        let mut writer = TrialWriter::new(sink, Arc::new(KeyOwner::Fixture(key)), "failed.idx".into()).unwrap();
         assert!(writer.write_all(&vec![4; CHUNK]).is_err());
         assert!(writer.write_all(b"retry").is_err());
         assert!(writer.terminate().is_err());
