@@ -15,6 +15,8 @@ mod encrypted_cutover_prototype;
 mod encrypted_key_prototype;
 #[cfg(any(test, all(windows, feature = "experimental-encrypted-search")))]
 mod encrypted_scope;
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
+mod encrypted_legacy_quarantine;
 #[cfg(test)]
 mod encrypted_migration_prototype;
 #[cfg(any(test, all(windows, feature = "experimental-encrypted-search")))]
@@ -125,6 +127,8 @@ pub struct SearchEngine {
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     experimental_id: Option<[u8; 16]>,
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    experimental_legacy_path: Option<std::path::PathBuf>,
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     experimental_verified: AtomicBool,
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     experimental_selection: Option<crate::encrypted_generation_prototype::PinnedSelectionStore>,
@@ -227,12 +231,20 @@ impl SearchEngine {
                 .map_err(|e| std::io::Error::other(e.to_string()))?;
             (Some(pins), Some(lease))
         };
+        // Retained plaintext recovery backups must never be crawled, including
+        // after restart when this engine no longer has their in-memory paths.
+        for entry in std::fs::read_dir(parent)? {
+            let entry = entry?;
+            if entry.file_name().to_string_lossy().starts_with(".wincommander-legacy-index-backup-") {
+                config.skip_paths.push(entry.path());
+            }
+        }
         // Generation creation is exclusive; interrupted candidates remain.
         if !existing {
             std::fs::create_dir(&generation)?;
         }
         // Avoid ingesting either index if a user's search root contains them.
-        config.skip_paths.push(old);
+        config.skip_paths.push(old.clone());
         config.skip_paths.push(generation.clone());
         config.index_dir = generation;
         let ci = Arc::new(ContentIndex::open_experimental_encrypted(&config.index_dir, index_id, existing)?);
@@ -241,6 +253,7 @@ impl SearchEngine {
         engine.experimental_legacy_pins = legacy_pins;
         engine.experimental_fresh = !existing;
         engine.experimental_id = Some(index_id);
+        engine.experimental_legacy_path = Some(old);
         Ok(engine)
     }
     /// Build only a newly created, unselected candidate. Traversal and
@@ -372,6 +385,28 @@ impl SearchEngine {
         engine.start_indexing_internal(true)?;
         Ok(engine)
     }
+    /// Move the old plaintext cache to a reversible sibling backup. This does
+    /// not erase data or free space. Call only after stopping all old binaries;
+    /// an old process can otherwise bypass the cooperating writer lock.
+    /// Search is stopped and must be reopened afterward. No normal application
+    /// path invokes this experimental operation.
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    pub fn quarantine_experimental_legacy_cache(&mut self) -> Result<std::path::PathBuf> {
+        if self.experimental_selection.is_none() || self.experimental_id.is_none() {
+            return Err(SearchError::Config("encrypted generation is not selected".into()));
+        }
+        // Stop worker and watcher before changing exclusion paths. Reopening
+        // reconstructs exclusions from retained backup names.
+        self.stop();
+        // Reopen metadata through the active encrypted index before any move.
+        self.ci.index.reader()?;
+        let old = self.experimental_legacy_path.as_ref()
+            .ok_or_else(|| SearchError::Config("legacy index path unavailable".into()))?;
+        let backup = crate::encrypted_legacy_quarantine::quarantine(old)?;
+        // Prevent a later search root from ingesting the retained backup.
+        self.config.skip_paths.push(backup.clone());
+        Ok(backup)
+    }
     /// Caller must hold its cross-process volume guard until this engine is dropped.
     pub fn open_existing(config: IndexConfig) -> Result<Self> {
         Self::open_existing_with_policy(config, Arc::new(|_| true))
@@ -435,6 +470,8 @@ impl SearchEngine {
             experimental_legacy_pins: None,
             #[cfg(all(windows, feature = "experimental-encrypted-search"))]
             experimental_id: None,
+            #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+            experimental_legacy_path: None,
             #[cfg(all(windows, feature = "experimental-encrypted-search"))]
             experimental_verified: AtomicBool::new(false),
             #[cfg(all(windows, feature = "experimental-encrypted-search"))]
@@ -998,6 +1035,27 @@ mod tests {
         fs::write(&path, b"corrupt").unwrap();
         assert!(publish_experimental_scope(&dir, b"replacement", |_| Ok(())).is_err());
         assert_eq!(fs::read(path).unwrap(), b"corrupt");
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    #[test]
+    fn quarantine_requires_selected_cache_and_preserves_legacy_backup() {
+        let root = TempDir::new().unwrap();
+        let old = root.path().join("legacy"); let data = root.path().join("data");
+        let selector = root.path().join("selector");
+        fs::create_dir(&old).unwrap(); fs::create_dir(&data).unwrap(); fs::create_dir(&selector).unwrap();
+        fs::write(old.join("meta.json"), b"legacy retained").unwrap();
+        fs::write(data.join("doc.txt"), b"encryptedbackuptoken").unwrap();
+        let config = make_config(old.clone(), vec![data]);
+        let mut engine = SearchEngine::open_experimental_encrypted_with_policy(config, Arc::new(|_| true), [90; 16], false).unwrap();
+        assert!(engine.quarantine_experimental_legacy_cache().is_err());
+        assert_eq!(fs::read(old.join("meta.json")).unwrap(), b"legacy retained");
+        engine.rebuild_experimental_candidate().unwrap();
+        engine.select_experimental_candidate(&selector).unwrap();
+        let backup = engine.quarantine_experimental_legacy_cache().unwrap();
+        assert!(!old.exists());
+        assert_eq!(fs::read(backup.join("meta.json")).unwrap(), b"legacy retained");
+        let query = ContentQuery { terms: "encryptedbackuptoken".into(), roots: vec![], limit: 10, offset: 0, keyword_only: true };
+        assert_eq!(engine.search(&query).unwrap().len(), 1);
     }
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     #[test]
