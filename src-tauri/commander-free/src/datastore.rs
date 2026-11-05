@@ -49,6 +49,9 @@ use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
 
+#[path = "settings_generation_ownership.rs"]
+mod settings_generation_ownership;
+
 #[path = "settings_section_envelope.rs"]
 mod settings_section_envelope;
 
