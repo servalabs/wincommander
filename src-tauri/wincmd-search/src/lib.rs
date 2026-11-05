@@ -76,8 +76,6 @@ pub struct SearchEngine {
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     experimental_verified: AtomicBool,
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
-    experimental_source_digest: Option<[u8; 32]>,
-    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     experimental_selection: Option<crate::encrypted_generation_prototype::PinnedSelectionStore>,
     config: IndexConfig,
     ci: Arc<ContentIndex>,
@@ -201,9 +199,6 @@ impl SearchEngine {
         let files = crate::encrypted_strict_crawl::collect(
             &self.config.roots, &exclusions, &self.config.skip_paths, self.config.max_file_bytes,
         )?;
-        // Never read file contents that the active privacy policy denies.
-        let files: Vec<_> = files.into_iter().filter(|file| (self.path_policy)(&file.path)).collect();
-        let source_before = crate::encrypted_strict_crawl::fingerprint(&files)?;
         let mut seen = std::collections::HashSet::new();
         let mut writer = self.ci.writer()?;
         let mut indexed = 0usize;
@@ -228,61 +223,17 @@ impl SearchEngine {
         if reader.searcher().num_docs() != indexed as u64 {
             return Err(SearchError::Config("encrypted candidate document count mismatch".into()));
         }
-        let after_files = crate::encrypted_strict_crawl::collect(
-            &self.config.roots, &exclusions, &self.config.skip_paths, self.config.max_file_bytes,
-        )?;
-        let after_files: Vec<_> = after_files.into_iter().filter(|file| (self.path_policy)(&file.path)).collect();
-        let source_after = crate::encrypted_strict_crawl::fingerprint(&after_files)?;
-        if source_before != source_after {
-            return Err(SearchError::Config("source changed during encrypted rebuild".into()));
-        }
-        self.experimental_source_digest = Some(source_after);
-        self.experimental_verified.store(true, Ordering::Release);
         Ok(indexed)
     }
-    /// Stage an immutable creation proof only after a successful strict pass.
-    /// Caller must hold the migration lease, authorize selection_dir, and
-    /// verify source stability inside verify_source. This does not establish
-    /// crash durability, rollback resistance, or enable release selection.
+    /// Proof publication is disabled: a stable source snapshot, durable
+    /// selection and downgrade-resistant recovery have not been established.
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     pub fn record_experimental_candidate(
         &mut self,
-        selection_dir: &std::path::Path,
-        verify_source: impl FnOnce() -> Result<()>,
+        _selection_dir: &std::path::Path,
+        _verify_source: impl FnOnce() -> Result<()>,
     ) -> Result<()> {
-        use sha2::{Digest, Sha256};
-        use tantivy::directory::Directory;
-        use crate::encrypted_generation_prototype::{PinnedSelectionStore, UserProtector};
-        let id = self.experimental_id.ok_or_else(|| SearchError::Config("not an encrypted candidate".into()))?;
-        if self.experimental_legacy_lease.is_none() || self.experimental_legacy_pins.is_none() {
-            return Err(SearchError::Config("legacy writer lease unavailable".into()));
-        }
-        if !self.experimental_verified.load(Ordering::Acquire) {
-            return Err(SearchError::Config("candidate has not passed strict rebuild".into()));
-        }
-        verify_source()?;
-        // The protected proof itself must never become a search document.
-        self.config.skip_paths.push(selection_dir.to_path_buf());
-        let exclusions = build_globset(&self.config.exclusions)?;
-        let current = crate::encrypted_strict_crawl::collect(
-            &self.config.roots, &exclusions, &self.config.skip_paths, self.config.max_file_bytes,
-        )?;
-        let current: Vec<_> = current.into_iter().filter(|file| (self.path_policy)(&file.path)).collect();
-        let digest = crate::encrypted_strict_crawl::fingerprint(&current)?;
-        if self.experimental_source_digest != Some(digest) {
-            self.experimental_verified.store(false, Ordering::Release);
-            return Err(SearchError::Config("source changed since encrypted rebuild".into()));
-        }
-        let directory = crate::encrypted_index_prototype::tantivy_trial::TrialDirectory::open_protected(
-            &self.config.index_dir, crate::read_only::AccessMode::GuardedReader, &id, true,
-        )?;
-        let manifest = directory.atomic_read(std::path::Path::new("meta.json"))
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
-        let digest: [u8; 32] = Sha256::digest(&manifest).into();
-        let mut selection = PinnedSelectionStore::open(selection_dir)?;
-        crate::encrypted_generation_prototype::publish(&mut selection, &UserProtector, id, || Ok(digest))?;
-        self.experimental_selection = Some(selection);
-        Ok(())
+        Err(SearchError::Config("encrypted candidate selection is not yet available".into()))
     }
     /// Caller must hold its cross-process volume guard until this engine is dropped.
     pub fn open_existing(config: IndexConfig) -> Result<Self> {
@@ -347,8 +298,6 @@ impl SearchEngine {
             experimental_id: None,
             #[cfg(all(windows, feature = "experimental-encrypted-search"))]
             experimental_verified: AtomicBool::new(false),
-            #[cfg(all(windows, feature = "experimental-encrypted-search"))]
-            experimental_source_digest: None,
             #[cfg(all(windows, feature = "experimental-encrypted-search"))]
             experimental_selection: None,
             config,
@@ -878,8 +827,8 @@ mod tests {
         assert!(engine.rebuild_experimental_candidate().is_err());
         let proof = root.path().join("proof");
         fs::create_dir(&proof).unwrap();
-        engine.record_experimental_candidate(&proof, || Ok(())).unwrap();
-        assert!(proof.join("candidate-proof.v1").exists());
+        assert!(engine.record_experimental_candidate(&proof, || Ok(())).is_err());
+        assert!(!proof.join("candidate-proof.v1").exists());
         // Even directly supplied file metadata must not reintroduce either index.
         let all = collect_files(&engine.config.roots, &exclusions, &[], engine.config.max_file_bytes);
         engine.index_files_sync(all).unwrap();

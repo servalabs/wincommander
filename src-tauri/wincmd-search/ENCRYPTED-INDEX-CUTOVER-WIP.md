@@ -18,6 +18,13 @@ contains potentially sensitive extracted content and is currently plaintext.
   marker must distinguish an uncommitted candidate from a committed index;
   fail closed on missing keys, ambiguous state, and unexpected replacement.
   Reader and writer selection must agree across processes and users.
+- The held Tantivy writer lock does not fence legacy schema cleanup or other
+  direct file mutations. A fresh install with no old index also cannot acquire
+  that lock. Both cases need explicit handling before activation.
+- Rebuilds currently remain unselected caches. Triple source hashing was
+  removed: it was expensive and could not prove that extraction saw the same
+  bytes, timestamps, or paths. Proof publication fails closed until a reviewed
+  source snapshot or equivalent guarantee and durable selection are available.
 - Stop old writers during cutover. Remove the old index only after the new
   generation is verified and all older processes are excluded; report failures
   honestly. Deleting files does not guarantee physical erasure on SSDs, backups,
