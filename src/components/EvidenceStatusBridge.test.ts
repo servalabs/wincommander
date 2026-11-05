@@ -18,17 +18,19 @@ test("shows honest evidence warnings and does not duplicate them", async () => {
       globalThis.navigator = dom.window.navigator; globalThis.IS_REACT_ACT_ENVIRONMENT = true;
       const React = await import('react'); const { act, createElement: h } = React;
       const { createRoot } = await import('react-dom/client');
-      let status = { continuityUnverified: true }, notices = [];
+      let status = { continuityUnverified: true }, notices = [], listener;
       mock.module('./src/lib/evidence', () => ({ getEvidenceStatus: async () => {
         if (status === 'error') throw new Error('private path'); return status;
       }}));
       mock.module('./src/lib/notificationStore', () => ({ pushNotification: (...args) => notices.push(args) }));
+      mock.module('@tauri-apps/api/event', () => ({ listen: async (_name, callback) => { listener = callback; return () => {}; } }));
       const { default: Bridge, updateEvidenceNotice } = await import('./src/components/EvidenceStatusBridge');
       const root = createRoot(document.getElementById('root'));
       await act(async () => { root.render(h(Bridge)); });
       assert.equal(notices.length, 1); assert.equal(notices[0][0], 'warn');
       assert.match(notices[0][1], /history may be missing/);
       assert.equal(notices[0][3], 'alert');
+      listener(); assert.equal(notices.length, 2); assert.match(notices[1][1], /could not be recorded/);
       let last = updateEvidenceNotice('continuity', 'continuity', () => { throw new Error('duplicate'); });
       assert.equal(last, 'continuity');
       await act(async () => root.unmount());

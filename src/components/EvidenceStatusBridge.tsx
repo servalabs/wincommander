@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { getEvidenceStatus } from "../lib/evidence";
 import { pushNotification } from "../lib/notificationStore";
 
@@ -22,6 +23,15 @@ export default function EvidenceStatusBridge() {
     let busy = false;
     let previous: Notice = null;
     const notify: Notify = (message, id) => { pushNotification("warn", message, undefined, "alert", id); };
+    let unlisten: (() => void) | undefined;
+    void listen("evidence-record-failed", () => {
+      if (active) notify("An activity could not be recorded. Check activity history before relying on it.", "evidence-record-failure");
+    }).then((dispose) => {
+      if (active) unlisten = dispose;
+      else dispose();
+    }).catch(() => {
+      if (active) notify("Activity history alerts could not be enabled. Check activity history before relying on it.", "evidence-alert-unavailable");
+    });
     const refresh = async () => {
       if (busy) return;
       busy = true;
@@ -36,7 +46,7 @@ export default function EvidenceStatusBridge() {
     };
     void refresh();
     const timer = window.setInterval(() => { void refresh(); }, 60_000);
-    return () => { active = false; window.clearInterval(timer); };
+    return () => { active = false; unlisten?.(); window.clearInterval(timer); };
   }, []);
   return null;
 }
