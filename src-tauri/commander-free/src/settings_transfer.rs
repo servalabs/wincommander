@@ -5,8 +5,12 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri_plugin_dialog::DialogExt;
+use zeroize::Zeroizing;
 
-const MAX_IMPORT_BYTES: u64 = 4 * 1024 * 1024;
+#[path = "settings_backup_crypto.rs"]
+mod backup_crypto;
+
+const MAX_IMPORT_BYTES: u64 = backup_crypto::MAX_FILE;
 static TRANSFER_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 struct TransferGuard;
@@ -32,6 +36,7 @@ impl Drop for TransferGuard {
 pub struct SettingsImportFile {
     file_name: String,
     json: String,
+    encrypted: bool,
 }
 
 fn require_json_file(path: &Path) -> Result<(), String> {
@@ -67,7 +72,7 @@ fn read_import(reader: impl Read) -> Result<String, String> {
         .read_to_end(&mut bytes)
         .map_err(|_| "Settings file could not be read".to_string())?;
     if bytes.len() as u64 > MAX_IMPORT_BYTES {
-        return Err("Settings file exceeds the 4 MiB limit".into());
+        return Err("Settings file exceeds the 6 MiB limit".into());
     }
     let json =
         String::from_utf8(bytes).map_err(|_| "Settings file must be UTF-8 JSON".to_string())?;
@@ -77,6 +82,16 @@ fn read_import(reader: impl Read) -> Result<String, String> {
         return Err("Settings file must contain a JSON object".into());
     }
     Ok(json)
+}
+
+fn classify_import(json: &str) -> Result<bool, String> {
+    let value: serde_json::Value =
+        serde_json::from_str(json).map_err(|_| "Settings file is not valid JSON")?;
+    let encrypted = backup_crypto::encrypted(&value)?;
+    if !encrypted && json.len() > 4 * 1024 * 1024 {
+        return Err("Settings file exceeds the 4 MiB limit".into());
+    }
+    Ok(encrypted)
 }
 
 fn save_export(path: &Path, json: &str) -> Result<(), String> {
@@ -122,15 +137,20 @@ async fn select_file(app: &tauri::AppHandle, save: bool) -> Result<Option<PathBu
 }
 
 #[tauri::command]
-pub async fn write_settings_export_file(app: tauri::AppHandle) -> Result<bool, String> {
+pub async fn write_settings_export_file(
+    app: tauri::AppHandle,
+    password: String,
+) -> Result<bool, String> {
+    let password = Zeroizing::new(password);
     let _guard = TransferGuard::begin()?;
     let Some(path) = select_file(&app, true).await? else {
         return Ok(false);
     };
     require_json_file(&path)?;
     tauri::async_runtime::spawn_blocking(move || {
-        let json = crate::settings::export_settings_cmd()?;
-        save_export(&path, &json)?;
+        let json = Zeroizing::new(crate::settings::export_settings()?);
+        let protected = backup_crypto::encrypt(&json, &password)?;
+        save_export(&path, &protected)?;
         Ok(true)
     })
     .await
@@ -157,6 +177,7 @@ pub async fn read_settings_import_file(
             return Err("Choose a regular settings file".into());
         }
         let json = read_import(file)?;
+        let encrypted = classify_import(&json)?;
         Ok(Some(SettingsImportFile {
             file_name: path
                 .file_name()
@@ -164,10 +185,24 @@ pub async fn read_settings_import_file(
                 .to_string_lossy()
                 .into_owned(),
             json,
+            encrypted,
         }))
     })
     .await
     .map_err(|_| "Settings import task failed".to_string())?
+}
+
+/// Decrypt only a selected, bounded backup; callers must still confirm import.
+#[tauri::command]
+pub async fn decrypt_settings_import_file(
+    json: String,
+    password: String,
+) -> Result<String, String> {
+    let _guard = TransferGuard::begin()?;
+    let password = Zeroizing::new(password);
+    tauri::async_runtime::spawn_blocking(move || backup_crypto::decrypt(&json, &password))
+        .await
+        .map_err(|_| "Settings import task failed".to_string())?
 }
 
 #[cfg(test)]
@@ -189,6 +224,27 @@ mod tests {
     fn accepts_json_settings_and_preserves_bytes() {
         let json = "{\"settingsVersion\": 2}";
         assert_eq!(read_import(json.as_bytes()).unwrap(), json);
+        assert!(!classify_import(json).unwrap());
+        let oversized = format!(
+            "{{\"settingsVersion\":2,\"padding\":\"{}\"}}",
+            "x".repeat(4 * 1024 * 1024)
+        );
+        assert!(classify_import(&oversized).unwrap_err().contains("4 MiB"));
+    }
+
+    #[test]
+    fn encrypted_export_is_the_only_file_written_and_can_be_imported() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        let json = "{\"settingsVersion\":2,\"app\":{\"secret\":\"sample-secret\"}}";
+        let password = "a-long-backup-password";
+        let protected = backup_crypto::encrypt(json, password).unwrap();
+        save_export(&path, &protected).unwrap();
+        let stored = read_import(std::fs::File::open(&path).unwrap()).unwrap();
+        assert!(!stored.contains("sample-secret"));
+        assert!(classify_import(&stored).unwrap());
+        assert_eq!(backup_crypto::decrypt(&stored, password).unwrap(), json);
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
     }
 
     #[test]
@@ -201,7 +257,7 @@ mod tests {
     #[test]
     fn rejects_oversized_input_without_unbounded_reading() {
         let error = read_import(std::io::repeat(b' ')).unwrap_err();
-        assert!(error.contains("4 MiB"));
+        assert!(error.contains("6 MiB"));
     }
 
     #[test]

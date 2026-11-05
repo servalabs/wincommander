@@ -4129,14 +4129,6 @@ pub fn is_setting_locked(path: String) -> Result<bool, String> {
     is_path_locked(&path)
 }
 
-/// Export settings as JSON string.
-#[tauri::command]
-pub fn export_settings_cmd() -> Result<String, String> {
-    let settings = read_settings()?;
-    let v = serde_json::to_value(&settings).map_err(|e| format!("Export failed: {}", e))?;
-    serde_json::to_string_pretty(&v).map_err(|e| format!("Export failed: {}", e))
-}
-
 /// Import settings from JSON string.
 #[tauri::command]
 pub fn import_settings_cmd(json: String) -> Result<serde_json::Value, String> {

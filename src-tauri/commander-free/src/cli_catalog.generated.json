@@ -8225,6 +8225,16 @@
       ]
     },
     {
+      "id": "tauri:decrypt_settings_import_file",
+      "name": "decrypt_settings_import_file",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useSettings.ts"
+      ]
+    },
+    {
       "id": "tauri:delete_canary",
       "name": "delete_canary",
       "transport": "tauri",
@@ -8664,16 +8674,6 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": []
-    },
-    {
-      "id": "tauri:export_settings_cmd",
-      "name": "export_settings_cmd",
-      "transport": "tauri",
-      "registered": true,
-      "debugOnly": false,
-      "frontendReferences": [
-        "src/hooks/useSettings.ts"
-      ]
     },
     {
       "id": "tauri:f6_clear_boot_next",

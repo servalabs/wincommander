@@ -422,7 +422,6 @@ const RISK_OVERRIDES: &[(&str, Risk)] = &[
     ("tauri:export_evidence_vault", Risk::Mutating),
     ("tauri:export_evidence_affidavit", Risk::Mutating),
     ("tauri:export_flow_bundle", Risk::Mutating),
-    ("tauri:export_settings_cmd", Risk::Mutating),
     // `_snapshot` reads elsewhere; this one pushes posture to the fleet server.
     ("tauri:fleet_update_posture_snapshot", Risk::Mutating),
 ];

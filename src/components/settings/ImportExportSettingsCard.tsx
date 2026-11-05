@@ -9,11 +9,14 @@ import { useState } from "react";
 import { Button, Alert, Icon } from "@/components/ui/bp";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import SectionCard from "../shared/SectionCard";
 import {
     type SettingsImportFile,
     writeSettingsExportFile,
     readSettingsImportFile,
+    decryptSettingsImportFile,
 } from "../../hooks/useSettings";
 import { useAppState } from "../../context/AppContext";
 import { useSettingsWriter } from "../../context/SettingsWriteContext";
@@ -32,11 +35,15 @@ export default function ImportExportSettingsCard() {
     const [exporting, setExporting] = useState(false);
     const [importing, setImporting] = useState(false);
     const [pendingImportFile, setPendingImportFile] = useState<SettingsImportFile | null>(null);
+    const [encryptedImport, setEncryptedImport] = useState<SettingsImportFile | null>(null);
+    const [passwordMode, setPasswordMode] = useState<"export" | "import" | null>(null);
+    const [password, setPassword] = useState("");
+    const [confirmation, setConfirmation] = useState("");
 
-    const runExport = async () => {
+    const runExport = async (backupPassword: string) => {
         setExporting(true);
         try {
-            if (!await writeSettingsExportFile()) return;
+            if (!await writeSettingsExportFile(backupPassword)) return;
             showSuccess("Settings exported.");
         } catch (err) {
             showError(err instanceof Error ? err.message : String(err));
@@ -48,11 +55,42 @@ export default function ImportExportSettingsCard() {
     const pickImportFile = async () => {
         setImporting(true);
         try {
-            setPendingImportFile(await readSettingsImportFile());
+            const file = await readSettingsImportFile();
+            if (file?.encrypted) {
+                setEncryptedImport(file);
+                setPasswordMode("import");
+            } else setPendingImportFile(file);
         } catch (err) {
             showError(err instanceof Error ? err.message : String(err));
         } finally {
             setImporting(false);
+        }
+    };
+
+    const closePassword = () => {
+        setPasswordMode(null);
+        setPassword("");
+        setConfirmation("");
+        setEncryptedImport(null);
+    };
+
+    const submitPassword = async () => {
+        if (passwordMode === "export") {
+            const secret = password;
+            closePassword();
+            await runExport(secret);
+        } else if (passwordMode === "import" && encryptedImport) {
+            setImporting(true);
+            try {
+                const json = await decryptSettingsImportFile(encryptedImport.json, password);
+                setPendingImportFile({ ...encryptedImport, json, encrypted: false });
+                closePassword();
+            } catch (err) {
+                setPassword("");
+                showError(err instanceof Error ? err.message : String(err));
+            } finally {
+                setImporting(false);
+            }
         }
     };
 
@@ -84,7 +122,7 @@ export default function ImportExportSettingsCard() {
                         text="Export"
                         small
                         loading={exporting}
-                        onClick={runExport}
+                        onClick={() => setPasswordMode("export")}
                         aria-label="Export settings"
                     />
                     <Button
@@ -102,7 +140,7 @@ export default function ImportExportSettingsCard() {
                         </PopoverTrigger>
                         <PopoverContent align="start" className="import-export-info">
                             <div className="import-export-info__item">
-                                <strong>Export</strong> — save your full configuration to a JSON file you choose.
+                                <strong>Export</strong> — save your configuration in a password-protected backup.
                             </div>
                             <div className="import-export-info__item">
                                 <strong>Import</strong> — load a previously exported JSON file and apply it to this device.
@@ -123,6 +161,34 @@ export default function ImportExportSettingsCard() {
                     {IMPORT_WARNING_FULL_TEXT}
                 </TooltipContent>
             </Tooltip>
+
+            <Dialog open={passwordMode !== null} onOpenChange={open => { if (!open && !exporting && !importing) closePassword(); }}>
+                <DialogContent>
+                    <DialogHeader>
+                        <DialogTitle>{passwordMode === "export" ? "Protect your backup" : "Unlock your backup"}</DialogTitle>
+                        <DialogDescription>
+                            {passwordMode === "export"
+                                ? "Choose a password of at least 12 characters. Keep it safe: the backup cannot be restored without it."
+                                : "Enter the password used when this backup was created."}
+                        </DialogDescription>
+                    </DialogHeader>
+                    <label htmlFor="settings-backup-password">Backup password</label>
+                    <Input id="settings-backup-password" type="password" autoComplete={passwordMode === "export" ? "new-password" : "current-password"} maxLength={1024} autoFocus
+                        value={password} onChange={event => setPassword(event.target.value)} />
+                    {passwordMode === "export" && <>
+                        <label htmlFor="settings-backup-confirmation">Confirm password</label>
+                        <Input id="settings-backup-confirmation" type="password" autoComplete="new-password" maxLength={1024}
+                            value={confirmation} onChange={event => setConfirmation(event.target.value)} />
+                        {confirmation && password !== confirmation && <small role="status">Passwords do not match.</small>}
+                    </>}
+                    <DialogFooter>
+                        <Button text="Cancel" onClick={closePassword} disabled={importing || exporting} />
+                        <Button text={passwordMode === "export" ? "Continue" : "Unlock"} intent="primary"
+                            onClick={submitPassword} loading={importing || exporting}
+                            disabled={Array.from(password).length < 12 || (passwordMode === "export" && password !== confirmation)} />
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
 
             <Alert
                 isOpen={!!pendingImportFile}

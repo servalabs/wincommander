@@ -30,22 +30,23 @@ export async function getSettingsHash(): Promise<string> {
   return invoke<string>('get_settings_hash_cmd');
 }
 
-export async function exportSettings(): Promise<string> {
-  return invoke<string>('export_settings_cmd');
-}
-
 // File selection and exported bytes are owned by Rust, never renderer input.
 export interface SettingsImportFile {
   fileName: string;
   json: string;
+  encrypted: boolean;
 }
 
-export async function writeSettingsExportFile(): Promise<boolean> {
-  return invoke<boolean>('write_settings_export_file');
+export async function writeSettingsExportFile(password: string): Promise<boolean> {
+  return invoke<boolean>('write_settings_export_file', { password });
 }
 
 export async function readSettingsImportFile(): Promise<SettingsImportFile | null> {
   return invoke<SettingsImportFile | null>('read_settings_import_file');
+}
+
+export async function decryptSettingsImportFile(json: string, password: string): Promise<string> {
+  return invoke<string>('decrypt_settings_import_file', { json, password });
 }
 
 export async function getDriftReport(): Promise<DriftItem[]> {
