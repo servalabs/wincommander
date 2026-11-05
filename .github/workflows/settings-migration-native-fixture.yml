@@ -190,3 +190,9 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $stage -cne 'staged reconciliation=pending old-cache=retained') { throw 'Search stage outcome was not confirmed.' }
           $verify = (& pwsh -NoProfile -NonInteractive -File $script -Phase verify-staged -ExecutablePath $helper -InstallDirectory $root | Out-String).Trim()
           if ($LASTEXITCODE -ne 0 -or $verify -cne 'staged old-cache=retained') { throw 'Search verification outcome was not confirmed.' }
+          $env:WINCMD_TEST_SELECTED = '1'
+          foreach ($phase in @('stage', 'verify-staged')) {
+            $selected = (& pwsh -NoProfile -NonInteractive -File $script -Phase $phase -ExecutablePath $helper -InstallDirectory $root | Out-String).Trim()
+            if ($LASTEXITCODE -ne 0 -or $selected -cne 'selected') { throw 'Authenticated selected outcome was not accepted.' }
+          }
+          Remove-Item Env:WINCMD_TEST_SELECTED

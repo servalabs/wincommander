@@ -320,6 +320,10 @@ impl SearchEngine {
     /// Directory-entry durability and anti-downgrade remain unverified.
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     pub fn select_experimental_candidate(&mut self, selection_dir: &std::path::Path) -> Result<()> {
+        self.select_experimental_candidate_with_origin(selection_dir, false)
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    fn select_experimental_candidate_with_origin(&mut self, selection_dir: &std::path::Path, fresh: bool) -> Result<()> {
         use sha2::{Digest, Sha256};
         use tantivy::directory::Directory;
         use crate::encrypted_generation_prototype::{PinnedSelectionStore, UserProtector};
@@ -333,6 +337,8 @@ impl SearchEngine {
         let manifest = directory.atomic_read(std::path::Path::new("meta.json"))
             .map_err(|e| std::io::Error::other(e.to_string()))?;
         let digest: [u8; 32] = Sha256::digest(&manifest).into();
+        let source = self.experimental_legacy_path.as_ref().ok_or_else(|| SearchError::Config("legacy search source missing".into()))?;
+        crate::encrypted_generation_prototype::record_origin(selection_dir, &id, fresh, &digest, source)?;
         let mut selection = PinnedSelectionStore::open(selection_dir)?;
         crate::encrypted_generation_prototype::publish(&mut selection, &UserProtector, id, || Ok(digest))?;
         self.config.skip_paths.push(selection_dir.to_path_buf());
@@ -384,6 +390,81 @@ impl SearchEngine {
         if exists {
             return Self::open_experimental_selected_with_policy(config, path_policy, &selection);
         }
+        // Recover a crash after protected origin publication but before the
+        // selection record: reuse only its authenticated generation, after
+        // opening and authenticating the existing candidate. Never rebuild it.
+        if let Some(origin) = crate::encrypted_generation_prototype::read_origin(&selection)? {
+            let id = origin.id; let fresh_origin = origin.fresh;
+            let source_identity = crate::encrypted_migration_transaction::Intent::capture([1; 16], id, &config.index_dir)?.identity();
+            if source_identity != origin.source { return Err(SearchError::Config("Original search source changed; recovery required.".into())); }
+            use sha2::{Digest, Sha256};
+            use tantivy::directory::Directory;
+            use crate::read_only::{AccessMode, CheckedDirectory};
+            if fresh_origin {
+                for entry in std::fs::read_dir(parent)? {
+                    let name = entry?.file_name(); let name = name.to_string_lossy();
+                    if name.starts_with(".wincommander-legacy-index-backup-")
+                        || name.strip_prefix(".wincommander-encrypted-").is_some_and(|value|
+                            value.len() == 32 && value.bytes().all(|b| b.is_ascii_hexdigit()) && value != hex::encode(id)) {
+                        return Err(SearchError::Config("Prior search data needs recovery.".into()));
+                    }
+                }
+                match std::fs::symlink_metadata(&config.index_dir) {
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
+                    Err(e) => return Err(e.into()),
+                    Ok(_) => {
+                        let _old_pins = CheckedDirectory::pin_root_path(&config.index_dir)?;
+                        let mut names = Vec::new();
+                        for entry in std::fs::read_dir(&config.index_dir)? { names.push(entry?.file_name()); }
+                        let only_empty_lock = if names.len() == 1 && names[0] == std::ffi::OsStr::new(".tantivy-writer.lock") {
+                            use std::os::windows::io::AsRawHandle;
+                            use windows_sys::Win32::Storage::FileSystem::{BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle};
+                            let checked = CheckedDirectory::open(&config.index_dir, AccessMode::GuardedReader)?;
+                            let file = checked.open_read_pinned(std::path::Path::new(".tantivy-writer.lock"))
+                                .map_err(|e| std::io::Error::other(e.to_string()))?;
+                            let mut info = BY_HANDLE_FILE_INFORMATION::default();
+                            // SAFETY: the file and output remain valid through the call.
+                            (unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) }) != 0
+                                && info.nNumberOfLinks == 1 && file.metadata()?.len() == 0
+                        } else { false };
+                        if !names.is_empty() && !only_empty_lock && !Self::experimental_scope_only(&config.index_dir)? {
+                            return Err(SearchError::Config("Legacy search data appeared during recovery.".into()));
+                        }
+                    },
+                }
+            }
+            let generation = parent.join(format!(".wincommander-encrypted-{}", hex::encode(id)));
+            let directory = crate::encrypted_index_prototype::tantivy_trial::TrialDirectory::open_protected(&generation, AccessMode::GuardedReader, &id, true)?;
+            let manifest = directory.atomic_read(std::path::Path::new("meta.json")).map_err(|e| std::io::Error::other(e.to_string()))?;
+            tantivy::Index::open(directory).map_err(|_| SearchError::Config("Interrupted encrypted search candidate is invalid.".into()))?;
+            let digest: [u8; 32] = Sha256::digest(&manifest).into();
+            if digest != origin.digest { return Err(SearchError::Config("Interrupted search manifest changed; recovery required.".into())); }
+            let mut recovered = PinnedSelectionStore::open(&selection)?;
+            crate::encrypted_generation_prototype::publish(&mut recovered, &UserProtector, id, || Ok(digest))?;
+            drop(recovered);
+            return Self::open_experimental_selected_with_policy(config, path_policy, &selection);
+        }
+        // Only a missing/empty directory or the authenticated scope-only
+        // directory can establish that there was no legacy index.
+        let fresh = match std::fs::symlink_metadata(&config.index_dir) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
+            Err(e) => return Err(e.into()),
+            Ok(_) => {
+                let _old_pins = crate::read_only::CheckedDirectory::pin_root_path(&config.index_dir)?;
+                if std::fs::read_dir(&config.index_dir)?.next().transpose()?.is_none() { true }
+                else { Self::experimental_scope_only(&config.index_dir)? }
+            },
+        };
+        if fresh {
+            for entry in std::fs::read_dir(parent)? {
+                let name = entry?.file_name();
+                let name = name.to_string_lossy();
+                if name.starts_with(".wincommander-legacy-index-backup-")
+                    || name.strip_prefix(".wincommander-encrypted-").is_some_and(|id| id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit())) {
+                    return Err(SearchError::Config("Prior encrypted search data needs recovery; no fresh origin was created.".into()));
+                }
+            }
+        }
         let mut identity = [0u8; 16];
         OsRng.fill_bytes(&mut identity);
         if identity == [0; 16] { return Err(SearchError::Config("cannot create encrypted index identity".into())); }
@@ -395,7 +476,7 @@ impl SearchEngine {
                 report.omitted, report.skipped_links,
             ));
         }
-        engine.select_experimental_candidate(&selection)?;
+        engine.select_experimental_candidate_with_origin(&selection, fresh)?;
         engine.start_indexing_internal(true)?;
         Ok(engine)
     }
@@ -524,6 +605,21 @@ impl SearchEngine {
         tantivy::Index::open(directory).map_err(|_| SearchError::Config("encrypted index cannot be opened".into()))?;
         Ok(())
     }
+    /// Verify a scope-only directory without a backup only when the selected
+    /// generation has authenticated proof that no legacy index existed.
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    pub fn verify_fresh_scope_selection(old: &std::path::Path, selection_dir: &std::path::Path) -> Result<()> {
+        use crate::encrypted_generation_prototype::{inspect, inspect_origin, PinnedSelectionStore, UserProtector};
+        if !Self::experimental_scope_only(old)? { return Err(SearchError::Config("legacy index remains".into())); }
+        Self::verify_selected_generation(old, selection_dir)?;
+        let mut selection = PinnedSelectionStore::open(selection_dir)?;
+        let selected = inspect(&mut selection, &UserProtector)?
+            .ok_or_else(|| SearchError::Config("encrypted selection missing".into()))?;
+        if inspect_origin(selection_dir, &selected.index_id)? != Some(true) {
+            return Err(SearchError::Config("fresh search provenance unavailable".into()));
+        }
+        Ok(())
+    }
     /// Offline phase: authenticate the selected encrypted generation before
     /// moving the legacy cache under the helper's own exclusive fence.
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
@@ -566,13 +662,21 @@ impl SearchEngine {
         use crate::encrypted_key_prototype::{Protector, UserDpapi};
         use crate::read_only::{AccessMode, CheckedDirectory};
         let _pins = CheckedDirectory::pin_root_path(old)?;
-        let mut count = 0usize;
+        let mut scope_present = false;
+        let mut lock_present = false;
         for entry in std::fs::read_dir(old)? {
-            let entry = entry?; count += 1;
-            if count > 1 || entry.file_name() != std::ffi::OsStr::new("scope-v2.dpapi") { return Ok(false); }
+            let name = entry?.file_name();
+            if name == std::ffi::OsStr::new("scope-v2.dpapi") && !scope_present { scope_present = true; }
+            else if name == std::ffi::OsStr::new(".tantivy-writer.lock") && !lock_present { lock_present = true; }
+            else { return Ok(false); }
         }
-        if count != 1 { return Ok(false); }
+        if !scope_present { return Ok(false); }
         let dir = CheckedDirectory::open(old, AccessMode::GuardedReader)?;
+        if lock_present {
+            let lock = dir.atomic_read_bounded(std::path::Path::new(".tantivy-writer.lock"), 1)
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
+            if !lock.is_empty() { return Ok(false); }
+        }
         let protected = dir.atomic_read_bounded(std::path::Path::new("scope-v2.dpapi"), crate::encrypted_scope::MAX_PROTECTED_SCOPE)
             .map_err(|e| std::io::Error::other(e.to_string()))?;
         let clear = UserDpapi.unprotect(&protected)?;
@@ -1385,6 +1489,102 @@ mod tests {
         assert!(SearchEngine::abort_search_migration(&old, &selection, tx, &fence).is_err());
         SearchEngine::commit_search_migration(&old, &selection, tx, &fence).unwrap();
         assert!(SearchEngine::inspect_search_migration(&selection).unwrap().is_none());
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    #[test]
+    fn interrupted_origin_rejects_changed_source_or_manifest() {
+        use sha2::{Digest, Sha256};
+        use tantivy::directory::Directory;
+        let root = TempDir::new().unwrap(); let old = root.path().join("fts");
+        let selection = root.path().join(".wincommander-encrypted-selection");
+        fs::create_dir(&selection).unwrap();
+        let config = make_config(old.clone(), vec![]); let id = [46; 16];
+        let mut candidate = SearchEngine::open_experimental_encrypted_with_policy(config.clone(), Arc::new(|_| false), id, false).unwrap();
+        candidate.rebuild_experimental_candidate().unwrap();
+        let generation = root.path().join(format!(".wincommander-encrypted-{}", hex::encode(id)));
+        let directory = crate::encrypted_index_prototype::tantivy_trial::TrialDirectory::open_protected(
+            &generation, crate::read_only::AccessMode::Writable, &id, true).unwrap();
+        let mut manifest = directory.atomic_read(std::path::Path::new("meta.json")).unwrap();
+        let digest: [u8; 32] = Sha256::digest(&manifest).into();
+        crate::encrypted_generation_prototype::record_origin(&selection, &id, true, &digest, &old).unwrap();
+        manifest.push(b' '); // Still JSON, but no longer the approved manifest.
+        directory.atomic_write(std::path::Path::new("meta.json"), &manifest).unwrap();
+        drop(directory); drop(candidate);
+        assert!(SearchEngine::open_or_rebuild_experimental_with_policy(config.clone(), Arc::new(|_| true)).is_err());
+        assert!(!selection.join("candidate-proof.v1").exists());
+        let original = root.path().join("original");
+        fs::rename(&old, &original).unwrap(); fs::create_dir(&old).unwrap();
+        assert!(SearchEngine::open_or_rebuild_experimental_with_policy(config, Arc::new(|_| true)).is_err());
+        assert!(original.is_dir()); assert!(!selection.join("candidate-proof.v1").exists());
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    #[test]
+    fn interrupted_origin_recovers_valid_authenticated_candidate() {
+        let root = TempDir::new().unwrap(); let old = root.path().join("fts");
+        let selection = root.path().join(".wincommander-encrypted-selection");
+        fs::create_dir(&selection).unwrap();
+        let config = make_config(old, vec![]); let id = [45; 16];
+        let mut candidate = SearchEngine::open_experimental_encrypted_with_policy(config.clone(), Arc::new(|_| false), id, false).unwrap();
+        candidate.rebuild_experimental_candidate().unwrap();
+        // Simulate interruption immediately after origin publication.
+        use sha2::{Digest, Sha256};
+        use tantivy::directory::Directory;
+        let generation = root.path().join(format!(".wincommander-encrypted-{}", hex::encode(id)));
+        let directory = crate::encrypted_index_prototype::tantivy_trial::TrialDirectory::open_protected(
+            &generation, crate::read_only::AccessMode::GuardedReader, &id, true).unwrap();
+        let manifest = directory.atomic_read(std::path::Path::new("meta.json")).unwrap();
+        let digest: [u8; 32] = Sha256::digest(&manifest).into();
+        crate::encrypted_generation_prototype::record_origin(&selection, &id, true, &digest, &root.path().join("fts")).unwrap();
+        drop(directory);
+        drop(candidate);
+        assert!(!selection.join("candidate-proof.v1").exists());
+        let recovered = SearchEngine::open_or_rebuild_experimental_with_policy(config, Arc::new(|_| true)).unwrap();
+        assert!(selection.join("candidate-proof.v1").is_file());
+        assert_eq!(crate::encrypted_generation_prototype::inspect_origin(&selection, &id).unwrap(), Some(true));
+        recovered.stop();
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    #[test]
+    fn interrupted_origin_without_selector_fails_closed_and_preserves_proof() {
+        let root = TempDir::new().unwrap(); let old = root.path().join("fts");
+        let selection = root.path().join(".wincommander-encrypted-selection");
+        fs::create_dir(&selection).unwrap();
+        fs::create_dir(&old).unwrap();
+        crate::encrypted_generation_prototype::record_origin(&selection, &[44; 16], true, &[1; 32], &old).unwrap();
+        let original = fs::read(selection.join("origin-proof.v1")).unwrap();
+        let config = make_config(old, vec![]);
+        assert!(SearchEngine::open_or_rebuild_experimental_with_policy(config, Arc::new(|_| true)).is_err());
+        assert_eq!(fs::read(selection.join("origin-proof.v1")).unwrap(), original);
+        assert!(!selection.join("candidate-proof.v1").exists());
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    #[test]
+    fn missing_selector_with_prior_backup_cannot_be_marked_fresh() {
+        let root = TempDir::new().unwrap();
+        let old = root.path().join("fts");
+        let backup = root.path().join(".wincommander-legacy-index-backup-11111111111111111111111111111111");
+        fs::create_dir(&backup).unwrap(); fs::write(backup.join("old.txt"), b"preserve").unwrap();
+        let config = make_config(old, vec![]);
+        assert!(SearchEngine::open_or_rebuild_experimental_with_policy(config, Arc::new(|_| true)).is_err());
+        assert_eq!(fs::read(backup.join("old.txt")).unwrap(), b"preserve");
+        assert!(!root.path().join(".wincommander-encrypted-selection").join("origin-proof.v1").exists());
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    #[test]
+    fn fresh_install_scope_only_remains_verifiable_on_next_update() {
+        let root = TempDir::new().unwrap();
+        let old = root.path().join("fts"); let data = root.path().join("data");
+        fs::create_dir(&data).unwrap(); fs::write(data.join("doc.txt"), b"freshscope").unwrap();
+        let config = make_config(old.clone(), vec![data]);
+        let engine = SearchEngine::open_or_rebuild_experimental_with_policy(config, Arc::new(|_| true)).unwrap();
+        engine.stop(); drop(engine);
+        // A fresh setup has no old backup but may later publish its scope.
+        // Keep the empty Tantivy writer lock created on first launch.
+        publish_experimental_scope(&old, b"scope", |_| Ok(())).unwrap();
+        let selection = root.path().join(".wincommander-encrypted-selection");
+        SearchEngine::verify_fresh_scope_selection(&old, &selection).unwrap();
+        // A quarantined-legacy check still requires its expected backup.
+        assert!(SearchEngine::verify_quarantined_selection(&old, &selection).is_err());
     }
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     #[test]
