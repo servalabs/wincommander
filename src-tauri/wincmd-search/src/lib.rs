@@ -7,11 +7,11 @@
 //! Unit D: tantivy index, hit-merge helper, and SearchEngine facade.
 
 pub mod backend;
-#[cfg(test)]
+#[cfg(any(test, all(windows, feature = "experimental-encrypted-search")))]
 mod encrypted_index_prototype;
 #[cfg(test)]
 mod encrypted_cutover_prototype;
-#[cfg(test)]
+#[cfg(any(test, all(windows, feature = "experimental-encrypted-search")))]
 mod encrypted_key_prototype;
 #[cfg(test)]
 mod encrypted_migration_prototype;

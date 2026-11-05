@@ -265,7 +265,7 @@ fn native_disk_roundtrip_does_not_write_indexed_text_as_plaintext() {
 // Deliberately test-only: key management, migration and atomic manifest limits
 // are not ready for production. It exercises Tantivy's real Directory contract.
 #[cfg(windows)]
-mod tantivy_trial {
+pub(crate) mod tantivy_trial {
     use super::*;
     use crate::read_only::{AccessMode, CheckedDirectory};
     use std::{
@@ -298,7 +298,7 @@ mod tantivy_trial {
         }
     }
     #[derive(Clone)]
-    struct TrialDirectory {
+    pub(crate) struct TrialDirectory {
         inner: CheckedDirectory,
         key: Arc<KeyOwner>,
         // Experimental lifetime pin: blocks rename of all ancestors while open.
@@ -318,7 +318,7 @@ mod tantivy_trial {
     impl TrialDirectory {
         // Caller must authorize root and hold the migration lease while
         // determining the independently trusted index identity.
-        fn open_protected(root: &Path, mode: AccessMode, index_id: &[u8; 16], has_index: bool) -> io::Result<Self> {
+        pub(crate) fn open_protected(root: &Path, mode: AccessMode, index_id: &[u8; 16], has_index: bool) -> io::Result<Self> {
             if mode != AccessMode::Writable && !has_index {
                 return Err(io::Error::new(io::ErrorKind::PermissionDenied, "read-only index cannot create a key"));
             }
@@ -636,6 +636,35 @@ mod tantivy_trial {
         assert!(std::fs::remove_file(&key_path).is_err());
         drop(writer);
         std::fs::remove_file(&key_path).unwrap();
+    }
+    #[cfg(feature = "experimental-encrypted-search")]
+    #[test]
+    fn production_schema_can_rebuild_and_reopen_in_a_separate_encrypted_index() {
+        use crate::{index::ContentIndex, types::{ContentQuery, DocProps, FileMeta}};
+        let root = tempfile::tempdir().unwrap();
+        let old = root.path().join("legacy");
+        let new = root.path().join("encrypted");
+        std::fs::create_dir(&old).unwrap();
+        std::fs::create_dir(&new).unwrap();
+        std::fs::write(old.join("meta.json"), b"legacy intact").unwrap();
+        let index = ContentIndex::open_experimental_encrypted(&new, [33; 16], false).unwrap();
+        let meta = FileMeta { doc_id: 1, path: root.path().join("document.txt"), name: "document.txt".into(), ext: "txt".into(), mtime: 1, size: 24 };
+        let mut writer = index.writer().unwrap();
+        index.upsert(&mut writer, &meta, "document", "confidential schemaindexsecret", &DocProps::default()).unwrap();
+        index.commit(&mut writer).unwrap();
+        drop(writer);
+        drop(index);
+        for entry in std::fs::read_dir(&new).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_type().unwrap().is_file() {
+                let bytes = std::fs::read(entry.path()).unwrap();
+                assert!(!bytes.windows(b"schemaindexsecret".len()).any(|w| w == b"schemaindexsecret"));
+            }
+        }
+        let reopened = ContentIndex::open_experimental_encrypted(&new, [33; 16], true).unwrap();
+        let query = ContentQuery { terms: "schemaindexsecret".into(), roots: vec![], limit: 10, offset: 0, keyword_only: true };
+        assert_eq!(reopened.search_keyword(&query).unwrap().len(), 1);
+        assert_eq!(std::fs::read(old.join("meta.json")).unwrap(), b"legacy intact");
     }
     #[test]
     fn isolated_rebuild_uses_user_key_and_preserves_legacy_index() {

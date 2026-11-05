@@ -102,7 +102,7 @@ fn validate_storage_once(root: &Path) -> io::Result<()> {
 }
 
 impl CheckedDirectory {
-    #[cfg(all(test, windows))]
+    #[cfg(all(windows, any(test, feature = "experimental-encrypted-search")))]
     pub(crate) fn pin_root_path(root: &Path) -> io::Result<Vec<std::fs::File>> {
         use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
         use windows_sys::Win32::Storage::FileSystem::{
@@ -130,18 +130,18 @@ impl CheckedDirectory {
         Ok(pins)
     }
 
-    #[cfg(all(test, windows))]
+    #[cfg(all(windows, any(test, feature = "experimental-encrypted-search")))]
     pub(crate) fn pin_root(&self) -> io::Result<Vec<std::fs::File>> {
         Self::pin_root_path(&self.root)
     }
 
-    #[cfg(all(test, windows))]
+    #[cfg(all(windows, any(test, feature = "experimental-encrypted-search")))]
     fn pin_mutation_root(&self, path: &Path) -> io::Result<Vec<std::fs::File>> {
         self.check(path, true)?;
         self.pin_root()
     }
 
-    #[cfg(all(test, windows))]
+    #[cfg(all(windows, any(test, feature = "experimental-encrypted-search")))]
     pub(crate) fn acquire_lock_pinned(&self, lock: &Lock) -> Result<DirectoryLock, LockError> {
         use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
         use std::os::windows::io::AsRawHandle;
@@ -176,7 +176,7 @@ impl CheckedDirectory {
         Ok(DirectoryLock::from(Box::new(file)))
     }
 
-    #[cfg(all(test, windows))]
+    #[cfg(all(windows, any(test, feature = "experimental-encrypted-search")))]
     pub(crate) fn open_write_pinned(&self, path: &Path) -> Result<WritePtr, OpenWriteError> {
         let _pins = self
             .pin_mutation_root(path)
@@ -186,24 +186,24 @@ impl CheckedDirectory {
         self.inner.open_write(path)
     }
 
-    #[cfg(all(test, windows))]
+    #[cfg(all(windows, any(test, feature = "experimental-encrypted-search")))]
     pub(crate) fn atomic_write_pinned(&self, path: &Path, data: &[u8]) -> io::Result<()> {
         self.atomic_write_pinned_with_hooks(path, data, || {}, || {})
     }
 
     // Key records must never overwrite a pre-existing key, including one
     // created by another process after the operation begins.
-    #[cfg(all(test, windows))]
+    #[cfg(all(windows, any(test, feature = "experimental-encrypted-search")))]
     pub(crate) fn atomic_create_pinned(&self, path: &Path, data: &[u8]) -> io::Result<()> {
         self.atomic_pinned_with_hooks(path, data, false, || {}, || {})
     }
 
-    #[cfg(all(test, windows))]
+    #[cfg(all(windows, any(test, feature = "experimental-encrypted-search")))]
     fn atomic_write_pinned_with_hooks(&self, path: &Path, data: &[u8], after_pin: impl FnOnce(), before_rename: impl FnOnce()) -> io::Result<()> {
         self.atomic_pinned_with_hooks(path, data, true, after_pin, before_rename)
     }
 
-    #[cfg(all(test, windows))]
+    #[cfg(all(windows, any(test, feature = "experimental-encrypted-search")))]
     fn atomic_pinned_with_hooks(&self, path: &Path, data: &[u8], replace: bool, after_pin: impl FnOnce(), before_rename: impl FnOnce()) -> io::Result<()> {
         use rand::{rngs::OsRng, RngCore};
         use std::{io::Write, os::windows::{ffi::OsStrExt, fs::OpenOptionsExt, io::AsRawHandle}};
@@ -254,7 +254,7 @@ impl CheckedDirectory {
         result
     }
 
-    #[cfg(all(test, windows))]
+    #[cfg(all(windows, any(test, feature = "experimental-encrypted-search")))]
     pub(crate) fn delete_pinned(&self, path: &Path) -> Result<(), DeleteError> {
         use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
         use windows_sys::Win32::Storage::FileSystem::{
@@ -303,12 +303,12 @@ impl CheckedDirectory {
         }
         Ok(())
     }
-    #[cfg(all(test, windows))]
+    #[cfg(all(windows, any(test, feature = "experimental-encrypted-search")))]
     pub(crate) fn open_read_pinned(&self, path: &Path) -> Result<std::fs::File, OpenReadError> {
         self.open_read_pinned_after_guard(path, || {})
     }
 
-    #[cfg(all(test, windows))]
+    #[cfg(all(windows, any(test, feature = "experimental-encrypted-search")))]
     fn open_read_pinned_after_guard(
         &self,
         path: &Path,
@@ -364,7 +364,7 @@ impl CheckedDirectory {
         Ok(leaf)
     }
 
-    #[cfg(all(test, windows))]
+    #[cfg(all(windows, any(test, feature = "experimental-encrypted-search")))]
     pub(crate) fn atomic_read_bounded(
         &self,
         path: &Path,
@@ -389,7 +389,7 @@ impl CheckedDirectory {
         }
         Ok(bytes)
     }
-    #[cfg(all(test, windows))]
+    #[cfg(all(windows, any(test, feature = "experimental-encrypted-search")))]
     pub(crate) fn direct_for_test(root: &Path, mode: AccessMode) -> tantivy::Result<Self> {
         validate_storage(root)?;
         Ok(Self {
