@@ -53,6 +53,23 @@ overwrite existing outputs. These commands do not load or manage signing keys,
 publish files, prevent later file replacement, or establish a production
 signing ceremony. Keep the artifact immutable until publication.
 
+For a local offline rehearsal, `wincmd-pq-offline-sign` can sign either
+prepared message with its separately held key. Build it with
+`--features experimental-signer --bin wincmd-pq-offline-sign`:
+
+```text
+wincmd-pq-offline-sign ed25519 ed-private-seed.bin ed.msg ed.sig
+wincmd-pq-offline-sign mldsa65 pq-private-pkcs8.der pq.msg pq.sig
+```
+
+The Ed25519 input is a raw 32-byte seed; the ML-DSA-65 input is PKCS#8 DER.
+The tool refuses existing output files and only accepts the release-purpose
+messages used by the Free and Pro preparation tools. It does not validate
+the artifact, independently approve trust keys, provide secure key storage,
+or publish a release. Run each signer only after independently reviewing the
+artifact and signing inputs, and run the corresponding `finish` and offline
+verification steps. Keep private key files out of the repository and logs.
+
 For the experimental Free updater, build `wincmd-pq-free-release-prepare`
 with `--features experimental-signer --bin wincmd-pq-free-release-prepare`.
 Use an independently trusted Free key file, not the Pro trust file:
