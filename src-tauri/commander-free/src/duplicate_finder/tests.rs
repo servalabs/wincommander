@@ -3,6 +3,31 @@ use super::*;
 static SERIAL: Mutex<()> = Mutex::new(());
 
 #[test]
+fn encrypted_scan_database_remains_private_after_bulk_commit() {
+    let mut index = index::ScanIndex::new().unwrap();
+    let marker = "duplicate-sensitive-directory-378951";
+    let mode: String = index.connection.query_row("PRAGMA journal_mode", [], |row| row.get(0)).unwrap();
+    let temp_store: i64 = index.connection.query_row("PRAGMA temp_store", [], |row| row.get(0)).unwrap();
+    assert_eq!(mode.to_lowercase(), "off");
+    assert_eq!(temp_store, 2, "SQLite temporary stores must stay in memory");
+    let transaction = index.connection.transaction().unwrap();
+    for number in 0..1_000 {
+        let path = format!("{marker}/{number:04}");
+        transaction.execute("INSERT INTO directories(path,root) VALUES(?1,?2)", rusqlite::params![path, marker]).unwrap();
+    }
+    transaction.commit().unwrap();
+    let rows: i64 = index.connection.query_row("SELECT count(*) FROM directories", [], |row| row.get(0)).unwrap();
+    assert_eq!(rows, 1_000);
+    for entry in std::fs::read_dir(index.directory.path()).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_type().unwrap().is_file() {
+            let bytes = std::fs::read(entry.path()).unwrap();
+            assert!(!bytes.windows(marker.len()).any(|window| window == marker.as_bytes()));
+        }
+    }
+}
+
+#[test]
 fn scan_scratch_does_not_expose_paths_on_disk() {
     let index = index::ScanIndex::new().unwrap();
     let marker = "scratch-secret-path-94252";
