@@ -299,7 +299,7 @@ fn install_machine_material(directory: &std::path::Path) -> Result<[u8; 32], Str
                 None => {
                     creation?;
                     #[cfg(windows)]
-                    key_dependency_guard::check_current_user(true)?;
+                    let _dependencies = key_dependency_guard::check_current_user(true)?;
                     let mut material = [0u8; 32];
                     OsRng.fill_bytes(&mut material);
                     let protected = dpapi_protect(&material)
@@ -461,7 +461,9 @@ fn load_or_create_user_material(
                 None => {
                     creation?;
                     #[cfg(windows)]
-                    if current_user_install { key_dependency_guard::check_current_user(false)?; }
+                    let _dependencies = if current_user_install {
+                        Some(key_dependency_guard::check_current_user(false)?)
+                    } else { None };
                     create(&path, current_user_install)
                 }
             }
