@@ -25,7 +25,8 @@ struct Section {
 pub(super) struct Snapshot {
     store: PathBuf,
     _directories: Vec<File>,
-    _key_file: File,
+    key_file: File,
+    key_digest: [u8; 32],
     material: Zeroizing<[u8; 32]>,
     sections: Vec<Section>,
 }
@@ -114,6 +115,7 @@ impl Snapshot {
         let pins = pin_directories(&store)?;
         let mut key_file = open_locked(&root.join(".install.material"), MAX_KEY)?;
         let raw = Zeroizing::new(read_locked(&mut key_file, MAX_KEY)?);
+        let key_digest = Sha256::digest(&raw[..]).into();
         let plain = if raw.len() == 32 { Zeroizing::new(raw.to_vec()) }
             else { Zeroizing::new(dpapi_unprotect(&raw).map_err(|_| UNAVAILABLE)?) };
         let mut material = Zeroizing::new([0u8; 32]);
@@ -130,12 +132,15 @@ impl Snapshot {
             let encoded = String::from_utf8(bytes).map_err(|_| UNAVAILABLE)?;
             sections.push(Section { name, file, digest, encoded });
         }
-        let mut snapshot = Self { store, _directories: pins, _key_file: key_file, material, sections };
+        let mut snapshot = Self { store, _directories: pins, key_file, key_digest, material, sections };
         snapshot.verify_unchanged()?;
         Ok(snapshot)
     }
 
     pub(super) fn verify_unchanged(&mut self) -> Result<(), String> {
+        let raw_key = Zeroizing::new(read_locked(&mut self.key_file, MAX_KEY)?);
+        let observed_key: [u8; 32] = Sha256::digest(&raw_key[..]).into();
+        if observed_key != self.key_digest { return Err(UNAVAILABLE.into()); }
         let current = enumerate(&self.store)?;
         if current.len() != self.sections.len()
             || current.iter().zip(&self.sections).any(|((name, _), section)| name != &section.name) {
