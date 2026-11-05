@@ -8,7 +8,7 @@ const RECORD_LEN: usize = 8 + 16 + 32;
 const MAX_PROTECTED: usize = 65536;
 
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct Selection { index_id: [u8; 16], creation_digest: [u8; 32] }
+pub(crate) struct Selection { pub(crate) index_id: [u8; 16], creation_digest: [u8; 32] }
 pub(crate) trait Protect {
     fn seal(&self, plain: &[u8]) -> io::Result<Vec<u8>>;
     fn open(&self, protected: &[u8]) -> io::Result<Vec<u8>>;
@@ -34,14 +34,14 @@ fn decode(value: &[u8]) -> io::Result<Selection> {
     if index_id == [0; 16] { return Err(invalid()); }
     Ok(Selection { index_id, creation_digest })
 }
-fn inspect(store: &mut impl Store, protector: &impl Protect) -> io::Result<Option<Selection>> {
+pub(crate) fn inspect(store: &mut impl Store, protector: &impl Protect) -> io::Result<Option<Selection>> {
     let Some(record) = store.read()? else { return Ok(None); };
     if record.is_empty() || record.len() > MAX_PROTECTED { return Err(invalid()); }
     Ok(Some(decode(&protector.open(&record)?)?))
 }
-// The verifier must authenticate the exact complete candidate, establish the
-// source snapshot, and return its manifest digest under the migration lease.
-// Selection alone is never a proof of current source completeness or freshness.
+// The callback authenticates the candidate metadata under the migration lease.
+// The digest is historical creation evidence, not current mutable metadata.
+// Selection alone does not prove that source files stayed unchanged.
 pub(crate) fn publish(store: &mut impl Store, protector: &impl Protect, index_id: [u8; 16], verify: impl FnOnce() -> io::Result<[u8; 32]>) -> io::Result<Selection> {
     if index_id == [0; 16] { return Err(invalid()); }
     let selection = Selection { index_id, creation_digest: verify()? };
