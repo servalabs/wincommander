@@ -431,6 +431,34 @@ impl SearchEngine {
         self.config.skip_paths.push(backup.clone());
         Ok(backup)
     }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    fn check_offline_rebuild_space(old: &std::path::Path, parent: &std::path::Path) -> Result<()> {
+        use std::os::windows::{ffi::OsStrExt, fs::MetadataExt};
+        use windows_sys::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_REPARSE_POINT, GetDiskFreeSpaceExW};
+        let _pins = crate::read_only::CheckedDirectory::pin_root_path(old)?;
+        let mut old_bytes = 0u64;
+        for entry in std::fs::read_dir(old)? {
+            let entry = entry?;
+            let meta = std::fs::symlink_metadata(entry.path())?;
+            if !meta.is_file() || meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                return Err(SearchError::Config("Old search index contains unsupported entries; existing files were retained.".into()));
+            }
+            old_bytes = old_bytes.checked_add(meta.len())
+                .ok_or_else(|| SearchError::Config("Cannot estimate search rebuild size.".into()))?;
+        }
+        let required = old_bytes.checked_mul(2).and_then(|n| n.checked_add(512 * 1024 * 1024))
+            .ok_or_else(|| SearchError::Config("Cannot estimate search rebuild size.".into()))?;
+        let wide: Vec<u16> = parent.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+        let mut available = 0u64;
+        // SAFETY: the UTF-16 path is terminated and output pointers are valid.
+        if unsafe { GetDiskFreeSpaceExW(wide.as_ptr(), &mut available, std::ptr::null_mut(), std::ptr::null_mut()) } == 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        if available < required {
+            return Err(SearchError::Config("Not enough free space to rebuild the search cache; existing files were retained.".into()));
+        }
+        Ok(())
+    }
     /// Rebuild a disposable encrypted cache under an offline exclusive fence.
     /// Failed candidates remain in place and the original cache is untouched.
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
@@ -458,6 +486,7 @@ impl SearchEngine {
                 }
             }
         }
+        Self::check_offline_rebuild_space(old, parent)?;
         match std::fs::create_dir(selection_dir) {
             Ok(()) => {}, Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}, Err(e) => return Err(e.into()),
         }
