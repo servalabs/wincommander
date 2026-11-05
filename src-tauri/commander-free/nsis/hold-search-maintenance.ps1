@@ -14,6 +14,8 @@ try {
     $info.UseShellExecute = $false
     $info.CreateNoWindow = $true
     $info.RedirectStandardOutput = $true
+    # Do not let the long-lived child inherit nsExec's stderr pipe.
+    $info.RedirectStandardError = $true
     $process = [Diagnostics.Process]::Start($info)
     if ($null -eq $process) { throw 'Search maintenance helper failed to start.' }
     try {

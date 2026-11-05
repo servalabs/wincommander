@@ -745,6 +745,11 @@ fn hold_search_fence_at(parent_dir: &std::path::Path, pid: u32) -> Result<(), St
     let parent = Process(unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) });
     if parent.0.is_null() { return Err("Cannot verify installer process lifetime.".into()); }
     if unsafe { WaitForSingleObject(parent.0, 0) } != WAIT_TIMEOUT { return Err("Installer already exited.".into()); }
+    match std::fs::create_dir(parent_dir) {
+        Ok(()) => {},
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {},
+        Err(_) => return Err("Cannot prepare search maintenance directory.".into()),
+    }
     let _search_pins = source_snapshot::pin_directories(parent_dir)?;
     let file = OpenOptions::new().read(true).write(true).create(true).truncate(false)
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
