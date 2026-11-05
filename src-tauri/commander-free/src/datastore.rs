@@ -1057,6 +1057,20 @@ mod tests {
             assert_eq!(super::install_machine_material(directory.path(), true).unwrap(), key);
             assert!(!directory.path().join(".install.material.lock").exists());
         }
+        // An old plaintext key remains readable but cannot be migrated by
+        // this read-only token. The error must explain how to recover.
+        let path = directory.path().join(super::MATERIAL_FILENAME);
+        std::fs::write(&path, key).unwrap();
+        assert_ne!(unsafe { ImpersonateLoggedOnUser(restricted.0) }, 0);
+        {
+            let _revert = Revert;
+            assert_eq!(super::install_machine_material(directory.path(), false).unwrap(), key);
+            let error = super::install_machine_material(directory.path(), true).unwrap_err();
+            assert!(error.contains("administrator"));
+        }
+        assert_eq!(std::fs::read(&path).unwrap(), key);
+        assert_eq!(super::install_machine_material(directory.path(), true).unwrap(), key);
+        assert_eq!(super::dpapi_unprotect(&std::fs::read(path).unwrap()).unwrap(), key);
     }
     #[test]
     fn missing_section_read_does_not_create_the_store() {

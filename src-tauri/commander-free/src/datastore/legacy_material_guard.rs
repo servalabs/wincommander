@@ -13,7 +13,7 @@ pub(super) fn protect_legacy_material(
             return Err("Protected settings key could not be verified".to_string());
         }
         persist(&protected)
-    })().map_err(|_| "Settings key protection is unavailable; existing data preserved and changes were not saved.".to_string())
+    })().map_err(|_| "Could not protect the existing settings key. Reopen WinCommander as administrator and retry; existing settings are preserved.".to_string())
 }
 
 /// The open handle prevents replacement of the lock file on Windows. The OS
@@ -24,8 +24,8 @@ pub(super) fn acquire_writer_lock(directory: &std::path::Path) -> Result<std::fs
         os::windows::fs::{MetadataExt, OpenOptionsExt},
         time::{Duration, Instant},
     };
-    const UNAVAILABLE: &str =
-        "Settings key protection is busy or unavailable; changes were not saved.";
+    const UNAVAILABLE: &str = "Could not access the settings key migration lock. Reopen WinCommander as administrator and retry; existing settings are preserved.";
+    const BUSY: &str = "Settings key protection is busy. Wait and retry; existing settings are preserved.";
     let path = directory.join(".install.material.lock");
     let file = std::fs::OpenOptions::new()
         .read(true)
@@ -46,6 +46,7 @@ pub(super) fn acquire_writer_lock(directory: &std::path::Path) -> Result<std::fs
             Err(std::fs::TryLockError::WouldBlock) if Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(15))
             }
+            Err(std::fs::TryLockError::WouldBlock) => return Err(BUSY.into()),
             Err(_) => return Err(UNAVAILABLE.into()),
         }
     }
