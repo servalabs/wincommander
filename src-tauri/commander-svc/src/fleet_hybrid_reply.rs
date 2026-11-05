@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Service-side verification of exact enrollment reply bytes. Verification
 //! alone does not grant transport, install credentials or publish a session.
-use super::{hybrid_enrollment::ClaimedHybridEnrollment, FleetMachinePolicy};
+use super::{
+    hybrid_enrollment::{ClaimMarker, ClaimedHybridEnrollment},
+    FleetHybridTrust, FleetMachinePolicy,
+};
 use base64::{
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
     Engine as _,
@@ -36,8 +39,27 @@ impl Drop for Identity {
 /// A checked reply is not installation authority. Future publication must
 /// atomically recheck the claim and durably commit its credential and epoch.
 pub(crate) struct VerifiedHybridReply {
-    pub(crate) epoch: u64,
-    pub(crate) body: zeroize::Zeroizing<Vec<u8>>,
+    marker: ClaimMarker,
+    keys: FleetHybridTrust,
+    epoch: u64,
+    secret: zeroize::Zeroizing<Vec<u8>>,
+    body: zeroize::Zeroizing<Vec<u8>>,
+}
+
+impl VerifiedHybridReply {
+    pub(super) fn matches(&self, claim: &ClaimedHybridEnrollment, keys: &FleetHybridTrust) -> bool {
+        &self.marker == claim.marker() && &self.keys == keys
+    }
+    pub(super) fn epoch(&self) -> u64 {
+        self.epoch
+    }
+    pub(super) fn secret(&self) -> &[u8] {
+        &self.secret
+    }
+    #[cfg(test)]
+    pub(super) fn body(&self) -> &[u8] {
+        &self.body
+    }
 }
 
 impl FleetMachinePolicy {
@@ -132,12 +154,15 @@ impl FleetMachinePolicy {
         // This is still a snapshot. Publication must be serialized with
         // cancellation; callers cannot use this return value as authority.
         if !self.hybrid_claim_is_current(claim)
-            || self.hybrid_trust_snapshot()?.as_ref() != Some(&(binding, keys))
+            || self.hybrid_trust_snapshot()?.as_ref() != Some(&(binding.clone(), keys.clone()))
         {
             return Err(INVALID);
         }
         Ok(VerifiedHybridReply {
+            marker: claim.marker().clone(),
+            keys,
             epoch,
+            secret,
             body: zeroize::Zeroizing::new(body.to_vec()),
         })
     }

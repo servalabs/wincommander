@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 const MAX_REQUEST: usize = 32 * 1024;
 const INVALID: &str = "hybrid_enrollment_invalid";
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub(super) struct ClaimMarker {
     id: String,
     caller_sid: String,
@@ -35,6 +35,9 @@ pub(crate) struct ClaimedHybridEnrollment {
 }
 
 impl ClaimedHybridEnrollment {
+    pub(super) fn marker(&self) -> &ClaimMarker {
+        &self.marker
+    }
     pub(super) fn binding(&self) -> &FleetTrust {
         &self.marker.trust
     }
@@ -200,27 +203,31 @@ impl FleetMachinePolicy {
         let Ok(guard) = self.state.lock() else {
             return false;
         };
-        let Some(record) = guard.record.as_ref() else {
-            return false;
-        };
-        let Some(saved) = guard.hybrid_claim.as_ref() else {
-            return false;
-        };
-        saved.matches_owner(
-            &claim.marker.id,
-            &claim.marker.caller_sid,
-            claim.marker.session_id,
-        ) && saved.request_hash == claim.marker.request_hash
-            && saved.trust == claim.marker.trust
-            && saved.connection_revision == claim.marker.connection_revision
-            && saved.trust == record.trust
-            && saved.connection_revision == record.connection_revision
-            && !record.service_enabled
-            && record.credential.is_none()
-            && !record.hybrid_unconfirmed
-            && record.hybrid_trust.is_some()
-            && std::time::Instant::now() < saved.expires
+        hybrid_claim_matches(&guard, claim)
     }
+}
+
+pub(super) fn hybrid_claim_matches(state: &State, claim: &ClaimedHybridEnrollment) -> bool {
+    let Some(record) = state.record.as_ref() else {
+        return false;
+    };
+    let Some(saved) = state.hybrid_claim.as_ref() else {
+        return false;
+    };
+    saved.matches_owner(
+        &claim.marker.id,
+        &claim.marker.caller_sid,
+        claim.marker.session_id,
+    ) && saved.request_hash == claim.marker.request_hash
+        && saved.trust == claim.marker.trust
+        && saved.connection_revision == claim.marker.connection_revision
+        && saved.trust == record.trust
+        && saved.connection_revision == record.connection_revision
+        && !record.service_enabled
+        && record.credential.is_none()
+        && !record.hybrid_unconfirmed
+        && record.hybrid_trust.is_some()
+        && std::time::Instant::now() < saved.expires
 }
 
 #[cfg(test)]
