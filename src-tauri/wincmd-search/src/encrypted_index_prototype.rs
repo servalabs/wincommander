@@ -638,6 +638,44 @@ mod tantivy_trial {
         std::fs::remove_file(&key_path).unwrap();
     }
     #[test]
+    fn isolated_rebuild_uses_user_key_and_preserves_legacy_index() {
+        use tantivy::{collector::Count, doc, query::QueryParser, schema::{Schema, STORED, TEXT}, Index};
+        let sandbox = tempfile::tempdir().unwrap();
+        let old_index = sandbox.path().join("old-index");
+        let fresh_index = sandbox.path().join("new-index");
+        std::fs::create_dir(&old_index).unwrap();
+        std::fs::create_dir(&fresh_index).unwrap();
+        let legacy_file = old_index.join("meta.json");
+        std::fs::write(&legacy_file, b"legacy index retained").unwrap();
+        let document = sandbox.path().join("document.txt");
+        std::fs::write(&document, "confidential rebuildneedleword example").unwrap();
+
+        let directory = TrialDirectory::open_protected(&fresh_index, AccessMode::Writable, &[13; 16], false).unwrap();
+        let mut schema = Schema::builder();
+        let body = schema.add_text_field("body", TEXT | STORED);
+        let index = Index::create(directory, schema.build(), Default::default()).unwrap();
+        let mut writer = index.writer(50_000_000).unwrap();
+        let contents = std::fs::read_to_string(&document).unwrap();
+        writer.add_document(doc!(body => contents)).unwrap();
+        writer.commit().unwrap();
+        drop(writer);
+        drop(index);
+        assert_eq!(std::fs::read(&legacy_file).unwrap(), b"legacy index retained");
+        assert!(fresh_index.join("protected-search-key.v1").is_file());
+        for entry in std::fs::read_dir(&fresh_index).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_type().unwrap().is_file() {
+                let bytes = std::fs::read(entry.path()).unwrap();
+                assert!(!bytes.windows(b"rebuildneedleword".len()).any(|w| w == b"rebuildneedleword"));
+            }
+        }
+        let directory = TrialDirectory::open_protected(&fresh_index, AccessMode::SharedReader, &[13; 16], true).unwrap();
+        let reopened = Index::open(directory).unwrap();
+        let query = QueryParser::for_index(&reopened, vec![body]).parse_query("rebuildneedleword").unwrap();
+        assert_eq!(reopened.reader().unwrap().searcher().search(&query, &Count).unwrap(), 1);
+        assert_eq!(std::fs::read(&legacy_file).unwrap(), b"legacy index retained");
+    }
+    #[test]
     fn real_tantivy_index_search_and_reopen_are_encrypted() {
         use tantivy::{
             collector::Count,
