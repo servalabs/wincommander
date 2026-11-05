@@ -49,6 +49,11 @@ use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
 
+#[cfg(any(windows, test))]
+mod legacy_material_guard;
+#[cfg(any(windows, test))]
+use legacy_material_guard::protect_legacy_material;
+
 const MATERIAL_FILENAME: &str = ".install.material";
 const USER_MATERIAL_FILENAME: &str = ".user-store.material";
 const PERSONAL_SECRETS_KEY_MARKER: &str = "personal-secrets-key.in-use";
@@ -275,6 +280,16 @@ fn user_dpapi_unprotect(blob: &[u8]) -> Result<Vec<u8>, String> {
 // a noninteractive logon (such as SSH). The LocalAppData directory ACL remains
 // the per-user access boundary; the DPAPI scope supplies logon compatibility.
 fn install_material() -> Result<[u8; 32], String> {
+    install_material_with_policy(false)
+}
+
+/// New writes require legacy plaintext material to have been successfully
+/// wrapped; reads still work if Windows cannot protect it yet.
+fn writable_install_material() -> Result<[u8; 32], String> {
+    install_material_with_policy(true)
+}
+
+fn install_material_with_policy(require_protected: bool) -> Result<[u8; 32], String> {
     if crate::paths::current_user_install_uses_local_datastore() {
         return user_material();
     }
@@ -302,13 +317,20 @@ fn install_material() -> Result<[u8; 32], String> {
         }
     };
     if raw.len() == 32 {
-        // Legacy plaintext material. Use it, and best-effort re-write it
-        // DPAPI-protected so the salt is no longer readable from an image.
+        // Preserve readability, but do not create new ciphertext while its
+        // legacy key remains exposed on disk.
         let mut buf = [0u8; 32];
         buf.copy_from_slice(&raw);
-        if let Ok(protected) = dpapi_protect(&buf) {
-            let _ = atomic_write_bytes(&path, &protected);
-        }
+        #[cfg(windows)]
+        protect_legacy_material(&buf, require_protected, dpapi_protect, dpapi_unprotect, |protected| {
+            atomic_write_bytes(&path, protected)?;
+            let saved = fs::read(&path).map_err(|_| "Could not verify protected settings key".to_string())?;
+            let recovered = dpapi_unprotect(&saved)?;
+            if recovered.as_slice() != buf { return Err("Protected settings key did not match".to_string()); }
+            Ok(())
+        })?;
+        #[cfg(not(windows))]
+        let _ = require_protected;
         return Ok(buf);
     }
     // DPAPI-protected material (blobs are always far larger than 32 bytes).
@@ -607,7 +629,7 @@ fn read_section_file(path: &std::path::Path, section: &str) -> Result<Option<Str
 /// Write a settings section to disk (replaces the full section).
 pub fn save(section: &str, data: &Value) -> Result<(), String> {
     let path = section_path(section)?;
-    let material = install_material()?;
+    let material = writable_install_material()?;
     let key = derive_section_key(&material, None)?;
     let bytes = serde_json::to_vec(data)
         .map_err(|e| format!("Failed to serialise section '{section}': {e}"))?;
@@ -867,6 +889,57 @@ pub fn log_decrypt_line(line: &str) -> Option<(String, String)> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn failed_legacy_key_protection_keeps_reads_available_but_blocks_writes() {
+        let material = [0x42; 32];
+        let key = super::derive_section_key(&material, None).unwrap();
+        let existing = super::encode_section(&key, b"existing settings", "machine:settings").unwrap();
+        for require_protected in [false, true] {
+            let result = super::protect_legacy_material(&material, require_protected,
+                |_| Err("protection failed".into()), |_| panic!("nothing to decrypt"),
+                |_| panic!("unprotected key must not be written"));
+            assert_eq!(result.is_err(), require_protected);
+            let result = super::protect_legacy_material(&material, require_protected,
+                |_| Ok(vec![9; 64]), |_| Ok(vec![7; 32]),
+                |_| panic!("mismatched key must not be written"));
+            assert_eq!(result.is_err(), require_protected);
+        }
+        assert_eq!(super::decode_section(&key, &existing, "machine:settings").unwrap(), b"existing settings");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn legacy_key_locked_destination_preserves_data_and_retry_protects_it() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("legacy.material");
+        let material = [0x42; 32];
+        std::fs::write(&path, material).unwrap();
+        let locked = std::fs::OpenOptions::new().read(true).share_mode(0).open(&path).unwrap();
+        let result = super::protect_legacy_material(&material, true, super::dpapi_protect, super::dpapi_unprotect,
+            |wrapped| super::atomic_write_bytes(&path, wrapped));
+        assert!(result.is_err());
+        drop(locked);
+        assert_eq!(std::fs::read(&path).unwrap(), material);
+        super::protect_legacy_material(&material, true, super::dpapi_protect, super::dpapi_unprotect,
+            |wrapped| super::atomic_write_bytes(&path, wrapped)).unwrap();
+        let saved = std::fs::read(&path).unwrap();
+        assert!(saved.len() > material.len());
+        assert_eq!(super::dpapi_unprotect(&saved).unwrap(), material);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn actual_dpapi_verification_failure_never_replaces_legacy_material() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("legacy.material");
+        let material = [0x42; 32];
+        std::fs::write(&path, material).unwrap();
+        assert!(super::protect_legacy_material(&material, true, super::dpapi_protect,
+            |_| super::dpapi_unprotect(b"invalid Windows DPAPI blob"),
+            |_| panic!("a failed DPAPI check must not replace material")).is_err());
+        assert_eq!(std::fs::read(path).unwrap(), material);
+    }
     #[test]
     fn missing_section_read_does_not_create_the_store() {
         let temp = tempfile::tempdir().unwrap();
