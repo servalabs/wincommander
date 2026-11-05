@@ -1427,7 +1427,10 @@ mod tests {
         let engine = SearchEngine::open_or_rebuild_experimental_with_policy(config, Arc::new(|_| true)).unwrap();
         engine.stop(); drop(engine);
         // A fresh setup has no old backup but may later publish its scope.
-        if old.exists() { fs::remove_dir(&old).unwrap(); }
+        if old.exists() {
+            for entry in fs::read_dir(&old).unwrap() { fs::remove_file(entry.unwrap().path()).unwrap(); }
+            fs::remove_dir(&old).unwrap();
+        }
         publish_experimental_scope(&old, b"scope", |_| Ok(())).unwrap();
         let selection = root.path().join(".wincommander-encrypted-selection");
         SearchEngine::verify_fresh_scope_selection(&old, &selection).unwrap();
