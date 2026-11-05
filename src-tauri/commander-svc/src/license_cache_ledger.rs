@@ -94,6 +94,47 @@ fn parse_ledger(raw: &[u8]) -> Result<Ledger, &'static str> {
     Ok(ledger)
 }
 
+/// Return the first outstanding paid record without restoring it as an entitlement.
+pub(super) fn next_unreleased_paid(
+    retained: &[u8], public_key: &str, trust: &wincmd_pq_experiment::jws::Trust<'_>,
+    old_trust: Option<&history::HistoricalTrust>,
+) -> Result<Option<Vec<u8>>, &'static str> {
+    let ledger = parse_ledger(retained)?;
+    let mut selected = None;
+    for record in &ledger.records {
+        let cache: ExistingCache = serde_json::from_str(record).map_err(|_| "license security record is invalid")?;
+        let candidate = StoreLicenseCacheRequest { payload: cache.token.payload, signature: cache.token.signature,
+            hybrid: cache.token.hybrid, seats_used: cache.seats_used, seat_limit: cache.seat_limit };
+        validate_request(&candidate, public_key)?;
+        history::verify_previous(&candidate, trust, old_trust)?;
+        let claims: SignedClaims = serde_json::from_str(&candidate.payload).map_err(|_| "license security record is invalid")?;
+        let value: serde_json::Value = serde_json::from_str(&candidate.payload).map_err(|_| "license security record is invalid")?;
+        if value.get("plan").and_then(serde_json::Value::as_str) == Some("trial") { continue; }
+        let generation = checked_activation_generation(claims.activation_generation)?
+            .ok_or("paid license history requires recovery")?;
+        let id = claims.license_id.as_deref().filter(|id| !id.is_empty()).ok_or("paid license history requires recovery")?;
+        if !ledger.released.iter().any(|item| item.license_id == id && item.device_hash == claims.device_hash
+            && item.generation >= generation && item.completion.is_some()) && selected.is_none() {
+            selected = Some(record.as_bytes().to_vec());
+        }
+    }
+    Ok(selected)
+}
+
+/// Match exact signed bytes and timestamp, never a caller-selected licence ID.
+pub(super) fn exact_retained_cache(retained: &[u8], candidate: &StoreLicenseCacheRequest, time: u64) -> Result<Vec<u8>, &'static str> {
+    let mut found = None;
+    for record in parse_ledger(retained)?.records {
+        let cache: ExistingCache = serde_json::from_str(&record).map_err(|_| "license security record is invalid")?;
+        if cache.token.payload == candidate.payload && cache.token.signature == candidate.signature
+            && cache.token.hybrid == candidate.hybrid && cache.last_verified_at == Some(time) {
+            if found.is_some() { return Err("license security record is invalid"); }
+            found = Some(record.into_bytes());
+        }
+    }
+    found.ok_or("license security record is unavailable")
+}
+
 /// A successful removal must account for every retained paid licence, not just
 /// the currently displayed one. Missing generations remain ambiguous.
 pub(super) fn ensure_paid_history_released(
