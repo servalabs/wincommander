@@ -352,6 +352,12 @@ FunctionEnd
     ${If} $0 != 1
       Call WC_RestoreMovedSearch
       ${If} $R6 != 1
+        ${If} $WCUserStageServiceRunning == 1
+          Call WC_RestoreUserStageService
+          ${If} $R6 != 1
+            Abort "Search backup recovery and service restart both failed. Existing data remains in its backup; manual recovery is required."
+          ${EndIf}
+        ${EndIf}
         Abort "Search migration failed and the prior index could not be restored. Existing data remains in its backup; recovery is required."
       ${EndIf}
       ${If} $WCUserStageServiceRunning == 1
@@ -369,6 +375,12 @@ FunctionEnd
     ${If} $0 != 0
       Call WC_RestoreMovedSearch
       ${If} $R6 != 1
+        ${If} $WCUserStageServiceRunning == 1
+          Call WC_RestoreUserStageService
+          ${If} $R6 != 1
+            Abort "Search backup recovery and service restart both failed. Existing data remains in its backup; manual recovery is required."
+          ${EndIf}
+        ${EndIf}
         Abort "Search verification failed and the prior index could not be restored. Existing data remains in its backup; recovery is required."
       ${EndIf}
       !insertmacro WC_ABORT_STOP_FAILURE "preinstall" "WinCommander could not verify the protected search index."
@@ -389,6 +401,12 @@ FunctionEnd
         !ifdef WC_EXPERIMENTAL_SEARCH_FENCE
           Call WC_RestoreMovedSearch
           ${If} $R6 != 1
+            ${If} $WCUserStageServiceRunning == 1
+              Call WC_RestoreUserStageService
+              ${If} $R6 != 1
+                Abort "Search backup recovery and service restart both failed. Existing data remains in its backup; manual recovery is required."
+              ${EndIf}
+            ${EndIf}
             Abort "Settings staging failed and the prior search index could not be restored. Existing data remains in its backup; recovery is required."
           ${EndIf}
         !endif
