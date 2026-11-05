@@ -146,6 +146,7 @@ fn move_to_sibling_with_hook(old: &Path, destination_name: &str, fence: &crate::
     // Allow our delete-capable handle to open, then verify it is exactly the
     // pinned object. Parent pins remain held across this narrow transition.
     drop(old_pins);
+    after_unpin();
     let handle = std::fs::OpenOptions::new().read(true)
         .access_mode(DELETE | FILE_READ_ATTRIBUTES)
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
