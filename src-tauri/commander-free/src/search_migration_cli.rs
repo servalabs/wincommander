@@ -68,6 +68,12 @@ pub fn run(phase: &str) -> Result<(), String> {
                     .map_err(|e| e.to_string()),
             }
         }
+        "restore" => {
+            let guard = SearchOperationFence::acquire_exclusive(&parent)
+                .map_err(|_| "Cannot acquire offline search maintenance lock.")?;
+            SearchEngine::restore_quarantined_with_fence(&old, &selection, &guard)
+                .map(|_| ()).map_err(|e| e.to_string())
+        }
         "verify" => match classify(&parent, &old, &selection)? {
             State::Fresh => Ok(()),
             State::Quarantined => SearchEngine::verify_quarantined_selection(&old, &selection)

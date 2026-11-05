@@ -525,6 +525,20 @@ impl SearchEngine {
         absent()?;
         Ok(())
     }
+    /// Restore only the authenticated generation's backup, never overwriting
+    /// an existing legacy path. The helper must own the exclusive fence.
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    pub fn restore_quarantined_with_fence(old: &std::path::Path, selection_dir: &std::path::Path,
+        fence: &crate::encrypted_search_fence::SearchOperationFence) -> Result<std::path::PathBuf> {
+        use crate::encrypted_generation_prototype::{inspect, PinnedSelectionStore, UserProtector};
+        let parent = old.parent().ok_or_else(|| SearchError::Config("invalid legacy index path".into()))?;
+        fence.require_exclusive_for(parent)?;
+        Self::verify_quarantined_selection(old, selection_dir)?;
+        let mut selection = PinnedSelectionStore::open(selection_dir)?;
+        let selected = inspect(&mut selection, &UserProtector)?
+            .ok_or_else(|| SearchError::Config("encrypted selection missing".into()))?;
+        Ok(crate::encrypted_legacy_quarantine::restore_with_fence(old, &selected.index_id, fence)?)
+    }
     /// Locate the generation-specific quarantine path for inspection after an
     /// interrupted move. Existence alone is not proof of successful migration.
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
@@ -1245,7 +1259,9 @@ mod tests {
         assert!(restore_experimental_legacy_backup(&old, &[90; 16]).is_err());
         assert_eq!(fs::read(backup.join("meta.json")).unwrap(), b"legacy retained");
         fs::remove_dir(&old).unwrap();
-        assert_eq!(restore_experimental_legacy_backup(&old, &[90; 16]).unwrap(), old);
+        let restore_guard = crate::encrypted_search_fence::SearchOperationFence::acquire_exclusive(root.path()).unwrap();
+        assert_eq!(SearchEngine::restore_quarantined_with_fence(&old, &selector, &restore_guard).unwrap(), old);
+        drop(restore_guard);
         assert_eq!(fs::read(old.join("meta.json")).unwrap(), b"legacy retained");
     }
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]

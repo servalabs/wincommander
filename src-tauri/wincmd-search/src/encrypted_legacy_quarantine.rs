@@ -39,11 +39,17 @@ pub(crate) fn quarantine_with_fence(old: &Path, index_id: &[u8; 16], fence: &cra
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
 pub(crate) fn restore(old: &Path, index_id: &[u8; 16]) -> io::Result<PathBuf> {
     let parent = old.parent().ok_or_else(|| io::Error::other("invalid legacy index path"))?;
+    let fence = crate::encrypted_search_fence::SearchOperationFence::acquire_exclusive(parent)?;
+    restore_with_fence(old, index_id, &fence)
+}
+
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
+pub(crate) fn restore_with_fence(old: &Path, index_id: &[u8; 16], fence: &crate::encrypted_search_fence::SearchOperationFence) -> io::Result<PathBuf> {
+    let parent = old.parent().ok_or_else(|| io::Error::other("invalid legacy index path"))?;
     let name = old.file_name().and_then(|name| name.to_str())
         .ok_or_else(|| io::Error::other("invalid legacy index name"))?;
     let source = parent.join(backup_name(index_id)?);
-    let fence = crate::encrypted_search_fence::SearchOperationFence::acquire_exclusive(parent)?;
-    move_to_sibling(&source, name, &fence)
+    move_to_sibling(&source, name, fence)
 }
 
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
