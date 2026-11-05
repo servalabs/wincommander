@@ -201,6 +201,8 @@ impl SearchEngine {
         let files = crate::encrypted_strict_crawl::collect(
             &self.config.roots, &exclusions, &self.config.skip_paths, self.config.max_file_bytes,
         )?;
+        // Never read file contents that the active privacy policy denies.
+        let files: Vec<_> = files.into_iter().filter(|file| (self.path_policy)(&file.path)).collect();
         let source_before = crate::encrypted_strict_crawl::fingerprint(&files)?;
         let mut seen = std::collections::HashSet::new();
         let mut writer = self.ci.writer()?;
@@ -229,6 +231,7 @@ impl SearchEngine {
         let after_files = crate::encrypted_strict_crawl::collect(
             &self.config.roots, &exclusions, &self.config.skip_paths, self.config.max_file_bytes,
         )?;
+        let after_files: Vec<_> = after_files.into_iter().filter(|file| (self.path_policy)(&file.path)).collect();
         let source_after = crate::encrypted_strict_crawl::fingerprint(&after_files)?;
         if source_before != source_after {
             return Err(SearchError::Config("source changed during encrypted rebuild".into()));
@@ -264,6 +267,7 @@ impl SearchEngine {
         let current = crate::encrypted_strict_crawl::collect(
             &self.config.roots, &exclusions, &self.config.skip_paths, self.config.max_file_bytes,
         )?;
+        let current: Vec<_> = current.into_iter().filter(|file| (self.path_policy)(&file.path)).collect();
         let digest = crate::encrypted_strict_crawl::fingerprint(&current)?;
         if self.experimental_source_digest != Some(digest) {
             self.experimental_verified.store(false, Ordering::Release);
