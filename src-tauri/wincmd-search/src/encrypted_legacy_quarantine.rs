@@ -25,9 +25,16 @@ mod tests {
 }
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
 pub(crate) fn quarantine(old: &Path, index_id: &[u8; 16]) -> io::Result<PathBuf> {
-    move_to_sibling(old, &backup_name(index_id)?)
+    let parent = old.parent().ok_or_else(|| io::Error::other("invalid legacy index path"))?;
+    let fence = crate::encrypted_search_fence::SearchOperationFence::acquire_exclusive(parent)?;
+    quarantine_with_fence(old, index_id, &fence)
 }
 
+/// Execute in the holder process without reacquiring its exclusive fence.
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
+pub(crate) fn quarantine_with_fence(old: &Path, index_id: &[u8; 16], fence: &crate::encrypted_search_fence::SearchOperationFence) -> io::Result<PathBuf> {
+    move_to_sibling(old, &backup_name(index_id)?, fence)
+}
 /// Explicit recovery only: do not overwrite a recreated legacy directory.
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
 pub(crate) fn restore(old: &Path, index_id: &[u8; 16]) -> io::Result<PathBuf> {
@@ -35,11 +42,12 @@ pub(crate) fn restore(old: &Path, index_id: &[u8; 16]) -> io::Result<PathBuf> {
     let name = old.file_name().and_then(|name| name.to_str())
         .ok_or_else(|| io::Error::other("invalid legacy index name"))?;
     let source = parent.join(backup_name(index_id)?);
-    move_to_sibling(&source, name)
+    let fence = crate::encrypted_search_fence::SearchOperationFence::acquire_exclusive(parent)?;
+    move_to_sibling(&source, name, &fence)
 }
 
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
-fn move_to_sibling(old: &Path, destination_name: &str) -> io::Result<PathBuf> {
+fn move_to_sibling(old: &Path, destination_name: &str, fence: &crate::encrypted_search_fence::SearchOperationFence) -> io::Result<PathBuf> {
     use crate::read_only::{AccessMode, CheckedDirectory};
     use std::os::windows::{ffi::OsStrExt, fs::{MetadataExt, OpenOptionsExt}, io::AsRawHandle};
     use windows_sys::Win32::Storage::FileSystem::{
@@ -56,8 +64,7 @@ fn move_to_sibling(old: &Path, destination_name: &str) -> io::Result<PathBuf> {
     let parent = old.parent().ok_or_else(denied)?;
     let parent_pins = CheckedDirectory::pin_root_path(parent)?;
     let _parent_handle = parent_pins.last().ok_or_else(denied)?;
-    // Cooperating runtimes hold a shared fence; maintenance holds it exclusively.
-    let _maintenance = crate::encrypted_search_fence::SearchOperationFence::acquire_exclusive(parent)?;
+    fence.require_exclusive_for(parent)?;
     crate::encrypted_search_maintenance::verify_known_writers_stopped().map_err(io::Error::other)?;
     let old_pins = CheckedDirectory::pin_root_path(old)?;
     let old_handle = old_pins.last().ok_or_else(denied)?;

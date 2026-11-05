@@ -7,7 +7,7 @@ use windows_sys::Win32::Storage::FileSystem::{BY_HANDLE_FILE_INFORMATION,
     FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ,
     FILE_SHARE_WRITE, GetFileInformationByHandle};
 
-pub struct SearchOperationFence { _pins: Vec<File>, _file: File }
+pub struct SearchOperationFence { _pins: Vec<File>, _file: File, parent: std::path::PathBuf, exclusive: bool }
 
 impl SearchOperationFence {
     /// Prepare the search parent below an independently verified user root.
@@ -26,6 +26,9 @@ impl SearchOperationFence {
     pub fn acquire_shared(parent: &Path) -> io::Result<Self> { Self::acquire(parent, false) }
     /// Hold for the full offline installer lifetime; old binaries do not cooperate.
     pub fn acquire_exclusive(parent: &Path) -> io::Result<Self> { Self::acquire(parent, true) }
+    pub(crate) fn require_exclusive_for(&self, parent: &Path) -> io::Result<()> {
+        if self.exclusive && self.parent == parent { Ok(()) } else { Err(io::Error::new(io::ErrorKind::PermissionDenied, "wrong search maintenance fence")) }
+    }
     fn acquire(parent: &Path, exclusive: bool) -> io::Result<Self> {
         let denied = || io::Error::new(io::ErrorKind::PermissionDenied, "search fence refused");
         let pins = crate::read_only::CheckedDirectory::pin_root_path(parent)?;
@@ -43,7 +46,7 @@ impl SearchOperationFence {
             std::fs::TryLockError::WouldBlock => io::Error::new(io::ErrorKind::WouldBlock, "search migration is in progress"),
             std::fs::TryLockError::Error(error) => error,
         })?;
-        Ok(Self { _pins: pins, _file: file })
+        Ok(Self { _pins: pins, _file: file, parent: parent.to_path_buf(), exclusive })
     }
 }
 

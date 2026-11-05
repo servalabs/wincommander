@@ -403,6 +403,15 @@ impl SearchEngine {
     /// path invokes this experimental operation.
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     pub fn quarantine_experimental_legacy_cache(&mut self) -> Result<std::path::PathBuf> {
+        self.quarantine_experimental_inner(None)
+    }
+    /// Offline helper variant: reuse its exclusive fence without reacquiring it.
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    pub fn quarantine_experimental_with_fence(&mut self, fence: &crate::encrypted_search_fence::SearchOperationFence) -> Result<std::path::PathBuf> {
+        self.quarantine_experimental_inner(Some(fence))
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    fn quarantine_experimental_inner(&mut self, fence: Option<&crate::encrypted_search_fence::SearchOperationFence>) -> Result<std::path::PathBuf> {
         if self.experimental_selection.is_none() || self.experimental_id.is_none() {
             return Err(SearchError::Config("encrypted generation is not selected".into()));
         }
@@ -414,7 +423,10 @@ impl SearchEngine {
         let old = self.experimental_legacy_path.as_ref()
             .ok_or_else(|| SearchError::Config("legacy index path unavailable".into()))?;
         let id = self.experimental_id.ok_or_else(|| SearchError::Config("index identity unavailable".into()))?;
-        let backup = crate::encrypted_legacy_quarantine::quarantine(old, &id)?;
+        let backup = match fence {
+            Some(guard) => crate::encrypted_legacy_quarantine::quarantine_with_fence(old, &id, guard)?,
+            None => crate::encrypted_legacy_quarantine::quarantine(old, &id)?,
+        };
         // Prevent a later search root from ingesting the retained backup.
         self.config.skip_paths.push(backup.clone());
         Ok(backup)
@@ -1081,7 +1093,12 @@ mod tests {
         assert!(engine.quarantine_experimental_legacy_cache().is_err());
         assert_eq!(fs::read(old.join("meta.json")).unwrap(), b"legacy retained");
         drop(maintenance);
-        let backup = engine.quarantine_experimental_legacy_cache().unwrap();
+        let shared = crate::encrypted_search_fence::SearchOperationFence::acquire_shared(root.path()).unwrap();
+        assert!(engine.quarantine_experimental_with_fence(&shared).is_err());
+        drop(shared);
+        let exclusive = crate::encrypted_search_fence::SearchOperationFence::acquire_exclusive(root.path()).unwrap();
+        let backup = engine.quarantine_experimental_with_fence(&exclusive).unwrap();
+        drop(exclusive);
         assert_eq!(backup, expected_backup);
         assert!(!old.exists());
         assert_eq!(fs::read(backup.join("meta.json")).unwrap(), b"legacy retained");
