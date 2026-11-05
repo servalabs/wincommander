@@ -7,7 +7,7 @@
 use globset::GlobSet;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc, atomic::{AtomicBool, AtomicU64, Ordering}};
 
 use crate::crawler::{doc_id_for, path_is_skipped};
 use crate::error::{Result, SearchError};
@@ -88,18 +88,71 @@ pub fn apply_fs_event(
     }
 }
 
+// Delete identities may change after a path disappears, and rename events may
+// contain two paths. Force a full rescan instead of silently guessing. Errors
+// or an explicit backend rescan flag also make the cache unsafe to serve.
+fn needs_reconciliation(event: &notify::Result<Event>, skip: &[PathBuf], exclusions: &GlobSet, max_bytes: u64) -> bool {
+    let event = match event { Ok(event) => event, Err(_) => return true };
+    if event.need_rescan() { return true; }
+    let relevant = |path: &PathBuf| !path_is_skipped(path, skip) && !path_is_excluded(path, exclusions);
+    if matches!(event.kind, EventKind::Remove(_) | EventKind::Modify(notify::event::ModifyKind::Name(_))) {
+        return event.paths.is_empty() || event.paths.iter().any(relevant);
+    }
+    if matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_)) {
+        return event.paths.is_empty() || event.paths.iter().filter(|path| relevant(path))
+            .any(|path| match std::fs::metadata(path) {
+                Ok(meta) => meta.is_dir() || meta.len() > max_bytes,
+                Err(_) => true,
+            });
+    }
+    false
+}
 /// Spawn a notify watcher over `roots` and forward classified actions to `tx`.
 pub fn watch_roots(
-    roots: &[PathBuf],
-    skip_paths: Vec<PathBuf>,
-    exclusions: GlobSet,
-    max_file_bytes: u64,
-    tx: mpsc::Sender<FsEventAction>,
+    roots: &[PathBuf], skip_paths: Vec<PathBuf>, exclusions: GlobSet,
+    max_file_bytes: u64, tx: mpsc::Sender<FsEventAction>,
 ) -> Result<RecommendedWatcher> {
+    watch_roots_impl(roots, skip_paths, exclusions, max_file_bytes, EventSink::Unbounded(tx), None)
+}
+
+pub(crate) fn watch_roots_strict(
+    roots: &[PathBuf], skip_paths: Vec<PathBuf>, exclusions: GlobSet,
+    max_file_bytes: u64, tx: mpsc::SyncSender<FsEventAction>, invalid: Arc<AtomicBool>, generation: Arc<AtomicU64>,
+) -> Result<RecommendedWatcher> {
+    watch_roots_impl(roots, skip_paths, exclusions, max_file_bytes, EventSink::Bounded(tx), Some((invalid, generation)))
+}
+
+enum EventSink {
+    Unbounded(mpsc::Sender<FsEventAction>),
+    Bounded(mpsc::SyncSender<FsEventAction>),
+}
+fn invalidate(state: &(Arc<AtomicBool>, Arc<AtomicU64>)) {
+    state.1.fetch_add(1, Ordering::SeqCst);
+    state.0.store(true, Ordering::SeqCst);
+}
+fn enqueue(sink: &EventSink, action: FsEventAction, invalid: &Option<(Arc<AtomicBool>, Arc<AtomicU64>)>) {
+    match sink {
+        EventSink::Unbounded(tx) => { let _ = tx.send(action); },
+        EventSink::Bounded(tx) => if tx.try_send(action).is_err() {
+            if let Some(state) = invalid { invalidate(state); }
+        },
+    }
+}
+fn watch_roots_impl(
+    roots: &[PathBuf], skip_paths: Vec<PathBuf>, exclusions: GlobSet,
+    max_file_bytes: u64, tx: EventSink, invalid: Option<(Arc<AtomicBool>, Arc<AtomicU64>)>,
+) -> Result<RecommendedWatcher> {
+    let strict = invalid.is_some();
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
+        if let Some(state) = &invalid {
+            if needs_reconciliation(&res, &skip_paths, &exclusions, max_file_bytes) {
+                invalidate(state);
+                return;
+            }
+        }
         if let Ok(event) = res {
             if let Some(action) = apply_fs_event(&event, &skip_paths, &exclusions, max_file_bytes) {
-                let _ = tx.send(action);
+                enqueue(&tx, action, &invalid);
             }
         }
     })
@@ -107,6 +160,7 @@ pub fn watch_roots(
 
     for root in roots {
         if let Err(e) = watcher.watch(root, RecursiveMode::Recursive) {
+            if strict { return Err(SearchError::Io(std::io::Error::other(e.to_string()))); }
             eprintln!("wincmd-search: skipping unwatchable root {:?}: {}", root, e);
             continue;
         }
@@ -124,7 +178,49 @@ mod tests {
     use std::fs;
     use std::path::Path;
     use tempfile::TempDir;
+    #[test]
+    fn strict_watcher_rejects_an_unwatchable_root() {
+        let root = TempDir::new().unwrap();
+        let missing = root.path().join("missing");
+        let exclusions = crate::crawler::build_globset(&[]).unwrap();
+        let (tx, _rx) = std::sync::mpsc::sync_channel(2);
+        assert!(watch_roots_strict(&[missing], vec![], exclusions, 1024, tx, Arc::new(AtomicBool::new(false)), Arc::new(AtomicU64::new(0))).is_err());
+    }
 
+    #[test]
+    fn strict_queue_overflow_requests_reconciliation() {
+        let (tx, _rx) = mpsc::sync_channel(1);
+        let sink = EventSink::Bounded(tx);
+        let flag = Arc::new(AtomicBool::new(false));
+        let generation = Arc::new(AtomicU64::new(0));
+        let state = Some((Arc::clone(&flag), Arc::clone(&generation)));
+        enqueue(&sink, FsEventAction::Delete(1), &state);
+        assert!(!flag.load(Ordering::SeqCst));
+        enqueue(&sink, FsEventAction::Delete(2), &state);
+        assert!(flag.load(Ordering::SeqCst));
+        assert_eq!(generation.load(Ordering::SeqCst), 1);
+    }
+    #[test]
+    fn growing_beyond_size_limit_requires_reconciliation() {
+        let root = TempDir::new().unwrap();
+        let path = root.path().join("data.txt");
+        std::fs::write(&path, b"more than limit").unwrap();
+        let event = Ok(make_event(EventKind::Modify(ModifyKind::Data(DataChange::Content)), &path));
+        assert!(needs_reconciliation(&event, &[], &no_exclusions(), 4));
+        assert!(!needs_reconciliation(&event, &[], &no_exclusions(), 100));
+    }
+    #[test]
+    fn strict_classification_flags_errors_deletes_and_two_path_renames() {
+        let glob = no_exclusions();
+        let bad: notify::Result<Event> = Err(notify::Error::generic("lost events"));
+        assert!(needs_reconciliation(&bad, &[], &glob, 1024));
+        let root = TempDir::new().unwrap();
+        let old = root.path().join("old"); let new = root.path().join("new");
+        let deletion = Ok(make_event(EventKind::Remove(RemoveKind::File), &old));
+        assert!(needs_reconciliation(&deletion, &[], &glob, 1024));
+        let rename = Ok(Event { kind: EventKind::Modify(ModifyKind::Name(notify::event::RenameMode::Both)), paths: vec![old, new], attrs: Default::default() });
+        assert!(needs_reconciliation(&rename, &[], &glob, 1024));
+    }
     fn make_event(kind: EventKind, path: &Path) -> Event {
         Event {
             kind,

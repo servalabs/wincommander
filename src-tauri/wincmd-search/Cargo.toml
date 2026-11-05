@@ -6,7 +6,14 @@ rust-version = "1.93.1"
 license = "AGPL-3.0-or-later"
 description = "Full-text file-content search for WinCommander (Free tier)"
 
+[features]
+experimental-encrypted-search = ["dep:aes-gcm", "dep:rand", "dep:zeroize", "dep:windows-sys", "dep:hmac"]
+
 [dependencies]
+aes-gcm = { version = "0.11", features = ["zeroize"], optional = true }
+hmac = { version = "0.13", features = ["zeroize"], optional = true }
+rand = { version = "0.8", optional = true }
+zeroize = { version = "1", optional = true }
 tantivy       = "0.27"
 lopdf         = "0.46"   # >=0.42 fixes RUSTSEC-2026-0187 (stack overflow on nested PDFs)
 calamine      = "0.38"
@@ -22,10 +29,20 @@ sha2          = "0.11"
 hex           = "0.4"
 
 [dev-dependencies]
+hmac = { version = "0.13", features = ["zeroize"] }
 tempfile = "3"
-# Same versions as [dependencies] above so the integration harness can
+aes-gcm = { version = "0.11", features = ["zeroize"] }
+zeroize = "1"
+rand = "0.8"
+# Same versions as dependencies above so the integration harness can
 # synthesize real docx/pptx/xlsx (zip) and pdf (lopdf) fixtures without
 # pulling any new crate into the lock. Dev-deps never link into the shipped
 # AV-clean Free binary.
 zip   = "9.3"
 lopdf = "0.46"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_Foundation", "Win32_Security_Cryptography", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Services", "Win32_System_Threading"], optional = true }
+
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_Foundation", "Win32_Security_Cryptography", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Services", "Win32_System_Threading"] }

@@ -1,0 +1,69 @@
+name: Experimental encrypted search Windows proof
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+permissions:
+  contents: read
+jobs:
+  native-search:
+    if: startsWith(github.head_ref, 'codex/ci-encrypted-search-windows-')
+    runs-on: windows-latest
+    timeout-minutes: 35
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: 1.99.1
+      - name: Run disposable encrypted search fixtures
+        shell: pwsh
+        run: |
+          $tests = @(
+            'encrypted_index_prototype::',
+            'encrypted_key_prototype::',
+            'encrypted_generation_prototype::',
+            'encrypted_legacy_quarantine::',
+            'encrypted_search_maintenance::',
+            'encrypted_search_fence::',
+            'experimental_scope_publication_requires_validated_pinned_root',
+            'quarantine_requires_selected_cache_and_preserves_legacy_backup',
+            'application_entry_rebuilds_then_refuses_corrupt_selector',
+            'fresh_install_can_build_select_and_reopen_without_legacy_index',
+            'candidate_holds_cooperating_legacy_writer_lock',
+            'reconciliation_invalidates_candidate_proof',
+            'failed_strict_crawl_cannot_create_candidate_proof',
+            'experimental_engine_rebuilds_separate_generation_without_touching_legacy'
+          )
+          $failed = @()
+          foreach ($test in $tests) {
+            Write-Host "Running $test"
+            $output = & cargo test --locked -p wincmd-search --lib --features experimental-encrypted-search $test -- --test-threads=1 2>&1
+            $code = $LASTEXITCODE
+            $output | ForEach-Object { Write-Host $_ }
+            if ($code -ne 0) { $failed += $test; continue }
+            if (-not (($output | Out-String) -match 'running [1-9][0-9]* tests?')) { $failed += $test; Write-Host "No tests executed for $test" }
+          }
+          if ($failed.Count -gt 0) { throw ("Failed groups: " + ($failed -join ", ")) }
+  app-feature-check:
+    if: startsWith(github.head_ref, 'codex/ci-encrypted-search-windows-')
+    runs-on: windows-latest
+    timeout-minutes: 35
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: 1.99.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.4.3
+      - run: bun install --frozen-lockfile
+        working-directory: .
+      - run: bun run encrypt-backend
+        working-directory: .
+      - run: cargo check --locked -p commander-free --features experimental-encrypted-search
