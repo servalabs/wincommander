@@ -142,8 +142,11 @@ fn open_generation(input: &[u8]) -> Result<Generation, String> {
         || generation.sections.keys().any(|name| {
             name.is_empty() || name.len() > 128 || validate_section_name(name).is_err()
         })
-        || generation.sections.len() != generation.source_sections.len()
-        || generation.sections.keys().ne(generation.source_sections.keys())
+        || generation.source_sections.keys().any(|name| !generation.sections.contains_key(name))
+        || {
+            let mut names = std::collections::HashSet::new();
+            generation.sections.keys().any(|name| !names.insert(name.to_lowercase()))
+        }
         || generation.source_sections.values().any(|digest| !valid_digest(digest))
         || !valid_digest(&generation.source_key_digest)
     {
@@ -170,7 +173,7 @@ fn verify_source(input: &[u8], old_material: &[u8; 32], sections: &[(String, Str
             return Err("duplicate settings section".into());
         }
     }
-    if generation.source_sections != observed {
+    if generation.source_sections != observed || generation.sections.keys().ne(observed.keys()) {
         return Err("settings source sections changed; do not activate generation".into());
     }
     // The encrypted manifest binds source bytes but cannot by itself prove the
@@ -348,8 +351,13 @@ fn update_selected_generation(
     file.take((MAX_TOTAL * 2 + 65537) as u64).read_to_end(&mut input)
         .map_err(|_| "cannot read selected settings generation")?;
     let mut generation = open_generation(&input)?;
-    let entry = generation.sections.get_mut(section).ok_or("section was not in the guarded snapshot")?;
-    *entry = value;
+    if section.is_empty() || section.len() > 128 { return Err("invalid settings section".into()); }
+    validate_section_name(section)?;
+    if !generation.sections.contains_key(section)
+        && (generation.sections.len() >= MAX_SECTIONS || generation.sections.keys().any(|name| name.to_lowercase() == section.to_lowercase())) {
+        return Err("duplicate or excessive settings sections".into());
+    }
+    generation.sections.insert(section.to_owned(), value);
     let candidate = seal_generation(&generation)?;
     // Reject a self-inconsistent output before any persistent modification.
     let reopened = open_generation(&candidate)?;

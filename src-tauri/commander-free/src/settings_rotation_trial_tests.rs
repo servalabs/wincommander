@@ -335,6 +335,9 @@ fn selected_generation_rejects_corruption_stale_sources_and_ambiguous_publish() 
     let old = [42; 32];
     let input = sections(&old);
     let candidate = prepare(&old, &input).unwrap();
+    let mut forged = open_generation(&candidate).unwrap();
+    forged.sections.insert("unexpected".into(), json!({"value": true}));
+    assert!(verify_source(&seal_generation(&forged).unwrap(), &old, &input).is_err());
     let path = root.path().join("selected-generation");
     assert!(select_initial_generation(&path, &candidate, &old, &input, &|_, _| Err("write failed".into())).is_err());
     assert!(!path.exists());
@@ -365,8 +368,12 @@ fn selected_generation_update_preserves_other_sections_and_fails_closed() {
     let contents = open(&updated).unwrap();
     assert_eq!(contents["settings"]["changed"], true);
     assert_eq!(contents["payments"]["token"], "second secret");
-    assert!(update_selected_generation(&path, "not-in-snapshot", json!({}), &crate::datastore_io::atomic_write).is_err());
+    assert!(update_selected_generation(&path, "SETTINGS", json!({}), &crate::datastore_io::atomic_write).is_err());
     assert_eq!(std::fs::read(&path).unwrap(), updated);
+    update_selected_generation(&path, "new-section", json!({"enabled": true}), &crate::datastore_io::atomic_write).unwrap();
+    let added = open(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(added["new-section"]["enabled"], true);
+    assert_eq!(added["payments"]["token"], "second secret");
     std::fs::write(&path, b"corrupt").unwrap();
     assert!(update_selected_generation(&path, "settings", json!({}), &crate::datastore_io::atomic_write).is_err());
     assert_eq!(std::fs::read(&path).unwrap(), b"corrupt");
