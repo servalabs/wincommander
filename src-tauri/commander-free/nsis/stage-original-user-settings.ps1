@@ -20,8 +20,16 @@ try {
         throw 'This installer is not running as the user who owns the target installation.'
     }
     $installed = Join-Path $actual 'wincommander-free.exe'
-    if (-not [IO.File]::Exists($installed)) {
-        if (-not [IO.Directory]::Exists($actual)) { return }
+    $binaryMissing = $false
+    try { [void][IO.File]::GetAttributes($installed) }
+    catch [IO.FileNotFoundException] { $binaryMissing = $true }
+    catch [IO.DirectoryNotFoundException] { $binaryMissing = $true }
+    if ($binaryMissing) {
+        $rootMissing = $false
+        try { [void][IO.File]::GetAttributes($actual) }
+        catch [IO.FileNotFoundException] { $rootMissing = $true }
+        catch [IO.DirectoryNotFoundException] { $rootMissing = $true }
+        if ($rootMissing) { return }
         $entries = [IO.Directory]::EnumerateFileSystemEntries($actual).GetEnumerator()
         try {
             if (-not $entries.MoveNext()) { return }
