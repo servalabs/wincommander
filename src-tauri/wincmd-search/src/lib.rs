@@ -11,6 +11,8 @@ pub mod backend;
 mod encrypted_index_prototype;
 #[cfg(test)]
 mod encrypted_cutover_prototype;
+#[cfg(test)]
+mod encrypted_key_prototype;
 pub mod chunk;
 pub mod crawler;
 #[cfg(windows)]
