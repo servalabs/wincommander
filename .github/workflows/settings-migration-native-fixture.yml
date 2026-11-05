@@ -130,6 +130,51 @@ jobs:
         shell: pwsh
         run: |
           $env:RUSTFLAGS = '-D warnings'
-          $output = cargo test --locked --manifest-path tools/settings-migration-ci/Cargo.toml --features experimental-settings-generation search_fence_lasts_until_parent_process_exits -- --nocapture --test-threads=1 2>&1 | Out-String
+          $output = cargo test --locked --manifest-path tools/settings-migration-ci/Cargo.toml --features experimental-settings-generation duplicated_search_fence_is_locked_by_installer_process -- --nocapture --test-threads=1 2>&1 | Out-String
           Write-Host $output
           if ($LASTEXITCODE -ne 0 -or $output -notmatch 'test result: ok\. 1 passed; 0 failed; 0 ignored') { throw 'Cross-process fence fixture did not pass.' }
+      - name: Verify NSIS byte-range ownership and crash release
+        shell: pwsh
+        run: |
+          cargo build --locked --manifest-path tools/settings-migration-ci/Cargo.toml --bin lock_probe
+          if ($LASTEXITCODE -ne 0) { throw 'Lock probe did not compile.' }
+          $nsis = Join-Path ${env:ProgramFiles(x86)} 'NSIS/makensis.exe'
+          $lock = Join-Path $env:RUNNER_TEMP 'search-fence-native-test.lock'
+          $ready = Join-Path $env:RUNNER_TEMP 'search-fence-native-test.ready'
+          $output = Join-Path $env:RUNNER_TEMP 'search-fence-native-test.exe'
+          $fixture = Join-Path $env:RUNNER_TEMP 'search-fence-native-test.nsi'
+          @"
+          Unicode true
+          Name "Search fence ownership fixture"
+          OutFile "$output"
+          SilentInstall silent
+          RequestExecutionLevel user
+          Section
+          System::Call 'kernel32::CreateFileW(w "$lock", i 0xC0000000, i 3, p 0, i 4, i 0, p 0) p .R5'
+          System::Call '*(i 0, i 0, i 0, i 0, i 0) p.r0'
+          System::Call 'kernel32::LockFileEx(p `$R5, i 3, i 0, i -1, i -1, p r0) i .r1'
+          System::Free `$0
+          StrCmp `$1 1 0 failed
+          FileOpen `$2 "$ready" w
+          FileWrite `$2 "ready"
+          FileClose `$2
+          Sleep 30000
+          failed:
+          SectionEnd
+          "@ | Set-Content -Encoding ascii -LiteralPath $fixture
+          & $nsis $fixture
+          if ($LASTEXITCODE -ne 0) { throw 'NSIS lock fixture did not compile.' }
+          $process = Start-Process -FilePath $output -ArgumentList '/S' -WindowStyle Hidden -PassThru
+          try {
+            $deadline = [Diagnostics.Stopwatch]::StartNew()
+            while (-not (Test-Path -LiteralPath $ready) -and $deadline.Elapsed.TotalSeconds -lt 20 -and -not $process.HasExited) { Start-Sleep -Milliseconds 200; $process.Refresh() }
+            if (-not (Test-Path -LiteralPath $ready)) { throw 'NSIS lock fixture did not acquire its lock.' }
+            $probe = 'tools/settings-migration-ci/target/debug/lock_probe.exe'
+            & $probe $lock
+            if ($LASTEXITCODE -ne 2) { throw 'Rust shared lock was not excluded by NSIS.' }
+          } finally {
+            if (-not $process.HasExited) { $process.Kill() }
+            $process.WaitForExit()
+          }
+          & $probe $lock
+          if ($LASTEXITCODE -ne 0) { throw 'NSIS lock survived installer process termination.' }
