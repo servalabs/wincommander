@@ -103,17 +103,16 @@ fn validate_storage_once(root: &Path) -> io::Result<()> {
 
 impl CheckedDirectory {
     #[cfg(all(test, windows))]
-    fn pin_mutation_root(&self, path: &Path) -> io::Result<Vec<std::fs::File>> {
+    pub(crate) fn pin_root_path(root: &Path) -> io::Result<Vec<std::fs::File>> {
         use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
         use windows_sys::Win32::Storage::FileSystem::{
             FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
             FILE_SHARE_READ, FILE_SHARE_WRITE,
         };
-        self.check(path, true)?;
-        if !self.root.is_absolute() {
+        if !root.is_absolute() {
             return Err(denied());
         }
-        let mut ancestors: Vec<_> = self.root.ancestors().collect();
+        let mut ancestors: Vec<_> = root.ancestors().collect();
         ancestors.reverse();
         let mut pins = Vec::with_capacity(ancestors.len());
         for ancestor in ancestors {
@@ -132,6 +131,52 @@ impl CheckedDirectory {
     }
 
     #[cfg(all(test, windows))]
+    pub(crate) fn pin_root(&self) -> io::Result<Vec<std::fs::File>> {
+        Self::pin_root_path(&self.root)
+    }
+
+    #[cfg(all(test, windows))]
+    fn pin_mutation_root(&self, path: &Path) -> io::Result<Vec<std::fs::File>> {
+        self.check(path, true)?;
+        self.pin_root()
+    }
+
+    #[cfg(all(test, windows))]
+    pub(crate) fn acquire_lock_pinned(&self, lock: &Lock) -> Result<DirectoryLock, LockError> {
+        use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_REPARSE_POINT,
+            FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE,
+            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION};
+        self.check(&lock.filepath, false).map_err(LockError::wrap_io_error)?;
+        let _pins = self.pin_root().map_err(LockError::wrap_io_error)?;
+        if self.mode != AccessMode::Writable && lock.filepath != META_LOCK.filepath {
+            return Err(LockError::wrap_io_error(denied()));
+        }
+        if self.mode == AccessMode::GuardedReader {
+            return Ok(DirectoryLock::from(Box::new(())));
+        }
+        let file = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(self.root.join(&lock.filepath)).map_err(LockError::wrap_io_error)?;
+        let meta = file.metadata().map_err(LockError::wrap_io_error)?;
+        if !meta.is_file() || meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(LockError::wrap_io_error(denied()));
+        }
+        let mut info = BY_HANDLE_FILE_INFORMATION::default();
+        // SAFETY: the file handle and output structure remain live for the call.
+        if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 || info.nNumberOfLinks != 1 {
+            return Err(LockError::wrap_io_error(denied()));
+        }
+        if lock.is_blocking { file.lock().map_err(LockError::wrap_io_error)?; }
+        else { file.try_lock().map_err(|e| match e {
+            std::fs::TryLockError::WouldBlock => LockError::LockBusy,
+            std::fs::TryLockError::Error(e) => LockError::wrap_io_error(e),
+        })?; }
+        Ok(DirectoryLock::from(Box::new(file)))
+    }
+
+    #[cfg(all(test, windows))]
     pub(crate) fn open_write_pinned(&self, path: &Path) -> Result<WritePtr, OpenWriteError> {
         let _pins = self
             .pin_mutation_root(path)
@@ -139,6 +184,62 @@ impl CheckedDirectory {
         self.check(path, true)
             .map_err(|e| OpenWriteError::wrap_io_error(e, path.into()))?;
         self.inner.open_write(path)
+    }
+
+    #[cfg(all(test, windows))]
+    pub(crate) fn atomic_write_pinned(&self, path: &Path, data: &[u8]) -> io::Result<()> {
+        self.atomic_write_pinned_with_hooks(path, data, || {}, || {})
+    }
+
+    #[cfg(all(test, windows))]
+    fn atomic_write_pinned_with_hooks(&self, path: &Path, data: &[u8], after_pin: impl FnOnce(), before_rename: impl FnOnce()) -> io::Result<()> {
+        use rand::{rngs::OsRng, RngCore};
+        use std::{io::Write, os::windows::{ffi::OsStrExt, fs::OpenOptionsExt, io::AsRawHandle}};
+        use windows_sys::Win32::Storage::FileSystem::{DELETE, FILE_ATTRIBUTE_REPARSE_POINT,
+            FILE_DISPOSITION_INFO, FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_WRITE, FILE_READ_ATTRIBUTES,
+            FILE_RENAME_INFO, FILE_RENAME_INFO_0, FILE_SHARE_READ, FileDispositionInfo, FileRenameInfo,
+            SetFileInformationByHandle};
+        use std::os::windows::fs::MetadataExt;
+        let pins = self.pin_mutation_root(path)?;
+        after_pin();
+        self.check(path, true)?;
+        let root = pins.last().ok_or_else(denied)?;
+        let mut random = [0u8; 16]; OsRng.fill_bytes(&mut random);
+        let temp_name = format!(".encrypted-index-{}.tmp", hex::encode(random));
+        let mut file = std::fs::OpenOptions::new().access_mode(FILE_GENERIC_WRITE | DELETE | FILE_READ_ATTRIBUTES)
+            .share_mode(FILE_SHARE_READ).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .create_new(true).open(self.root.join(temp_name))?;
+        let result = (|| -> io::Result<()> {
+            let meta = file.metadata()?;
+            if !meta.is_file() || meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 { return Err(denied()); }
+            file.write_all(data)?; file.sync_all()?;
+            before_rename();
+            let name: Vec<u16> = path.as_os_str().encode_wide().collect();
+            let name_bytes = name.len().checked_mul(2).ok_or_else(denied)?;
+            let offset = std::mem::offset_of!(FILE_RENAME_INFO, FileName);
+            let len = offset.checked_add(name_bytes).and_then(|n| n.checked_add(2)).ok_or_else(denied)?;
+            let mut buffer = vec![0usize; len.div_ceil(std::mem::size_of::<usize>())];
+            let rename = buffer.as_mut_ptr().cast::<FILE_RENAME_INFO>();
+            // SAFETY: allocation is aligned and covers the header, name and terminator;
+            // the source and pinned root handles remain live throughout the call.
+            unsafe {
+                (*rename).Anonymous = FILE_RENAME_INFO_0 { ReplaceIfExists: true };
+                (*rename).RootDirectory = root.as_raw_handle();
+                (*rename).FileNameLength = u32::try_from(name_bytes).map_err(|_| denied())?;
+                std::ptr::copy_nonoverlapping(name.as_ptr(), std::ptr::addr_of_mut!((*rename).FileName).cast::<u16>(), name.len());
+                if SetFileInformationByHandle(file.as_raw_handle(), FileRenameInfo, rename.cast(), u32::try_from(len).map_err(|_| denied())?) == 0 {
+                    return Err(io::Error::last_os_error());
+                }
+            }
+            Ok(())
+        })();
+        if result.is_err() {
+            let mut disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
+            // SAFETY: this cleanup applies only to our newly-created temp handle.
+            unsafe { SetFileInformationByHandle(file.as_raw_handle(), FileDispositionInfo,
+                std::ptr::from_mut(&mut disposition).cast(), std::mem::size_of::<FILE_DISPOSITION_INFO>() as u32); }
+        }
+        result
     }
 
     #[cfg(all(test, windows))]
@@ -419,6 +520,42 @@ mod tests {
         assert!(std::fs::rename(&root, dir.path().join("moved")).is_err());
         drop(pins);
         std::fs::rename(&root, dir.path().join("moved")).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn atomic_pinned_write_cannot_be_redirected_by_parent_or_leaf_swap() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("index"); std::fs::create_dir(&root).unwrap();
+        let outside = dir.path().join("outside"); std::fs::write(&outside, b"outside").unwrap();
+        let path = Path::new("manifest"); std::fs::write(root.join(path), b"old").unwrap();
+        let directory = CheckedDirectory::open(&root, AccessMode::Writable).unwrap();
+        directory.atomic_write_pinned_with_hooks(path, b"new", || {
+            assert!(std::fs::rename(&root, dir.path().join("moved")).is_err());
+        }, || {}).unwrap();
+        assert_eq!(std::fs::read(root.join(path)).unwrap(), b"new");
+        let result = directory.atomic_write_pinned_with_hooks(path, b"newer", || {}, || {
+            std::fs::remove_file(root.join(path)).unwrap();
+            std::os::windows::fs::symlink_file(&outside, root.join(path)).unwrap();
+        });
+        assert_eq!(std::fs::read(&outside).unwrap(), b"outside");
+        if result.is_ok() { assert_eq!(std::fs::read(root.join(path)).unwrap(), b"newer"); }
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION};
+        let outside_handle = std::fs::File::open(&outside).unwrap();
+        let identity = || {
+            let mut info = BY_HANDLE_FILE_INFORMATION::default();
+            assert_ne!(unsafe { GetFileInformationByHandle(outside_handle.as_raw_handle(), &mut info) }, 0);
+            (info.dwVolumeSerialNumber, info.nFileIndexHigh, info.nFileIndexLow)
+        };
+        let before = identity();
+        let result = directory.atomic_write_pinned_with_hooks(path, b"third", || {}, || {
+            std::fs::remove_file(root.join(path)).unwrap();
+            std::fs::hard_link(&outside, root.join(path)).unwrap();
+        });
+        assert_eq!(std::fs::read(&outside).unwrap(), b"outside");
+        assert_eq!(identity(), before);
+        if result.is_ok() { assert_eq!(std::fs::read(root.join(path)).unwrap(), b"third"); }
     }
 
     #[cfg(windows)]

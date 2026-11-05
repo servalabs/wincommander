@@ -287,6 +287,19 @@ mod tantivy_trial {
     struct TrialDirectory {
         inner: CheckedDirectory,
         key: [u8; 32],
+        // Experimental lifetime pin: blocks rename of all ancestors while open.
+        _root_anchor: Arc<Vec<std::fs::File>>,
+    }
+    impl TrialDirectory {
+        fn open(root: &Path, mode: AccessMode, key: [u8; 32]) -> Self {
+            Self::open_after_pin(root, mode, key, || {})
+        }
+        fn open_after_pin(root: &Path, mode: AccessMode, key: [u8; 32], after_pin: impl FnOnce()) -> Self {
+            let anchor = CheckedDirectory::pin_root_path(root).unwrap();
+            after_pin();
+            let inner = CheckedDirectory::open(root, mode).unwrap();
+            Self { inner, key, _root_anchor: Arc::new(anchor) }
+        }
     }
     impl fmt::Debug for TrialDirectory {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -527,20 +540,20 @@ mod tantivy_trial {
             // reader has the old manifest open. Preserve a permanent failure.
             #[cfg(windows)]
             for delay in [2, 4, 8, 16, 32, 64, 128] {
-                match self.inner.atomic_write(path, &encrypted) {
+                match self.inner.atomic_write_pinned(path, &encrypted) {
                     Err(e) if e.raw_os_error() == Some(5) => {
                         std::thread::sleep(std::time::Duration::from_millis(delay))
                     }
                     result => return result,
                 }
             }
-            self.inner.atomic_write(path, &encrypted)
+            self.inner.atomic_write_pinned(path, &encrypted)
         }
         fn sync_directory(&self) -> io::Result<()> {
             self.inner.sync_directory()
         }
         fn acquire_lock(&self, lock: &Lock) -> Result<DirectoryLock, LockError> {
-            self.inner.acquire_lock(lock)
+            self.inner.acquire_lock_pinned(lock)
         }
         fn watch(&self, callback: WatchCallback) -> tantivy::Result<WatchHandle> {
             self.inner.watch(callback)
@@ -557,10 +570,7 @@ mod tantivy_trial {
             Index,
         };
         let dir = tempfile::tempdir().unwrap();
-        let directory = TrialDirectory {
-            inner: CheckedDirectory::open(dir.path(), AccessMode::Writable).unwrap(),
-            key: [9; 32],
-        };
+        let directory = TrialDirectory::open(dir.path(), AccessMode::Writable, [9; 32]);
         let mut schema = Schema::builder();
         let body = schema.add_text_field("body", TEXT | STORED);
         let schema = schema.build();
@@ -692,10 +702,7 @@ mod tantivy_trial {
             Index,
         };
         let dir = tempfile::tempdir().unwrap();
-        let writer_dir = TrialDirectory {
-            inner: CheckedDirectory::open(dir.path(), AccessMode::Writable).unwrap(),
-            key: [23; 32],
-        };
+        let writer_dir = TrialDirectory::open(dir.path(), AccessMode::Writable, [23; 32]);
         let mut schema = Schema::builder();
         let body = schema.add_text_field("body", TEXT);
         let index = Index::create(writer_dir.clone(), schema.build(), Default::default()).unwrap();
@@ -704,10 +711,7 @@ mod tantivy_trial {
             .add_document(doc!(body => "sharedreadtoken"))
             .unwrap();
         writer.commit().unwrap();
-        let reader_dir = TrialDirectory {
-            inner: CheckedDirectory::open(dir.path(), AccessMode::SharedReader).unwrap(),
-            key: [23; 32],
-        };
+        let reader_dir = TrialDirectory::open(dir.path(), AccessMode::SharedReader, [23; 32]);
         assert!(reader_dir.open_write(Path::new("forbidden")).is_err());
         assert!(reader_dir
             .atomic_write(Path::new("meta.json"), b"forbidden")
@@ -731,10 +735,7 @@ mod tantivy_trial {
     #[test]
     fn bounded_atomic_manifest_rejects_large_input_without_replacing_existing() {
         let dir = tempfile::tempdir().unwrap();
-        let directory = TrialDirectory {
-            inner: CheckedDirectory::open(dir.path(), AccessMode::Writable).unwrap(),
-            key: [24; 32],
-        };
+        let directory = TrialDirectory::open(dir.path(), AccessMode::Writable, [24; 32]);
         let path = Path::new("manifest.json");
         directory.atomic_write(path, b"valid manifest").unwrap();
         assert!(directory
@@ -753,14 +754,9 @@ mod tantivy_trial {
         use std::{sync::mpsc, thread, time::Duration};
         use tantivy::directory::META_LOCK;
         let dir = tempfile::tempdir().unwrap();
-        let writer = TrialDirectory {
-            inner: CheckedDirectory::open(dir.path(), AccessMode::Writable).unwrap(),
-            key: [25; 32],
-        };
-        let reader = TrialDirectory {
-            inner: CheckedDirectory::open(dir.path(), AccessMode::SharedReader).unwrap(),
-            key: [25; 32],
-        };
+        // The other participant uses the existing production CheckedDirectory lock.
+        let writer = CheckedDirectory::open(dir.path(), AccessMode::Writable).unwrap();
+        let reader = TrialDirectory::open(dir.path(), AccessMode::SharedReader, [25; 32]);
         let held = writer.acquire_lock(&META_LOCK).unwrap();
         let (tx, rx) = mpsc::channel();
         let handle = thread::spawn(move || {
@@ -776,6 +772,35 @@ mod tantivy_trial {
     }
 
     #[test]
+    fn root_anchor_blocks_replacement_during_directory_lifetime() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("index"); std::fs::create_dir(&root).unwrap();
+        let directory = TrialDirectory::open_after_pin(&root, AccessMode::Writable, [26; 32], || {
+            assert!(std::fs::rename(&root, parent.path().join("moved")).is_err());
+        });
+        assert!(std::fs::rename(&root, parent.path().join("moved")).is_err());
+        drop(directory);
+        std::fs::rename(&root, parent.path().join("moved")).unwrap();
+    }
+
+    #[test]
+    fn pinned_lock_refuses_symlink_and_hardlink() {
+        use tantivy::directory::META_LOCK;
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("index"); std::fs::create_dir(&root).unwrap();
+        let outside = parent.path().join("outside"); std::fs::write(&outside, b"untouched").unwrap();
+        let directory = TrialDirectory::open(&root, AccessMode::Writable, [26; 32]);
+        let lock_path = root.join(&META_LOCK.filepath);
+        std::fs::hard_link(&outside, &lock_path).unwrap();
+        assert!(directory.acquire_lock(&META_LOCK).is_err());
+        assert_eq!(std::fs::read(&outside).unwrap(), b"untouched");
+        std::fs::remove_file(&lock_path).unwrap();
+        std::os::windows::fs::symlink_file(&outside, &lock_path).unwrap();
+        assert!(directory.acquire_lock(&META_LOCK).is_err());
+        assert_eq!(std::fs::read(outside).unwrap(), b"untouched");
+    }
+
+    #[test]
     fn checked_shared_reader_waits_for_writer_in_another_process() {
         use std::{
             process::Command,
@@ -786,19 +811,13 @@ mod tantivy_trial {
         const ENV: &str = "WINCOM_SEARCH_METADATA_LOCK_TEST";
         if let Some(path) = std::env::var_os(ENV) {
             let root = std::path::PathBuf::from(path);
-            let reader = TrialDirectory {
-                inner: CheckedDirectory::open(&root, AccessMode::SharedReader).unwrap(),
-                key: [31; 32],
-            };
+            let reader = TrialDirectory::open(&root, AccessMode::SharedReader, [31; 32]);
             std::fs::write(root.join("child-started"), b"ready").unwrap();
             let _lock = reader.acquire_lock(&META_LOCK).unwrap();
             return;
         }
         let dir = tempfile::tempdir().unwrap();
-        let writer = TrialDirectory {
-            inner: CheckedDirectory::open(dir.path(), AccessMode::Writable).unwrap(),
-            key: [31; 32],
-        };
+        let writer = TrialDirectory::open(dir.path(), AccessMode::Writable, [31; 32]);
         let held = writer.acquire_lock(&META_LOCK).unwrap();
         let mut child = Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "encrypted_index_prototype::tantivy_trial::checked_shared_reader_waits_for_writer_in_another_process"])
@@ -830,14 +849,8 @@ mod tantivy_trial {
     fn atomic_manifest_reads_never_observe_a_partial_replacement() {
         use std::thread;
         let dir = tempfile::tempdir().unwrap();
-        let writable = TrialDirectory {
-            inner: CheckedDirectory::open(dir.path(), AccessMode::Writable).unwrap(),
-            key: [27; 32],
-        };
-        let shared = TrialDirectory {
-            inner: CheckedDirectory::open(dir.path(), AccessMode::SharedReader).unwrap(),
-            key: [27; 32],
-        };
+        let writable = TrialDirectory::open(dir.path(), AccessMode::Writable, [27; 32]);
+        let shared = TrialDirectory::open(dir.path(), AccessMode::SharedReader, [27; 32]);
         let path = Path::new("manifest.json");
         writable.atomic_write(path, &vec![1; 64 * 1024]).unwrap();
         let writer = thread::spawn(move || {
