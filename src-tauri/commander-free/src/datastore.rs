@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+
+#[cfg(windows)]
+mod key_dependency_guard;
 // src-tauri/commander-free/src/datastore.rs
 //
 // ═══════════════════════════════════════════════════════════════════════
@@ -281,7 +284,12 @@ fn install_material() -> Result<[u8; 32], String> {
 
     // Machine-wide alongside the store (see store_dir): the AES/Argon2 salt
     // must live where the sections it decrypts live, so all accounts share one key.
-    let path = crate::paths::datastore_data_dir()?.join(MATERIAL_FILENAME);
+    let directory = crate::paths::datastore_data_dir()?;
+    install_machine_material(&directory)
+}
+
+fn install_machine_material(directory: &std::path::Path) -> Result<[u8; 32], String> {
+    let path = directory.join(MATERIAL_FILENAME);
     let raw = match read_material_file(&path)? {
         Some(raw) => raw,
         None => {
@@ -290,6 +298,8 @@ fn install_material() -> Result<[u8; 32], String> {
                 Some(raw) => raw,
                 None => {
                     creation?;
+                    #[cfg(windows)]
+                    key_dependency_guard::check_current_user(true)?;
                     let mut material = [0u8; 32];
                     OsRng.fill_bytes(&mut material);
                     let protected = dpapi_protect(&material)
@@ -450,6 +460,8 @@ fn load_or_create_user_material(
                 Some(raw) => decode_user_material(&raw, current_user_install),
                 None => {
                     creation?;
+                    #[cfg(windows)]
+                    if current_user_install { key_dependency_guard::check_current_user(false)?; }
                     create(&path, current_user_install)
                 }
             }
@@ -1326,5 +1338,49 @@ mod tests {
         // computed reference ciphertext back to the exact plaintext.
         let decrypted = cipher.decrypt(nonce, ciphertext.as_ref()).unwrap();
         assert_eq!(decrypted, plaintext);
+    }
+}
+
+#[cfg(all(test, windows))]
+mod key_creation_preflight_tests {
+    use super::*;
+
+    #[test]
+    fn known_ciphertext_blocks_replacement_and_clean_profile_initializes() {
+        const CHILD: &str = "WINCOMMANDER_PREFLIGHT_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let dir = tempfile::tempdir().unwrap();
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .arg("--exact")
+                .arg("datastore::key_creation_preflight_tests::known_ciphertext_blocks_replacement_and_clean_profile_initializes")
+                .arg("--test-threads=1")
+                .env(CHILD, dir.path())
+                .env("LOCALAPPDATA", dir.path().join("local"))
+                .status().unwrap();
+            assert!(status.success());
+            return;
+        }
+        let dir = std::path::PathBuf::from(std::env::var_os(CHILD).unwrap());
+        let local = dir.join("local");
+        let root = local.join(option_env!("WINCMD_APP_DIR").unwrap_or("WinCommander"));
+        let logs = root.join("logs");
+        let machine = dir.join("machine");
+        let user = dir.join("user");
+        fs::create_dir_all(&logs).unwrap();
+        fs::create_dir(&machine).unwrap();
+        fs::create_dir(&user).unwrap();
+        let log = logs.join("wincommander.log");
+        let encrypted = b"L2:existing ciphertext\n";
+        fs::write(&log, encrypted).unwrap();
+        assert!(install_machine_material(&machine).is_err());
+        assert!(!machine.join(MATERIAL_FILENAME).exists());
+        assert!(load_or_create_user_material(&user, true, |_, _| panic!("must not create user key")).is_err());
+        assert!(!user.join(USER_MATERIAL_FILENAME).exists());
+        assert_eq!(fs::read(&log).unwrap(), encrypted);
+        fs::write(&log, b"[2026-11-05 01:02:03] legacy plaintext\n").unwrap();
+        assert!(install_machine_material(&machine).is_ok());
+        assert!(machine.join(MATERIAL_FILENAME).exists());
+        assert_eq!(load_or_create_user_material(&user, true, |_, _| Ok([42; 32])).unwrap(), [42; 32]);
+        assert_eq!(fs::read(&log).unwrap(), b"[2026-11-05 01:02:03] legacy plaintext\n");
     }
 }

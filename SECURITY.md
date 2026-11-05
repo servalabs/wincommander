@@ -360,6 +360,10 @@ Clearing the application log removes its history; retain any history needed for
 troubleshooting before clearing it. A safe migration and visible status flow
 remain to be implemented. Do not delete key material to retry: older settings,
 logs and diagnostic data may need that same key.
+If WinCommander reports a missing settings key, retain your settings, logs,
+and backups and contact support about restoring the matching key. Data in other
+Windows profiles or on disconnected storage can also depend on that key; a
+check of the current profile cannot establish that all such data is safe.
 
 ## Local maintenance
 
