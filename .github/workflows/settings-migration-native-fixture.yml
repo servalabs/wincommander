@@ -52,3 +52,13 @@ jobs:
           $script = 'src-tauri/commander-free/nsis/stage-original-user-settings.ps1'
           & pwsh -NoProfile -NonInteractive -File $script -ExecutablePath $env:ComSpec -InstallDirectory (Join-Path $env:RUNNER_TEMP 'other-user-profile')
           if ($LASTEXITCODE -eq 0) { throw 'Another profile unexpectedly passed the installer guard.' }
+      - name: Preserve profile when installed binary is missing
+        shell: pwsh
+        run: |
+          $root = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)) 'WinCommander'
+          if (Test-Path -LiteralPath $root) { throw 'Runner profile is not empty; fixture refuses to touch it.' }
+          New-Item -ItemType Directory -Path $root | Out-Null
+          Set-Content -LiteralPath (Join-Path $root 'saved-settings-sentinel') -Value 'preserve'
+          & pwsh -NoProfile -NonInteractive -File 'src-tauri/commander-free/nsis/stage-original-user-settings.ps1' -ExecutablePath $env:ComSpec -InstallDirectory $root
+          if ($LASTEXITCODE -eq 0) { throw 'Missing installed binary was accepted.' }
+          if ((Get-Content -Raw -LiteralPath (Join-Path $root 'saved-settings-sentinel')).Trim() -ne 'preserve') { throw 'Existing profile contents changed.' }
