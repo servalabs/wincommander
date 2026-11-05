@@ -412,8 +412,12 @@ impl SearchEngine {
                         let _old_pins = CheckedDirectory::pin_root_path(&config.index_dir)?;
                         let mut names = Vec::new();
                         for entry in std::fs::read_dir(&config.index_dir)? { names.push(entry?.file_name()); }
-                        let only_empty_lock = names.len() == 1 && names[0] == std::ffi::OsStr::new(".tantivy-writer.lock")
-                            && std::fs::symlink_metadata(config.index_dir.join(".tantivy-writer.lock"))?.len() == 0;
+                        let only_empty_lock = if names.len() == 1 && names[0] == std::ffi::OsStr::new(".tantivy-writer.lock") {
+                            use std::os::windows::fs::MetadataExt;
+                            let meta = std::fs::symlink_metadata(config.index_dir.join(".tantivy-writer.lock"))?;
+                            meta.is_file() && meta.len() == 0
+                                && meta.file_attributes() & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT == 0
+                        } else { false };
                         if !names.is_empty() && !only_empty_lock && !Self::experimental_scope_only(&config.index_dir)? {
                             return Err(SearchError::Config("Legacy search data appeared during recovery.".into()));
                         }
