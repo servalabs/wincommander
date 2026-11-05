@@ -10,7 +10,6 @@
 !endif
 !endif
 !include "TextFunc.nsh"
-${TrimNewLines}
 !include "StrFunc.nsh"
 ${Using:StrFunc} StrStr
 ${Using:StrFunc} UnStrStr
