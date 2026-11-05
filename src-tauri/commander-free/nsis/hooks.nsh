@@ -9,6 +9,8 @@
 !error "Search maintenance fencing requires the gated current-user staging installer"
 !endif
 !endif
+!include "TextFunc.nsh"
+${TrimNewLines}
 !include "StrFunc.nsh"
 ${Using:StrFunc} StrStr
 ${Using:StrFunc} UnStrStr
@@ -279,8 +281,8 @@ FunctionEnd
     !insertmacro WC_STOP_OWNED_SERVICE_OR_ABORT "preinstall" ""
   !endif
   !ifdef WC_EXPERIMENTAL_SEARCH_FENCE
-    ; The child owns exclusive per-user search maintenance until this installer
-    ; exits, including any abort or crash. Readiness is received over its pipe.
+    ; The helper duplicates verified file and directory handles into this
+    ; installer. Only this process acquires and owns the exclusive lock.
     InitPluginsDir
     File /oname=$PLUGINSDIR\wincommander-search-fence.exe "${MAINBINARYSRCPATH}"
     File /oname=$PLUGINSDIR\wincommander-hold-search-maintenance.ps1 "${WC_HOLD_SEARCH_MAINTENANCE}"
@@ -289,7 +291,19 @@ FunctionEnd
     nsExec::ExecToStack /TIMEOUT=90000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-hold-search-maintenance.ps1" -ExecutablePath "$PLUGINSDIR\wincommander-search-fence.exe" -InstallerProcessId $R6'
     Pop $0
     Pop $1
-    ${If} $0 != 0
+    ${If} $0 == 0
+      ; nsExec returns a newline-terminated decimal handle owned by this process.
+      ${TrimNewLines} "$1" $R5
+      System::Call '*(i 0, i 0, i 0, i 0, i 0) p.r0'
+      ${If} $0 != 0
+        System::Call 'kernel32::LockFileEx(p $R5, i 3, i 0, i -1, i -1, p r0) i .r1'
+        System::Free $0
+        StrCpy $0 $1
+      ${EndIf}
+    ${Else}
+      StrCpy $0 0
+    ${EndIf}
+    ${If} $0 != 1
       ${If} $WCUserStageServiceRunning == 1
         Call WC_RestoreUserStageService
         ${If} $R6 != 1
