@@ -305,14 +305,14 @@ $detector = [System.Diagnostics.Process]::Start($info)
         use std::os::windows::io::{AsHandle, AsRawHandle, FromRawHandle, OwnedHandle};
         use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
         use windows_sys::Win32::System::JobObjects::{
-            AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
-            SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob,
+            JobObjectExtendedLimitInformation, SetInformationJobObject,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
         };
         use windows_sys::Win32::System::Pipes::PeekNamedPipe;
         use windows_sys::Win32::System::Threading::{
-            OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
-            PROCESS_TERMINATE,
+            OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION,
+            PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
         };
         // The job owns the complete fixture tree even if parsing or an assertion
         // fails. Assign before sending stdin, so no descendant can escape it.
@@ -385,9 +385,28 @@ exit 7
             .unwrap()
             .parse()
             .unwrap();
-        let raw = unsafe { OpenProcess(PROCESS_SYNCHRONIZE | PROCESS_TERMINATE, 0, pid) };
+        let raw = unsafe {
+            OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE | PROCESS_TERMINATE,
+                0,
+                pid,
+            )
+        };
         assert!(!raw.is_null(), "detector process must still exist");
         let process = unsafe { OwnedHandle::from_raw_handle(raw) };
+        let mut in_fixture_job = 0;
+        assert_ne!(
+            unsafe {
+                IsProcessInJob(
+                    process.as_raw_handle(),
+                    job.as_raw_handle(),
+                    &mut in_fixture_job,
+                )
+            },
+            0,
+            "could not verify detector ownership"
+        );
+        assert_ne!(in_fixture_job, 0, "detector must belong to the fixture job");
         let alive = unsafe { WaitForSingleObject(process.as_raw_handle(), 0) } == WAIT_TIMEOUT;
         let is_open = |pipe: &OwnedHandle| unsafe {
             PeekNamedPipe(
