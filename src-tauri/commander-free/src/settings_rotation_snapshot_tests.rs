@@ -108,3 +108,20 @@ fn hardlinked_source_file_is_not_accepted() {
     assert!(Snapshot::capture(dir.path()).is_err());
     assert_eq!(fs::read(&key).unwrap(), fs::read(&alias).unwrap());
 }
+
+#[test]
+fn successful_staging_does_not_fence_a_later_old_writer() {
+    let dir = tempfile::tempdir().unwrap();
+    fixture(dir.path());
+    let mut snapshot = Snapshot::capture(dir.path()).unwrap();
+    snapshot.stage_unactivated(&|_| Ok(())).unwrap();
+    let late = dir.path().join("store").join("late.dat");
+    if fs::write(&late, b"post-check old writer").is_ok() {
+        // The previous success did not authorize activation. The caller can
+        // still detect this change while it retains the snapshot guard.
+        assert!(snapshot.verify_unchanged().is_err());
+    }
+    drop(snapshot);
+    // Once the guard is dropped, old writers are no longer fenced at all.
+    assert!(fs::write(dir.path().join("store").join("settings.dat"), b"old writer resumed").is_ok());
+}
