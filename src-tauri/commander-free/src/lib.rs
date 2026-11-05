@@ -1,3 +1,7 @@
+// This prototype has not passed native validation or paired Pro rollout.
+// Refuse ordinary optimized release builds until a real pairing gate exists.
+#[cfg(all(feature = "experimental-encrypted-search", not(debug_assertions)))]
+compile_error!("experimental encrypted search is not approved for release");
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex, OnceLock,

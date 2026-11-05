@@ -37,10 +37,12 @@ pub(crate) fn revision_ns(path: &Path) -> std::io::Result<u64> {
 }
 
 // An unobservable existing path is not evidence that it was deleted.
+#[cfg(any(test, all(windows, feature = "experimental-encrypted-search")))]
 fn confirmed_missing(path: &Path) -> bool {
     matches!(std::fs::symlink_metadata(path), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
 }
 // These configuration rules are independent of filesystem accessibility.
+#[cfg(any(test, all(windows, feature = "experimental-encrypted-search")))]
 fn explicitly_out_of_scope(path: &Path, config: &crate::types::IndexConfig, exclusions: &globset::GlobSet) -> bool {
     config.roots.is_empty()
         || !crate::index::path_in_roots(&path.to_string_lossy(), &config.roots)

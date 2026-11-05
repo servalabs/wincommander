@@ -33,6 +33,7 @@ pub(super) fn with_engine<T>(
     let mut write = cell().write().map_err(|_| "Search state is unavailable.")?;
     // Another request may have initialized the same configuration while this
     // request waited for the replacement lock.
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     if let Some(current) = write.as_ref().filter(|c| c.signature == signature) {
         return operation(&current.engine);
     }
