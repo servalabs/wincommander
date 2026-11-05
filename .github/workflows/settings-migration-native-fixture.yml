@@ -62,3 +62,11 @@ jobs:
           & pwsh -NoProfile -NonInteractive -File 'src-tauri/commander-free/nsis/stage-original-user-settings.ps1' -ExecutablePath $env:ComSpec -InstallDirectory $root
           if ($LASTEXITCODE -eq 0) { throw 'Missing installed binary was accepted.' }
           if ((Get-Content -Raw -LiteralPath (Join-Path $root 'saved-settings-sentinel')).Trim() -ne 'preserve') { throw 'Existing profile contents changed.' }
+      - name: Allow fresh profile with installer diagnostic
+        shell: pwsh
+        run: |
+          $root = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)) 'WinCommander'
+          Remove-Item -LiteralPath (Join-Path $root 'saved-settings-sentinel')
+          Set-Content -LiteralPath (Join-Path $root 'installer-lifecycle.log') -Value 'fixture diagnostic'
+          & pwsh -NoProfile -NonInteractive -File 'src-tauri/commander-free/nsis/stage-original-user-settings.ps1' -ExecutablePath $env:ComSpec -InstallDirectory $root
+          if ($LASTEXITCODE -ne 0) { throw 'Fresh profile with diagnostic was rejected.' }
