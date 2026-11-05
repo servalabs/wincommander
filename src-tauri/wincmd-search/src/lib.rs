@@ -1352,6 +1352,14 @@ mod tests {
         SearchEngine::abort_search_migration(&old, &selection, tx, &fence).unwrap();
         assert_eq!(fs::read(old.join("meta.json")).unwrap(), b"original cache");
         SearchEngine::begin_search_migration(&old, &selection, tx, &fence).unwrap();
+        let backup = fs::read_dir(root.path()).unwrap().map(|e| e.unwrap().path())
+            .find(|p| p.file_name().unwrap().to_string_lossy().starts_with(".wincommander-legacy-index-backup-")).unwrap();
+        let displaced = root.path().join("displaced-original");
+        fs::rename(&backup, &displaced).unwrap();
+        fs::create_dir(&backup).unwrap();
+        assert!(SearchEngine::mark_search_replacement(&old, &selection, tx, &fence).is_err());
+        fs::remove_dir(&backup).unwrap();
+        fs::rename(&displaced, &backup).unwrap();
         SearchEngine::mark_search_replacement(&old, &selection, tx, &fence).unwrap();
         assert_eq!(SearchEngine::inspect_search_migration(&selection).unwrap(), Some((tx, true)));
         assert!(SearchEngine::abort_search_migration(&old, &selection, tx, &fence).is_err());
