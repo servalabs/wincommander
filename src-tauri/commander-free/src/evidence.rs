@@ -116,10 +116,17 @@ pub fn evidence_record(
 }
 
 fn mark_record_failure() -> Result<(), String> {
-    crate::paths::atomic_write_machine_state(
+    mark_record_failure_at(
         &crate::paths::machine_state_file(FAILURE_MARKER_FILENAME)?,
-        b"evidence-recording-incomplete-v1\n",
+        &crate::paths::atomic_write_machine_state,
     )
+}
+
+fn mark_record_failure_at(
+    path: &std::path::Path,
+    persist: &impl Fn(&std::path::Path, &[u8]) -> Result<(), String>,
+) -> Result<(), String> {
+    persist(path, b"evidence-recording-incomplete-v1\n")
 }
 
 fn record_entry(entry: EvidenceEntry) -> Result<(), String> {
@@ -249,5 +256,18 @@ mod tests {
     fn unverified_history_cannot_be_exported_as_complete_evidence() {
         assert!(ensure_export_continuity(true).is_err());
         assert!(ensure_export_continuity(false).is_ok());
+    }
+
+    #[test]
+    fn recording_failure_marker_is_written_and_reports_write_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("failure.flag");
+        assert!(mark_record_failure_at(&marker, &|_, _| Err("injected failure".into())).is_err());
+        assert!(!marker.exists());
+        mark_record_failure_at(&marker, &crate::datastore_io::atomic_write).unwrap();
+        assert_eq!(
+            std::fs::read(marker).unwrap(),
+            b"evidence-recording-incomplete-v1\n"
+        );
     }
 }
