@@ -5,6 +5,7 @@ use crate::datastore::dpapi_unprotect;
 use sha2::{Digest, Sha256};
 use std::{fs::{self, File, OpenOptions}, io::{Read, Seek, SeekFrom}, path::{Path, PathBuf}};
 use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+use std::os::windows::io::AsRawHandle;
 use windows_sys::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE};
 use zeroize::Zeroizing;
 
@@ -54,6 +55,13 @@ fn open_locked(path: &Path, limit: u64) -> Result<File, String> {
     if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 || metadata.len() > limit {
         return Err(UNAVAILABLE.into());
     }
+    use windows_sys::Win32::Storage::FileSystem::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION};
+    let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    // SAFETY: the file and output buffer stay live for this API call.
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0
+        || info.nNumberOfLinks != 1 {
+        return Err(UNAVAILABLE.into());
+    }
     Ok(file)
 }
 
@@ -71,6 +79,11 @@ fn enumerate(store: &Path) -> Result<Vec<(String, PathBuf)>, String> {
     for entry in fs::read_dir(store).map_err(|_| UNAVAILABLE)? {
         let entry = entry.map_err(|_| UNAVAILABLE)?;
         let path = entry.path();
+        // Rust's Path::extension treats `.dat` as a stem with no extension,
+        // but the existing section validator can create this empty-name file.
+        if entry.file_name().to_str().is_some_and(|name| name.eq_ignore_ascii_case(".dat")) {
+            return Err(UNAVAILABLE.into());
+        }
         if !path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("dat")) { continue; }
         let name = path.file_stem().and_then(|s| s.to_str()).ok_or(UNAVAILABLE)?.to_owned();
         if name.is_empty() || name.len() > 128 || validate_section_name(&name).is_err()
@@ -83,9 +96,20 @@ fn enumerate(store: &Path) -> Result<Vec<(String, PathBuf)>, String> {
 }
 
 impl Snapshot {
-    /// `root` must be the machine datastore's already authorized directory.
+    /// Machine-only entry point. The inherited machine-data resolver uses the
+    /// process environment; trustworthy root authorization remains required
+    /// before any production integration.
+    pub(super) fn capture_machine() -> Result<Self, String> {
+        if crate::paths::current_user_install_uses_local_datastore() {
+            return Err("machine settings rotation is unavailable for a current-user install".into());
+        }
+        let root = crate::paths::machine_data_dir().map_err(|_| UNAVAILABLE)?;
+        Self::capture(&root)
+    }
+
+    /// Test fixture / internal seam. Caller must independently authorize root.
     /// The key and every section are read once while write/delete sharing is denied.
-    pub(super) fn capture(root: &Path) -> Result<Self, String> {
+    fn capture(root: &Path) -> Result<Self, String> {
         let store = root.join("store");
         let pins = pin_directories(&store)?;
         let mut key_file = open_locked(&root.join(".install.material"), MAX_KEY)?;

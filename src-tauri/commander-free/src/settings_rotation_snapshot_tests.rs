@@ -88,3 +88,23 @@ fn failure_after_staging_does_not_authorize_cutover_or_modify_sources() {
     assert_eq!(fs::read(&section).unwrap(), original);
     assert!(staged.exists());
 }
+
+#[test]
+fn empty_name_section_is_not_silently_omitted() {
+    let dir = tempfile::tempdir().unwrap();
+    fixture(dir.path());
+    fs::write(dir.path().join("store").join(".dat"), b"legacy empty-name data").unwrap();
+    assert!(Snapshot::capture(dir.path()).is_err());
+    assert_eq!(fs::read(dir.path().join("store").join(".dat")).unwrap(), b"legacy empty-name data");
+}
+
+#[test]
+fn hardlinked_source_file_is_not_accepted() {
+    let dir = tempfile::tempdir().unwrap();
+    fixture(dir.path());
+    let key = dir.path().join(".install.material");
+    let alias = dir.path().join("key-alias");
+    fs::hard_link(&key, &alias).unwrap();
+    assert!(Snapshot::capture(dir.path()).is_err());
+    assert_eq!(fs::read(&key).unwrap(), fs::read(&alias).unwrap());
+}
