@@ -32,7 +32,7 @@ pub(super) struct Snapshot {
     sections: Vec<Section>,
 }
 
-fn pin_directories(path: &Path) -> Result<Vec<File>, String> {
+pub(super) fn pin_directories(path: &Path) -> Result<Vec<File>, String> {
     if !path.is_absolute() { return Err(UNAVAILABLE.into()); }
     let mut ancestors: Vec<_> = path.ancestors().collect();
     ancestors.reverse();
@@ -198,6 +198,10 @@ impl Snapshot {
         let mut snapshot = Self { store, _directories: pins, key_file, key_digest, material, sections };
         snapshot.verify_unchanged()?;
         Ok(snapshot)
+    }
+
+    pub(super) fn root(&self) -> Result<PathBuf, String> {
+        self.store.parent().map(Path::to_path_buf).ok_or_else(|| UNAVAILABLE.into())
     }
 
     pub(super) fn verify_unchanged(&mut self) -> Result<(), String> {

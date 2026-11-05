@@ -388,6 +388,9 @@ fn locked_selected_generation_serializes_owners_and_never_falls_back() {
     let candidate = prepare(&old, &input).unwrap();
     let path = root.path().join(".settings-generation.v1");
     select_initial_generation(&path, &candidate, &old, &input, &crate::datastore_io::publish_new).unwrap();
+    let authority = root.path().join(".settings-generation.authority.v1");
+    let pending = crate::datastore::settings_generation_authority::pending(None, &candidate, &dpapi_protect, &dpapi_unprotect).unwrap();
+    crate::datastore_io::publish_new(&authority, &pending).unwrap();
     let generation = LockedSelectedGeneration::try_open(root.path()).unwrap();
     assert!(LockedSelectedGeneration::try_open(root.path()).is_err());
     generation.write_section("settings", json!({"new_value": true})).unwrap();
@@ -397,4 +400,39 @@ fn locked_selected_generation_serializes_owners_and_never_falls_back() {
     assert!(LockedSelectedGeneration::try_open(root.path()).is_ok());
     std::fs::write(path, b"broken").unwrap();
     assert!(LockedSelectedGeneration::try_open(root.path()).is_err());
+}
+
+#[test]
+fn selected_store_recovers_real_pending_files_at_each_publish_boundary() {
+    let root = tempfile::tempdir().unwrap();
+    let old = [42; 32];
+    let input = sections(&old);
+    let original = prepare(&old, &input).unwrap();
+    let selected_path = root.path().join(".settings-generation.v1");
+    let authority_path = root.path().join(".settings-generation.authority.v1");
+    let pending_initial = crate::datastore::settings_generation_authority::pending(None, &original, &dpapi_protect, &dpapi_unprotect).unwrap();
+    crate::datastore_io::atomic_write(&authority_path, &pending_initial).unwrap();
+    assert!(LockedSelectedGeneration::try_open(root.path()).is_err());
+    crate::datastore_io::atomic_write(&selected_path, &original).unwrap();
+    assert_eq!(LockedSelectedGeneration::try_open(root.path()).unwrap().read_all().unwrap()["payments"]["token"], "second secret");
+    let next = updated_generation(&original, "settings", json!({"updated": true})).unwrap();
+    let pending = crate::datastore::settings_generation_authority::pending(Some(&original), &next, &dpapi_protect, &dpapi_unprotect).unwrap();
+    crate::datastore_io::atomic_write(&authority_path, &pending).unwrap();
+    assert!(LockedSelectedGeneration::try_open(root.path()).unwrap().read_all().unwrap()["settings"].get("private_value").is_some());
+    crate::datastore_io::atomic_write(&authority_path, &pending).unwrap();
+    crate::datastore_io::atomic_write(&selected_path, &next).unwrap();
+    assert_eq!(LockedSelectedGeneration::try_open(root.path()).unwrap().read_all().unwrap()["settings"]["updated"], true);
+}
+
+#[test]
+fn initial_generation_accepts_mixed_legacy_and_individually_wrapped_sections() {
+    let old = [42; 32];
+    let mut input = sections(&old);
+    let wrapped = crate::datastore::settings_section_envelope::seal(
+        "machine:f6-keystore", br#"{"signing_seed_hex":"abc123"}"#, dpapi_protect, dpapi_unprotect,
+    ).unwrap();
+    input.push(("f6-keystore".into(), wrapped));
+    let candidate = prepare(&old, &input).unwrap();
+    verify_source(&candidate, &old, &input).unwrap();
+    assert_eq!(open(&candidate).unwrap()["f6-keystore"]["signing_seed_hex"], "abc123");
 }

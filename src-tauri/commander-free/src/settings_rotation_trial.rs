@@ -42,6 +42,17 @@ fn valid_digest(value: &str) -> bool {
     B64.decode(value).is_ok_and(|bytes| bytes.len() == 32)
 }
 
+// The machine snapshot can contain both historic shared-key sections and
+// individually wrapped v3 sections produced by the separate envelope draft.
+fn decode_snapshot_section(old_key: &[u8; 32], name: &str, encoded: &str) -> Result<Vec<u8>, String> {
+    let encoded = encoded.trim();
+    if encoded.starts_with(super::settings_section_envelope::PREFIX) {
+        super::settings_section_envelope::open(&format!("machine:{name}"), encoded, dpapi_unprotect)
+    } else {
+        decode_section(old_key, encoded, &format!("machine:{name}"))
+    }
+}
+
 /// Snapshot input is supplied by a caller holding all source/key ownership.
 /// It may include any general datastore section, not just the UI settings.
 /// No original file is changed. A caller must establish directory and old-writer
@@ -66,7 +77,7 @@ fn prepare(old_material: &[u8; 32], sections: &[(String, String)]) -> Result<Vec
             return Err("settings snapshot too large".into());
         }
         let bytes = Zeroizing::new(
-            decode_section(&old_key, encoded.trim(), &format!("machine:{name}"))
+            decode_snapshot_section(&old_key, name, encoded)
                 .map_err(|_| "settings section cannot be authenticated")?,
         );
         let value: Value =
@@ -181,7 +192,7 @@ fn verify_source(input: &[u8], old_material: &[u8; 32], sections: &[(String, Str
     let old_key = Zeroizing::new(derive_section_key(old_material, None)?);
     for (name, encoded) in sections {
         let bytes = Zeroizing::new(
-            decode_section(&old_key, encoded.trim(), &format!("machine:{name}"))
+            decode_snapshot_section(&old_key, name, encoded)
                 .map_err(|_| "settings source section cannot be authenticated")?,
         );
         let original: Value = serde_json::from_slice(&bytes)
@@ -335,38 +346,127 @@ fn publish(
     persist(path, candidate)
 }
 
-/// Gated production seam: keeps cooperative ownership for every operation on
-/// a selected generation. No runtime route constructs this yet. Before wiring,
-/// callers must authorize and pin the root, fence old executables, and protect
-/// the selected file and its authoritative state against replacement.
+/// Unwired selected-generation store. Callers must authorize the root, fence
+/// old binaries, and provide a trusted anti-rollback anchor before integration.
 pub(super) struct LockedSelectedGeneration {
     _ownership: super::settings_generation_ownership::SettingsGenerationLock,
+    #[cfg(windows)]
+    _root_pins: Vec<std::fs::File>,
     path: PathBuf,
+    authority: PathBuf,
+}
+
+// No missing/error conflation. Windows holds a no-follow, no-write/delete
+// handle for each read; the owner also holds directory pins for its lifetime.
+fn read_generation_file(path: &Path, limit: usize) -> Result<Option<Vec<u8>>, String> {
+    use std::io::Read;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)] {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ};
+        options.share_mode(FILE_SHARE_READ).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    #[cfg(not(windows))]
+    if path.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()) { return Err("linked settings file refused".into()); }
+    let file = match options.open(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err("settings generation file unavailable".into()),
+    };
+    let metadata = file.metadata().map_err(|_| "cannot inspect settings file")?;
+    if !metadata.is_file() || metadata.len() > limit as u64 { return Err("invalid settings file".into()); }
+    #[cfg(windows)] {
+        use std::os::windows::{fs::MetadataExt, io::AsRawHandle};
+        use windows_sys::Win32::Storage::FileSystem::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_REPARSE_POINT};
+        let mut info = BY_HANDLE_FILE_INFORMATION::default();
+        // SAFETY: file handle and output structure remain valid for the call.
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+            || unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0
+            || info.nNumberOfLinks != 1 { return Err("invalid settings file".into()); }
+    }
+    let mut bytes = Vec::new();
+    file.take(limit as u64 + 1).read_to_end(&mut bytes).map_err(|_| "cannot read settings file")?;
+    if bytes.len() > limit { return Err("settings file too large".into()); }
+    Ok(Some(bytes))
 }
 
 impl LockedSelectedGeneration {
-    pub(super) fn try_open(root: &Path) -> Result<Self, String> {
+    fn acquire(root: &Path) -> Result<Self, String> {
+        #[cfg(windows)]
+        let root_pins = source_snapshot::pin_directories(root)?;
         let ownership = super::settings_generation_ownership::SettingsGenerationLock::try_acquire(root)
             .map_err(|_| "settings generation ownership unavailable")?;
-        let path = root.join(".settings-generation.v1");
-        let selected = Self { _ownership: ownership, path };
-        // Presence alone is not authorization, but the candidate must at least
-        // be readable and authenticated before this owner is returned.
-        selected.read_all()?;
+        Ok(Self { _ownership: ownership, #[cfg(windows)] _root_pins: root_pins,
+            path: root.join(".settings-generation.v1"), authority: root.join(".settings-generation.authority.v1") })
+    }
+
+    pub(super) fn try_open(root: &Path) -> Result<Self, String> {
+        let selected = Self::acquire(root)?;
+        selected.read_reconciled()?;
         Ok(selected)
     }
 
+    /// First selection from a guarded complete legacy snapshot. Legacy files
+    /// are untouched. Interrupted initialization remains visibly pending.
+    /// Root ACL authorization and old-writer exclusion remain prerequisites.
+    #[cfg(windows)]
+    pub(super) fn initialize(snapshot: &mut source_snapshot::Snapshot, candidate: &[u8]) -> Result<Self, String> {
+        let root = snapshot.root()?;
+        let selected = Self::acquire(&root)?;
+        snapshot.verify_generation(candidate)?;
+        if read_generation_file(&selected.authority, 65_536)?.is_some()
+            || read_generation_file(&selected.path, MAX_TOTAL * 2 + 65_536)?.is_some() {
+            return Err("settings generation or authority already exists".into());
+        }
+        let pending = super::settings_generation_authority::pending(None, candidate, &dpapi_protect, &dpapi_unprotect)?;
+        if !crate::datastore_io::publish_new(&selected.authority, &pending)?
+            || read_generation_file(&selected.authority, 65_536)?.as_deref() != Some(pending.as_slice()) {
+            return Err("initial settings authority publication failed".into());
+        }
+        snapshot.verify_generation(candidate)?;
+        if !crate::datastore_io::publish_new(&selected.path, candidate)?
+            || read_generation_file(&selected.path, MAX_TOTAL * 2 + 65_536)?.as_deref() != Some(candidate) {
+            return Err("initial settings generation publication failed".into());
+        }
+        snapshot.verify_generation(candidate)?;
+        selected.read_reconciled()?;
+        Ok(selected)
+    }
+
+    fn publish_authority(&self, bytes: &[u8]) -> Result<Vec<u8>, String> {
+        crate::datastore_io::atomic_write(&self.authority, bytes)?;
+        read_generation_file(&self.authority, 65_536)?.ok_or("settings authority missing after publication".into())
+    }
+
+    fn read_reconciled(&self) -> Result<Vec<u8>, String> {
+        let selected = read_generation_file(&self.path, MAX_TOTAL * 2 + 65_536)?;
+        // Never finalize authority for a corrupt or unauthenticated generation.
+        if let Some(bytes) = selected.as_ref() { open_generation(bytes)?; }
+        let authority = read_generation_file(&self.authority, 65_536)?;
+        let state = super::settings_generation_authority::recover(
+            authority.as_deref(), selected.as_deref(), &dpapi_protect, &dpapi_unprotect,
+            &|bytes| self.publish_authority(bytes),
+        )?;
+        if state != super::settings_generation_authority::Recovery::Selected {
+            return Err("settings generation has not completed selection".into());
+        }
+        selected.ok_or("selected settings generation unavailable".into())
+    }
+
     pub(super) fn read_all(&self) -> Result<BTreeMap<String, Value>, String> {
-        use std::io::Read;
-        let file = std::fs::File::open(&self.path).map_err(|_| "selected settings generation unavailable")?;
-        let mut bytes = Vec::new();
-        file.take((MAX_TOTAL * 2 + 65537) as u64).read_to_end(&mut bytes)
-            .map_err(|_| "cannot read selected settings generation")?;
-        open(&bytes)
+        open(&self.read_reconciled()?)
     }
 
     pub(super) fn write_section(&self, section: &str, value: Value) -> Result<(), String> {
-        update_selected_generation(&self.path, section, value, &crate::datastore_io::atomic_write)
+        let current = self.read_reconciled()?;
+        let candidate = updated_generation(&current, section, value)?;
+        let pending = super::settings_generation_authority::pending(Some(&current), &candidate, &dpapi_protect, &dpapi_unprotect)?;
+        if self.publish_authority(&pending)? != pending { return Err("pending settings authority readback mismatch".into()); }
+        crate::datastore_io::atomic_write(&self.path, &candidate)?;
+        let reread = self.read_reconciled()?;
+        if reread != candidate { return Err("settings generation publication readback mismatch".into()); }
+        Ok(())
     }
 }
 
@@ -380,12 +480,13 @@ fn update_selected_generation(
     value: Value,
     persist: &impl Fn(&Path, &[u8]) -> Result<(), String>,
 ) -> Result<(), String> {
-    use std::io::Read;
-    let file = std::fs::File::open(path).map_err(|_| "selected settings generation unavailable")?;
-    let mut input = Vec::new();
-    file.take((MAX_TOTAL * 2 + 65537) as u64).read_to_end(&mut input)
-        .map_err(|_| "cannot read selected settings generation")?;
-    let mut generation = open_generation(&input)?;
+    let input = read_generation_file(path, MAX_TOTAL * 2 + 65_536)?.ok_or("selected settings generation unavailable")?;
+    let candidate = updated_generation(&input, section, value)?;
+    persist(path, &candidate)
+}
+
+fn updated_generation(input: &[u8], section: &str, value: Value) -> Result<Vec<u8>, String> {
+    let mut generation = open_generation(input)?;
     if section.is_empty() || section.len() > 128 { return Err("invalid settings section".into()); }
     validate_section_name(section)?;
     if !generation.sections.contains_key(section)
@@ -394,10 +495,9 @@ fn update_selected_generation(
     }
     generation.sections.insert(section.to_owned(), value);
     let candidate = seal_generation(&generation)?;
-    // Reject a self-inconsistent output before any persistent modification.
     let reopened = open_generation(&candidate)?;
     if reopened.sections != generation.sections { return Err("settings generation readback mismatch".into()); }
-    persist(path, &candidate)
+    Ok(candidate)
 }
 
 /// Test-only single-file generation selection. The caller must hold a complete,
