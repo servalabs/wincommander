@@ -391,7 +391,10 @@ fn locked_selected_generation_serializes_owners_and_never_falls_back() {
     let authority = root.path().join(".settings-generation.authority.v1");
     let pending = crate::datastore::settings_generation_authority::pending(None, &candidate, &dpapi_protect, &dpapi_unprotect).unwrap();
     crate::datastore_io::publish_new(&authority, &pending).unwrap();
-    let generation = LockedSelectedGeneration::try_open(root.path()).unwrap();
+    assert!(LockedSelectedGeneration::try_open(root.path()).is_err());
+    // Fixture stands in for the Windows guarded snapshot verification.
+    let generation = LockedSelectedGeneration::acquire(root.path()).unwrap();
+    generation.read_reconciled(true).unwrap();
     assert!(LockedSelectedGeneration::try_open(root.path()).is_err());
     generation.write_section("settings", json!({"new_value": true})).unwrap();
     assert_eq!(generation.read_all().unwrap()["settings"]["new_value"], true);
@@ -414,7 +417,11 @@ fn selected_store_recovers_real_pending_files_at_each_publish_boundary() {
     crate::datastore_io::atomic_write(&authority_path, &pending_initial).unwrap();
     assert!(LockedSelectedGeneration::try_open(root.path()).is_err());
     crate::datastore_io::atomic_write(&selected_path, &original).unwrap();
-    assert_eq!(LockedSelectedGeneration::try_open(root.path()).unwrap().read_all().unwrap()["payments"]["token"], "second secret");
+    assert!(LockedSelectedGeneration::try_open(root.path()).is_err());
+    let owner = LockedSelectedGeneration::acquire(root.path()).unwrap();
+    owner.read_reconciled(true).unwrap(); // fixture stands in for snapshot verification
+    assert_eq!(owner.read_all().unwrap()["payments"]["token"], "second secret");
+    drop(owner);
     let next = updated_generation(&original, "settings", json!({"updated": true})).unwrap();
     let pending = crate::datastore::settings_generation_authority::pending(Some(&original), &next, &dpapi_protect, &dpapi_unprotect).unwrap();
     crate::datastore_io::atomic_write(&authority_path, &pending).unwrap();
@@ -435,4 +442,31 @@ fn initial_generation_accepts_mixed_legacy_and_individually_wrapped_sections() {
     let candidate = prepare(&old, &input).unwrap();
     verify_source(&candidate, &old, &input).unwrap();
     assert_eq!(open(&candidate).unwrap()["f6-keystore"]["signing_seed_hex"], "abc123");
+}
+
+#[test]
+fn current_user_generation_preserves_mixed_sections_and_rejects_machine_scope() {
+    let old = [42; 32];
+    let mut input = sections(&old);
+    let wrapped = crate::datastore::settings_section_envelope::seal(
+        "user-install:f6-keystore", br#"{"signing_seed_hex":"userseed"}"#, user_dpapi_protect, user_dpapi_unprotect,
+    ).unwrap();
+    input.push(("f6-keystore".into(), wrapped));
+    let candidate = prepare_for(StoreScope::CurrentUser, &old, &input).unwrap();
+    verify_source_for(StoreScope::CurrentUser, &candidate, &old, &input).unwrap();
+    assert!(verify_source_for(StoreScope::Machine, &candidate, &old, &input).is_err());
+    assert_eq!(open(&candidate).unwrap()["f6-keystore"]["signing_seed_hex"], "userseed");
+    let root = tempfile::tempdir().unwrap();
+    let selected = root.path().join(".settings-generation.v1");
+    let authority = root.path().join(".settings-generation.authority.v1");
+    std::fs::write(&selected, &candidate).unwrap();
+    let pending = crate::datastore::settings_generation_authority::pending(None, &candidate, &user_dpapi_protect, &user_dpapi_unprotect).unwrap();
+    std::fs::write(&authority, pending).unwrap();
+    assert!(LockedSelectedGeneration::try_open_for(root.path(), StoreScope::Machine).is_err());
+    let user = LockedSelectedGeneration::acquire_for(root.path(), StoreScope::CurrentUser).unwrap();
+    user.read_reconciled(true).unwrap(); // fixture stands in for guarded source verification
+    user.write_section("settings", json!({"user": true})).unwrap();
+    drop(user);
+    assert_eq!(LockedSelectedGeneration::try_open_for(root.path(), StoreScope::CurrentUser).unwrap().read_all().unwrap()["settings"]["user"], true);
+    assert!(LockedSelectedGeneration::try_open_for(root.path(), StoreScope::Machine).is_err());
 }

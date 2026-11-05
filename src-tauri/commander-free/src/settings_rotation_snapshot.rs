@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Test-only source snapshot. This does not provide a production cutover.
-use super::{prepare, recover_stage, stage_new_with_hook, validate_section_name, verify_source, StagedFile, MAX_SECTIONS, MAX_TOTAL};
+use super::{prepare_for, recover_stage, stage_new_with_hook, validate_section_name, verify_source_for, StoreScope, StagedFile, MAX_SECTIONS, MAX_TOTAL};
 use crate::datastore::dpapi_unprotect;
 use sha2::{Digest, Sha256};
 use std::{fs::{self, File, OpenOptions}, io::{Read, Seek, SeekFrom}, path::{Path, PathBuf}};
@@ -25,6 +25,7 @@ struct Section {
 /// cannot create a new file or write after this guard is released.
 pub(super) struct Snapshot {
     store: PathBuf,
+    scope: StoreScope,
     _directories: Vec<File>,
     key_file: File,
     key_digest: [u8; 32],
@@ -53,10 +54,12 @@ pub(super) fn pin_directories(path: &Path) -> Result<Vec<File>, String> {
 // Both directory trees stay pinned by the returned handles. This detects a
 // disagreement between the known-folder root and the legacy live resolver;
 // it does not authorize ACLs or prevent an old process using another path.
-fn pin_matching_machine_roots(trusted: &Path) -> Result<Vec<File>, String> {
+fn pin_matching_roots(trusted: &Path, scope: StoreScope) -> Result<Vec<File>, String> {
     use windows_sys::Win32::Storage::FileSystem::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION};
-    let live_base = std::env::var("ProgramData").or_else(|_| std::env::var("ALLUSERSPROFILE"))
-        .map_err(|_| UNAVAILABLE)?;
+    let live_base = match scope {
+        StoreScope::Machine => std::env::var("ProgramData").or_else(|_| std::env::var("ALLUSERSPROFILE")),
+        StoreScope::CurrentUser => std::env::var("LOCALAPPDATA"),
+    }.map_err(|_| UNAVAILABLE)?;
     let live = PathBuf::from(live_base).join(crate::paths::APP_DIR_NAME);
     let mut trusted_pins = pin_directories(trusted)?;
     let live_pins = pin_directories(&live)?;
@@ -125,9 +128,9 @@ fn enumerate(store: &Path) -> Result<Vec<(String, PathBuf)>, String> {
 
 // Resolve the machine root independently of process environment variables. This
 // does not establish directory ACL ownership or authorize activation.
-fn known_machine_root() -> Result<PathBuf, String> {
+fn known_root(scope: StoreScope) -> Result<PathBuf, String> {
     use std::os::windows::ffi::OsStringExt;
-    use windows_sys::Win32::{System::Com::CoTaskMemFree, UI::Shell::{FOLDERID_ProgramData, SHGetKnownFolderPath}};
+    use windows_sys::Win32::{System::Com::CoTaskMemFree, UI::Shell::{FOLDERID_LocalAppData, FOLDERID_ProgramData, SHGetKnownFolderPath}};
     let app = Path::new(crate::paths::APP_DIR_NAME);
     let mut components = app.components();
     if !matches!(components.next(), Some(std::path::Component::Normal(_))) || components.next().is_some() {
@@ -135,7 +138,8 @@ fn known_machine_root() -> Result<PathBuf, String> {
     }
     let mut raw = std::ptr::null_mut();
     // SAFETY: SHGetKnownFolderPath initializes an allocated null-terminated path.
-    let result = unsafe { SHGetKnownFolderPath(&FOLDERID_ProgramData, 0, std::ptr::null_mut(), &mut raw) };
+    let folder = match scope { StoreScope::Machine => &FOLDERID_ProgramData, StoreScope::CurrentUser => &FOLDERID_LocalAppData };
+    let result = unsafe { SHGetKnownFolderPath(folder, 0, std::ptr::null_mut(), &mut raw) };
     if result < 0 || raw.is_null() {
         if !raw.is_null() { unsafe { CoTaskMemFree(raw.cast()) }; }
         return Err(UNAVAILABLE.into());
@@ -164,23 +168,41 @@ impl Snapshot {
         if crate::paths::current_user_install_uses_local_datastore() {
             return Err("machine settings rotation is unavailable for a current-user install".into());
         }
-        let root = known_machine_root()?;
-        let root_pins = pin_matching_machine_roots(&root)?;
+        let root = known_root(StoreScope::Machine)?;
+        let root_pins = pin_matching_roots(&root, StoreScope::Machine)?;
         let mut snapshot = Self::capture(&root)?;
+        snapshot._directories.extend(root_pins);
+        Ok(snapshot)
+    }
+
+    /// Current-user install only; never falls back to a machine-store root.
+    /// ACL authorization and reliable noninteractive DPAPI remain open.
+    pub(super) fn capture_user() -> Result<Self, String> {
+        if !crate::paths::current_user_install_uses_local_datastore() {
+            return Err("current-user settings rotation is unavailable for this install".into());
+        }
+        let root = known_root(StoreScope::CurrentUser)?;
+        let root_pins = pin_matching_roots(&root, StoreScope::CurrentUser)?;
+        let mut snapshot = Self::capture_for(&root, StoreScope::CurrentUser)?;
         snapshot._directories.extend(root_pins);
         Ok(snapshot)
     }
 
     /// Test fixture / internal seam. Caller must independently authorize root.
     /// The key and every section are read once while write/delete sharing is denied.
-    fn capture(root: &Path) -> Result<Self, String> {
+    fn capture(root: &Path) -> Result<Self, String> { Self::capture_for(root, StoreScope::Machine) }
+    fn capture_for(root: &Path, scope: StoreScope) -> Result<Self, String> {
         let store = root.join("store");
         let pins = pin_directories(&store)?;
-        let mut key_file = open_locked(&root.join(".install.material"), MAX_KEY)?;
+        let key_name = match scope { StoreScope::Machine => ".install.material", StoreScope::CurrentUser => ".user-store.material" };
+        let mut key_file = open_locked(&root.join(key_name), MAX_KEY)?;
         let raw = Zeroizing::new(read_locked(&mut key_file, MAX_KEY)?);
         let key_digest = Sha256::digest(&raw[..]).into();
-        let plain = if raw.len() == 32 { Zeroizing::new(raw.to_vec()) }
-            else { Zeroizing::new(dpapi_unprotect(&raw).map_err(|_| UNAVAILABLE)?) };
+        let plain = match scope {
+            StoreScope::Machine if raw.len() == 32 => Zeroizing::new(raw.to_vec()),
+            StoreScope::Machine => Zeroizing::new(dpapi_unprotect(&raw).map_err(|_| UNAVAILABLE)?),
+            StoreScope::CurrentUser => Zeroizing::new(crate::datastore::unprotect_user_store_material(&raw, true).map_err(|_| UNAVAILABLE)?),
+        };
         let mut material = Zeroizing::new([0u8; 32]);
         if plain.len() != material.len() { return Err(UNAVAILABLE.into()); }
         material.copy_from_slice(&plain);
@@ -195,11 +217,12 @@ impl Snapshot {
             let encoded = String::from_utf8(bytes).map_err(|_| UNAVAILABLE)?;
             sections.push(Section { name, file, digest, encoded });
         }
-        let mut snapshot = Self { store, _directories: pins, key_file, key_digest, material, sections };
+        let mut snapshot = Self { store, scope, _directories: pins, key_file, key_digest, material, sections };
         snapshot.verify_unchanged()?;
         Ok(snapshot)
     }
 
+    pub(super) fn scope(&self) -> StoreScope { self.scope }
     pub(super) fn root(&self) -> Result<PathBuf, String> {
         self.store.parent().map(Path::to_path_buf).ok_or_else(|| UNAVAILABLE.into())
     }
@@ -227,7 +250,7 @@ impl Snapshot {
     pub(super) fn prepare(&mut self) -> Result<Vec<u8>, String> {
         self.verify_unchanged()?;
         let sections: Vec<_> = self.sections.iter().map(|s| (s.name.clone(), s.encoded.clone())).collect();
-        let output = prepare(&self.material, &sections)?;
+        let output = prepare_for(self.scope, &self.material, &sections)?;
         self.verify_unchanged()?;
         Ok(output)
     }
@@ -237,7 +260,7 @@ impl Snapshot {
     pub(super) fn verify_generation(&mut self, generation: &[u8]) -> Result<(), String> {
         self.verify_unchanged()?;
         let sections: Vec<_> = self.sections.iter().map(|s| (s.name.clone(), s.encoded.clone())).collect();
-        verify_source(generation, &self.material, &sections)?;
+        verify_source_for(self.scope, generation, &self.material, &sections)?;
         self.verify_unchanged()
     }
 
@@ -251,6 +274,7 @@ impl Snapshot {
     /// Inspect a prior stage after restart against the complete current source.
     /// A mismatch or partial write is left untouched for manual investigation.
     pub(super) fn recover_unactivated(&mut self) -> Result<GuardedStage<'_>, String> {
+        if self.scope != StoreScope::Machine { return Err("user staged recovery is not available".into()); }
         self.verify_unchanged()?;
         let sections: Vec<_> = self.sections.iter().map(|s| (s.name.clone(), s.encoded.clone())).collect();
         let stage_path = self.store.parent().ok_or(UNAVAILABLE)?.join(STAGED_NAME);
@@ -263,6 +287,7 @@ impl Snapshot {
         &mut self,
         after_write: &impl Fn(&Path, &mut File) -> Result<(), String>,
     ) -> Result<GuardedStage<'_>, String> {
+        if self.scope != StoreScope::Machine { return Err("user staging is not available".into()); }
         let output = self.prepare()?;
         self.verify_generation(&output)?;
         let sections: Vec<_> = self.sections.iter().map(|s| (s.name.clone(), s.encoded.clone())).collect();

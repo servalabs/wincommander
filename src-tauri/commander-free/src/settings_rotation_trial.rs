@@ -3,7 +3,7 @@
 //! Existing shared installation material remains unchanged for logs and Pro.
 use super::{
     decode_section, derive_section_key, dpapi_protect, dpapi_unprotect, encode_section,
-    validate_section_name,
+    validate_section_name, user_dpapi_protect, user_dpapi_unprotect,
 };
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use rand::{rngs::OsRng, RngCore};
@@ -26,9 +26,24 @@ struct Bundle {
     ciphertext: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) enum StoreScope { Machine, CurrentUser }
+impl StoreScope {
+    fn protect(self, bytes: &[u8]) -> Result<Vec<u8>, String> {
+        match self { Self::Machine => dpapi_protect(bytes), Self::CurrentUser => user_dpapi_protect(bytes) }
+    }
+    fn unprotect(self, bytes: &[u8]) -> Result<Vec<u8>, String> {
+        match self { Self::Machine => dpapi_unprotect(bytes), Self::CurrentUser => user_dpapi_unprotect(bytes) }
+    }
+    fn section_scope(self, name: &str) -> String {
+        format!("{}:{name}", match self { Self::Machine => "machine", Self::CurrentUser => "user-install" })
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Generation {
+    scope: StoreScope,
     sections: BTreeMap<String, Value>,
     source_sections: BTreeMap<String, String>,
     source_key_digest: String,
@@ -44,10 +59,10 @@ fn valid_digest(value: &str) -> bool {
 
 // The machine snapshot can contain both historic shared-key sections and
 // individually wrapped v3 sections produced by the separate envelope draft.
-fn decode_snapshot_section(old_key: &[u8; 32], name: &str, encoded: &str) -> Result<Vec<u8>, String> {
+fn decode_snapshot_section(scope: StoreScope, old_key: &[u8; 32], name: &str, encoded: &str) -> Result<Vec<u8>, String> {
     let encoded = encoded.trim();
     if encoded.starts_with(super::settings_section_envelope::PREFIX) {
-        super::settings_section_envelope::open(&format!("machine:{name}"), encoded, dpapi_unprotect)
+        super::settings_section_envelope::open(&scope.section_scope(name), encoded, |bytes| scope.unprotect(bytes))
     } else {
         decode_section(old_key, encoded, &format!("machine:{name}"))
     }
@@ -58,6 +73,9 @@ fn decode_snapshot_section(old_key: &[u8; 32], name: &str, encoded: &str) -> Res
 /// No original file is changed. A caller must establish directory and old-writer
 /// fencing and use a separately authenticated cutover decision before use.
 fn prepare(old_material: &[u8; 32], sections: &[(String, String)]) -> Result<Vec<u8>, String> {
+    prepare_for(StoreScope::Machine, old_material, sections)
+}
+fn prepare_for(scope: StoreScope, old_material: &[u8; 32], sections: &[(String, String)]) -> Result<Vec<u8>, String> {
     if sections.len() > MAX_SECTIONS {
         return Err("too many settings sections".into());
     }
@@ -77,7 +95,7 @@ fn prepare(old_material: &[u8; 32], sections: &[(String, String)]) -> Result<Vec
             return Err("settings snapshot too large".into());
         }
         let bytes = Zeroizing::new(
-            decode_snapshot_section(&old_key, name, encoded)
+            decode_snapshot_section(scope, &old_key, name, encoded)
                 .map_err(|_| "settings section cannot be authenticated")?,
         );
         let value: Value =
@@ -88,6 +106,7 @@ fn prepare(old_material: &[u8; 32], sections: &[(String, String)]) -> Result<Vec
         source_sections.insert(name.clone(), source_digest(encoded.as_bytes()));
     }
     let generation = Generation {
+        scope,
         sections: values,
         source_sections,
         source_key_digest: source_digest(old_material),
@@ -105,7 +124,7 @@ fn seal_generation(generation: &Generation) -> Result<Vec<u8>, String> {
     }
     let mut material = Zeroizing::new([0u8; 32]);
     OsRng.fill_bytes(material.as_mut());
-    let protected = Zeroizing::new(dpapi_protect(material.as_ref())?);
+    let protected = Zeroizing::new(generation.scope.protect(material.as_ref())?);
     let key = Zeroizing::new(derive_section_key(&material, None)?);
     let ciphertext = encode_section(&key, &plain, SCOPE)?;
     let bundle = Bundle {
@@ -174,7 +193,11 @@ fn open(input: &[u8]) -> Result<BTreeMap<String, Value>, String> {
 /// this generation. Matching is not an old-writer fence: ownership must be
 /// held through activation, and a trusted anti-rollback policy is still needed.
 fn verify_source(input: &[u8], old_material: &[u8; 32], sections: &[(String, String)]) -> Result<(), String> {
+    verify_source_for(StoreScope::Machine, input, old_material, sections)
+}
+fn verify_source_for(scope: StoreScope, input: &[u8], old_material: &[u8; 32], sections: &[(String, String)]) -> Result<(), String> {
     let generation = open_generation(input)?;
+    if generation.scope != scope { return Err("settings generation scope mismatch".into()); }
     if generation.source_key_digest != source_digest(old_material) {
         return Err("settings source key changed; do not activate generation".into());
     }
@@ -192,7 +215,7 @@ fn verify_source(input: &[u8], old_material: &[u8; 32], sections: &[(String, Str
     let old_key = Zeroizing::new(derive_section_key(old_material, None)?);
     for (name, encoded) in sections {
         let bytes = Zeroizing::new(
-            decode_snapshot_section(&old_key, name, encoded)
+            decode_snapshot_section(scope, &old_key, name, encoded)
                 .map_err(|_| "settings source section cannot be authenticated")?,
         );
         let original: Value = serde_json::from_slice(&bytes)
@@ -354,6 +377,7 @@ pub(super) struct LockedSelectedGeneration {
     _root_pins: Vec<std::fs::File>,
     path: PathBuf,
     authority: PathBuf,
+    scope: StoreScope,
 }
 
 // No missing/error conflation. Windows holds a no-follow, no-write/delete
@@ -392,18 +416,20 @@ fn read_generation_file(path: &Path, limit: usize) -> Result<Option<Vec<u8>>, St
 }
 
 impl LockedSelectedGeneration {
-    fn acquire(root: &Path) -> Result<Self, String> {
+    fn acquire(root: &Path) -> Result<Self, String> { Self::acquire_for(root, StoreScope::Machine) }
+    fn acquire_for(root: &Path, scope: StoreScope) -> Result<Self, String> {
         #[cfg(windows)]
         let root_pins = source_snapshot::pin_directories(root)?;
         let ownership = super::settings_generation_ownership::SettingsGenerationLock::try_acquire(root)
             .map_err(|_| "settings generation ownership unavailable")?;
         Ok(Self { _ownership: ownership, #[cfg(windows)] _root_pins: root_pins,
-            path: root.join(".settings-generation.v1"), authority: root.join(".settings-generation.authority.v1") })
+            path: root.join(".settings-generation.v1"), authority: root.join(".settings-generation.authority.v1"), scope })
     }
 
-    pub(super) fn try_open(root: &Path) -> Result<Self, String> {
-        let selected = Self::acquire(root)?;
-        selected.read_reconciled()?;
+    pub(super) fn try_open(root: &Path) -> Result<Self, String> { Self::try_open_for(root, StoreScope::Machine) }
+    pub(super) fn try_open_for(root: &Path, scope: StoreScope) -> Result<Self, String> {
+        let selected = Self::acquire_for(root, scope)?;
+        selected.read_reconciled(false)?;
         Ok(selected)
     }
 
@@ -413,13 +439,13 @@ impl LockedSelectedGeneration {
     #[cfg(windows)]
     pub(super) fn initialize(snapshot: &mut source_snapshot::Snapshot, candidate: &[u8]) -> Result<Self, String> {
         let root = snapshot.root()?;
-        let selected = Self::acquire(&root)?;
+        let selected = Self::acquire_for(&root, snapshot.scope())?;
         snapshot.verify_generation(candidate)?;
         if read_generation_file(&selected.authority, 65_536)?.is_some()
             || read_generation_file(&selected.path, MAX_TOTAL * 2 + 65_536)?.is_some() {
             return Err("settings generation or authority already exists".into());
         }
-        let pending = super::settings_generation_authority::pending(None, candidate, &dpapi_protect, &dpapi_unprotect)?;
+        let pending = super::settings_generation_authority::pending(None, candidate, &|bytes| selected.scope.protect(bytes), &|bytes| selected.scope.unprotect(bytes))?;
         if !crate::datastore_io::publish_new(&selected.authority, &pending)?
             || read_generation_file(&selected.authority, 65_536)?.as_deref() != Some(pending.as_slice()) {
             return Err("initial settings authority publication failed".into());
@@ -430,7 +456,18 @@ impl LockedSelectedGeneration {
             return Err("initial settings generation publication failed".into());
         }
         snapshot.verify_generation(candidate)?;
-        selected.read_reconciled()?;
+        selected.read_reconciled(true)?;
+        Ok(selected)
+    }
+
+    /// Recover initial selection only after checking the current guarded source.
+    #[cfg(windows)]
+    pub(super) fn recover_initial(snapshot: &mut source_snapshot::Snapshot) -> Result<Self, String> {
+        let selected = Self::acquire_for(&snapshot.root()?, snapshot.scope())?;
+        let candidate = read_generation_file(&selected.path, MAX_TOTAL * 2 + 65_536)?
+            .ok_or("initial selected generation unavailable")?;
+        snapshot.verify_generation(&candidate)?;
+        selected.read_reconciled(true)?;
         Ok(selected)
     }
 
@@ -439,13 +476,15 @@ impl LockedSelectedGeneration {
         read_generation_file(&self.authority, 65_536)?.ok_or("settings authority missing after publication".into())
     }
 
-    fn read_reconciled(&self) -> Result<Vec<u8>, String> {
+    fn read_reconciled(&self, initial_snapshot_verified: bool) -> Result<Vec<u8>, String> {
         let selected = read_generation_file(&self.path, MAX_TOTAL * 2 + 65_536)?;
         // Never finalize authority for a corrupt or unauthenticated generation.
-        if let Some(bytes) = selected.as_ref() { open_generation(bytes)?; }
+        if let Some(bytes) = selected.as_ref() {
+            if open_generation(bytes)?.scope != self.scope { return Err("settings generation scope mismatch".into()); }
+        }
         let authority = read_generation_file(&self.authority, 65_536)?;
         let state = super::settings_generation_authority::recover(
-            authority.as_deref(), selected.as_deref(), &dpapi_protect, &dpapi_unprotect,
+            authority.as_deref(), selected.as_deref(), initial_snapshot_verified, &|bytes| self.scope.protect(bytes), &|bytes| self.scope.unprotect(bytes),
             &|bytes| self.publish_authority(bytes),
         )?;
         if state != super::settings_generation_authority::Recovery::Selected {
@@ -455,16 +494,16 @@ impl LockedSelectedGeneration {
     }
 
     pub(super) fn read_all(&self) -> Result<BTreeMap<String, Value>, String> {
-        open(&self.read_reconciled()?)
+        open(&self.read_reconciled(false)?)
     }
 
     pub(super) fn write_section(&self, section: &str, value: Value) -> Result<(), String> {
-        let current = self.read_reconciled()?;
+        let current = self.read_reconciled(false)?;
         let candidate = updated_generation(&current, section, value)?;
-        let pending = super::settings_generation_authority::pending(Some(&current), &candidate, &dpapi_protect, &dpapi_unprotect)?;
+        let pending = super::settings_generation_authority::pending(Some(&current), &candidate, &|bytes| self.scope.protect(bytes), &|bytes| self.scope.unprotect(bytes))?;
         if self.publish_authority(&pending)? != pending { return Err("pending settings authority readback mismatch".into()); }
         crate::datastore_io::atomic_write(&self.path, &candidate)?;
-        let reread = self.read_reconciled()?;
+        let reread = self.read_reconciled(false)?;
         if reread != candidate { return Err("settings generation publication readback mismatch".into()); }
         Ok(())
     }
