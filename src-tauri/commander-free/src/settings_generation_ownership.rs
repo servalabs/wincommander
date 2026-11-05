@@ -8,10 +8,14 @@ use std::{fs::{File, OpenOptions}, io, path::Path};
 pub(super) struct SettingsGenerationLock { _file: File }
 
 impl SettingsGenerationLock {
-    pub(super) fn try_acquire(root: &Path) -> io::Result<Self> {
+    pub(super) fn try_acquire(root: &Path) -> io::Result<Self> { Self::try_acquire_mode(root, false) }
+    pub(super) fn try_acquire_shared(root: &Path) -> io::Result<Self> { Self::try_acquire_mode(root, true) }
+    fn try_acquire_mode(root: &Path, shared: bool) -> io::Result<Self> {
         let path = root.join(".settings-generation.lock");
         let mut options = OpenOptions::new();
-        options.read(true).write(true).create(true).truncate(false);
+        // Lock file must be pre-provisioned with the intended cross-user ACL.
+        // Readers only request read access; neither path creates or repairs it.
+        options.read(true).write(!shared);
         #[cfg(windows)]
         {
             use std::os::windows::fs::OpenOptionsExt;
@@ -38,7 +42,8 @@ impl SettingsGenerationLock {
                 return Err(io::Error::other("invalid settings generation lock"));
             }
         }
-        file.try_lock().map_err(|e| io::Error::other(format!("settings generation is busy: {e}")))?;
+        let result = if shared { file.try_lock_shared() } else { file.try_lock() };
+        result.map_err(|e| io::Error::other(format!("settings generation is busy: {e}")))?;
         Ok(Self { _file: file })
     }
 }
@@ -46,13 +51,37 @@ impl SettingsGenerationLock {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Another test's short-lived subprocess may inherit open lock descriptors
+    // during process launch, so serialize the parent-side fixture tests.
+    static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
     #[test]
     fn guard_excludes_other_owners_and_releases_on_drop() {
+        let _fixture = TEST_MUTEX.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".settings-generation.lock"), b"").unwrap();
         let guard = SettingsGenerationLock::try_acquire(dir.path()).unwrap();
         assert!(SettingsGenerationLock::try_acquire(dir.path()).is_err());
         drop(guard);
         SettingsGenerationLock::try_acquire(dir.path()).unwrap();
+    }
+    #[test]
+    fn shared_readers_coexist_and_exclude_writer() {
+        let _fixture = TEST_MUTEX.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        assert!(SettingsGenerationLock::try_acquire_shared(dir.path()).is_err());
+        assert!(SettingsGenerationLock::try_acquire(dir.path()).is_err());
+        assert!(!dir.path().join(".settings-generation.lock").exists());
+        std::fs::write(dir.path().join(".settings-generation.lock"), b"").unwrap();
+        let first = SettingsGenerationLock::try_acquire_shared(dir.path()).unwrap();
+        let second = SettingsGenerationLock::try_acquire_shared(dir.path()).unwrap();
+        assert!(SettingsGenerationLock::try_acquire(dir.path()).is_err());
+        drop(first);
+        assert!(SettingsGenerationLock::try_acquire(dir.path()).is_err());
+        drop(second);
+        let writer = SettingsGenerationLock::try_acquire(dir.path()).unwrap();
+        assert!(SettingsGenerationLock::try_acquire_shared(dir.path()).is_err());
+        drop(writer);
+        assert!(SettingsGenerationLock::try_acquire_shared(dir.path()).is_ok());
     }
     #[test]
     fn lock_child_probe() {
@@ -62,7 +91,9 @@ mod tests {
     }
     #[test]
     fn guard_excludes_a_separate_process() {
+        let _fixture = TEST_MUTEX.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".settings-generation.lock"), b"").unwrap();
         let guard = SettingsGenerationLock::try_acquire(dir.path()).unwrap();
         let run_child = |available: bool| {
             let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
@@ -78,7 +109,9 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn held_guard_prevents_lock_file_replacement() {
+        let _fixture = TEST_MUTEX.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".settings-generation.lock"), b"").unwrap();
         let guard = SettingsGenerationLock::try_acquire(dir.path()).unwrap();
         assert!(std::fs::remove_file(dir.path().join(".settings-generation.lock")).is_err());
         drop(guard);

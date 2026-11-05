@@ -382,6 +382,7 @@ fn selected_generation_update_preserves_other_sections_and_fails_closed() {
 #[test]
 fn locked_selected_generation_serializes_owners_and_never_falls_back() {
     let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join(".settings-generation.lock"), b"").unwrap();
     assert!(LockedSelectedGeneration::try_open(root.path()).is_err());
     let old = [42; 32];
     let input = sections(&old);
@@ -408,6 +409,7 @@ fn locked_selected_generation_serializes_owners_and_never_falls_back() {
 #[test]
 fn selected_store_recovers_real_pending_files_at_each_publish_boundary() {
     let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join(".settings-generation.lock"), b"").unwrap();
     let old = [42; 32];
     let input = sections(&old);
     let original = prepare(&old, &input).unwrap();
@@ -457,6 +459,7 @@ fn current_user_generation_preserves_mixed_sections_and_rejects_machine_scope() 
     assert!(verify_source_for(StoreScope::Machine, &candidate, &old, &input).is_err());
     assert_eq!(open(&candidate).unwrap()["f6-keystore"]["signing_seed_hex"], "userseed");
     let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join(".settings-generation.lock"), b"").unwrap();
     let selected = root.path().join(".settings-generation.v1");
     let authority = root.path().join(".settings-generation.authority.v1");
     std::fs::write(&selected, &candidate).unwrap();
@@ -469,4 +472,29 @@ fn current_user_generation_preserves_mixed_sections_and_rejects_machine_scope() 
     drop(user);
     assert_eq!(LockedSelectedGeneration::try_open_for(root.path(), StoreScope::CurrentUser).unwrap().read_all().unwrap()["settings"]["user"], true);
     assert!(LockedSelectedGeneration::try_open_for(root.path(), StoreScope::Machine).is_err());
+}
+
+#[test]
+fn shared_readers_never_repair_pending_authority_and_exclude_writers() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join(".settings-generation.lock"), b"").unwrap();
+    let old = [42; 32];
+    let input = sections(&old);
+    let candidate = prepare(&old, &input).unwrap();
+    let selected_path = root.path().join(".settings-generation.v1");
+    let authority_path = root.path().join(".settings-generation.authority.v1");
+    std::fs::write(&selected_path, &candidate).unwrap();
+    let pending = crate::datastore::settings_generation_authority::pending(None, &candidate, &dpapi_protect, &dpapi_unprotect).unwrap();
+    std::fs::write(&authority_path, &pending).unwrap();
+    assert!(ReadOnlySelectedGeneration::try_open(root.path(), StoreScope::Machine).is_err());
+    assert_eq!(std::fs::read(&authority_path).unwrap(), pending);
+    let repair = LockedSelectedGeneration::acquire(root.path()).unwrap();
+    repair.read_reconciled(true).unwrap(); // fixture stands in for guarded source verification
+    drop(repair);
+    let first = ReadOnlySelectedGeneration::try_open(root.path(), StoreScope::Machine).unwrap();
+    let second = ReadOnlySelectedGeneration::try_open(root.path(), StoreScope::Machine).unwrap();
+    assert_eq!(first.read_all().unwrap()["payments"]["token"], "second secret");
+    assert!(LockedSelectedGeneration::try_open(root.path()).is_err());
+    drop(first); drop(second);
+    assert!(LockedSelectedGeneration::try_open(root.path()).is_ok());
 }
