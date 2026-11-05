@@ -166,6 +166,7 @@ fn write_renewal_with_gate(
         serde_json::from_str(&candidate.payload).map_err(|_| "license renewal is invalid")?;
     if old.license_id != new.license_id
         || old.device_hash != new.device_hash
+        || old.activation_generation != new.activation_generation
         || old.is_portable != new.is_portable
         || new.iss != "wincommander-license-worker"
         || new.sub != MAINLINE_APP_ID
@@ -455,6 +456,12 @@ fn check_previous_with_history(
     let new: SignedClaims =
         serde_json::from_str(&candidate.payload).map_err(|_| "license cache is invalid")?;
     let same_licence = same_licence(&old, &new);
+    let next_generation = checked_activation_generation(new.activation_generation)?;
+    let previous_generation = checked_activation_generation(old.activation_generation)?;
+    if same_licence && previous_generation.is_some()
+        && (next_generation.is_none() || next_generation < previous_generation) {
+        return Err("license cache would restore an older activation");
+    }
     if same_licence && new.iat < old.iat {
         return Err("license cache would restore an older signed licence");
     }
@@ -462,10 +469,18 @@ fn check_previous_with_history(
     // the same timestamp have no trustworthy ordering; retain the existing
     // proof and allow the issuer to retry in a later second. Exact retries,
     // including signatures regenerated over identical claims, remain valid.
-    if same_licence && new.iat == old.iat && candidate.payload != previous.payload {
+    if same_licence && new.iat == old.iat && candidate.payload != previous.payload
+        && !(next_generation > previous_generation && next_generation.is_some()) {
         return Err("license cache has conflicting licences issued in the same second; retry");
     }
     Ok(())
+}
+
+fn checked_activation_generation(value: Option<u64>) -> Result<Option<u64>, &'static str> {
+    if value.is_some_and(|number| number == 0 || number > 9_007_199_254_740_991) {
+        return Err("license activation generation is invalid");
+    }
+    Ok(value)
 }
 
 fn same_licence(old: &SignedClaims, new: &SignedClaims) -> bool {

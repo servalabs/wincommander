@@ -75,6 +75,9 @@ struct SignedClaims {
     #[cfg(feature = "experimental-pq-licence")]
     #[serde(default)]
     license_id: Option<String>,
+    #[cfg(feature = "experimental-pq-licence")]
+    #[serde(default)]
+    activation_generation: Option<u64>,
     device_hash: String,
     iat: u64,
     exp: u64,
@@ -225,6 +228,10 @@ fn validate_claims(payload: &[u8]) -> Result<(), &'static str> {
     if claims.device_hash.trim().is_empty() || claims.exp == 0 || claims.iat > claims.exp {
         return Err("license cache payload is invalid");
     }
+    #[cfg(feature = "experimental-pq-licence")]
+    if claims.activation_generation.is_some_and(|value| value == 0 || value > 9_007_199_254_740_991) {
+        return Err("license activation generation is invalid");
+    }
     Ok(())
 }
 
@@ -233,6 +240,8 @@ fn validate_claims(payload: &[u8]) -> Result<(), &'static str> {
 struct RefreshClaims {
     license_id: String,
     device_hash: String,
+    #[serde(default)]
+    activation_generation: Option<u64>,
     iss: String,
     sub: String,
     #[serde(default)]

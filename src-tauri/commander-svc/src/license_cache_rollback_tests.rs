@@ -104,6 +104,34 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
     };
     let previous = make("lic-a", 100, 10000, 7, &old_ed, &old_pq, "old-ed", "old-pq");
     let next = make("lic-a", 101, 10000, 8, &new_ed, &new_pq, "new-ed", "new-pq");
+    let with_generation = |source: &StoreLicenseCacheRequest, generation: Option<u64>, iat: u64| {
+        let mut value: serde_json::Value = serde_json::from_str(&source.payload).unwrap();
+        value["iat"] = iat.into();
+        if let Some(generation) = generation { value["activation_generation"] = generation.into(); }
+        let payload = value.to_string();
+        let hybrid = jws::sign::assemble(payload.as_bytes(), 8, &current,
+            |message| Ok(new_ed.sign(message).to_bytes().to_vec()), |message| {
+                let mut sig = vec![0; 3309];
+                new_pq.sign(message, &mut sig).map_err(|_| VerifyError::InvalidSignature)?;
+                Ok(sig)
+            }).unwrap();
+        StoreLicenseCacheRequest { signature: general_purpose::URL_SAFE_NO_PAD.encode(classic.sign(payload.as_bytes()).to_bytes()),
+            payload, hybrid: Some(String::from_utf8(hybrid).unwrap()), seats_used: None, seat_limit: None }
+    };
+    let generation_two = with_generation(&next, Some(2), 102);
+    let generation_one_later = with_generation(&next, Some(1), 103);
+    let generation_missing_later = with_generation(&next, None, 103);
+    let generation_three_same_second = with_generation(&next, Some(3), 102);
+    assert!(check_previous(&cache(&generation_two), &generation_one_later, &public, &current).is_err());
+    assert!(check_previous(&cache(&generation_two), &generation_missing_later, &public, &current).is_err());
+    assert!(check_previous(&cache(&generation_two), &generation_three_same_second, &public, &current).is_ok());
+    assert!(check_previous(&cache(&next), &generation_two, &public, &current).is_ok());
+    assert!(validate_dual_request(&with_generation(&next, Some(0), 103), &public, &current).is_err());
+    assert!(validate_dual_request(&with_generation(&next, Some(9_007_199_254_740_992), 103), &public, &current).is_err());
+    let generation_record = ledger::advance(None, None, &generation_two, &cache(&generation_two), &public, &current, None).unwrap();
+    assert!(ledger::advance(Some(&generation_record), None, &generation_one_later, &cache(&generation_one_later), &public, &current, None).is_err());
+    assert!(ledger::advance(Some(&generation_record), None, &generation_missing_later, &cache(&generation_missing_later), &public, &current, None).is_err());
+    assert!(ledger::advance(Some(&generation_record), None, &generation_three_same_second, &cache(&generation_three_same_second), &public, &current, None).is_ok());
     let old_bytes = cache(&previous);
     let rotated_other = make("lic-b", 101, 10000, 8, &new_ed, &new_pq, "new-ed", "new-pq");
     let rotated_bytes = cache(&rotated_other);
