@@ -18,6 +18,8 @@ pub use contact::{ContactChallenge, ContactObservation};
 
 #[path = "fleet_hybrid_enrollment.rs"]
 mod hybrid_enrollment;
+#[path = "fleet_hybrid_reply.rs"]
+mod hybrid_reply;
 
 #[cfg(windows)]
 use crate::peer_auth_deployment_acl as protected_acl;
@@ -1517,6 +1519,77 @@ mod tests {
             assert!(store.claim_hybrid_enrollment(&offer.authorization_id, "S-1-5-21-7", 7, &bytes).is_err());
             assert!(store.claim_hybrid_enrollment(&offer.authorization_id, "S-1-5-21-7", 7, &hybrid_request(&offer)).is_err());
         }
+    }
+
+    #[test]
+    fn hybrid_reply_requires_both_pinned_signatures_and_current_claim() {
+        use aws_lc_rs::signature::{KeyPair, PqdsaKeyPair, ML_DSA_65_SIGNING};
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use wincmd_pq_experiment::{jws, Purpose, VerifyError};
+        let pq = PqdsaKeyPair::generate(&ML_DSA_65_SIGNING).unwrap();
+        let pq_public: [u8; 1952] = pq.public_key().as_ref().try_into().unwrap();
+        let fs = MemoryFs::default();
+        let store = store(fs);
+        let proof = proof_with_origins(&store, &trust(), vec!["https://fleet.example".into()]);
+        store.provision(trust(), &proof, "S-1-5-18").unwrap();
+        let mut hybrid = hybrid();
+        hybrid.ml_dsa_65_public_b64 = STANDARD.encode(pq_public);
+        store.provision_hybrid_trust(trust(), hybrid, "S-1-5-18").unwrap();
+        let offer = store.begin_hybrid_enrollment(&trust(), "https://fleet.example", "S-1-5-21-7", 7).unwrap();
+        let claim = store.claim_hybrid_enrollment(&offer.authorization_id, "S-1-5-21-7", 7, &hybrid_request(&offer)).unwrap();
+        let body = serde_json::to_vec(&serde_json::json!({
+            "device_id":trust().device_id, "org_id":trust().org_id,
+            "shield_progress_generation":trust().enrollment_generation,
+            "outcome_pubkey_b64":claim.outcome_key(), "checkin_secret_b64":STANDARD.encode([6u8; 32]),
+            "server_signing_key_b64":trust().signer_key, "capabilities":["hmac_body_v2"]
+        })).unwrap();
+        let ed = signing_key();
+        let ed_public = ed.verifying_key().to_bytes();
+        let signer = jws::Trust { purpose: Purpose::FleetEnrollment, minimum_epoch: 7,
+            ed_key_id: "fleet-ed", ed25519_public: &ed_public,
+            pq_key_id: "fleet-pq", ml_dsa_65_public: &pq_public };
+        let sign = |bytes: &[u8]| {
+            let preimage = fleet_proto::windows_v2::windows_hybrid_enrollment_preimage(claim.challenge(), claim.request(), 200, bytes);
+            let classical = format!("v2.{}", STANDARD.encode(ed.sign(&preimage).to_bytes()));
+            let hybrid = jws::sign::assemble(&preimage, 7, &signer,
+                |message| Ok(ed.sign(message).to_bytes().to_vec()),
+                |message| { let mut output = vec![0; 3309];
+                    let len = pq.sign(message, &mut output).map_err(|_| VerifyError::InvalidSignature)?;
+                    output.truncate(len); Ok(output) }).unwrap();
+            (classical, URL_SAFE_NO_PAD.encode(hybrid))
+        };
+        let (classical, proof) = sign(&body);
+        let verified = store.verify_hybrid_enrollment_reply(&claim, 200, &body, &classical, &proof).unwrap();
+        assert_eq!(verified.epoch, 7);
+        assert_eq!(&*verified.body, &body);
+        assert!(store.verify_hybrid_enrollment_reply(&claim, 201, &body, &classical, &proof).is_err());
+        assert!(store.verify_hybrid_enrollment_reply(&claim, 200, b"{}", &classical, &proof).is_err());
+        assert!(store.verify_hybrid_enrollment_reply(&claim, 200, &body, "v2.invalid", &proof).is_err());
+        assert!(store.verify_hybrid_enrollment_reply(&claim, 200, &body, &"x".repeat(100_000), &proof).is_err());
+        assert!(store.verify_hybrid_enrollment_reply(&claim, 200, &body, &classical, &"x".repeat(24 * 1024 + 1)).is_err());
+        assert!(store.verify_hybrid_enrollment_reply(&claim, 200, &body, &classical, "invalid").is_err());
+        let mut corrupt: serde_json::Value = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(&proof).unwrap()).unwrap();
+        let signature = corrupt["signatures"][1]["signature"].as_str().unwrap().to_owned();
+        let first = if signature.starts_with('A') { "B" } else { "A" };
+        corrupt["signatures"][1]["signature"] = format!("{}{}", first, &signature[1..]).into();
+        let corrupt = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&corrupt).unwrap());
+        assert!(store.verify_hybrid_enrollment_reply(&claim, 200, &body, &classical, &corrupt).is_err());
+        let mut missing: serde_json::Value = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(&proof).unwrap()).unwrap();
+        missing["signatures"].as_array_mut().unwrap().pop();
+        let missing = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&missing).unwrap());
+        assert!(store.verify_hybrid_enrollment_reply(&claim, 200, &body, &classical, &missing).is_err());
+        let mut wrong: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        wrong["org_id"] = "different-org".into();
+        let wrong = serde_json::to_vec(&wrong).unwrap();
+        let (wrong_classical, wrong_proof) = sign(&wrong);
+        assert!(store.verify_hybrid_enrollment_reply(&claim, 200, &wrong, &wrong_classical, &wrong_proof).is_err());
+        let mut wrong: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        wrong["shield_progress_generation"] = "cccccccc-cccc-4ccc-8ccc-cccccccccccc".into();
+        let wrong = serde_json::to_vec(&wrong).unwrap();
+        let (wrong_classical, wrong_proof) = sign(&wrong);
+        assert!(store.verify_hybrid_enrollment_reply(&claim, 200, &wrong, &wrong_classical, &wrong_proof).is_err());
+        assert!(store.cancel_hybrid_enrollment(&offer.authorization_id, "S-1-5-21-7", 7).unwrap());
+        assert!(store.verify_hybrid_enrollment_reply(&claim, 200, &body, &classical, &proof).is_err());
     }
 
     #[test]

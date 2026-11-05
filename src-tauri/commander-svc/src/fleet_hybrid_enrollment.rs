@@ -35,6 +35,9 @@ pub(crate) struct ClaimedHybridEnrollment {
 }
 
 impl ClaimedHybridEnrollment {
+    pub(super) fn binding(&self) -> &FleetTrust {
+        &self.marker.trust
+    }
     pub(crate) fn request(&self) -> &[u8] {
         &self.request
     }
