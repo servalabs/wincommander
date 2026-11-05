@@ -77,7 +77,7 @@ fn move_to_sibling(old: &Path, destination_name: &str) -> io::Result<PathBuf> {
         .access_mode(DELETE | FILE_READ_ATTRIBUTES)
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
-        .open(old)?;
+        .open(old).map_err(|e| io::Error::new(e.kind(), format!("source-open: {e}")))?;
     let metadata = handle.metadata()?;
     if !metadata.is_dir() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 || identity(&handle)? != before {
         return Err(denied());
@@ -98,7 +98,8 @@ fn move_to_sibling(old: &Path, destination_name: &str) -> io::Result<PathBuf> {
         (*info).FileNameLength = u32::try_from(name_bytes).map_err(|_| denied())?;
         std::ptr::copy_nonoverlapping(wide.as_ptr(), std::ptr::addr_of_mut!((*info).FileName).cast::<u16>(), wide.len());
         if SetFileInformationByHandle(handle.as_raw_handle(), FileRenameInfo, info.cast(), u32::try_from(size).map_err(|_| denied())?) == 0 {
-            return Err(io::Error::last_os_error());
+            let e = io::Error::last_os_error();
+            return Err(io::Error::new(e.kind(), format!("source-rename: {e}")));
         }
     }
     // An error after the rename may be ambiguous after a crash; never delete a
