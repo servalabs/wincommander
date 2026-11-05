@@ -431,6 +431,41 @@ impl SearchEngine {
         self.config.skip_paths.push(backup.clone());
         Ok(backup)
     }
+    /// Read-only post-handoff check. The installer must hold its exclusive
+    /// operation fence for the entire call; this helper never owns that lock.
+    /// It verifies the DPAPI selector and authenticates the encrypted manifest,
+    /// but does not claim every segment or every source file has been checked.
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    pub fn verify_quarantined_selection(old: &std::path::Path, selection_dir: &std::path::Path) -> Result<()> {
+        use tantivy::directory::Directory;
+        use crate::encrypted_generation_prototype::{inspect, PinnedSelectionStore, UserProtector};
+        use crate::encrypted_index_prototype::tantivy_trial::TrialDirectory;
+        use crate::read_only::{AccessMode, CheckedDirectory};
+        let parent = old.parent().ok_or_else(|| SearchError::Config("invalid legacy index path".into()))?;
+        if !old.is_absolute() || selection_dir.parent() != Some(parent) {
+            return Err(SearchError::Config("invalid selection parent".into()));
+        }
+        let _pins = CheckedDirectory::pin_root_path(parent)?;
+        let absent = || -> Result<()> {
+            match std::fs::symlink_metadata(old) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(e) => Err(e.into()),
+                Ok(_) => Err(SearchError::Config("legacy index still present".into())),
+            }
+        };
+        absent()?;
+        let mut selection = PinnedSelectionStore::open(selection_dir)?;
+        let selected = inspect(&mut selection, &UserProtector)?
+            .ok_or_else(|| SearchError::Config("encrypted selection missing".into()))?;
+        let generation = parent.join(format!(".wincommander-encrypted-{}", hex::encode(selected.index_id)));
+        let directory = TrialDirectory::open_protected(&generation, AccessMode::GuardedReader, &selected.index_id, true)?;
+        let manifest = directory.atomic_read(std::path::Path::new("meta.json"))
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        let _: serde_json::Value = serde_json::from_slice(&manifest)
+            .map_err(|_| SearchError::Config("encrypted index manifest invalid".into()))?;
+        absent()?;
+        Ok(())
+    }
     /// Locate the generation-specific quarantine path for inspection after an
     /// interrupted move. Existence alone is not proof of successful migration.
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
@@ -1106,11 +1141,13 @@ mod tests {
         drop(exclusive);
         assert_eq!(backup, expected_backup);
         assert!(!old.exists());
+        SearchEngine::verify_quarantined_selection(&old, &selector).unwrap();
         assert_eq!(fs::read(backup.join("meta.json")).unwrap(), b"legacy retained");
         let query = ContentQuery { terms: "encryptedbackuptoken".into(), roots: vec![], limit: 10, offset: 0, keyword_only: true };
         assert_eq!(engine.search(&query).unwrap().len(), 1);
         // Explicit recovery never replaces a newly created legacy directory.
         fs::create_dir(&old).unwrap();
+        assert!(SearchEngine::verify_quarantined_selection(&old, &selector).is_err());
         assert!(restore_experimental_legacy_backup(&old, &[90; 16]).is_err());
         assert_eq!(fs::read(backup.join("meta.json")).unwrap(), b"legacy retained");
         fs::remove_dir(&old).unwrap();
