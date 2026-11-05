@@ -40,6 +40,13 @@ fn classify(parent: &Path, old: &Path, selection: &Path) -> Result<State, String
     }
 }
 
+fn reject_pending(selection: &Path) -> Result<(), String> {
+    if present(selection).map_err(|_| "Cannot inspect encrypted search selection.")?
+        && SearchEngine::inspect_search_migration(selection).map_err(|e| e.to_string())?.is_some() {
+        return Err("A previous search migration needs recovery before this update.".into());
+    }
+    Ok(())
+}
 /// Run from the temporary early CLI helper, before normal application startup.
 /// The verify phase is read-only and the installer must hold its exclusive lock.
 pub fn run(phase: &str) -> Result<String, String> {
@@ -50,6 +57,7 @@ pub fn run(phase: &str) -> Result<String, String> {
         "stage" => {
             let guard = SearchOperationFence::acquire_exclusive(&parent)
                 .map_err(|_| "Cannot acquire offline search maintenance lock.")?;
+            reject_pending(&selection)?;
             match classify(&parent, &old, &selection)? {
                 State::Fresh => Ok("fresh".into()),
                 State::NeedsRebuild => {
@@ -74,13 +82,16 @@ pub fn run(phase: &str) -> Result<String, String> {
                 },
             }
         }
-        "verify-staged" => match classify(&parent, &old, &selection)? {
+        "verify-staged" => {
+            reject_pending(&selection)?;
+            match classify(&parent, &old, &selection)? {
             State::Fresh => Ok("fresh".into()),
             State::NeedsQuarantine => SearchEngine::verify_selected_generation(&old, &selection)
                 .map(|_| "staged old-cache=retained".into()).map_err(|e| e.to_string()),
             State::Quarantined => SearchEngine::verify_quarantined_selection(&old, &selection)
                 .map(|_| "already-quarantined".into()).map_err(|e| e.to_string()),
             State::NeedsRebuild => Err("The encrypted search generation is not ready.".into()),
+            }
         },
         "quarantine" => {
             let guard = SearchOperationFence::acquire_exclusive(&parent)
