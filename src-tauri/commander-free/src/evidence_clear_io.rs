@@ -128,6 +128,14 @@ fn with_verified_file<T>(
     path: &Path,
     operation: &impl Fn(&fs::File, &FileStamp) -> Result<T, String>,
 ) -> Result<Option<T>, String> {
+    with_verified_file_after_pins(path, &|| {}, operation)
+}
+
+fn with_verified_file_after_pins<T>(
+    path: &Path,
+    before_leaf: &impl Fn(),
+    operation: &impl Fn(&fs::File, &FileStamp) -> Result<T, String>,
+) -> Result<Option<T>, String> {
     match fs::symlink_metadata(path) {
         Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
         Err(_) => return Err("Cannot inspect old evidence".into()),
@@ -160,7 +168,7 @@ fn with_verified_file<T>(
         let mut pins = Vec::with_capacity(ancestors.len());
         for ancestor in ancestors {
             let pin = fs::OpenOptions::new()
-                .access_mode(FILE_READ_ATTRIBUTES)
+                .read(true)
                 .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
                 .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
                 .open(ancestor)
@@ -173,6 +181,7 @@ fn with_verified_file<T>(
             }
             pins.push(pin);
         }
+        before_leaf();
         let leaf = match fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -245,6 +254,35 @@ mod tests {
         let first = current_user().unwrap();
         assert!(!first.is_empty());
         assert_eq!(first, current_user().unwrap());
+    }
+    #[test]
+    fn verified_parent_cannot_be_renamed_during_operation() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("parent");
+        fs::create_dir(&root).unwrap();
+        let path = root.join("old");
+        fs::write(&path, b"old").unwrap();
+        with_verified_file(&path, &|_, _| {
+            assert!(fs::rename(&root, dir.path().join("moved")).is_err());
+            Ok(())
+        })
+        .unwrap();
+    }
+    #[test]
+    fn parent_cannot_be_renamed_before_leaf_is_opened() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("parent");
+        fs::create_dir(&root).unwrap();
+        let path = root.join("old");
+        fs::write(&path, b"old").unwrap();
+        with_verified_file_after_pins(
+            &path,
+            &|| {
+                assert!(fs::rename(&root, dir.path().join("moved")).is_err());
+            },
+            &|_, _| Ok(()),
+        )
+        .unwrap();
     }
     #[test]
     fn clear_refuses_later_content_and_different_file_identity() {
