@@ -7480,6 +7480,7 @@ name = "wincmd-search"
 version = "0.1.0"
 dependencies = [
  "calamine",
+ "fs4",
  "globset",
  "hex",
  "lopdf",

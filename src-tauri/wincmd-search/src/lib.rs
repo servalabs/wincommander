@@ -20,6 +20,7 @@ pub mod query;
 mod read_only;
 pub mod reconcile;
 mod restricted;
+mod space_guard;
 pub mod semantic_model;
 pub mod tokenize;
 pub mod types;
