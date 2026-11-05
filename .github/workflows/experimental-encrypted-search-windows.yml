@@ -36,6 +36,7 @@ jobs:
             'staged_index_opens_after_restart_without_moving_old_cache',
             'fresh_install_scope_only_remains_verifiable_on_next_update',
             'missing_selector_with_prior_backup_cannot_be_marked_fresh',
+            'interrupted_origin_without_selector_fails_closed_and_preserves_proof',
             'search_migration_intent_recovers_and_respects_replacement_boundary',
             'application_entry_rebuilds_then_refuses_corrupt_selector',
             'fresh_install_can_build_select_and_reopen_without_legacy_index',

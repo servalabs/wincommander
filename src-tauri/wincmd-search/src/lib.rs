@@ -1437,6 +1437,19 @@ mod tests {
     }
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     #[test]
+    fn interrupted_origin_without_selector_fails_closed_and_preserves_proof() {
+        let root = TempDir::new().unwrap(); let old = root.path().join("fts");
+        let selection = root.path().join(".wincommander-encrypted-selection");
+        fs::create_dir(&selection).unwrap();
+        crate::encrypted_generation_prototype::record_origin(&selection, &[44; 16], true).unwrap();
+        let original = fs::read(selection.join("origin-proof.v1")).unwrap();
+        let config = make_config(old, vec![]);
+        assert!(SearchEngine::open_or_rebuild_experimental_with_policy(config, Arc::new(|_| true)).is_err());
+        assert_eq!(fs::read(selection.join("origin-proof.v1")).unwrap(), original);
+        assert!(!selection.join("candidate-proof.v1").exists());
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    #[test]
     fn missing_selector_with_prior_backup_cannot_be_marked_fresh() {
         let root = TempDir::new().unwrap();
         let old = root.path().join("fts");
