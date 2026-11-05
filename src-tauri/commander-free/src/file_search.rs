@@ -62,6 +62,16 @@ fn build_index_config(fs: &FileSearchSettings, roots: Vec<PathBuf>) -> Result<In
     })
 }
 
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
+pub(crate) fn offline_index_plan() -> Result<(IndexConfig, wincmd_search::PathPolicy), String> {
+    use std::sync::Arc;
+    let settings = read_settings()?;
+    let plan = privacy::plan(&settings.app.file_search)?;
+    let config = build_index_config(&settings.app.file_search, plan.ordinary)?;
+    let protected = plan.protected;
+    let policy: wincmd_search::PathPolicy = Arc::new(move |path| privacy::ordinary_allowed(path, &protected));
+    Ok((config, policy))
+}
 fn build_content_query(
     terms: String,
     roots: Vec<PathBuf>,
