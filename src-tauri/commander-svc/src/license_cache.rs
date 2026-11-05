@@ -26,6 +26,9 @@ mod hybrid_trust;
 mod rollback;
 #[cfg(feature = "experimental-pq-licence")]
 pub(crate) use rollback::anchor as licence_device_anchor;
+#[cfg(feature = "experimental-pq-licence")]
+#[path = "licence_release_gate.rs"]
+pub(crate) mod release_gate;
 #[cfg(not(feature = "experimental-pq-licence"))]
 #[allow(dead_code)]
 #[path = "../../commander-free/src/updater/hybrid_free_anchor.rs"]

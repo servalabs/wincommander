@@ -213,6 +213,18 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
         &crash_anchor,
     )
     .unwrap();
+    let gate_path = format!(r"SOFTWARE\WinCommanderReleaseFenceTest-{}", uuid::Uuid::new_v4());
+    let gate = anchor::Anchor::test_user(gate_path.clone());
+    super::super::release_gate::begin_at(&gate, &[77; 32]).unwrap();
+    let before_fence = fs::read(&crash_path).unwrap();
+    let retained_before_fence = crash_anchor.read().unwrap();
+    let blocked = "license release is in progress or unavailable";
+    assert_eq!(write_with_gate(&crash_path, &later, &cache(&later), &public, &current, &crash_anchor, &gate), Err(blocked));
+    assert_eq!(write_renewal_with_gate(&crash_path, (&previous_epoch9, 99), &later, 200,
+        &public, &current, &crash_anchor, &gate), Err(blocked));
+    assert_eq!(fs::read(&crash_path).unwrap(), before_fence);
+    assert_eq!(crash_anchor.read().unwrap(), retained_before_fence);
+    anchor::remove_test_key(&gate_path).unwrap();
     assert!(
         !recover_pending_with_anchor(&crash_path, 200, &public, &current, &crash_anchor).unwrap()
     );

@@ -123,6 +123,7 @@ fn save_locked(
     binding: &Binding<'_>,
     credential: &PendingCredential,
 ) -> Result<(), &'static str> {
+    crate::license_cache::release_gate::ensure_idle()?;
     // Never silently replace an existing or damaged identity. Recovery and
     // cross-process coordination must be designed before this is connected.
     if anchor.read().map_err(|_| INVALID)?.is_some() {
@@ -163,6 +164,7 @@ fn get_or_create_with(
 ) -> Result<PendingCredential, &'static str> {
     let _guard = LOCK.lock().map_err(|_| INVALID)?;
     let _process_lock = crate::licence_security_lock().map_err(|_| INVALID)?;
+    crate::license_cache::release_gate::ensure_idle()?;
     if let Some(bytes) = anchor.read().map_err(|_| INVALID)? {
         return decode(protector, binding, &bytes);
     }
@@ -303,6 +305,16 @@ fn checked_refresh_wire(
     )
 }
 
+fn checked_renewal_wire(binding: &Binding<'_>, licence: &RefreshLicence<'_>) -> Result<Vec<u8>, &'static str> {
+    crate::license_cache::with_verified_refresh_wire(
+        licence.payload, licence.signature, licence.hybrid, licence.last_verified_at,
+        binding.licence_id, binding.device_hash, |body| {
+            crate::license_cache::release_gate::ensure_idle()?;
+            Ok(body)
+        },
+    )
+}
+
 /// Prepare a challenge request from the service's verified cache and confirmed identity.
 pub(crate) fn prepare_challenge_request(
     binding: &Binding<'_>,
@@ -311,7 +323,7 @@ pub(crate) fn prepare_challenge_request(
     now: u64,
 ) -> Result<Vec<u8>, &'static str> {
     let credential = load_confirmed(binding, receipt_trust, now)?;
-    let body = checked_refresh_wire(binding, licence)?;
+    let body = checked_renewal_wire(binding, licence)?;
     wire::challenge_request(&credential, &body)
 }
 
@@ -324,7 +336,7 @@ pub(crate) fn prepare_renewal_request(
     now: u64,
 ) -> Result<Vec<u8>, &'static str> {
     let credential = load_confirmed(binding, receipt_trust, now)?;
-    let body = checked_refresh_wire(binding, licence)?;
+    let body = checked_renewal_wire(binding, licence)?;
     wire::renewal_request(&credential, body, challenge, now)
 }
 
@@ -375,6 +387,21 @@ pub(crate) async fn request_release(
         |request, confirmation| release_pending::record_acknowledgement(
             binding, receipt_trust, licence, now()?, &request, &confirmation),
     ).await
+}
+
+/// No caller-supplied licence identity, trust, cache or path is accepted.
+/// Success means the server acknowledgement was saved; the local licence remains.
+/// Authentication and crash-safe local finalization are still required before IPC use.
+pub(crate) async fn release_from_machine_cache() -> Result<(), &'static str> {
+    let cache = crate::license_cache::load_device_licence_snapshot()?;
+    let trust = crate::license_cache::configured_device_receipt_trust()?;
+    let mut receipt_policy = trust.policy();
+    receipt_policy.purpose = wincmd_pq_experiment::Purpose::LicenceEnrolment;
+    let binding = Binding { licence_id: &cache.licence_id, device_hash: &cache.device_hash,
+        issuer_origin: wire::LICENCE_ORIGIN };
+    let licence = RefreshLicence { payload: &cache.payload, signature: &cache.signature,
+        hybrid: &cache.hybrid, last_verified_at: cache.last_verified_at };
+    request_release(&binding, &receipt_policy, &licence).await
 }
 
 /// Resume only a protected confirmed release. On an uncertain send or write,
@@ -633,6 +660,7 @@ fn confirm_locked(
     signed_receipt: &str,
     now: u64,
 ) -> Result<ConfirmedCredential, &'static str> {
+    crate::license_cache::release_gate::ensure_idle()?;
     let original = anchor.read().map_err(|_| INVALID)?.ok_or(INVALID)?;
     let record: Record = serde_json::from_slice(&original).map_err(|_| INVALID)?;
     if record.phase == "confirmed" {
@@ -694,6 +722,7 @@ fn enrolment_state(
     let state = {
         let _guard = LOCK.lock().map_err(|_| INVALID)?;
         let _process_lock = crate::licence_security_lock().map_err(|_| INVALID)?;
+        crate::license_cache::release_gate::ensure_idle()?;
         match anchor.read().map_err(|_| INVALID)? {
             None => {
                 let pending = PendingCredential::generate()?;

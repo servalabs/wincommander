@@ -18,6 +18,10 @@ mod hybrid_trust;
 mod hybrid_history;
 
 #[cfg(windows)]
+#[path = "licence_release_guard.rs"]
+mod licence_release_guard;
+
+#[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 const OFFLINE_GRACE_SECONDS: u64 = 7 * 24 * 60 * 60;
@@ -1005,6 +1009,8 @@ fn deny_unconfirmed_history(status: &mut LicenseStatus) {
 }
 
 fn save_cached_license_direct(cached: &CachedLicense) -> Result<(), String> {
+    #[cfg(windows)]
+    let _release_guard = licence_release_guard::acquire()?;
     let path = license_file_path()?;
     let data = serde_json::to_string_pretty(cached)
         .map_err(|e| format!("Failed to encode cached license token: {}", e))?;
@@ -1064,6 +1070,8 @@ fn require_license_removal_administrator() -> Result<(), String> {
 }
 
 fn clear_cached_license_inner() -> Result<(), String> {
+    #[cfg(windows)]
+    let _release_guard = licence_release_guard::acquire()?;
     let path = license_file_path()?;
     if path.exists() {
         fs::remove_file(path)
