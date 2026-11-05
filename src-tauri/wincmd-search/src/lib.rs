@@ -1096,6 +1096,11 @@ mod tests {
         let shared = crate::encrypted_search_fence::SearchOperationFence::acquire_shared(root.path()).unwrap();
         assert!(engine.quarantine_experimental_with_fence(&shared).is_err());
         drop(shared);
+        let wrong_parent = TempDir::new().unwrap();
+        let wrong = crate::encrypted_search_fence::SearchOperationFence::acquire_exclusive(wrong_parent.path()).unwrap();
+        assert!(engine.quarantine_experimental_with_fence(&wrong).is_err());
+        assert_eq!(fs::read(old.join("meta.json")).unwrap(), b"legacy retained");
+        drop(wrong);
         let exclusive = crate::encrypted_search_fence::SearchOperationFence::acquire_exclusive(root.path()).unwrap();
         let backup = engine.quarantine_experimental_with_fence(&exclusive).unwrap();
         drop(exclusive);
