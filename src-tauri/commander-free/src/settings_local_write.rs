@@ -62,6 +62,9 @@ pub(super) fn prepare(current: &AppSettings, mutation: Mutation) -> Result<AppSe
             if json.len() > MAX_IMPORT_BYTES {
                 return Err("Settings file exceeds the 4 MiB limit".into());
             }
+            if crate::settings_transfer::classify_import(&json)? {
+                return Err("Unlock the encrypted settings backup before importing it.".into());
+            }
             let mut value: Value =
                 serde_json::from_str(&json).map_err(|e| format!("Import failed: {e}"))?;
             super::normalize_file_search_result_limit(&mut value);

@@ -5,6 +5,28 @@ use serde_json::json;
 use std::cell::Cell;
 
 #[test]
+fn every_import_route_rejects_legacy_root_state_instead_of_dropping_it() {
+    let current = create_default_settings();
+    let mut legacy = serde_json::to_value(&current).unwrap();
+    legacy.as_object_mut().unwrap().remove("settingsVersion");
+    legacy["privacy"] = json!({"telemetry": {"windowsDisabled": true}});
+    for value in [legacy.clone(), {
+        legacy["settingsVersion"] = json!(1);
+        legacy
+    }] {
+        let error = prepare(&current, Mutation::Import(value.to_string())).unwrap_err();
+        assert!(error.contains("older settings backup"));
+    }
+    let mut modern = serde_json::to_value(&current).unwrap();
+    modern["ideal"]["privacy"]["telemetry"]["windowsDisabled"] = json!(true);
+    let imported = prepare(&current, Mutation::Import(modern.to_string())).unwrap();
+    assert_eq!(
+        imported.ideal.privacy.telemetry.windows_disabled,
+        Some(true)
+    );
+}
+
+#[test]
 fn quick_mount_settings_refuse_new_duplicates_and_protected_letters_but_allow_removal() {
     let current = create_default_settings();
     for letters in [vec!["Q", "q:"], vec!["C"], vec!["A"], vec!["QQ"]] {

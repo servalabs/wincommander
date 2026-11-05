@@ -35,6 +35,8 @@ WinCommander is the third option: a single, open-source command console that sho
 
 Settings backups created in Backup & Restore are password-protected. Keep the password safe: a backup cannot be restored without it. Existing version 2 plaintext settings backups can still be imported; version 1 and versionless backups cannot be imported safely. Older plaintext backups remain readable to anyone who can access them.
 
+Other tools that have access to WinCommander's settings interface may still read settings in plaintext; the backup password protects the exported backup file.
+
 ## Install
 
 1. Download the latest installer from [Releases](https://github.com/servalabs/wincommander/releases).

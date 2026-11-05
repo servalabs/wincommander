@@ -88,7 +88,7 @@ fn read_import(reader: impl Read) -> Result<String, String> {
     Ok(json)
 }
 
-fn classify_import(json: &str) -> Result<bool, String> {
+pub(crate) fn classify_import(json: &str) -> Result<bool, String> {
     let value: serde_json::Value =
         serde_json::from_str(json).map_err(|_| "Settings file is not valid JSON")?;
     let encrypted = backup_crypto::encrypted(&value)?;
