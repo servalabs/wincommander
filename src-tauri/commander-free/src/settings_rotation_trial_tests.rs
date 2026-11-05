@@ -150,3 +150,41 @@ fn unscoped_legacy_ciphertext_is_rejected_for_new_generation() {
     assert!(publish(&path, &substituted, &crate::datastore_io::atomic_write).is_err());
     assert_eq!(std::fs::read(path).unwrap(), candidate);
 }
+
+#[test]
+fn reopened_generation_rejects_changed_missing_added_or_duplicate_sources() {
+    let old = [42; 32];
+    let input = sections(&old);
+    let candidate = prepare(&old, &input).unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("generation");
+    publish(&path, &candidate, &crate::datastore_io::atomic_write).unwrap();
+    let reopened = std::fs::read(&path).unwrap();
+    verify_source(&reopened, &old, &input).unwrap();
+    assert!(verify_source(&reopened, &[43; 32], &input).is_err());
+    let mut changed = input.clone();
+    changed[0].1.push('X');
+    assert!(verify_source(&reopened, &old, &changed).is_err());
+    assert!(verify_source(&reopened, &old, &input[..1]).is_err());
+    let mut added = input.clone();
+    added.push(("new_section".into(), "new data".into()));
+    assert!(verify_source(&reopened, &old, &added).is_err());
+    let mut duplicate = input.clone();
+    duplicate.push(input[0].clone());
+    assert!(verify_source(&reopened, &old, &duplicate).is_err());
+    assert_eq!(std::fs::read(path).unwrap(), candidate);
+}
+
+#[test]
+fn corrupt_authenticated_generation_cannot_validate_a_source_snapshot() {
+    let old = [42; 32];
+    let input = sections(&old);
+    let candidate = prepare(&old, &input).unwrap();
+    let mut bundle: Bundle = serde_json::from_slice(&candidate).unwrap();
+    let mut ciphertext = bundle.ciphertext.into_bytes();
+    let index = "enc:v2:".len() + 4;
+    ciphertext[index] = if ciphertext[index] == b'A' { b'B' } else { b'A' };
+    bundle.ciphertext = String::from_utf8(ciphertext).unwrap();
+    let tampered = serde_json::to_vec(&bundle).unwrap();
+    assert!(verify_source(&tampered, &old, &input).is_err());
+}

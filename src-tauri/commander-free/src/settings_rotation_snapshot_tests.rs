@@ -125,3 +125,20 @@ fn successful_staging_does_not_fence_a_later_old_writer() {
     // Once the guard is dropped, old writers are no longer fenced at all.
     assert!(fs::write(dir.path().join("store").join("settings.dat"), b"old writer resumed").is_ok());
 }
+
+#[test]
+fn fresh_snapshot_can_verify_reopened_generation_but_detects_new_section() {
+    let dir = tempfile::tempdir().unwrap();
+    fixture(dir.path());
+    let generation = {
+        let mut first = Snapshot::capture(dir.path()).unwrap();
+        first.prepare().unwrap()
+    };
+    {
+        let mut reopened = Snapshot::capture(dir.path()).unwrap();
+        reopened.verify_generation(&generation).unwrap();
+    }
+    fs::write(dir.path().join("store").join("later.dat"), b"later source").unwrap();
+    let mut changed = Snapshot::capture(dir.path()).unwrap();
+    assert!(changed.verify_generation(&generation).is_err());
+}

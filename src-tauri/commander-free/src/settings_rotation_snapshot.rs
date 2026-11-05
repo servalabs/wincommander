@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Test-only source snapshot. This does not provide a production cutover.
-use super::{prepare, validate_section_name, MAX_SECTIONS, MAX_TOTAL};
+use super::{prepare, validate_section_name, verify_source, MAX_SECTIONS, MAX_TOTAL};
 use crate::datastore::dpapi_unprotect;
 use sha2::{Digest, Sha256};
 use std::{fs::{self, File, OpenOptions}, io::{Read, Seek, SeekFrom}, path::{Path, PathBuf}};
@@ -163,6 +163,15 @@ impl Snapshot {
         let output = prepare(&self.material, &sections)?;
         self.verify_unchanged()?;
         Ok(output)
+    }
+
+    /// Compare a reopened generation with a freshly guarded, complete source
+    /// snapshot. This detects observed changes, not writers racing afterward.
+    pub(super) fn verify_generation(&mut self, generation: &[u8]) -> Result<(), String> {
+        self.verify_unchanged()?;
+        let sections: Vec<_> = self.sections.iter().map(|s| (s.name.clone(), s.encoded.clone())).collect();
+        verify_source(generation, &self.material, &sections)?;
+        self.verify_unchanged()
     }
 
     /// Stage only an unactivated candidate while all source guards stay alive.

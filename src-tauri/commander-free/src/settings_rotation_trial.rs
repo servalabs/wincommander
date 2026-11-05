@@ -9,6 +9,7 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, path::Path};
 use zeroize::Zeroizing;
 
@@ -25,6 +26,22 @@ struct Bundle {
     ciphertext: String,
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Generation {
+    sections: BTreeMap<String, Value>,
+    source_sections: BTreeMap<String, String>,
+    source_key_digest: String,
+}
+
+fn source_digest(bytes: &[u8]) -> String {
+    B64.encode(Sha256::digest(bytes))
+}
+
+fn valid_digest(value: &str) -> bool {
+    B64.decode(value).is_ok_and(|bytes| bytes.len() == 32)
+}
+
 /// Snapshot input is supplied by a caller holding all source/key ownership.
 /// It may include any general datastore section, not just the UI settings.
 /// No original file is changed. A caller must establish directory and old-writer
@@ -36,6 +53,7 @@ fn prepare(old_material: &[u8; 32], sections: &[(String, String)]) -> Result<Vec
     let mut total = 0usize;
     let old_key = Zeroizing::new(derive_section_key(old_material, None)?);
     let mut values = BTreeMap::<String, Value>::new();
+    let mut source_sections = BTreeMap::<String, String>::new();
     for (name, encoded) in sections {
         if name.is_empty() || name.len() > 128 {
             return Err("invalid settings section".into());
@@ -56,9 +74,16 @@ fn prepare(old_material: &[u8; 32], sections: &[(String, String)]) -> Result<Vec
         if values.insert(name.clone(), value).is_some() {
             return Err("duplicate settings section".into());
         }
+        source_sections.insert(name.clone(), source_digest(encoded.as_bytes()));
     }
-    let plain =
-        Zeroizing::new(serde_json::to_vec(&values).map_err(|_| "cannot encode settings snapshot")?);
+    let generation = Generation {
+        sections: values,
+        source_sections,
+        source_key_digest: source_digest(old_material),
+    };
+    let plain = Zeroizing::new(
+        serde_json::to_vec(&generation).map_err(|_| "cannot encode settings snapshot")?,
+    );
     if plain.len() > MAX_TOTAL {
         return Err("settings snapshot too large".into());
     }
@@ -75,7 +100,7 @@ fn prepare(old_material: &[u8; 32], sections: &[(String, String)]) -> Result<Vec
     serde_json::to_vec(&bundle).map_err(|_| "cannot encode protected settings generation".into())
 }
 
-fn open(input: &[u8]) -> Result<BTreeMap<String, Value>, String> {
+fn open_generation(input: &[u8]) -> Result<Generation, String> {
     if input.len() > MAX_TOTAL * 2 + 65536 {
         return Err("settings generation too large".into());
     }
@@ -106,16 +131,44 @@ fn open(input: &[u8]) -> Result<BTreeMap<String, Value>, String> {
         decode_section(&key, &bundle.ciphertext, SCOPE)
             .map_err(|_| "settings generation cannot be authenticated")?,
     );
-    let values: BTreeMap<String, Value> =
+    let generation: Generation =
         serde_json::from_slice(&plain).map_err(|_| "invalid settings generation")?;
-    if values.len() > MAX_SECTIONS
-        || values
-            .keys()
-            .any(|name| name.is_empty() || name.len() > 128 || validate_section_name(name).is_err())
+    if generation.sections.len() > MAX_SECTIONS
+        || generation.sections.keys().any(|name| {
+            name.is_empty() || name.len() > 128 || validate_section_name(name).is_err()
+        })
+        || generation.sections.len() != generation.source_sections.len()
+        || generation.sections.keys().ne(generation.source_sections.keys())
+        || generation.source_sections.values().any(|digest| !valid_digest(digest))
+        || !valid_digest(&generation.source_key_digest)
     {
         return Err("invalid settings generation".into());
     }
-    Ok(values)
+    Ok(generation)
+}
+
+fn open(input: &[u8]) -> Result<BTreeMap<String, Value>, String> {
+    Ok(open_generation(input)?.sections)
+}
+
+/// Diagnose whether a newly enumerated snapshot matches the source used for
+/// this generation. Matching is not an old-writer fence: ownership must be
+/// held through activation, and a trusted anti-rollback policy is still needed.
+fn verify_source(input: &[u8], old_material: &[u8; 32], sections: &[(String, String)]) -> Result<(), String> {
+    let generation = open_generation(input)?;
+    if generation.source_key_digest != source_digest(old_material) {
+        return Err("settings source key changed; do not activate generation".into());
+    }
+    let mut observed = BTreeMap::new();
+    for (name, encoded) in sections {
+        if observed.insert(name.clone(), source_digest(encoded.as_bytes())).is_some() {
+            return Err("duplicate settings section".into());
+        }
+    }
+    if generation.source_sections != observed {
+        return Err("settings source sections changed; do not activate generation".into());
+    }
+    Ok(())
 }
 
 /// A single file contains both protected key material and all encrypted
