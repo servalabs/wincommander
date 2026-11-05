@@ -40,3 +40,10 @@ and `cargo test -p commander-free settings_rotation_trial::tests -- --ignored`
 in both elevated Administrator and LocalSystem contexts, followed by separate
 standard-user versus privileged-process cross-account tests. An ignored test
 is not acceptance evidence.
+
+The gated `inspect_startup_once` seam now makes a read-only decision under a
+short-lived shared lock: no generation and no authority is `Legacy`, a verified
+stable pair is `Selected`, and a pending pair is `RecoveryRequired`. Missing
+provisioned lock, invalid files or scope mismatch are errors. It does not run
+from the application yet. Before routing, a trusted external marker must also
+distinguish a first legacy start from deletion or rollback of both files.

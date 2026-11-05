@@ -538,17 +538,36 @@ impl ReadOnlySelectedGeneration {
         reader.read_all()?;
         Ok(reader)
     }
-    fn read_all(&self) -> Result<BTreeMap<String, Value>, String> {
+    fn inspect_startup(&self) -> Result<StartupView, String> {
         let selected = read_generation_file(&self.path, MAX_TOTAL * 2 + 65_536)?;
         let authority = read_generation_file(&self.authority, 65_536)?;
         let generation = selected.as_deref().map(open_generation).transpose()?;
         if generation.as_ref().is_some_and(|g| g.scope != self.scope) { return Err("settings generation scope mismatch".into()); }
         match super::settings_generation_authority::inspect(authority.as_deref(), selected.as_deref(), &|bytes| self.scope.unprotect(bytes))? {
-            super::settings_generation_authority::Inspection::Stable => generation.map(|g| g.sections).ok_or("selected settings generation unavailable".into()),
-            super::settings_generation_authority::Inspection::Legacy => Err("settings generation has not been selected".into()),
-            super::settings_generation_authority::Inspection::RepairRequired | super::settings_generation_authority::Inspection::InitialVerificationRequired => Err("settings generation requires authorized recovery".into()),
+            super::settings_generation_authority::Inspection::Stable => Ok(StartupView::Selected(generation.ok_or("selected settings generation unavailable")?.sections)),
+            super::settings_generation_authority::Inspection::Legacy => Ok(StartupView::Legacy),
+            super::settings_generation_authority::Inspection::RepairRequired | super::settings_generation_authority::Inspection::InitialVerificationRequired => Ok(StartupView::RecoveryRequired),
         }
     }
+    fn read_all(&self) -> Result<BTreeMap<String, Value>, String> {
+        match self.inspect_startup()? {
+            StartupView::Selected(sections) => Ok(sections),
+            StartupView::Legacy => Err("settings generation has not been selected".into()),
+            StartupView::RecoveryRequired => Err("settings generation requires authorized recovery".into()),
+        }
+    }
+}
+
+/// Read-only startup decision; callers must not fall back to legacy when this
+/// reports recovery or an error. This seam is not wired to normal startup.
+#[derive(Debug, PartialEq)]
+pub(super) enum StartupView {
+    Legacy,
+    Selected(BTreeMap<String, Value>),
+    RecoveryRequired,
+}
+pub(super) fn inspect_startup_once(root: &Path, scope: StoreScope) -> Result<StartupView, String> {
+    ReadOnlySelectedGeneration::acquire(root, scope)?.inspect_startup()
 }
 
 /// Open and release shared ownership for this read only. It cannot be cached by

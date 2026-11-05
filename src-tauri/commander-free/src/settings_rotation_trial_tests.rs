@@ -513,3 +513,32 @@ fn shared_readers_never_repair_pending_authority_and_exclude_writers() {
     // The public read seam has released its shared lock before returning.
     assert!(LockedSelectedGeneration::try_open(root.path()).is_ok());
 }
+
+#[test]
+#[cfg_attr(windows, ignore = "requires elevated machine-lock ACL provisioning; run explicitly in Windows acceptance")]
+fn startup_inspection_distinguishes_legacy_pending_selected_and_corrupt() {
+    let root = tempfile::tempdir().unwrap();
+    assert!(inspect_startup_once(root.path(), StoreScope::Machine).is_err());
+    provision_test_lock(root.path());
+    assert_eq!(inspect_startup_once(root.path(), StoreScope::Machine).unwrap(), StartupView::Legacy);
+    let old = [42; 32];
+    let mut input = sections(&old);
+    let key = derive_section_key(&old, None).unwrap();
+    input.push(("f6-keystore".into(), encode_section(&key, br#"{"signing_seed_hex":"preserve"}"#, "machine:f6-keystore").unwrap()));
+    let candidate = prepare(&old, &input).unwrap();
+    let selected = root.path().join(".settings-generation.v1");
+    let authority = root.path().join(".settings-generation.authority.v1");
+    let pending = crate::datastore::settings_generation_authority::pending(None, &candidate, &dpapi_protect, &dpapi_unprotect).unwrap();
+    std::fs::write(&authority, &pending).unwrap();
+    assert_eq!(inspect_startup_once(root.path(), StoreScope::Machine).unwrap(), StartupView::RecoveryRequired);
+    std::fs::write(&selected, &candidate).unwrap();
+    assert_eq!(inspect_startup_once(root.path(), StoreScope::Machine).unwrap(), StartupView::RecoveryRequired);
+    assert_eq!(std::fs::read(&authority).unwrap(), pending);
+    let owner = LockedSelectedGeneration::acquire(root.path()).unwrap();
+    owner.read_reconciled(true).unwrap(); // fixture stands in for source verification
+    drop(owner);
+    let StartupView::Selected(values) = inspect_startup_once(root.path(), StoreScope::Machine).unwrap() else { panic!("expected selected generation"); };
+    assert_eq!(values["f6-keystore"]["signing_seed_hex"], "preserve");
+    std::fs::write(&selected, b"corrupt").unwrap();
+    assert!(inspect_startup_once(root.path(), StoreScope::Machine).is_err());
+}
