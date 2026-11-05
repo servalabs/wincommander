@@ -153,6 +153,7 @@ fn dpapi_unprotect(blob: &[u8]) -> Result<Vec<u8>, String> {
     use windows_sys::Win32::Security::Cryptography::{
         CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
     };
+    use zeroize::Zeroize;
     unsafe {
         let in_blob = CRYPT_INTEGER_BLOB {
             cbData: blob.len() as u32,
@@ -174,8 +175,23 @@ fn dpapi_unprotect(blob: &[u8]) -> Result<Vec<u8>, String> {
         if ok == 0 {
             return Err("CryptUnprotectData failed".to_string());
         }
-        let out = std::slice::from_raw_parts(out_blob.pbData, out_blob.cbData as usize).to_vec();
-        LocalFree(out_blob.pbData as _);
+        let len = out_blob.cbData as usize;
+        if len != 0 && out_blob.pbData.is_null() {
+            return Err("CryptUnprotectData returned invalid output".to_string());
+        }
+        let out = if len == 0 {
+            Vec::new()
+        } else {
+            std::slice::from_raw_parts(out_blob.pbData, len).to_vec()
+        };
+        if !out_blob.pbData.is_null() {
+            // DPAPI owns this allocation until LocalFree; wipe its plaintext
+            // separately from the returned copy.
+            if len != 0 {
+                std::slice::from_raw_parts_mut(out_blob.pbData, len).zeroize();
+            }
+            LocalFree(out_blob.pbData as _);
+        }
         Ok(out)
     }
 }
@@ -224,6 +240,7 @@ fn user_dpapi_unprotect(blob: &[u8]) -> Result<Vec<u8>, String> {
     use windows_sys::Win32::Security::Cryptography::{
         CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
     };
+    use zeroize::Zeroize;
     unsafe {
         let in_blob = CRYPT_INTEGER_BLOB {
             cbData: blob.len() as u32,
@@ -246,8 +263,21 @@ fn user_dpapi_unprotect(blob: &[u8]) -> Result<Vec<u8>, String> {
         {
             return Err("current-user material unprotection failed".to_string());
         }
-        let out = std::slice::from_raw_parts(out_blob.pbData, out_blob.cbData as usize).to_vec();
-        LocalFree(out_blob.pbData as _);
+        let len = out_blob.cbData as usize;
+        if len != 0 && out_blob.pbData.is_null() {
+            return Err("current-user material unprotection returned invalid output".to_string());
+        }
+        let out = if len == 0 {
+            Vec::new()
+        } else {
+            std::slice::from_raw_parts(out_blob.pbData, len).to_vec()
+        };
+        if !out_blob.pbData.is_null() {
+            if len != 0 {
+                std::slice::from_raw_parts_mut(out_blob.pbData, len).zeroize();
+            }
+            LocalFree(out_blob.pbData as _);
+        }
         Ok(out)
     }
 }

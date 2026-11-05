@@ -10,6 +10,20 @@ use std::path::{Path, PathBuf};
 use crate::error::{Result, SearchError};
 use crate::types::{DocId, FileMeta};
 
+pub(crate) fn path_is_skipped(path: &Path, skip_paths: &[PathBuf]) -> bool {
+    if skip_paths.is_empty() {
+        return false;
+    }
+    #[cfg(windows)]
+    {
+        crate::index::path_in_roots(&path.to_string_lossy(), skip_paths)
+    }
+    #[cfg(not(windows))]
+    {
+        skip_paths.iter().any(|skip| path.starts_with(skip))
+    }
+}
+
 /// FNV-1a 64-bit hash of the canonicalized path string.
 pub fn doc_id_for(path: &Path) -> DocId {
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
@@ -62,7 +76,7 @@ fn collect_recursive(
         let path = entry.path();
 
         // Hard skip (decoy paths, etc.)
-        if skip_paths.iter().any(|s| path.starts_with(s)) {
+        if path_is_skipped(&path, skip_paths) {
             continue;
         }
 
@@ -126,6 +140,15 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    #[cfg(windows)]
+    #[test]
+    fn skip_paths_are_case_insensitive_and_component_bounded() {
+        let skips = vec![PathBuf::from(r"C:\Users\A\WinCommander\fts")];
+        assert!(path_is_skipped(Path::new(r"c:\users\a\wincommander\FTS\meta.json"), &skips));
+        assert!(path_is_skipped(Path::new(r"\\?\C:\Users\A\WinCommander\fts\meta.json"), &skips));
+        assert!(!path_is_skipped(Path::new(r"C:\Users\A\WinCommander\fts-backup\doc.json"), &skips));
+    }
 
     fn empty_globset() -> GlobSet {
         build_globset(&[]).unwrap()

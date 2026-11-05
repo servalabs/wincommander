@@ -9,7 +9,7 @@ use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::PathBuf;
 use std::sync::mpsc;
 
-use crate::crawler::doc_id_for;
+use crate::crawler::{doc_id_for, path_is_skipped};
 use crate::error::{Result, SearchError};
 use crate::types::{DocId, FileMeta};
 
@@ -44,7 +44,7 @@ pub fn apply_fs_event(
 ) -> Option<FsEventAction> {
     let path = event.paths.first()?;
 
-    if skip_paths.iter().any(|s| path.starts_with(s)) {
+    if path_is_skipped(path, skip_paths) {
         return None;
     }
     if path_is_excluded(path, exclusions) {
