@@ -33,7 +33,6 @@ ${Using:StrFunc} UnStrStr
 !ifdef WC_EXPERIMENTAL_SEARCH_FENCE
 !define WC_HOLD_SEARCH_MAINTENANCE "${__FILEDIR__}\hold-search-maintenance.ps1"
 !define WC_SEARCH_MIGRATION_PHASE "${__FILEDIR__}\search-migration-phase.ps1"
-Var WCSearchTransaction
 Var WCSearchFenceHandle
 !endif
 Var WCUserStageServiceRunning
@@ -169,39 +168,7 @@ Function WC_RestoreUserStageService
 FunctionEnd
 !endif
 
-; Called only after POSTINSTALL succeeds. Release the installer-owned lock,
-; then commit under a newly acquired exclusive lock and revalidate selection.
-; A contending runtime or failure leaves the authenticated marker pending.
-!macro WC_COMMIT_SEARCH_TRANSACTION
-  !ifdef WC_EXPERIMENTAL_SEARCH_FENCE
-    ${If} $WCSearchTransaction != "NONE"
-      ${If} $WCSearchFenceHandle != 0
-        System::Call 'kernel32::CloseHandle(p $WCSearchFenceHandle) i .r0'
-        ${If} $0 == 0
-          DetailPrint "Search update could not release its maintenance lock. Retry setup."
-          SetErrorLevel 1
-          Quit
-        ${EndIf}
-        StrCpy $WCSearchFenceHandle 0
-      ${EndIf}
-      !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
-      nsExec::ExecToStack /TIMEOUT=600000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-search-migration-phase.ps1" -Phase commit -Transaction "$WCSearchTransaction" -ExecutablePath "$PLUGINSDIR\wincommander-search-fence.exe" -InstallDirectory "$INSTDIR"'
-      Pop $0
-      Pop $1
-      ${If} $0 != 0
-        DetailPrint "Search update remains pending. Close WinCommander and retry this setup."
-        ${IfNot} ${Silent}
-          MessageBox MB_ICONSTOP "Search update remains pending. Close WinCommander and retry this setup. Your previous search index is preserved."
-        ${EndIf}
-        SetErrorLevel 1
-        Quit
-      ${EndIf}
-      StrCpy $WCSearchTransaction "NONE"
-    ${EndIf}
-  !endif
-!macroend
-
-; Invoke only after every installation step and migration commit has succeeded.
+; Invoke only after all installation steps have succeeded.
 !macro WC_RELEASE_SEARCH_BEFORE_LAUNCH
   !ifdef WC_EXPERIMENTAL_SEARCH_FENCE
     ${If} $WCSearchFenceHandle != 0
@@ -333,21 +300,18 @@ FunctionEnd
     ; The helper duplicates verified file and directory handles into this
     ; installer. Only this process acquires and owns the exclusive lock.
     InitPluginsDir
-    StrCpy $WCSearchTransaction "NONE"
     StrCpy $WCSearchFenceHandle 0
     File /oname=$PLUGINSDIR\wincommander-search-fence.exe "${MAINBINARYSRCPATH}"
     File /oname=$PLUGINSDIR\wincommander-hold-search-maintenance.ps1 "${WC_HOLD_SEARCH_MAINTENANCE}"
     File /oname=$PLUGINSDIR\wincommander-search-migration-phase.ps1 "${WC_SEARCH_MIGRATION_PHASE}"
-    ; Prepare records a durable transaction and marks roll-forward before
-    ; releasing its exclusive lock. Failures after this point require retry.
+    ; Prepare a protected empty cache without moving the legacy index.
     !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
-    nsExec::ExecToStack /TIMEOUT=600000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-search-migration-phase.ps1" -Phase prepare -ExecutablePath "$PLUGINSDIR\wincommander-search-fence.exe" -InstallDirectory "$INSTDIR"'
+    nsExec::ExecToStack /TIMEOUT=600000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-search-migration-phase.ps1" -Phase stage -ExecutablePath "$PLUGINSDIR\wincommander-search-fence.exe" -InstallDirectory "$INSTDIR"'
     Pop $0
     Pop $1
     ${If} $0 != 0
-      !insertmacro WC_ABORT_STOP_FAILURE "preinstall" "Search preparation needs recovery. Close WinCommander and retry setup."
+      !insertmacro WC_ABORT_STOP_FAILURE "preinstall" "WinCommander could not prepare protected search. The existing index remains in place."
     ${EndIf}
-    ${TrimNewLines} "$1" $WCSearchTransaction
     System::Call 'kernel32::GetCurrentProcessId() i .R6'
     !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
     nsExec::ExecToStack /TIMEOUT=90000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-hold-search-maintenance.ps1" -ExecutablePath "$PLUGINSDIR\wincommander-search-fence.exe" -InstallerProcessId $R6'
@@ -367,14 +331,14 @@ FunctionEnd
       StrCpy $0 0
     ${EndIf}
     ${If} $0 != 1
-      !insertmacro WC_ABORT_STOP_FAILURE "preinstall" "Search update is pending. Close WinCommander and retry setup."
+      !insertmacro WC_ABORT_STOP_FAILURE "preinstall" "Search maintenance could not start. The existing index remains in place."
     ${EndIf}
     !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
-    nsExec::ExecToStack /TIMEOUT=600000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-search-migration-phase.ps1" -Phase verify -ExecutablePath "$PLUGINSDIR\wincommander-search-fence.exe" -InstallDirectory "$INSTDIR"'
+    nsExec::ExecToStack /TIMEOUT=600000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-search-migration-phase.ps1" -Phase verify-staged -ExecutablePath "$PLUGINSDIR\wincommander-search-fence.exe" -InstallDirectory "$INSTDIR"'
     Pop $0
     Pop $1
     ${If} $0 != 0
-      !insertmacro WC_ABORT_STOP_FAILURE "preinstall" "Search verification is pending. Close WinCommander and retry setup."
+      !insertmacro WC_ABORT_STOP_FAILURE "preinstall" "Protected search verification failed. The existing index remains in place."
     ${EndIf}
   !endif
   !ifdef WC_EXPERIMENTAL_USER_STAGE_ONLY

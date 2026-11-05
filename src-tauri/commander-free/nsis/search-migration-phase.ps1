@@ -1,9 +1,8 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)][ValidateSet('prepare','verify','commit')][string]$Phase,
+    [Parameter(Mandatory)][ValidateSet('stage','verify-staged')][string]$Phase,
     [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$ExecutablePath,
-    [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$InstallDirectory,
-    [string]$Transaction = ''
+    [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$InstallDirectory
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -42,34 +41,12 @@ try {
             return $output.Substring($Prefix.Length)
         } finally { $process.Dispose() }
     }
-    $txPrefix = 'WINCOMMANDER_SEARCH_TRANSACTION_OUTCOME:'
-    if ($Phase -eq 'prepare') {
-        $pending = Invoke-Helper '--search-migration-transaction inspect placeholder' $txPrefix
-        if ($pending -ceq 'none') {
-            $random = New-Object byte[] 16
-            $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
-            try { $rng.GetBytes($random) } finally { $rng.Dispose() }
-            $token = -join ($random | ForEach-Object { $_.ToString('x2') })
-            if ($token -ceq ('0' * 32)) { throw 'Could not generate search transaction identity.' }
-        } elseif ($pending -cmatch '^(?:intent|replacement-pending) ([0-9a-f]{32})$') {
-            $token = $Matches[1]
-        } else { throw 'Pending search transaction is invalid; retry setup or recover it.' }
-        $result = Invoke-Helper "--search-migration-transaction prepare $token" $txPrefix
-        if ($result -ceq 'fresh' -or $result -ceq 'already-quarantined') {
-            [Console]::Out.WriteLine('NONE')
-        } elseif ($result -ceq 'replacement-pending reconciliation=pending') {
-            [Console]::Out.WriteLine($token)
-        } else { throw 'Search migration preparation needs recovery.' }
-    } elseif ($Phase -eq 'verify') {
-        $result = Invoke-Helper '--search-migration-lab verify' 'WINCOMMANDER_SEARCH_MIGRATION_OUTCOME:'
-        if ($result -cne 'fresh' -and $result -cne 'verified') { throw 'Search verification outcome was invalid.' }
-        [Console]::Out.WriteLine($result)
-    } else {
-        if ($Transaction -cnotmatch '^[0-9a-f]{32}$') { throw 'Search transaction identity is invalid.' }
-        $result = Invoke-Helper "--search-migration-transaction commit $Transaction" $txPrefix
-        if ($result -cne 'committed') { throw 'Search transaction commit was not confirmed.' }
-        [Console]::Out.WriteLine('committed')
-    }
+    $result = Invoke-Helper "--search-migration-lab $Phase" 'WINCOMMANDER_SEARCH_MIGRATION_OUTCOME:'
+    $pattern = if ($Phase -eq 'stage') {
+        '^(fresh|staged reconciliation=pending old-cache=retained|already-quarantined)$'
+    } else { '^(fresh|staged old-cache=retained|already-quarantined)$' }
+    if ($result -cnotmatch $pattern) { throw 'Protected search staging outcome was not confirmed.' }
+    [Console]::Out.WriteLine($result)
 
 } catch {
     [Console]::Error.WriteLine("Search migration failed; existing data was preserved. $($_.Exception.Message)")
