@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Test-only source snapshot. This does not provide a production cutover.
-use super::{prepare, stage_new_with_hook, validate_section_name, verify_source, MAX_SECTIONS, MAX_TOTAL};
+use super::{prepare, stage_new_with_hook, validate_section_name, verify_source, StagedFile, MAX_SECTIONS, MAX_TOTAL};
 use crate::datastore::dpapi_unprotect;
 use sha2::{Digest, Sha256};
 use std::{fs::{self, File, OpenOptions}, io::{Read, Seek, SeekFrom}, path::{Path, PathBuf}};
@@ -10,6 +10,7 @@ use windows_sys::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_REPARSE_POINT, FILE
 use zeroize::Zeroizing;
 
 const MAX_KEY: u64 = 65536;
+const STAGED_NAME: &str = ".settings-generation.v1.staged";
 const UNAVAILABLE: &str = "settings source unavailable or changed; originals preserved";
 
 struct Section {
@@ -174,23 +175,41 @@ impl Snapshot {
         self.verify_unchanged()
     }
 
-    /// Stage at a new path and independently verify its contents while all
-    /// source guards stay alive. It does not activate or fence old writers.
-    pub(super) fn stage_unactivated(&mut self, path: &Path) -> Result<(), String> {
-        self.stage_unactivated_with_hook(path, &|_, _| Ok(()))
+    /// Stage at the reserved filename under the pinned source root. The
+    /// returned value holds the source and stage handles through verification;
+    /// it does not activate or authorize a production cutover.
+    pub(super) fn stage_unactivated(&mut self) -> Result<GuardedStage<'_>, String> {
+        self.stage_unactivated_with_hook(&|_, _| Ok(()))
     }
 
     fn stage_unactivated_with_hook(
         &mut self,
-        path: &Path,
         after_write: &impl Fn(&Path, &mut File) -> Result<(), String>,
-    ) -> Result<(), String> {
+    ) -> Result<GuardedStage<'_>, String> {
         let output = self.prepare()?;
         self.verify_generation(&output)?;
         let sections: Vec<_> = self.sections.iter().map(|s| (s.name.clone(), s.encoded.clone())).collect();
-        stage_new_with_hook(path, &output, &self.material, &sections, after_write)?;
+        let stage_path = self.store.parent().ok_or(UNAVAILABLE)?.join(STAGED_NAME);
+        let stage = stage_new_with_hook(&stage_path, &output, &self.material, &sections, after_write)?;
         self.verify_generation(&output)?;
-        Ok(())
+        Ok(GuardedStage { snapshot: self, stage, output })
+    }
+}
+
+/// This borrow keeps the snapshot and stage handles alive together. Dropping
+/// it ends that protection; it is not a durable restart or activation token.
+pub(super) struct GuardedStage<'a> {
+    snapshot: &'a mut Snapshot,
+    stage: StagedFile,
+    output: Vec<u8>,
+}
+
+impl GuardedStage<'_> {
+    pub(super) fn verify(&mut self) -> Result<(), String> {
+        self.snapshot.verify_generation(&self.output)?;
+        let sections: Vec<_> = self.snapshot.sections.iter().map(|s| (s.name.clone(), s.encoded.clone())).collect();
+        self.stage.verify(&self.output, &self.snapshot.material, &sections)?;
+        self.snapshot.verify_generation(&self.output)
     }
 }
 

@@ -270,3 +270,19 @@ fn staged_readback_succeeds_for_an_unchanged_new_file() {
     stage_new_with_hook(&staged, &candidate, &old, &input, &|_, _| Ok(())).unwrap();
     assert_eq!(std::fs::read(staged).unwrap(), candidate);
 }
+
+#[cfg(unix)]
+#[test]
+fn held_stage_guard_detects_path_swap_after_first_readback() {
+    let dir = tempfile::tempdir().unwrap();
+    let old = [42; 32];
+    let input = sections(&old);
+    let candidate = prepare(&old, &input).unwrap();
+    let path = dir.path().join("stage");
+    let moved = dir.path().join("original-stage");
+    let stage = stage_new_with_hook(&path, &candidate, &old, &input, &|_, _| Ok(())).unwrap();
+    std::fs::rename(&path, &moved).unwrap();
+    std::fs::write(&path, &candidate).unwrap();
+    assert!(stage.verify(&candidate, &old, &input).is_err());
+    assert_eq!(std::fs::read(moved).unwrap(), candidate);
+}

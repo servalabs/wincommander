@@ -10,7 +10,7 @@ use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeMap, path::Path};
+use std::{collections::BTreeMap, path::{Path, PathBuf}};
 use zeroize::Zeroizing;
 
 const FORMAT: &str = "wincommander-settings-generation-v1";
@@ -185,18 +185,56 @@ fn verify_source(input: &[u8], old_material: &[u8; 32], sections: &[(String, Str
     Ok(())
 }
 
-/// Stage only to an absent path, hold the newly created file, and verify an
-/// independently opened, bounded readback. The supplied path is not bound to
-/// a trusted destination and its ancestors are not pinned. Handles are dropped
-/// before any activation. These are production blockers, not a cutover proof.
+/// Holds the created stage handle and an independent reader while the caller
+/// verifies. Reopening the path each time detects observed replacement. Root
+/// authorization and activation fencing remain production requirements.
+struct StagedFile {
+    path: PathBuf,
+    written: std::fs::File,
+    _reader: std::fs::File,
+}
+
+fn open_stage_reader(path: &Path) -> Result<std::fs::File, String> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE};
+        options.share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    #[cfg(unix)]
+    if std::fs::symlink_metadata(path).map_err(|_| "cannot inspect settings stage")?.file_type().is_symlink() {
+        return Err("linked settings stage refused".into());
+    }
+    options.open(path).map_err(|_| "cannot reopen settings stage".into())
+}
+
+impl StagedFile {
+    fn verify(&self, candidate: &[u8], old_material: &[u8; 32], sections: &[(String, String)]) -> Result<(), String> {
+        use std::io::Read;
+        let limit = MAX_TOTAL * 2 + 65536;
+        let readback = open_stage_reader(&self.path)?;
+        if !same_stage_file(&self.written, &readback)? { return Err("settings stage identity changed".into()); }
+        let metadata = readback.metadata().map_err(|_| "cannot inspect settings stage")?;
+        if !metadata.is_file() || metadata.len() > limit as u64 { return Err("invalid settings stage".into()); }
+        let mut actual = Vec::new();
+        readback.take(limit as u64 + 1).read_to_end(&mut actual).map_err(|_| "cannot read settings stage")?;
+        if actual.len() > limit || actual != candidate { return Err("settings stage readback mismatch".into()); }
+        verify_source(&actual, old_material, sections)
+    }
+}
+
+/// Create a new stage without overwrite and hold it through readback. A failed
+/// attempt may leave an unactivated file that must be inspected, not activated.
 fn stage_new_with_hook(
     path: &Path,
     candidate: &[u8],
     old_material: &[u8; 32],
     sections: &[(String, String)],
     after_write: &impl Fn(&Path, &mut std::fs::File) -> Result<(), String>,
-) -> Result<(), String> {
-    use std::io::{Read, Write};
+) -> Result<StagedFile, String> {
+    use std::io::Write;
     let limit = MAX_TOTAL * 2 + 65536;
     if candidate.len() > limit { return Err("settings generation too large".into()); }
     verify_source(candidate, old_material, sections)?;
@@ -211,23 +249,11 @@ fn stage_new_with_hook(
     written.write_all(candidate).and_then(|_| written.sync_all())
         .map_err(|_| "settings stage write failed; inspect destination")?;
     after_write(path, &mut written)?;
-
-    let mut read_options = std::fs::OpenOptions::new();
-    read_options.read(true);
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE};
-        read_options.share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-    }
-    let readback = read_options.open(path).map_err(|_| "cannot reopen settings stage")?;
-    if !same_stage_file(&written, &readback)? { return Err("settings stage identity changed".into()); }
-    let metadata = readback.metadata().map_err(|_| "cannot inspect settings stage")?;
-    if !metadata.is_file() || metadata.len() > limit as u64 { return Err("invalid settings stage".into()); }
-    let mut actual = Vec::new();
-    readback.take(limit as u64 + 1).read_to_end(&mut actual).map_err(|_| "cannot read settings stage")?;
-    if actual.len() > limit || actual != candidate { return Err("settings stage readback mismatch".into()); }
-    verify_source(&actual, old_material, sections)
+    let reader = open_stage_reader(path)?;
+    if !same_stage_file(&written, &reader)? { return Err("settings stage identity changed".into()); }
+    let guard = StagedFile { path: path.to_path_buf(), written, _reader: reader };
+    guard.verify(candidate, old_material, sections)?;
+    Ok(guard)
 }
 
 #[cfg(windows)]

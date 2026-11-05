@@ -65,8 +65,7 @@ fn staging_does_not_accept_new_section_created_during_publication() {
     let original = fs::read(dir.path().join("store").join("settings.dat")).unwrap();
     let mut snapshot = Snapshot::capture(dir.path()).unwrap();
     let later = dir.path().join("store").join("later.dat");
-    let staged = dir.path().join("unactivated-generation");
-    let result = snapshot.stage_unactivated_with_hook(&staged, &|_, _| {
+    let result = snapshot.stage_unactivated_with_hook(&|_, _| {
         fs::write(&later, b"late old-writer data").map_err(|_| "old writer blocked".to_string())
     });
     assert!(result.is_err());
@@ -79,9 +78,9 @@ fn failure_after_staging_does_not_authorize_cutover_or_modify_sources() {
     fixture(dir.path());
     let section = dir.path().join("store").join("settings.dat");
     let original = fs::read(&section).unwrap();
-    let staged = dir.path().join("unactivated-generation");
+    let staged = dir.path().join(STAGED_NAME);
     let mut snapshot = Snapshot::capture(dir.path()).unwrap();
-    let result = snapshot.stage_unactivated_with_hook(&staged, &|_, _| {
+    let result = snapshot.stage_unactivated_with_hook(&|_, _| {
         Err("publication outcome unknown".into())
     });
     assert!(result.is_err());
@@ -114,13 +113,14 @@ fn successful_staging_does_not_fence_a_later_old_writer() {
     let dir = tempfile::tempdir().unwrap();
     fixture(dir.path());
     let mut snapshot = Snapshot::capture(dir.path()).unwrap();
-    snapshot.stage_unactivated(&dir.path().join("unactivated-generation")).unwrap();
+    let mut stage = snapshot.stage_unactivated().unwrap();
     let late = dir.path().join("store").join("late.dat");
     if fs::write(&late, b"post-check old writer").is_ok() {
         // The previous success did not authorize activation. The caller can
         // still detect this change while it retains the snapshot guard.
-        assert!(snapshot.verify_unchanged().is_err());
+        assert!(stage.verify().is_err());
     }
+    drop(stage);
     drop(snapshot);
     // Once the guard is dropped, old writers are no longer fenced at all.
     assert!(fs::write(dir.path().join("store").join("settings.dat"), b"old writer resumed").is_ok());
@@ -141,4 +141,29 @@ fn fresh_snapshot_can_verify_reopened_generation_but_detects_new_section() {
     fs::write(dir.path().join("store").join("later.dat"), b"later source").unwrap();
     let mut changed = Snapshot::capture(dir.path()).unwrap();
     assert!(changed.verify_generation(&generation).is_err());
+}
+
+#[test]
+fn staging_uses_only_reserved_name_under_guarded_root_without_overwrite() {
+    let dir = tempfile::tempdir().unwrap();
+    fixture(dir.path());
+    let stage = dir.path().join(STAGED_NAME);
+    fs::write(&stage, b"existing protected file").unwrap();
+    let mut snapshot = Snapshot::capture(dir.path()).unwrap();
+    assert!(snapshot.stage_unactivated().is_err());
+    assert_eq!(fs::read(stage).unwrap(), b"existing protected file");
+}
+
+#[test]
+fn stage_guard_revalidates_held_identity_and_source() {
+    let dir = tempfile::tempdir().unwrap();
+    fixture(dir.path());
+    let mut snapshot = Snapshot::capture(dir.path()).unwrap();
+    let mut stage = snapshot.stage_unactivated().unwrap();
+    stage.verify().unwrap();
+    let path = dir.path().join(STAGED_NAME);
+    assert!(path.is_file());
+    assert!(fs::remove_file(&path).is_err());
+    drop(stage);
+    assert!(fs::remove_file(path).is_ok());
 }
