@@ -16,6 +16,9 @@ mod origins;
 mod contact;
 pub use contact::{ContactChallenge, ContactObservation};
 
+#[path = "fleet_hybrid_enrollment.rs"]
+mod hybrid_enrollment;
+
 #[cfg(windows)]
 use crate::peer_auth_deployment_acl as protected_acl;
 
@@ -108,6 +111,9 @@ pub struct FleetHybridTrust {
     pub ed_key_id: String,
     pub pq_key_id: String,
     pub ml_dsa_65_public_b64: String,
+    /// Independently approved local outcome-signing key for this device.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome_key_b64: Option<String>,
 }
 
 fn validate_hybrid_trust(binding: &FleetTrust, hybrid: &FleetHybridTrust) -> Result<(), &'static str> {
@@ -124,6 +130,14 @@ fn validate_hybrid_trust(binding: &FleetTrust, hybrid: &FleetHybridTrust) -> Res
         || STANDARD.encode(ed) != binding.signer_key
         || !ed25519_dalek::VerifyingKey::from_bytes(&ed).is_ok_and(|key| !key.is_weak()) {
         return Err("invalid_hybrid_trust");
+    }
+    if let Some(value) = &hybrid.outcome_key_b64 {
+        let outcome = STANDARD.decode(value).map_err(|_| "invalid_hybrid_trust")?;
+        let outcome: [u8; 32] = outcome.try_into().map_err(|_| "invalid_hybrid_trust")?;
+        if STANDARD.encode(outcome) != *value
+            || !ed25519_dalek::VerifyingKey::from_bytes(&outcome).is_ok_and(|key| !key.is_weak()) {
+            return Err("invalid_hybrid_trust");
+        }
     }
     Ok(())
 }
@@ -262,6 +276,8 @@ struct State {
     contact_challenge: Option<contact::PendingContact>,
     #[serde(skip)]
     hybrid_enrollment: Option<PendingHybridEnrollment>,
+    #[serde(skip)]
+    hybrid_claim: Option<hybrid_enrollment::ClaimMarker>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -460,6 +476,7 @@ impl FleetMachinePolicy {
         );
         let mut guard = self.state.lock().map_err(|_| "store_unavailable")?;
         guard.hybrid_enrollment = None;
+        guard.hybrid_claim = None;
         let mut next = guard.clone();
         next.pending = Some(PendingEnrollment {
             device_id,
@@ -545,6 +562,7 @@ impl FleetMachinePolicy {
             pending: None,
             contact_challenge: None,
             hybrid_enrollment: None,
+            hybrid_claim: None,
         };
         self.persist(&next)?;
         *guard = next;
@@ -562,18 +580,24 @@ impl FleetMachinePolicy {
     ) -> Result<(), &'static str> {
         validate_trust(&expected)?;
         validate_hybrid_trust(&expected, &hybrid)?;
+        if hybrid.outcome_key_b64.is_none() { return Err("outcome_key_required"); }
         let audit = trust_audit("hybrid_provision", actor, &expected.enrollment_generation)?;
         let mut guard = self.state.lock().map_err(|_| "store_unavailable")?;
         let current = guard.record.as_ref().ok_or("not_provisioned")?;
         if current.trust != expected { return Err("binding_changed"); }
         if let Some(existing) = &current.hybrid_trust {
-            if *existing != hybrid { return Err("hybrid_rotation_required"); }
-            if !current.hybrid_unconfirmed { return Ok(()); }
-            let mut next = guard.clone();
-            next.record.as_mut().ok_or("not_provisioned")?.hybrid_unconfirmed = false;
-            self.persist(&next)?;
-            *guard = next;
-            return Ok(());
+            if *existing == hybrid {
+                if !current.hybrid_unconfirmed { return Ok(()); }
+                let mut next = guard.clone();
+                next.record.as_mut().ok_or("not_provisioned")?.hybrid_unconfirmed = false;
+                self.persist(&next)?;
+                *guard = next;
+                return Ok(());
+            }
+            let completing_legacy_pin = existing.outcome_key_b64.is_none()
+                && existing.minimum_epoch == hybrid.minimum_epoch && existing.ed_key_id == hybrid.ed_key_id
+                && existing.pq_key_id == hybrid.pq_key_id && existing.ml_dsa_65_public_b64 == hybrid.ml_dsa_65_public_b64;
+            if !completing_legacy_pin || current.hybrid_unconfirmed { return Err("hybrid_rotation_required"); }
         }
         let mut next = guard.clone();
         let record = next.record.as_mut().ok_or("not_provisioned")?;
@@ -587,6 +611,8 @@ impl FleetMachinePolicy {
         record.audit.push(audit);
         next.pending = None;
         next.contact_challenge = None;
+        next.hybrid_enrollment = None;
+        next.hybrid_claim = None;
         match self.persist(&next) {
             Ok(()) => { *guard = next; Ok(()) }
             Err(error) => {
@@ -629,12 +655,13 @@ impl FleetMachinePolicy {
         let mut guard = self.state.lock().map_err(|_| "store_unavailable")?;
         let current = guard.record.as_ref().ok_or("not_provisioned")?;
         if current.trust != *expected { return Err("binding_changed"); }
-        if current.hybrid_unconfirmed || current.hybrid_trust.is_none() { return Err("hybrid_trust_unavailable"); }
+        if current.hybrid_unconfirmed || current.hybrid_trust.as_ref().and_then(|trust| trust.outcome_key_b64.as_ref()).is_none() { return Err("hybrid_trust_unavailable"); }
         if current.service_enabled || current.credential.is_some() || !current.origins.contains(&origin) {
             return Err("origin_not_authorized");
         }
         // A failed replacement or persistence never leaves the old grant live.
         guard.hybrid_enrollment = None;
+        guard.hybrid_claim = None;
         let mut next = guard.clone();
         let record = next.record.as_mut().ok_or("not_provisioned")?;
         record.connection_revision = record.connection_revision.checked_add(1).ok_or("revision_exhausted")?;
@@ -662,6 +689,10 @@ impl FleetMachinePolicy {
         if guard.hybrid_enrollment.as_ref().is_some_and(|pending|
             pending.id == id && pending.caller_sid == actor && pending.session_id == session) {
             guard.hybrid_enrollment = None;
+            return Ok(true);
+        }
+        if guard.hybrid_claim.as_ref().is_some_and(|claim| claim.matches_owner(id, actor, session)) {
+            guard.hybrid_claim = None;
             return Ok(true);
         }
         Ok(false)
@@ -739,6 +770,7 @@ impl FleetMachinePolicy {
             pending: None,
             contact_challenge: None,
             hybrid_enrollment: None,
+            hybrid_claim: None,
         };
         self.persist(&next)?;
         *guard = next;
@@ -873,6 +905,7 @@ impl FleetMachinePolicy {
             pending: guard.pending.clone(),
             contact_challenge: guard.contact_challenge.clone(),
             hybrid_enrollment: guard.hybrid_enrollment.clone(),
+            hybrid_claim: guard.hybrid_claim.clone(),
         };
         self.persist(&next)?;
         *guard = next;
@@ -1180,6 +1213,7 @@ impl FleetMachinePolicy {
             return Err("binding_changed");
         }
         guard.hybrid_enrollment = None;
+        guard.hybrid_claim = None;
         let mut next = guard.clone();
         let record = next.record.as_mut().ok_or("not_provisioned")?;
         record.credential_revision = record.credential_revision.checked_add(1).ok_or("revision_exhausted")?;
@@ -1217,6 +1251,7 @@ impl FleetMachinePolicy {
             return Ok(false);
         }
         guard.hybrid_enrollment = None;
+        guard.hybrid_claim = None;
         let mut next = guard.clone();
         let record = next.record.as_mut().ok_or("not_provisioned")?;
         record.credential = None;
@@ -1360,7 +1395,111 @@ mod tests {
 
     fn hybrid() -> FleetHybridTrust {
         FleetHybridTrust { minimum_epoch: 7, ed_key_id: "fleet-ed".into(), pq_key_id: "fleet-pq".into(),
-            ml_dsa_65_public_b64: STANDARD.encode([42u8; 1952]) }
+            ml_dsa_65_public_b64: STANDARD.encode([42u8; 1952]),
+            outcome_key_b64: Some(STANDARD.encode(SigningKey::from_bytes(&[7; 32]).verifying_key().as_bytes())) }
+    }
+
+    fn hybrid_request(offer: &HybridEnrollmentOffer) -> Vec<u8> {
+        hybrid_request_with_key(offer, 7)
+    }
+
+    fn hybrid_request_with_key(offer: &HybridEnrollmentOffer, seed: u8) -> Vec<u8> {
+        let outcome = SigningKey::from_bytes(&[seed; 32]);
+        let mut body = serde_json::json!({"device_id":trust().device_id, "device_hash":"device-hash",
+            "device_kind":"wincommander", "agent_version":"3.6.7", "protocol_version":1,
+            "capabilities":["hmac_body_v2"], "outcome_pubkey_b64":STANDARD.encode(outcome.verifying_key().as_bytes()),
+            "shield_progress_challenge":offer.challenge, "enrollment_proof_version":2,
+            "enrollment_server_key_b64":trust().signer_key,
+            "enrollment_nonce":"44444444-4444-4444-8444-444444444444", "enrollment_ts":42 });
+        let mut preimage = b"WinCommander Fleet enrollment proof v2\nPOST\n/v1/windows/enroll-v2\n".to_vec();
+        preimage.extend(fleet_proto::canonical_json_bytes(&body));
+        body["enrollment_signature_b64"] = STANDARD.encode(outcome.sign(&preimage).to_bytes()).into();
+        serde_json::to_vec(&body).unwrap()
+    }
+
+    fn signed_request_with_extra(offer: &HybridEnrollmentOffer, extra: serde_json::Value) -> Vec<u8> {
+        let mut body: serde_json::Value = serde_json::from_slice(&hybrid_request(offer)).unwrap();
+        body.as_object_mut().unwrap().remove("enrollment_signature_b64");
+        body["extra"] = extra;
+        let mut preimage = b"WinCommander Fleet enrollment proof v2\nPOST\n/v1/windows/enroll-v2\n".to_vec();
+        preimage.extend(fleet_proto::canonical_json_bytes(&body));
+        body["enrollment_signature_b64"] = STANDARD.encode(SigningKey::from_bytes(&[7;32]).sign(&preimage).to_bytes()).into();
+        serde_json::to_vec(&body).unwrap()
+    }
+
+    fn hybrid_ready() -> (MemoryFs, FleetMachinePolicy) {
+        let fs = MemoryFs::default();
+        let store = store(fs.clone());
+        let signature = proof_with_origins(&store, &trust(), vec!["https://fleet.example".into()]);
+        store.provision(trust(), &signature, "S-1-5-18").unwrap();
+        store.provision_hybrid_trust(trust(), hybrid(), "S-1-5-18").unwrap();
+        (fs, store)
+    }
+
+    #[test]
+    fn hybrid_claim_is_one_use_exact_and_revocable() {
+        let (fs, store) = hybrid_ready();
+        let offer = store.begin_hybrid_enrollment(&trust(), "https://fleet.example", "S-1-5-21-7", 7).unwrap();
+        let bytes = hybrid_request(&offer);
+        assert!(store.claim_hybrid_enrollment(&offer.authorization_id, "S-1-5-21-8", 7, &bytes).is_err());
+        let claim = store.claim_hybrid_enrollment(&offer.authorization_id, "S-1-5-21-7", 7, &bytes).unwrap();
+        assert_eq!(claim.request(), bytes);
+        assert_eq!(claim.origin(), "https://fleet.example");
+        assert_eq!(claim.challenge(), offer.challenge);
+        assert_eq!(claim.outcome_key(), STANDARD.encode(SigningKey::from_bytes(&[7; 32]).verifying_key().as_bytes()));
+        assert!(store.hybrid_claim_is_current(&claim));
+        assert!(store.claim_hybrid_enrollment(&offer.authorization_id, "S-1-5-21-7", 7, &bytes).is_err());
+        assert_eq!(store.hybrid_trust_for_helper("S-1-5-21-7", 7), Err("hybrid_enrollment_not_authorized"));
+        assert!(!store.cancel_hybrid_enrollment(&offer.authorization_id, "S-1-5-21-8", 7).unwrap());
+        let reopened = FleetMachinePolicy::open(Box::new(fs), PathBuf::from("test")).unwrap();
+        assert!(!reopened.hybrid_claim_is_current(&claim));
+        assert!(store.cancel_hybrid_enrollment(&offer.authorization_id, "S-1-5-21-7", 7).unwrap());
+        assert!(!store.hybrid_claim_is_current(&claim));
+    }
+
+    #[test]
+    fn hybrid_claim_rejects_malformed_or_tampered_requests_and_burns_the_grant() {
+        let (_, store) = hybrid_ready();
+        for mode in 0..10 {
+            let offer = store.begin_hybrid_enrollment(&trust(), "https://fleet.example", "S-1-5-21-7", 7).unwrap();
+            let original = hybrid_request(&offer);
+            let bad = match mode {
+                0 => vec![b'x'; 32 * 1024 + 1],
+                1 => b"{\"device_id\":\"a\",\"device_id\":\"b\"}".to_vec(),
+                6 => hybrid_request_with_key(&offer, 8),
+                7 => signed_request_with_extra(&offer, serde_json::json!({"$serde_json::private::Number":"1"})),
+                8 => signed_request_with_extra(&offer, serde_json::json!(9007199254740992u64)),
+                9 => signed_request_with_extra(&offer, serde_json::json!(1.0)),
+                _ => {
+                    let mut value: serde_json::Value = serde_json::from_slice(&original).unwrap();
+                    match mode {
+                        2 => value["shield_progress_challenge"] = "other".into(),
+                        3 => value["device_id"] = "other".into(),
+                        4 => value["enrollment_server_key_b64"] = STANDARD.encode([9u8;32]).into(),
+                        _ => value["enrollment_signature_b64"] = STANDARD.encode([0u8;64]).into(),
+                    }
+                    serde_json::to_vec(&value).unwrap()
+                }
+            };
+            assert!(store.claim_hybrid_enrollment(&offer.authorization_id, "S-1-5-21-7", 7, &bad).is_err());
+            assert!(store.claim_hybrid_enrollment(&offer.authorization_id, "S-1-5-21-7", 7, &original).is_err());
+        }
+    }
+
+    #[test]
+    fn hybrid_claim_has_only_one_winner_when_callers_race() {
+        use std::sync::Barrier;
+        let (_, store) = hybrid_ready();
+        let store = Arc::new(store);
+        let offer = store.begin_hybrid_enrollment(&trust(), "https://fleet.example", "S-1-5-21-7", 7).unwrap();
+        let bytes = Arc::new(hybrid_request(&offer));
+        let barrier = Arc::new(Barrier::new(8));
+        let workers: Vec<_> = (0..8).map(|_| {
+            let store = Arc::clone(&store); let bytes = Arc::clone(&bytes); let barrier = Arc::clone(&barrier);
+            let id = offer.authorization_id.clone();
+            std::thread::spawn(move || { barrier.wait(); store.claim_hybrid_enrollment(&id, "S-1-5-21-7", 7, &bytes).is_ok() })
+        }).collect();
+        assert_eq!(workers.into_iter().map(|worker| worker.join().unwrap()).filter(|success| *success).count(), 1);
     }
 
     #[test]
@@ -1423,6 +1562,28 @@ mod tests {
         *bytes = Some(serde_json::to_vec(&state).unwrap());
         drop(bytes);
         assert!(matches!(FleetMachinePolicy::open(Box::new(fs), PathBuf::from("test")), Err("invalid_hybrid_trust")));
+    }
+
+    #[test]
+    fn legacy_hybrid_pin_requires_administrator_to_complete_outcome_key() {
+        let (fs, store) = hybrid_ready();
+        let mut bytes = fs.0.lock().unwrap();
+        let mut state: serde_json::Value = serde_json::from_slice(bytes.as_ref().unwrap()).unwrap();
+        state["record"]["hybrid_trust"].as_object_mut().unwrap().remove("outcome_key_b64");
+        *bytes = Some(serde_json::to_vec(&state).unwrap());
+        drop(bytes);
+        drop(store);
+        let reopened = FleetMachinePolicy::open(Box::new(fs.clone()), PathBuf::from("test")).unwrap();
+        assert_eq!(reopened.hybrid_trust_snapshot().unwrap().unwrap().1.outcome_key_b64, None);
+        assert_eq!(reopened.begin_hybrid_enrollment(&trust(), "https://fleet.example", "S-1-5-21-7", 7), Err("hybrid_trust_unavailable"));
+        let mut changed = hybrid(); changed.pq_key_id = "changed".into();
+        assert_eq!(reopened.provision_hybrid_trust(trust(), changed, "S-1-5-18"), Err("hybrid_rotation_required"));
+        let mut missing = hybrid(); missing.outcome_key_b64 = None;
+        assert_eq!(reopened.provision_hybrid_trust(trust(), missing, "S-1-5-18"), Err("outcome_key_required"));
+        reopened.provision_hybrid_trust(trust(), hybrid(), "S-1-5-18").unwrap();
+        let saved = FleetMachinePolicy::open(Box::new(fs), PathBuf::from("test")).unwrap();
+        assert_eq!(saved.hybrid_trust_snapshot().unwrap(), Some((trust(), hybrid())));
+        assert!(saved.begin_hybrid_enrollment(&trust(), "https://fleet.example", "S-1-5-21-7", 7).is_ok());
     }
 
     #[test]
