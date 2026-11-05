@@ -128,8 +128,12 @@ fn known_machine_root() -> Result<PathBuf, String> {
 
 impl Snapshot {
     /// Machine-only entry point. The inherited machine-data resolver uses the
-    /// Windows known-folder API; directory ACL authorization remains required
-    /// before any production integration.
+    /// Windows known-folder API. Production cutover must establish that this
+    /// root has the same file identity as the live datastore root: its current
+    /// resolver is environment-based and can point elsewhere. It must also
+    /// verify authorized directory ACLs and fail closed when install mode is
+    /// uncertain: the existing install-mode test can fall back to machine mode.
+    /// These requirements are not implemented by this test-only entry point.
     pub(super) fn capture_machine() -> Result<Self, String> {
         if crate::paths::current_user_install_uses_local_datastore() {
             return Err("machine settings rotation is unavailable for a current-user install".into());
