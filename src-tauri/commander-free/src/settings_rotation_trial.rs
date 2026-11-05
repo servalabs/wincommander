@@ -709,6 +709,11 @@ pub(super) fn begin_experimental_write() -> Result<RuntimeWriteGuard, String> {
 #[cfg(windows)]
 pub(super) fn experimental_runtime_root() -> Result<(PathBuf, Vec<std::fs::File>, StoreScope), String> {
     let scope = if crate::paths::current_user_install_uses_local_datastore() { StoreScope::CurrentUser } else { StoreScope::Machine };
+    experimental_runtime_root_for(scope)
+}
+
+#[cfg(windows)]
+fn experimental_runtime_root_for(scope: StoreScope) -> Result<(PathBuf, Vec<std::fs::File>, StoreScope), String> {
     let root = source_snapshot::known_root(scope)?;
     let pins = source_snapshot::pin_matching_roots(&root, scope)?;
     let root_handle = pins.last().ok_or("settings root unavailable")?;
@@ -824,7 +829,7 @@ pub(super) fn migrate_explicitly() -> Result<(), String> {
 pub(super) fn stage_existing_explicitly(expected_scope: StoreScope) -> Result<(), String> {
     super::settings_generation_maintenance::verify_known_writers_stopped()?;
     let actual_scope = if crate::paths::current_user_install_uses_local_datastore() { StoreScope::CurrentUser } else { StoreScope::Machine };
-    if actual_scope != expected_scope {
+    if expected_scope == StoreScope::Machine && actual_scope != expected_scope {
         return Err("Settings installation scope does not match the running application; existing data preserved.".into());
     }
     let root = source_snapshot::known_root(expected_scope)?;
@@ -834,7 +839,10 @@ pub(super) fn stage_existing_explicitly(expected_scope: StoreScope) -> Result<()
         Err(_) => return Err("Cannot inspect settings root; existing data preserved.".into()),
         Ok(_) => {},
     }
-    let (root, _pins, scope) = experimental_runtime_root()?;
+    let (root, _pins, scope) = experimental_runtime_root_for(expected_scope)?;
+    let _installed_binary = if scope == StoreScope::CurrentUser {
+        Some(source_snapshot::pin_user_installed_binary(&root)?)
+    } else { None };
     let key_name = match scope { StoreScope::Machine => ".install.material", StoreScope::CurrentUser => ".user-store.material" };
     let key = read_generation_file(&root.join(key_name), 65_536)?;
     if key.is_none() {
@@ -861,7 +869,7 @@ pub(super) fn stage_existing_explicitly(expected_scope: StoreScope) -> Result<()
     }
     let mut snapshot = match scope {
         StoreScope::Machine => source_snapshot::Snapshot::capture_machine()?,
-        StoreScope::CurrentUser => source_snapshot::Snapshot::capture_user()?,
+        StoreScope::CurrentUser => source_snapshot::Snapshot::capture_user_from_verified_helper()?,
     };
     let stage = root.join(".settings-cutover-candidate.v1");
     let candidate = match read_generation_file(&stage, MAX_TOTAL * 2 + 65_536)? {

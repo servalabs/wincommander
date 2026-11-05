@@ -106,6 +106,12 @@ fn open_locked(path: &Path, limit: u64) -> Result<File, String> {
     Ok(file)
 }
 
+/// Pin the expected user installation's binary throughout staging. The root
+/// itself is independently checked against the current user's known folder.
+pub(super) fn pin_user_installed_binary(root: &Path) -> Result<File, String> {
+    open_locked(&root.join("wincommander-free.exe"), 1024 * 1024 * 1024)
+}
+
 fn read_locked(file: &mut File, limit: u64) -> Result<Vec<u8>, String> {
     file.seek(SeekFrom::Start(0)).map_err(|_| UNAVAILABLE)?;
     let mut bytes = Vec::new();
@@ -191,6 +197,12 @@ impl Snapshot {
         if !crate::paths::current_user_install_uses_local_datastore() {
             return Err("current-user settings rotation is unavailable for this install".into());
         }
+        Self::capture_user_from_verified_helper()
+    }
+
+    /// Caller verifies the original-user token and pins the installed app before
+    /// using a temporary helper outside the installation directory.
+    pub(super) fn capture_user_from_verified_helper() -> Result<Self, String> {
         let root = known_root(StoreScope::CurrentUser)?;
         let root_pins = pin_matching_roots(&root, StoreScope::CurrentUser)?;
         let mut snapshot = Self::capture_for(&root, StoreScope::CurrentUser)?;

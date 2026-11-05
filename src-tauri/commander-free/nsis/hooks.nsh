@@ -21,6 +21,12 @@ ${Using:StrFunc} UnStrStr
 !define WC_MIGRATE_WIPE_TASKS "${__FILEDIR__}\migrate-wipe-tasks.ps1"
 !define WC_MIGRATE_SYSTEM_MAINTENANCE_TASKS "${__FILEDIR__}\migrate-system-maintenance-tasks.ps1"
 !define WC_WIPE_TASK_MODULE "${__FILEDIR__}\..\..\wincmd-shared\scripts\auto-erase.ps1"
+!ifdef WC_EXPERIMENTAL_USER_STAGE_ONLY
+!if "${INSTALLMODE}" != "currentUser"
+!error "Original-user staging requires currentUser installer mode"
+!endif
+!define WC_STAGE_ORIGINAL_USER_SETTINGS "${__FILEDIR__}\stage-original-user-settings.ps1"
+!endif
 !define WC_REPAIR_SHARED_SETTINGS "${__FILEDIR__}\repair-shared-settings.ps1"
 !define WC_REPAIR_VAULT_DRIVER_ACCESS "${__FILEDIR__}\..\..\..\tools\repair-vault-driver-access.ps1"
 !define WC_UPGRADE_LICENSE_BACKUP "$R5\WinCommander-license_cache.upgrade-backup.json"
@@ -212,6 +218,23 @@ ${Using:StrFunc} UnStrStr
   ; Stop with the service's full advertised budget before replacing its
   ; executable. Older service binaries may take longer to dismount a Vault.
   !insertmacro WC_STOP_OWNED_SERVICE_OR_ABORT "preinstall" ""
+  !ifdef WC_EXPERIMENTAL_USER_STAGE_ONLY
+    ; Only pre-stage existing current-user installs. This never selects the new
+    ; store; failure occurs before the installer replaces existing app files.
+    IfFileExists "$INSTDIR\wincommander-free.exe" 0 wc_user_stage_done
+      InitPluginsDir
+      File /oname=$PLUGINSDIR\wincommander-settings-stage.exe "${MAINBINARYSRCPATH}"
+      File /oname=$PLUGINSDIR\wincommander-stage-original-user-settings.ps1 "${WC_STAGE_ORIGINAL_USER_SETTINGS}"
+      !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
+      nsExec::ExecToStack /TIMEOUT=600000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-stage-original-user-settings.ps1" -ExecutablePath "$PLUGINSDIR\wincommander-settings-stage.exe" -InstallDirectory "$INSTDIR"'
+      Pop $0
+      Pop $1
+      !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "user-settings-stage" "$0" "$1"
+      ${If} $0 != 0
+        Abort "WinCommander could not stage user settings. Existing app and settings remain in place."
+      ${EndIf}
+    wc_user_stage_done:
+  !endif
   !insertmacro WC_LOAD_PROGRAMDATA_OR_ABORT "preinstall"
   IfFileExists "$R5\WinCommander\license_cache.json" 0 wc_no_upgrade_license_to_backup
     ClearErrors
