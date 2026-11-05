@@ -22,7 +22,7 @@ test("password-protected export and encrypted and legacy restore require confirm
     mock.module('./src/hooks/useSettings', () => ({
       writeSettingsExportFile: async value => { exported.push(value); return true; },
       readSettingsImportFile: async () => selected,
-      decryptSettingsImportFile: async (json, password) => { if (password !== 'correct-password') throw new Error('Password incorrect or backup damaged.'); return '{"settingsVersion":2}'; }
+      decryptSettingsImportFile: async (json, password) => { if (password !== 'correct-password') throw new Error('Password incorrect or backup damaged.'); return '{"settingsVersion":2,"app":{},"ideal":{},"current":{},"policy":{}}'; }
     }));
     mock.module('./src/context/AppContext', () => ({ useAppState: () => ({ refreshSettings: async () => {} }) }));
     mock.module('./src/context/SettingsWriteContext', () => ({ useSettingsWriter: () => ({ import: async value => imported.push(value) }) }));
@@ -49,7 +49,7 @@ test("password-protected export and encrypted and legacy restore require confirm
     assert.ok(button('Continue').disabled);
     await fill('#settings-backup-confirmation', 'correct-password');
     await click('Continue'); assert.deepEqual(exported, ['correct-password']);
-    selected = { fileName: 'old.json', json: '{"settingsVersion":2}', encrypted: false };
+    selected = { fileName: 'old.json', json: '{"settingsVersion":2,"app":{},"ideal":{},"current":{},"policy":{}}', encrypted: false };
     await click('Import'); assert.ok(button('Replace settings')); assert.equal(imported.length, 0);
     await click('Replace settings'); assert.equal(imported.length, 1);
     selected = { fileName: 'new.json', json: 'ciphertext', encrypted: true };

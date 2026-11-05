@@ -239,11 +239,11 @@ mod tests {
 
     #[test]
     fn accepts_json_settings_and_preserves_bytes() {
-        let json = "{\"settingsVersion\": 2, \"app\": {}}";
+        let json = "{\"settingsVersion\":2,\"app\":{},\"ideal\":{},\"current\":{},\"policy\":{}}";
         assert_eq!(read_import(json.as_bytes()).unwrap(), json);
         assert!(!classify_import(json).unwrap());
         let oversized = format!(
-            "{{\"settingsVersion\":2,\"app\":{{}},\"padding\":\"{}\"}}",
+            "{{\"settingsVersion\":2,\"app\":{{}},\"ideal\":{{}},\"current\":{{}},\"policy\":{{}},\"padding\":\"{}\"}}",
             "x".repeat(4 * 1024 * 1024)
         );
         assert!(classify_import(&oversized).unwrap_err().contains("4 MiB"));
@@ -253,9 +253,11 @@ mod tests {
     fn encrypted_export_is_the_only_file_written_and_can_be_imported() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.json");
-        let json = "{\"settingsVersion\":2,\"app\":{\"secret\":\"sample-secret\"}}";
+        let mut value = serde_json::to_value(crate::settings::create_default_settings()).unwrap();
+        value["app"]["secret"] = "sample-secret".into();
+        let json = serde_json::to_string(&value).unwrap();
         let password = "a-long-backup-password";
-        let protected = backup_crypto::encrypt(json, password).unwrap();
+        let protected = backup_crypto::encrypt(&json, password).unwrap();
         save_export(&path, &protected).unwrap();
         let stored = read_import(std::fs::File::open(&path).unwrap()).unwrap();
         assert!(!stored.contains("sample-secret"));

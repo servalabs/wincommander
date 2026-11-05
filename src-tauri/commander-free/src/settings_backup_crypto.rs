@@ -118,11 +118,9 @@ pub(super) fn encrypted(value: &serde_json::Value) -> Result<bool, String> {
             {
                 return Err("This settings backup requires a newer WinCommander version.".into());
             }
-            let recognized = ["app", "ideal", "current", "policy"];
-            if !recognized.iter().any(|name| object.contains_key(*name))
-                || ["app", "ideal", "current", "policy"]
-                    .iter()
-                    .any(|name| object.get(*name).is_some_and(|entry| !entry.is_object()))
+            if ["app", "ideal", "current", "policy"]
+                .iter()
+                .any(|name| object.get(*name).is_none_or(|entry| !entry.is_object()))
                 || object
                     .get("settingsVersion")
                     .is_some_and(|entry| entry.as_u64().is_none())
@@ -185,7 +183,7 @@ mod tests {
 
     #[test]
     fn portable_roundtrip_hides_secrets_and_uses_fresh_salt_and_nonce() {
-        let original = r#"{"settingsVersion":2,"app":{"flows":[{"secret":"do-not-expose"}]}}"#;
+        let original = r#"{"settingsVersion":2,"app":{"flows":[{"secret":"do-not-expose"}]},"ideal":{},"current":{},"policy":{}}"#;
         let first = encrypt(original, "a-long-backup-password").unwrap();
         let second = encrypt(original, "a-long-backup-password").unwrap();
         assert!(!first.contains("do-not-expose"));
@@ -243,7 +241,16 @@ mod tests {
         assert!(encrypted(&serde_json::json!({})).is_err());
         assert!(encrypted(&serde_json::json!({"app": 1})).is_err());
         assert!(encrypted(&serde_json::json!({"settingsVersion":2})).is_err());
-        assert!(!encrypted(&serde_json::json!({"settingsVersion":2,"app":{}})).unwrap());
+        assert!(encrypted(&serde_json::json!({"settingsVersion":2,"app":{}})).is_err());
+        assert!(!encrypted(
+            &serde_json::json!({"settingsVersion":2,"app":{},"ideal":{},"current":{},"policy":{}})
+        )
+        .unwrap());
+        for missing in ["app", "ideal", "current", "policy"] {
+            let mut partial = serde_json::json!({"settingsVersion":2,"app":{},"ideal":{},"current":{},"policy":{}});
+            partial.as_object_mut().unwrap().remove(missing);
+            assert!(encrypted(&partial).is_err(), "missing {missing}");
+        }
         for legacy in [
             serde_json::json!({"privacy":{"telemetry":{"windowsDisabled":true}}}),
             serde_json::json!({"settingsVersion":1,"tweaks":{"security":{"windowsUpdateDisabled":true}}}),
@@ -258,10 +265,10 @@ mod tests {
     #[test]
     fn decrypts_independently_generated_argon2id_aes256_gcm_fixture() {
         // Produced by Node's independent Argon2id and AES-GCM implementation.
-        let backup = r#"{"format":"wincommander-encrypted-settings-v1","salt":"AAECAwQFBgcICQoLDA0ODw==","nonce":"EBESExQVFhcYGRob","ciphertext":"xviMunp7aCOtqbGICmUdxkAswVogoL6p56mcxiqFlcFrChb6gNrRC7aZ5psnMw=="}"#;
+        let backup = r#"{"format":"wincommander-encrypted-settings-v1","salt":"AAECAwQFBgcICQoLDA0ODw==","nonce":"EBESExQVFhcYGRob","ciphertext":"xviMunp7aCOtqbGICmUdxkAswVogoL6p56mcxirUyR6KbwPV4se9aa33871lyB7OHqG82c4pTU1XQdWdmgNsYDeS8Y9Xl6H/DYcUXcyKCQUoEQ=="}"#;
         assert_eq!(
             decrypt(backup, "a-long-backup-password").unwrap(),
-            r#"{"settingsVersion":2,"app":{}}"#
+            r#"{"settingsVersion":2,"app":{},"ideal":{},"current":{},"policy":{}}"#
         );
     }
 }
