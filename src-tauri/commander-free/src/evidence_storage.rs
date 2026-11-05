@@ -209,55 +209,56 @@ pub(super) fn read(
     if ledger.skip_future_imports {
         return Ok(ledger);
     }
-    let profile = match legacy() {
-        Ok(path) => path,
+    let candidate = (|| -> Result<Option<(PathBuf, Vec<EvidenceEntry>)>, String> {
+        let Some(old) = legacy()? else {
+            return Ok(None);
+        };
+        let identity = match fs::canonicalize(&old) {
+            Ok(identity) => identity,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(_) => return Err("Cannot identify old evidence ledger".into()),
+        };
+        if ledger.imported_profiles.contains(&identity) {
+            return Ok(None);
+        }
+        if ledger.imported_profiles.len() >= MAX_IMPORTED_PROFILES {
+            return Err("Too many evidence profile imports".into());
+        }
+        let raw = fs::read_to_string(&identity).map_err(|_| "Cannot read old evidence ledger")?;
+        let prior = parse_legacy(&raw)?;
+        let mut existing = std::collections::HashSet::<Vec<u8>>::new();
+        for entry in &ledger.entries {
+            existing.insert(serde_json::to_vec(entry).map_err(|_| "Cannot compare evidence")?);
+        }
+        for entry in &prior {
+            if existing.contains(&serde_json::to_vec(entry).map_err(|_| "Cannot compare evidence")?)
+            {
+                return Err("Ambiguous evidence records require review".into());
+            }
+        }
+        Ok(Some((identity, prior)))
+    })();
+    let candidate = match candidate {
+        Ok(value) => value,
         Err(_) if loaded_machine => {
             #[cfg(not(test))]
             crate::log::log_message(
                 "warn",
-                "Legacy evidence profile could not be inspected; import remains pending",
+                "Legacy evidence import is pending; original preserved",
             );
             None
         }
         Err(error) => return Err(error),
     };
-    if let Some(old) = profile {
-        match fs::canonicalize(&old) {
-            Ok(identity) => {
-                if !ledger.imported_profiles.contains(&identity) {
-                    if ledger.imported_profiles.len() >= MAX_IMPORTED_PROFILES {
-                        return Err("Too many evidence profile imports; originals preserved".into());
-                    }
-                    let raw = fs::read_to_string(&identity)
-                        .map_err(|_| "Cannot read old evidence ledger; original preserved")?;
-                    let mut counts = std::collections::HashMap::<Vec<u8>, usize>::new();
-                    for entry in &ledger.entries {
-                        let identity =
-                            serde_json::to_vec(entry).map_err(|_| "Cannot compare evidence")?;
-                        *counts.entry(identity).or_default() += 1;
-                    }
-                    let mut prior = Vec::new();
-                    for entry in parse_legacy(&raw)? {
-                        let identity =
-                            serde_json::to_vec(&entry).map_err(|_| "Cannot compare evidence")?;
-                        match counts.get_mut(&identity) {
-                            Some(count) if *count > 0 => *count -= 1,
-                            _ => prior.push(entry),
-                        }
-                    }
-                    prior.append(&mut ledger.entries);
-                    prior.sort_by(|a, b| a.time.cmp(&b.time));
-                    if prior.len() > MAX_ENTRIES {
-                        prior.drain(..prior.len() - MAX_ENTRIES);
-                    }
-                    ledger.entries = prior;
-                    ledger.imported_profiles.push(identity);
-                    write(path, key_path, &ledger, persist)?;
-                }
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(format!("Cannot read old evidence ledger: {error}")),
+    if let Some((identity, mut prior)) = candidate {
+        prior.append(&mut ledger.entries);
+        prior.sort_by(|a, b| a.time.cmp(&b.time));
+        if prior.len() > MAX_ENTRIES {
+            prior.drain(..prior.len() - MAX_ENTRIES);
         }
+        ledger.entries = prior;
+        ledger.imported_profiles.push(identity);
+        write(path, key_path, &ledger, persist)?;
     }
     Ok(ledger)
 }
@@ -648,7 +649,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(ledger.entries.len(), 1);
-        assert_eq!(ledger.imported_profiles.len(), 1);
+        assert!(ledger.imported_profiles.is_empty());
     }
 
     #[test]
@@ -681,5 +682,34 @@ mod tests {
         .unwrap();
         assert!(ledger.entries.is_empty());
         assert!(legacy.exists());
+    }
+
+    #[test]
+    fn damaged_profile_does_not_hide_healthy_machine_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger");
+        let key_path = dir.path().join("key");
+        let legacy = dir.path().join("profile-ledger");
+        fs::write(&legacy, b"malformed old data").unwrap();
+        write(
+            &path,
+            &key_path,
+            &Ledger {
+                entries: vec![entry()],
+                ..Ledger::default()
+            },
+            &crate::datastore_io::atomic_write,
+        )
+        .unwrap();
+        let ledger = read(
+            &path,
+            &|| Ok(Some(legacy.clone())),
+            &key_path,
+            &crate::datastore_io::atomic_write,
+        )
+        .unwrap();
+        assert_eq!(ledger.entries.len(), 1);
+        assert!(ledger.imported_profiles.is_empty());
+        assert_eq!(fs::read(&legacy).unwrap(), b"malformed old data");
     }
 }
