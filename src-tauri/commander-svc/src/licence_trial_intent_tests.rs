@@ -9,7 +9,7 @@ fn paths() -> (String, String) {
 #[test]
 fn trial_credential_commitment_matches_activation_vector() {
     let pending = PendingTrial { operation_id: "b".repeat(64), device_hash: "a".repeat(64),
-        credential_id: [4; 32], credential_secret: [5; 32] };
+        credential_id: [4; 32], credential_secret: [5; 32], issued: None, settlement: None };
     assert_eq!(pending.credential_commitment(), "fdef1206908c31b0f3b9ecce79bfb437e32deabe702d7f6fbf529b14f44a136f");
     let request = pending.request_body().unwrap();
     assert_eq!(request.as_slice(), include_str!("fixtures/rust-trial-v4-request.json").trim_end().as_bytes());
@@ -25,7 +25,7 @@ fn trial_credential_commitment_matches_activation_vector() {
 #[test]
 fn trial_response_must_bind_identity_operation_credential_and_fixed_expiry() {
     let pending = PendingTrial { operation_id: "b".repeat(64), device_hash: "a".repeat(64),
-        credential_id: [4; 32], credential_secret: [5; 32] };
+        credential_id: [4; 32], credential_secret: [5; 32], issued: None, settlement: None };
     let exp = 100 + 16 * 24 * 60 * 60;
     let claims = serde_json::json!({ "license_id":format!("trial-{}", &pending.device_hash[..16]),
         "device_hash":pending.device_hash, "plan":"trial", "features":["paid"], "base_features":[],
@@ -59,7 +59,7 @@ fn trial_response_must_bind_identity_operation_credential_and_fixed_expiry() {
 #[test]
 fn trial_settlement_candidate_binds_exact_payload_and_credential() {
     let pending = PendingTrial { operation_id: "b".repeat(64), device_hash: "a".repeat(64),
-        credential_id: [4; 32], credential_secret: [5; 32] };
+        credential_id: [4; 32], credential_secret: [5; 32], issued: None, settlement: None };
     let trial = |payload: &str| VerifiedTrial { payload: payload.into(), operation_id: pending.operation_id.clone(),
         device_hash: pending.device_hash.clone(), credential_id: pending.credential_id,
         credential_commitment: pending.credential_commitment(), expires_at: 200 };
@@ -73,12 +73,24 @@ fn trial_settlement_candidate_binds_exact_payload_and_credential() {
     assert_ne!(request.as_slice(), changed.as_slice());
     assert!(settlement_request(&pending, &trial(""), 100).is_err());
     assert!(settlement_request(&pending, &trial("valid"), 200).is_err());
+    let custody = pending.custody_request(&trial("verified trial"), 100).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&custody).unwrap();
+    assert_eq!(json["appId"], "com.servalabs.wincommander");
+    assert_eq!(json["operationId"], pending.operation_id);
+    assert_eq!(json["deviceHash"], pending.device_hash);
+    assert_eq!(json["credentialId"], URL_SAFE_NO_PAD.encode([4; 32]));
+    assert_eq!(json["deviceSecret"], URL_SAFE_NO_PAD.encode([5; 32]));
+    assert_eq!(json.as_object().unwrap().len(), 5);
+    assert!(pending.custody_request(&trial("verified trial"), 200).is_err());
+    let mut other = trial("verified trial");
+    other.credential_commitment = "c".repeat(64);
+    assert!(pending.custody_request(&other, 100).is_err());
 }
 
 #[test]
 fn trial_retirement_candidate_binds_operation_and_fresh_id() {
     let pending = PendingTrial { operation_id: "b".repeat(64), device_hash: "a".repeat(64),
-        credential_id: [4; 32], credential_secret: [5; 32] };
+        credential_id: [4; 32], credential_secret: [5; 32], issued: None, settlement: None };
     let request = retirement_request(&pending, &"c".repeat(64)).unwrap();
     let value: serde_json::Value = serde_json::from_slice(&request).unwrap();
     assert_eq!(value["proof"], "hPu-0obRVwtd5HRwKQxMOWKSzouRbDOxeeaH58gW-Yw");
@@ -95,7 +107,7 @@ fn trial_response_requires_real_classical_and_hybrid_signatures() {
     use ed25519_dalek::{Signer, SigningKey};
     use wincmd_pq_experiment::{jws, Purpose, VerifyError};
     let pending = PendingTrial { operation_id: "b".repeat(64), device_hash: "a".repeat(64),
-        credential_id: [4; 32], credential_secret: [5; 32] };
+        credential_id: [4; 32], credential_secret: [5; 32], issued: None, settlement: None };
     let exp = 100 + 16 * 24 * 60 * 60;
     let payload = serde_json::json!({"license_id":format!("trial-{}", &pending.device_hash[..16]),
         "device_hash":pending.device_hash, "plan":"trial", "features":["paid"], "base_features":[],
@@ -122,6 +134,121 @@ fn trial_response_requires_real_classical_and_hybrid_signatures() {
     assert!(verify_response_with(&pending, &body(&signature, &hybrid), 150, verify).is_ok());
     assert!(verify_response_with(&pending, &body(&URL_SAFE_NO_PAD.encode([0u8; 64]), &hybrid), 150, verify).is_err());
     assert!(verify_response_with(&pending, &body(&signature, "bad"), 150, verify).is_err());
+}
+
+#[test]
+fn trial_receipts_require_both_signatures_exact_payload_and_purpose() {
+    use aws_lc_rs::signature::{KeyPair, PqdsaKeyPair, ML_DSA_65_SIGNING};
+    use ed25519_dalek::{Signer, SigningKey};
+    use wincmd_pq_experiment::{jws, Purpose, VerifyError};
+    let pending = PendingTrial { operation_id: "b".repeat(64), device_hash: "a".repeat(64),
+        credential_id: [4; 32], credential_secret: [5; 32], issued: None, settlement: None };
+    let request = retirement_request(&pending, &"c".repeat(64)).unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&request).unwrap();
+    let payload = body["payload"].as_str().unwrap();
+    let ed = SigningKey::from_bytes(&[8; 32]);
+    let pq = PqdsaKeyPair::generate(&ML_DSA_65_SIGNING).unwrap();
+    let ed_public = ed.verifying_key().to_bytes();
+    let pq_public = pq.public_key().as_ref().try_into().unwrap();
+    let trust = jws::Trust { purpose: Purpose::LicenceTrialRetirement, minimum_epoch: 1, ed_key_id: "ed",
+        ed25519_public: &ed_public, pq_key_id: "pq", ml_dsa_65_public: pq_public };
+    let receipt = String::from_utf8(jws::sign::assemble(payload.as_bytes(), 1, &trust,
+        |message| Ok(ed.sign(message).to_bytes().to_vec()),
+        |message| { let mut value = vec![0; 3309]; pq.sign(message, &mut value)
+            .map_err(|_| VerifyError::InvalidSignature)?; Ok(value) }).unwrap()).unwrap();
+    assert!(verify_receipt(&request, &receipt, &trust, Purpose::LicenceTrialRetirement).is_ok());
+    assert!(verify_receipt(&request, &receipt, &trust, Purpose::LicenceTrialSettlement).is_err());
+    let changed = retirement_request(&pending, &"d".repeat(64)).unwrap();
+    assert!(verify_receipt(&changed, &receipt, &trust, Purpose::LicenceTrialRetirement).is_err());
+    let mut forged: serde_json::Value = serde_json::from_str(&receipt).unwrap();
+    forged["signatures"][1]["signature"] = serde_json::json!(URL_SAFE_NO_PAD.encode([0u8; 3309]));
+    assert!(verify_receipt(&request, &forged.to_string(), &trust, Purpose::LicenceTrialRetirement).is_err());
+}
+
+#[test]
+fn worker_signed_trial_receipts_interoperate_with_native_verifier() {
+    use wincmd_pq_experiment::{jws, Purpose, ML_DSA_65_PUBLIC_KEY_LEN};
+    let fixtures: Vec<serde_json::Value> = serde_json::from_str(include_str!("fixtures/worker-trial-receipts.json")).unwrap();
+    assert_eq!(fixtures.len(), 2);
+    for (index, fixture) in fixtures.iter().enumerate() {
+        let ed: [u8; 32] = URL_SAFE_NO_PAD.decode(fixture["publicEd"].as_str().unwrap()).unwrap().try_into().unwrap();
+        let pq: [u8; ML_DSA_65_PUBLIC_KEY_LEN] = URL_SAFE_NO_PAD.decode(fixture["publicPq"].as_str().unwrap()).unwrap().try_into().unwrap();
+        let purpose = if index == 0 { Purpose::LicenceTrialSettlement } else { Purpose::LicenceTrialRetirement };
+        let other = if index == 0 { Purpose::LicenceTrialRetirement } else { Purpose::LicenceTrialSettlement };
+        let trust = jws::Trust { purpose, minimum_epoch: fixture["epoch"].as_u64().unwrap(),
+            ed_key_id: fixture["edKeyId"].as_str().unwrap(), ed25519_public: &ed,
+            pq_key_id: fixture["pqKeyId"].as_str().unwrap(), ml_dsa_65_public: &pq };
+        let request = serde_json::to_vec(&fixture["request"]).unwrap();
+        let receipt = fixture["receipt"].as_str().unwrap();
+        assert_eq!(fixture["request"]["payload"], fixture["payload"]);
+        assert!(verify_receipt(&request, receipt, &trust, purpose).is_ok());
+        assert!(verify_receipt(&request, receipt, &trust, other).is_err());
+        let mut forged: serde_json::Value = serde_json::from_str(receipt).unwrap();
+        forged["signatures"][1]["signature"] = serde_json::json!(URL_SAFE_NO_PAD.encode([0u8; 3309]));
+        assert!(verify_receipt(&request, &forged.to_string(), &trust, purpose).is_err());
+    }
+}
+
+#[test]
+fn trial_issued_and_settlement_evidence_survive_restart_and_refuse_replacement() {
+    use aws_lc_rs::signature::{KeyPair, PqdsaKeyPair, ML_DSA_65_SIGNING};
+    use ed25519_dalek::{Signer, SigningKey};
+    use wincmd_pq_experiment::{jws, Purpose, VerifyError};
+    let (path, gate_path) = paths();
+    let store = Anchor::test_user(path.clone());
+    let gate = Anchor::test_user(gate_path);
+    let pending = begin_at(&store, &gate, &MachineDpapi, &"a".repeat(64), || Ok(())).unwrap();
+    let exp = 100 + 16 * 24 * 60 * 60;
+    let id: String = pending.credential_id.iter().map(|b| format!("{b:02x}")).collect();
+    let claims = serde_json::json!({"license_id":format!("trial-{}", &pending.device_hash[..16]),
+        "device_hash":pending.device_hash, "plan":"trial", "features":["paid"], "base_features":[],
+        "service_features":["paid"], "service_exp":exp, "iat":100, "exp":exp, "license_exp":exp,
+        "iss":"wincommander-license-worker", "sub":"com.servalabs.wincommander", "is_portable":false,
+        "trial_operation_id":pending.operation_id, "trial_credential_id":id,
+        "trial_credential_commitment":pending.credential_commitment() });
+    let response = serde_json::to_vec(&serde_json::json!({"ok":true, "payload":claims.to_string(),
+        "signature":"classical", "hybrid":"hybrid"})).unwrap();
+    let verify = |_: &str, classical: &str, hybrid: &str| {
+        if classical == "classical" && hybrid == "hybrid" { Ok(()) } else { Err(INVALID) }
+    };
+    let ed = SigningKey::from_bytes(&[8; 32]);
+    let pq = PqdsaKeyPair::generate(&ML_DSA_65_SIGNING).unwrap();
+    let ed_public = ed.verifying_key().to_bytes();
+    let pq_public = pq.public_key().as_ref().try_into().unwrap();
+    let trust = jws::Trust { purpose: Purpose::LicenceTrialSettlement, minimum_epoch: 1, ed_key_id: "ed",
+        ed25519_public: &ed_public, pq_key_id: "pq", ml_dsa_65_public: pq_public };
+    assert!(record_settlement_at(&store, &MachineDpapi, &pending, "missing", 150, &trust, verify).is_err());
+    record_issued_at(&store, &MachineDpapi, &pending, &response, 150, verify).unwrap();
+    let reopened = Anchor::test_user(path.clone());
+    let saved = load_at(&reopened, &MachineDpapi).unwrap().unwrap();
+    assert_eq!(URL_SAFE_NO_PAD.decode(saved.issued.as_ref().unwrap()).unwrap(), response);
+    record_issued_at(&reopened, &MachineDpapi, &pending, &response, 150, verify).unwrap();
+    let mut changed_claims = claims.clone();
+    changed_claims["iat"] = serde_json::json!(101);
+    changed_claims["exp"] = serde_json::json!(exp + 1);
+    changed_claims["service_exp"] = serde_json::json!(exp + 1);
+    changed_claims["license_exp"] = serde_json::json!(exp + 1);
+    let changed_response = serde_json::to_vec(&serde_json::json!({"ok":true, "payload":changed_claims.to_string(),
+        "signature":"classical", "hybrid":"hybrid"})).unwrap();
+    assert!(record_issued_at(&reopened, &MachineDpapi, &pending, &changed_response, 150, verify).is_err());
+    assert_eq!(URL_SAFE_NO_PAD.decode(load_at(&reopened, &MachineDpapi).unwrap().unwrap().issued.as_ref().unwrap()).unwrap(), response);
+    let verified = verify_response_with(&saved, &response, 150, verify).unwrap();
+    let request = settlement_request(&saved, &verified, 150).unwrap();
+    let parsed: serde_json::Value = serde_json::from_slice(&request).unwrap();
+    let payload = parsed["payload"].as_str().unwrap();
+    let receipt = String::from_utf8(jws::sign::assemble(payload.as_bytes(), 1, &trust,
+        |message| Ok(ed.sign(message).to_bytes().to_vec()),
+        |message| { let mut value = vec![0; 3309]; pq.sign(message, &mut value)
+            .map_err(|_| VerifyError::InvalidSignature)?; Ok(value) }).unwrap()).unwrap();
+    assert!(record_settlement_at(&reopened, &MachineDpapi, &pending, "invalid", 150, &trust, verify).is_err());
+    record_settlement_at(&reopened, &MachineDpapi, &pending, &receipt, 150, &trust, verify).unwrap();
+    record_settlement_at(&Anchor::test_user(path.clone()), &MachineDpapi, &pending, &receipt, 150, &trust, verify).unwrap();
+    let final_state = load_at(&Anchor::test_user(path.clone()), &MachineDpapi).unwrap().unwrap();
+    assert_eq!(final_state.settlement.as_deref(), Some(receipt.as_str()));
+    let raw = reopened.read().unwrap().unwrap();
+    assert!(!raw.windows(16).any(|part| part == &pending.credential_secret[..16]));
+    assert!(record_settlement_at(&reopened, &MachineDpapi, &pending, &receipt, exp, &trust, verify).is_err());
+    super::super::license_cache::licence_device_anchor::remove_test_key(&path).unwrap();
 }
 
 #[test]

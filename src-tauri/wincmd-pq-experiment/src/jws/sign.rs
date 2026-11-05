@@ -33,6 +33,8 @@ pub fn signing_inputs(
         Purpose::Release => "release",
         Purpose::LicenceEnrolment => "licence-enrolment",
         Purpose::LicenceActivationAck => "licence-activation-ack",
+        Purpose::LicenceTrialSettlement => "licence-trial-settlement",
+        Purpose::LicenceTrialRetirement => "licence-trial-retirement",
         Purpose::EvidenceAttestation => "evidence-attestation",
         Purpose::FleetCommand => "fleet-command",
         Purpose::FleetReceipt => "fleet-receipt",

@@ -323,6 +323,10 @@ pub(crate) async fn post_trial_v4(body: Zeroizing<Vec<u8>>) -> Result<Vec<u8>, &
     wire::post_trial_v4(body).await
 }
 
+pub(crate) async fn post_trial_custody(body: Zeroizing<Vec<u8>>) -> Result<Vec<u8>, &'static str> {
+    wire::post_trial_custody(body).await
+}
+
 fn with_activation_credential<T>(
     pending: &crate::licence_activation_intent::PendingActivation,
     verified: &crate::licence_activation_intent::VerifiedActivation,

@@ -102,6 +102,8 @@ pub fn verify(input: &[u8], trust: &Trust<'_>) -> Result<Verified, VerifyError> 
             Purpose::Release => "release",
             Purpose::LicenceEnrolment => "licence-enrolment",
             Purpose::LicenceActivationAck => "licence-activation-ack",
+            Purpose::LicenceTrialSettlement => "licence-trial-settlement",
+            Purpose::LicenceTrialRetirement => "licence-trial-retirement",
             Purpose::EvidenceAttestation => "evidence-attestation",
             Purpose::FleetCommand => "fleet-command",
             Purpose::FleetReceipt => "fleet-receipt",
