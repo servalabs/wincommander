@@ -51,6 +51,8 @@ use std::path::PathBuf;
 
 #[cfg(any(windows, test))]
 mod legacy_material_guard;
+#[cfg(windows)]
+mod key_dependency_guard;
 #[cfg(any(windows, test))]
 use legacy_material_guard::protect_legacy_material;
 
@@ -311,6 +313,8 @@ fn install_machine_material(directory: &std::path::Path, require_protected: bool
                 Some(raw) => raw,
                 None => {
                     creation?;
+                    #[cfg(windows)]
+                    key_dependency_guard::check_current_user(true)?;
                     let mut material = [0u8; 32];
                     OsRng.fill_bytes(&mut material);
                     let protected = dpapi_protect(&material)
@@ -492,6 +496,8 @@ fn load_or_create_user_material(
                 Some(raw) => decode_user_material(&raw, current_user_install),
                 None => {
                     creation?;
+                    #[cfg(windows)]
+                    if current_user_install { key_dependency_guard::check_current_user(false)?; }
                     create(&path, current_user_install)
                 }
             }
