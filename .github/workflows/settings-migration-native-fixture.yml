@@ -52,6 +52,7 @@ jobs:
           $script = 'src-tauri/commander-free/nsis/stage-original-user-settings.ps1'
           & pwsh -NoProfile -NonInteractive -File $script -ExecutablePath $env:ComSpec -InstallDirectory (Join-Path $env:RUNNER_TEMP 'other-user-profile')
           if ($LASTEXITCODE -eq 0) { throw 'Another profile unexpectedly passed the installer guard.' }
+          $global:LASTEXITCODE = 0
       - name: Preserve profile when installed binary is missing
         shell: pwsh
         run: |
@@ -62,6 +63,7 @@ jobs:
           & pwsh -NoProfile -NonInteractive -File 'src-tauri/commander-free/nsis/stage-original-user-settings.ps1' -ExecutablePath $env:ComSpec -InstallDirectory $root
           if ($LASTEXITCODE -eq 0) { throw 'Missing installed binary was accepted.' }
           if ((Get-Content -Raw -LiteralPath (Join-Path $root 'saved-settings-sentinel')).Trim() -ne 'preserve') { throw 'Existing profile contents changed.' }
+          $global:LASTEXITCODE = 0
       - name: Allow fresh profile with installer diagnostic
         shell: pwsh
         run: |
@@ -70,3 +72,11 @@ jobs:
           Set-Content -LiteralPath (Join-Path $root 'installer-lifecycle.log') -Value 'fixture diagnostic'
           & pwsh -NoProfile -NonInteractive -File 'src-tauri/commander-free/nsis/stage-original-user-settings.ps1' -ExecutablePath $env:ComSpec -InstallDirectory $root
           if ($LASTEXITCODE -ne 0) { throw 'Fresh profile with diagnostic was rejected.' }
+      - name: Reject a directory posing as the app executable
+        shell: pwsh
+        run: |
+          $root = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)) 'WinCommander'
+          New-Item -ItemType Directory -Path (Join-Path $root 'wincommander-free.exe') | Out-Null
+          & pwsh -NoProfile -NonInteractive -File 'src-tauri/commander-free/nsis/stage-original-user-settings.ps1' -ExecutablePath $env:ComSpec -InstallDirectory $root
+          if ($LASTEXITCODE -eq 0) { throw 'Directory masquerading as app unexpectedly passed.' }
+          $global:LASTEXITCODE = 0
