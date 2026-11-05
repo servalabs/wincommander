@@ -163,7 +163,11 @@ impl SearchEngine {
         let skips = config.skip_paths.clone();
         let original_policy = path_policy;
         let path_policy: PathPolicy = Arc::new(move |path| {
-            path.canonicalize().is_ok()
+            // Missing entries must reach index_file so it can delete stale hits.
+            // A broken link is not missing: symlink_metadata still sees the link.
+            let resolvable_or_missing = path.canonicalize().is_ok()
+                || matches!(std::fs::symlink_metadata(path), Err(e) if e.kind() == std::io::ErrorKind::NotFound);
+            resolvable_or_missing
                 && !crawler::path_is_skipped(path, &skips)
                 && original_policy(path)
         });
@@ -584,6 +588,25 @@ mod tests {
         assert!(watch::apply_fs_event(&event, &engine.config.skip_paths, &exclusions, u64::MAX).is_none());
         let ordinary = notify::Event { paths: vec![document], ..event };
         assert!(watch::apply_fs_event(&ordinary, &engine.config.skip_paths, &exclusions, u64::MAX).is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn queued_alias_replacement_is_rejected_but_missing_file_can_be_deleted() {
+        let root = TempDir::new().unwrap();
+        let index = root.path().join("index");
+        let queued = root.path().join("queued.json");
+        fs::write(&queued, "normal").unwrap();
+        let engine = SearchEngine::open(make_config(index.clone(), vec![root.path().to_path_buf()])).unwrap();
+        assert!((engine.path_policy)(&queued));
+        fs::remove_file(&queued).unwrap();
+        assert!((engine.path_policy)(&queued));
+        std::os::unix::fs::symlink(index.join("meta.json"), &queued).unwrap();
+        assert!(!(engine.path_policy)(&queued));
+        fs::remove_file(&queued).unwrap();
+        std::os::unix::fs::symlink(root.path().join("missing.json"), &queued).unwrap();
+        assert!(!(engine.path_policy)(&queued));
+        assert!(!(engine.path_policy)(&index.join("missing.json")));
     }
 
     /// Build a small tempdir tree, index it synchronously, then search.
