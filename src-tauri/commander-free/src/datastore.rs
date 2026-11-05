@@ -771,25 +771,69 @@ pub(crate) fn save_user_blob(
 // decrypting.  It does not reveal log *content* — only that the app ran on
 // that calendar day, which is observable from file-system timestamps anyway.
 
-static LOG_KEY_CACHE: std::sync::OnceLock<[u8; DERIVED_KEY_LEN]> = std::sync::OnceLock::new();
+struct CachedLogKey {
+    key: [u8; DERIVED_KEY_LEN],
+    material_hash: [u8; 32],
+}
+static LOG_KEY_CACHE: std::sync::OnceLock<CachedLogKey> = std::sync::OnceLock::new();
+
+fn material_hash(material: &[u8; 32]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(material).into()
+}
 
 fn cached_log_key() -> Result<[u8; DERIVED_KEY_LEN], String> {
     if let Some(k) = LOG_KEY_CACHE.get() {
-        return Ok(*k);
+        return Ok(k.key);
     }
     let material = install_material()?;
     let key = derive_section_key(&material, None)?;
-    let _ = LOG_KEY_CACHE.set(key); // ignore race: both threads derive the same key
+    let _ = LOG_KEY_CACHE.set(CachedLogKey { key, material_hash: material_hash(&material) });
     LOG_KEY_CACHE
         .get()
-        .copied()
+        .map(|cached| cached.key)
         .ok_or_else(|| "log key cache unavailable".to_string())
+}
+
+/// A cached key can still decrypt old records, but writing requires proof that
+/// the matching install material remains protected and available now.
+fn protected_log_key() -> Result<[u8; DERIVED_KEY_LEN], String> {
+    let user_install = crate::paths::current_user_install_uses_local_datastore();
+    let path = if user_install {
+        crate::paths::user_data_dir()?.join(USER_MATERIAL_FILENAME)
+    } else {
+        crate::paths::datastore_data_dir()?.join(MATERIAL_FILENAME)
+    };
+    if LOG_KEY_CACHE.get().is_some() && !path.exists() {
+        return Err("protected log material unavailable".into());
+    }
+    let material = writable_install_material()?;
+    let raw = read_material_file(&path)?.ok_or("protected log material unavailable")?;
+    validate_protected_log_material(&raw, &material, |bytes| {
+        if user_install { unprotect_user_store_material(bytes, true) } else { dpapi_unprotect(bytes) }
+    })?;
+    let key = cached_log_key()?;
+    if LOG_KEY_CACHE.get().map(|cached| cached.material_hash) != Some(material_hash(&material)) {
+        return Err("protected log material changed".into());
+    }
+    Ok(key)
+}
+
+fn validate_protected_log_material(
+    raw: &[u8],
+    material: &[u8; 32],
+    unprotect: impl FnOnce(&[u8]) -> Result<Vec<u8>, String>,
+) -> Result<(), String> {
+    if raw.len() == 32 { return Err("log material is not protected".into()); }
+    let unprotected = unprotect(raw).map_err(|_| "protected log material unavailable")?;
+    if unprotected.as_slice() != material { return Err("protected log material changed".into()); }
+    Ok(())
 }
 
 /// Writes new structured diagnostic events in the shared D1 envelope. Unlike
 /// the legacy general-log helper below, this has no plaintext fallback.
 pub(crate) fn diagnostic_encrypt_line(date: &str, body: &str) -> Result<String, String> {
-    let key = cached_log_key()?;
+    let key = protected_log_key()?;
     let mut nonce = [0u8; 12];
     OsRng.fill_bytes(&mut nonce);
     wincmd_shared::diagnostics::seal_diagnostic_record(
@@ -817,19 +861,18 @@ pub(crate) fn diagnostic_decrypt_line(line: &str) -> Option<(String, String)> {
 
 /// Encrypt one log body into an on-disk `L2:<date>:<b64>` line.
 /// `date` = `YYYY-MM-DD`; `body` = `[HH:MM:SS] [LEVEL] message`.
-/// Falls back to an unencrypted marker on key failure so the app never panics.
+/// Never return the plaintext when the key or encryption is unavailable.
 #[allow(dead_code)]
-pub fn log_encrypt_line(date: &str, body: &str) -> String {
-    let key = match cached_log_key() {
-        Ok(k) => k,
-        Err(_) => return format!("[ENCRYPT_FAIL] {}", body),
-    };
-    let cipher = Aes256Gcm::new((&key).into());
+pub fn log_encrypt_line(date: &str, body: &str) -> Result<String, String> {
+    let key = protected_log_key()?;
     let mut nonce_bytes = [0u8; 12];
-    OsRng.fill_bytes(&mut nonce_bytes);
-    let Ok(nonce) = nonce_from_bytes(&nonce_bytes) else {
-        return format!("[ENCRYPT_FAIL] {}", body);
-    };
+    OsRng.try_fill_bytes(&mut nonce_bytes).map_err(|_| "log randomness unavailable")?;
+    seal_log_line(date, body, &key, nonce_bytes)
+}
+
+fn seal_log_line(date: &str, body: &str, key: &[u8; 32], nonce_bytes: [u8; 12]) -> Result<String, String> {
+    let cipher = Aes256Gcm::new(key.into());
+    let nonce = nonce_from_bytes(&nonce_bytes)?;
     let aad = section_aad(&format!("log:{date}"));
     match cipher.encrypt(
         nonce,
@@ -842,9 +885,9 @@ pub fn log_encrypt_line(date: &str, body: &str) -> String {
             let mut payload = Vec::with_capacity(12 + ct.len());
             payload.extend_from_slice(&nonce_bytes);
             payload.extend_from_slice(&ct);
-            format!("L2:{}:{}", date, B64.encode(&payload))
+            Ok(format!("L2:{}:{}", date, B64.encode(&payload)))
         }
-        Err(_) => format!("[ENCRYPT_FAIL] {}", body),
+        Err(_) => Err("log encryption failed".into()),
     }
 }
 
@@ -940,6 +983,33 @@ mod tests {
             |_| panic!("a failed DPAPI check must not replace material")).is_err());
         assert_eq!(std::fs::read(path).unwrap(), material);
     }
+    #[test]
+    fn log_writes_reject_plaintext_unavailable_or_changed_material() {
+        let material = [4u8; 32];
+        assert!(super::validate_protected_log_material(&material, &material, |_| Ok(material.to_vec())).is_err());
+        assert!(super::validate_protected_log_material(&[1u8; 64], &material, |_| Err("DPAPI unavailable".into())).is_err());
+        assert!(super::validate_protected_log_material(&[1u8; 64], &material, |_| Ok(vec![5u8; 32])).is_err());
+        assert!(super::validate_protected_log_material(&[1u8; 64], &material, |_| Ok(material.to_vec())).is_ok());
+        assert_ne!(super::material_hash(&material), super::material_hash(&[5u8; 32]));
+    }
+
+    #[test]
+    fn log_ciphertext_round_trips_and_authenticates_its_date() {
+        use aes_gcm::{aead::{Aead, KeyInit, Payload}, Aes256Gcm};
+        use base64::Engine;
+        let key = [7u8; 32];
+        let body = "private log contents";
+        let line = super::seal_log_line("2026-11-05", body, &key, [3; 12]).unwrap();
+        assert!(!line.contains(body));
+        let payload = super::B64.decode(line.strip_prefix("L2:2026-11-05:").unwrap()).unwrap();
+        let cipher = Aes256Gcm::new((&key).into());
+        let nonce = super::nonce_from_bytes(&payload[..12]).unwrap();
+        let aad = super::section_aad("log:2026-11-05");
+        assert_eq!(cipher.decrypt(nonce, Payload { msg: &payload[12..], aad: aad.as_bytes() }).unwrap(), body.as_bytes());
+        let wrong = super::section_aad("log:2026-11-06");
+        assert!(cipher.decrypt(nonce, Payload { msg: &payload[12..], aad: wrong.as_bytes() }).is_err());
+    }
+
     #[test]
     fn missing_section_read_does_not_create_the_store() {
         let temp = tempfile::tempdir().unwrap();
