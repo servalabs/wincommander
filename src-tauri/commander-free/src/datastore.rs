@@ -764,7 +764,21 @@ fn cached_log_key() -> Result<[u8; DERIVED_KEY_LEN], String> {
     if let Some(k) = LOG_KEY_CACHE.get() {
         return Ok(k.key);
     }
-    let material = install_material()?;
+    let user_install = crate::paths::current_user_install_uses_local_datastore();
+    let path = if user_install {
+        crate::paths::user_data_dir()?.join(USER_MATERIAL_FILENAME)
+    } else {
+        crate::paths::datastore_data_dir()?.join(MATERIAL_FILENAME)
+    };
+    let raw = read_material_file(&path)?.ok_or("log material unavailable")?;
+    let material: [u8; 32] = if user_install {
+        decode_user_material(&raw, true)?
+    } else if raw.len() == 32 {
+        raw.try_into().map_err(|_| "invalid log material")?
+    } else {
+        dpapi_unprotect(&raw).map_err(|_| "log material unavailable")?
+            .try_into().map_err(|_| "invalid log material")?
+    };
     let key = derive_section_key(&material, None)?;
     let _ = LOG_KEY_CACHE.set(CachedLogKey { key, material_hash: material_hash(&material) });
     LOG_KEY_CACHE
@@ -782,30 +796,31 @@ fn protected_log_key() -> Result<[u8; DERIVED_KEY_LEN], String> {
     } else {
         crate::paths::datastore_data_dir()?.join(MATERIAL_FILENAME)
     };
-    if LOG_KEY_CACHE.get().is_some() && !path.exists() {
-        return Err("protected log material unavailable".into());
-    }
-    let material = install_material()?;
-    let raw = read_material_file(&path)?.ok_or("protected log material unavailable")?;
-    validate_protected_log_material(&raw, &material, |bytes| {
+    let raw = read_material_file(&path)?;
+    let material = existing_protected_log_material(raw.as_deref(), |bytes| {
         if user_install { unprotect_user_store_material(bytes, true) } else { dpapi_unprotect(bytes) }
     })?;
-    let key = cached_log_key()?;
-    if LOG_KEY_CACHE.get().map(|cached| cached.material_hash) != Some(material_hash(&material)) {
+    if LOG_KEY_CACHE.get().is_none() {
+        let key = derive_section_key(&material, None)?;
+        let _ = LOG_KEY_CACHE.set(CachedLogKey { key, material_hash: material_hash(&material) });
+    }
+    let cached = LOG_KEY_CACHE.get().ok_or("log key cache unavailable")?;
+    if cached.material_hash != material_hash(&material) {
         return Err("protected log material changed".into());
     }
-    Ok(key)
+    Ok(cached.key)
 }
 
-fn validate_protected_log_material(
-    raw: &[u8],
-    material: &[u8; 32],
+// Logging is never allowed to create or migrate a shared key. Other settings
+// operations own that lifecycle; a missing/plaintext/unreadable key fails closed.
+fn existing_protected_log_material(
+    raw: Option<&[u8]>,
     unprotect: impl FnOnce(&[u8]) -> Result<Vec<u8>, String>,
-) -> Result<(), String> {
+) -> Result<[u8; 32], String> {
+    let raw = raw.ok_or("protected log material unavailable")?;
     if raw.len() == 32 { return Err("log material is not protected".into()); }
     let unprotected = unprotect(raw).map_err(|_| "protected log material unavailable")?;
-    if unprotected.as_slice() != material { return Err("protected log material changed".into()); }
-    Ok(())
+    unprotected.try_into().map_err(|_| "invalid protected log material".into())
 }
 
 /// Writes new structured diagnostic events in the shared D1 envelope. Unlike
@@ -913,10 +928,11 @@ mod tests {
     #[test]
     fn log_writes_reject_plaintext_unavailable_or_changed_material() {
         let material = [4u8; 32];
-        assert!(super::validate_protected_log_material(&material, &material, |_| Ok(material.to_vec())).is_err());
-        assert!(super::validate_protected_log_material(&[1u8; 64], &material, |_| Err("DPAPI unavailable".into())).is_err());
-        assert!(super::validate_protected_log_material(&[1u8; 64], &material, |_| Ok(vec![5u8; 32])).is_err());
-        assert!(super::validate_protected_log_material(&[1u8; 64], &material, |_| Ok(material.to_vec())).is_ok());
+        assert!(super::existing_protected_log_material(None, |_| panic!("missing key must not be created")).is_err());
+        assert!(super::existing_protected_log_material(Some(&material), |_| panic!("plaintext key must not be rewrapped")).is_err());
+        assert!(super::existing_protected_log_material(Some(&[1u8; 64]), |_| Err("DPAPI unavailable".into())).is_err());
+        assert!(super::existing_protected_log_material(Some(&[1u8; 64]), |_| Ok(vec![5u8; 31])).is_err());
+        assert_eq!(super::existing_protected_log_material(Some(&[1u8; 64]), |_| Ok(material.to_vec())).unwrap(), material);
         assert_ne!(super::material_hash(&material), super::material_hash(&[5u8; 32]));
     }
 
