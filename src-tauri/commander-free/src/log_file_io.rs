@@ -67,11 +67,27 @@ pub(super) fn append_encrypted(
 
 pub(super) fn append_line(path: &Path, line: &str) -> Result<(), String> {
     let _guard = lock(path)?;
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .map_err(|_| "log unavailable")?;
+    let mut options = OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let mut file = options.open(path).map_err(|_| "log unavailable")?;
+    let metadata = file.metadata().map_err(|_| "log unavailable")?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err("invalid log file".into());
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err("invalid log file".into());
+        }
+    }
     let mut record = Vec::with_capacity(line.len() + 1);
     record.extend_from_slice(line.as_bytes());
     record.push(b'\n');
@@ -296,6 +312,19 @@ mod tests {
 
     fn sealed(date: &str, _body: &str) -> Result<String, String> {
         Ok(format!("L2:{date}:authenticated-ciphertext"))
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn append_rejects_symbolic_link_without_touching_its_target() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("target.txt");
+        let path = directory.path().join("wincommander.log");
+        std::fs::write(&target, b"target remains unchanged").unwrap();
+        std::os::windows::fs::symlink_file(&target, &path)
+            .expect("test requires symlink privilege");
+        assert!(append_encrypted(&path, || sealed("2026-11-05", "private")).is_err());
+        assert_eq!(std::fs::read(target).unwrap(), b"target remains unchanged");
     }
 
     #[test]

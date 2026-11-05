@@ -345,6 +345,22 @@ It is a partial review aid, not a complete cryptographic bill of materials or
 evidence of deployed protection. It does not run during application startup,
 builds, installation or updates.
 
+## Legacy local logs
+
+Release builds encrypt new general-log records and refuse to write a record if
+its encryption key is unavailable. A failed write or I/O failure can lose the
+record, and deduplication may suppress repeated messages while the failure
+persists; the app currently reports this only on standard error. Historical log
+entries from older versions
+can remain readable on disk: automatic migration is disabled until the app can
+safely verify ownership of the whole log path during replacement. This is not
+evidence that all existing local data is encrypted.
+
+Clearing the application log removes its history; retain any history needed for
+troubleshooting before clearing it. A safe migration and visible status flow
+remain to be implemented. Do not delete key material to retry: older settings,
+logs and diagnostic data may need that same key.
+
 ## Local maintenance
 
 Local maintenance scans do not establish that every byte on a volume was
