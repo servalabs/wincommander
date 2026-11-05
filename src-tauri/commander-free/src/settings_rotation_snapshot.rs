@@ -183,9 +183,9 @@ impl Snapshot {
         stage: &impl Fn(&[u8]) -> Result<(), String>,
     ) -> Result<(), String> {
         let output = self.prepare()?;
-        self.verify_unchanged()?;
+        self.verify_generation(&output)?;
         stage(&output)?;
-        self.verify_unchanged()?;
+        self.verify_generation(&output)?;
         Ok(())
     }
 }

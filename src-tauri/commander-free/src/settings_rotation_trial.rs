@@ -168,6 +168,20 @@ fn verify_source(input: &[u8], old_material: &[u8; 32], sections: &[(String, Str
     if generation.source_sections != observed {
         return Err("settings source sections changed; do not activate generation".into());
     }
+    // The encrypted manifest binds source bytes but cannot by itself prove the
+    // candidate values came from them. Re-decrypt every original and compare.
+    let old_key = Zeroizing::new(derive_section_key(old_material, None)?);
+    for (name, encoded) in sections {
+        let bytes = Zeroizing::new(
+            decode_section(&old_key, encoded.trim(), &format!("machine:{name}"))
+                .map_err(|_| "settings source section cannot be authenticated")?,
+        );
+        let original: Value = serde_json::from_slice(&bytes)
+            .map_err(|_| "settings source section is invalid")?;
+        if generation.sections.get(name) != Some(&original) {
+            return Err("settings generation differs from original values".into());
+        }
+    }
     Ok(())
 }
 
@@ -176,9 +190,11 @@ fn verify_source(input: &[u8], old_material: &[u8; 32], sections: &[(String, Str
 fn publish(
     path: &Path,
     candidate: &[u8],
+    old_material: &[u8; 32],
+    sections: &[(String, String)],
     persist: &impl Fn(&Path, &[u8]) -> Result<(), String>,
 ) -> Result<(), String> {
-    open(candidate)?;
+    verify_source(candidate, old_material, sections)?;
     persist(path, candidate)
 }
 

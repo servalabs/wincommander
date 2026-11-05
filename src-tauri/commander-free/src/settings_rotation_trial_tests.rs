@@ -62,13 +62,14 @@ fn failed_publication_retains_old_generation_and_success_reopens_after_restart()
     let old = [42; 32];
     let existing = prepare(&old, &sections(&old)).unwrap();
     std::fs::write(&destination, &existing).unwrap();
-    let candidate = prepare(&old, &sections(&old)).unwrap();
-    assert!(publish(&destination, &candidate, &|_, _| Err(
+    let input = sections(&old);
+    let candidate = prepare(&old, &input).unwrap();
+    assert!(publish(&destination, &candidate, &old, &input, &|_, _| Err(
         "injected failure".into()
     ))
     .is_err());
     assert_eq!(std::fs::read(&destination).unwrap(), existing);
-    publish(&destination, &candidate, &crate::datastore_io::atomic_write).unwrap();
+    publish(&destination, &candidate, &old, &input, &crate::datastore_io::atomic_write).unwrap();
     assert_eq!(
         open(&std::fs::read(&destination).unwrap()).unwrap()["payments"]["token"],
         "second secret"
@@ -76,7 +77,7 @@ fn failed_publication_retains_old_generation_and_success_reopens_after_restart()
     let mut damaged = candidate;
     let i = damaged.len() - 2;
     damaged[i] ^= 1;
-    assert!(publish(&destination, &damaged, &crate::datastore_io::atomic_write).is_err());
+    assert!(publish(&destination, &damaged, &old, &input, &crate::datastore_io::atomic_write).is_err());
     assert_ne!(std::fs::read(destination).unwrap(), damaged);
 }
 
@@ -87,8 +88,9 @@ fn unknown_commit_outcome_can_be_read_back_without_assuming_rollback() {
     let old = [42; 32];
     let before = prepare(&old, &sections(&old)).unwrap();
     std::fs::write(&destination, &before).unwrap();
-    let candidate = prepare(&old, &sections(&old)).unwrap();
-    let result = publish(&destination, &candidate, &|path, bytes| {
+    let input = sections(&old);
+    let candidate = prepare(&old, &input).unwrap();
+    let result = publish(&destination, &candidate, &old, &input, &|path, bytes| {
         crate::datastore_io::atomic_write(path, bytes)?;
         Err("commit outcome unknown".into())
     });
@@ -125,7 +127,8 @@ fn legacy_v1_section_is_preserved_in_fresh_generation() {
 fn unscoped_legacy_ciphertext_is_rejected_for_new_generation() {
     use super::super::{nonce_from_bytes, Aead, Aes256Gcm, KeyInit, FORMAT_PREFIX_V1};
     let old = [42; 32];
-    let candidate = prepare(&old, &sections(&old)).unwrap();
+    let input = sections(&old);
+    let candidate = prepare(&old, &input).unwrap();
     let mut bundle: Bundle = serde_json::from_slice(&candidate).unwrap();
     let protected = B64.decode(&bundle.protected_material).unwrap();
     let material = Zeroizing::new(dpapi_unprotect(&protected).unwrap());
@@ -147,7 +150,7 @@ fn unscoped_legacy_ciphertext_is_rejected_for_new_generation() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("generation");
     std::fs::write(&path, &candidate).unwrap();
-    assert!(publish(&path, &substituted, &crate::datastore_io::atomic_write).is_err());
+    assert!(publish(&path, &substituted, &old, &input, &crate::datastore_io::atomic_write).is_err());
     assert_eq!(std::fs::read(path).unwrap(), candidate);
 }
 
@@ -158,7 +161,7 @@ fn reopened_generation_rejects_changed_missing_added_or_duplicate_sources() {
     let candidate = prepare(&old, &input).unwrap();
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("generation");
-    publish(&path, &candidate, &crate::datastore_io::atomic_write).unwrap();
+    publish(&path, &candidate, &old, &input, &crate::datastore_io::atomic_write).unwrap();
     let reopened = std::fs::read(&path).unwrap();
     verify_source(&reopened, &old, &input).unwrap();
     assert!(verify_source(&reopened, &[43; 32], &input).is_err());
@@ -187,4 +190,30 @@ fn corrupt_authenticated_generation_cannot_validate_a_source_snapshot() {
     bundle.ciphertext = String::from_utf8(ciphertext).unwrap();
     let tampered = serde_json::to_vec(&bundle).unwrap();
     assert!(verify_source(&tampered, &old, &input).is_err());
+}
+
+#[test]
+fn validly_resealed_candidate_cannot_change_values_with_original_manifest() {
+    let old = [42; 32];
+    let input = sections(&old);
+    let candidate = prepare(&old, &input).unwrap();
+    let mut bundle: Bundle = serde_json::from_slice(&candidate).unwrap();
+    let protected = B64.decode(&bundle.protected_material).unwrap();
+    let material = Zeroizing::new(dpapi_unprotect(&protected).unwrap());
+    let material: &[u8; 32] = material.as_slice().try_into().unwrap();
+    let key = Zeroizing::new(derive_section_key(material, None).unwrap());
+    let plaintext = Zeroizing::new(decode_section(&key, &bundle.ciphertext, SCOPE).unwrap());
+    let mut generation: Generation = serde_json::from_slice(&plaintext).unwrap();
+    generation.sections.get_mut("payments").unwrap()["token"] = json!("forged secret");
+    let forged_plain = Zeroizing::new(serde_json::to_vec(&generation).unwrap());
+    bundle.ciphertext = encode_section(&key, &forged_plain, SCOPE).unwrap();
+    let forged = serde_json::to_vec(&bundle).unwrap();
+    // This is a valid AES-GCM generation; only comparison to old values rejects it.
+    assert_eq!(open(&forged).unwrap()["payments"]["token"], "forged secret");
+    assert!(verify_source(&forged, &old, &input).is_err());
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("generation");
+    std::fs::write(&path, &candidate).unwrap();
+    assert!(publish(&path, &forged, &old, &input, &crate::datastore_io::atomic_write).is_err());
+    assert_eq!(std::fs::read(path).unwrap(), candidate);
 }
