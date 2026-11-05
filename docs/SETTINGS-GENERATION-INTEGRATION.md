@@ -116,11 +116,13 @@ require all clients to upgrade before migration; these checks are not a
 substitute for enforced maintenance mode. Original settings and the signing
 key remain in place, and the staged encrypted candidate is retained.
 
-The optional NSIS block requires the explicit `WC_EXPERIMENTAL_SETTINGS_MIGRATION`
-define and a binary built with the matching Cargo feature. It stops/checks the
-installed desktop and service before calling the maintenance helper, aborts on
-failure, and starts no service until afterward. A feature-enabled release routes
-future reads/writes through the guarded generation; a missing anchor is an
-error. Feature and installer define must be paired in the release process. This
-path has not yet been compiled as an installer or exercised in Windows
-acceptance, and must not be enabled by default before that work is complete.
+The installer migration route is disconnected. A feature-enabled binary also
+requires explicit process-level opt-in to route settings through the experimental
+generation. A machine-only laboratory staging command preserves the original
+store and does not activate the candidate. It is not an installer integration:
+the intended installation and user identity are not established by this command.
+
+Before enabling rollout, implement and test interruption-safe executable and
+service recovery, bind migration to the original user's identity for per-user
+installs, and verify source changes and signing identity at activation. A
+pre-staged copy alone does not make a later cutover crash-safe.

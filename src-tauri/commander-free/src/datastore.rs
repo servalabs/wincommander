@@ -94,6 +94,10 @@ pub(crate) fn settings_generation_lab_migrate() -> Result<(), String> {
 pub(crate) fn settings_generation_lab_install() -> Result<(), String> {
     settings_rotation_trial::install_migration_explicitly()
 }
+#[cfg(all(windows, feature = "experimental-settings-generation"))]
+pub(crate) fn settings_generation_lab_stage() -> Result<(), String> {
+    settings_rotation_trial::stage_existing_explicitly()
+}
 
 const MATERIAL_FILENAME: &str = ".install.material";
 const USER_MATERIAL_FILENAME: &str = ".user-store.material";
@@ -669,10 +673,9 @@ pub fn load(section: &str) -> Result<Value, String> {
 #[cfg(all(windows, feature = "experimental-settings-generation"))]
 pub(crate) fn experimental_generation_routing_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    // Feature-enabled release packages always use the guarded route after
-    // installer migration. Debug builds require explicit process opt-in.
-    *ENABLED.get_or_init(|| !cfg!(debug_assertions)
-        || std::env::var_os("WINCOMMANDER_EXPERIMENTAL_SETTINGS_GENERATION").is_some_and(|value| value == "1"))
+    // No build automatically switches storage while interruption-safe cutover
+    // and installer recovery remain unverified.
+    *ENABLED.get_or_init(|| std::env::var_os("WINCOMMANDER_EXPERIMENTAL_SETTINGS_GENERATION").is_some_and(|value| value == "1"))
 }
 
 fn load_legacy(section: &str) -> Result<Value, String> {

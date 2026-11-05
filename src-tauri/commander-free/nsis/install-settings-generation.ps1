@@ -8,10 +8,10 @@ try {
     # Child-only opt-in. The binary fails closed if it was built without the
     # experimental feature, if maintenance checks fail, or if data is ambiguous.
     $env:WINCOMMANDER_EXPERIMENTAL_SETTINGS_GENERATION = '1'
-    & $resolved --settings-generation-lab install --offline-confirmed
-    if ($LASTEXITCODE -ne 0) { throw "Settings migration returned exit code $LASTEXITCODE." }
+    & $resolved --settings-generation-lab stage --offline-confirmed
+    if ($LASTEXITCODE -ne 0) { throw "Settings staging returned exit code $LASTEXITCODE." }
 }
 catch {
-    Write-Error "Settings migration did not complete; existing files were preserved. $($_.Exception.Message)"
+    Write-Error "Settings staging did not complete; existing files were preserved. $($_.Exception.Message)"
     exit 1
 }

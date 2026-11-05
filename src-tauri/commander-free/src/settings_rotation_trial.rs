@@ -816,6 +816,65 @@ pub(super) fn migrate_explicitly() -> Result<(), String> {
         })
 }
 
+/// Pre-replacement staging only. It never provisions a cutover anchor or
+/// selects a generation, so the original installation remains authoritative.
+/// This isolated lab path stages machine settings only. The caller must establish
+/// the intended installation identity; it is not suitable for installer use.
+#[cfg(windows)]
+pub(super) fn stage_existing_explicitly() -> Result<(), String> {
+    super::settings_generation_maintenance::verify_known_writers_stopped()?;
+    if crate::paths::current_user_install_uses_local_datastore() {
+        return Err("Per-user settings preflight requires original-user identity support; existing data preserved.".into());
+    }
+    let root = source_snapshot::known_root(StoreScope::Machine)?;
+    match std::fs::symlink_metadata(&root) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(_) => return Err("Cannot inspect settings root; existing data preserved.".into()),
+        Ok(_) => {},
+    }
+    let (root, _pins, scope) = experimental_runtime_root()?;
+    let key = read_generation_file(&root.join(".install.material"), 65_536)?;
+    if key.is_none() {
+        let store = root.join("store");
+        match std::fs::read_dir(&store) {
+            Ok(mut entries) => {
+                if entries.next().is_none() { return Ok(()); }
+                return Err("Settings key is missing for existing store; existing data preserved.".into());
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            _ => return Err("Settings key is missing or store cannot be inspected; existing data preserved.".into()),
+        }
+    }
+    super::settings_generation_acl_windows::provision_or_verify(&root)
+        .map_err(|_| "Cannot provision settings lock; existing data preserved.")?;
+    let owner = LockedSelectedGeneration::acquire_for(&root, scope)?;
+    let anchor = ProtectedFileAnchor::new(&root, scope);
+    match anchor.read()? {
+        Some(AnchorState::Active { .. }) => { owner.read_reconciled()?; return Ok(()); },
+        Some(AnchorState::Updating { .. }) => return Err("Settings update requires recovery; existing data preserved.".into()),
+        Some(AnchorState::Legacy | AnchorState::Preparing { .. }) | None => {},
+    }
+    let mut snapshot = source_snapshot::Snapshot::capture_machine()?;
+    let stage = root.join(".settings-cutover-candidate.v1");
+    let candidate = match read_generation_file(&stage, MAX_TOTAL * 2 + 65_536)? {
+        Some(existing) => existing,
+        None => {
+            let prepared = snapshot.prepare()?;
+            snapshot.verify_generation(&prepared)?;
+            super::settings_generation_maintenance::verify_known_writers_stopped()?;
+            if !crate::datastore_io::publish_new(&stage, &prepared)? { return Err("Settings staging changed; retry with originals preserved.".into()); }
+            let observed = read_generation_file(&stage, MAX_TOTAL * 2 + 65_536)?.ok_or("Settings stage unavailable")?;
+            if observed != prepared { return Err("Settings stage readback failed; originals preserved.".into()); }
+            observed
+        },
+    };
+    if let Some(AnchorState::Preparing { next }) = anchor.read()? {
+        if cutover::digest(&candidate) != next { return Err("Settings stage does not match pending recovery; originals preserved.".into()); }
+    }
+    super::settings_generation_maintenance::verify_known_writers_stopped()?;
+    snapshot.verify_generation(&candidate)
+}
+
 /// Installer decision under the same maintenance checks. A protected Active
 /// generation is reused; an existing legacy key is migrated; otherwise the
 /// conservative fresh path rejects any unexpected existing file or directory.
