@@ -26,6 +26,7 @@ ${Using:StrFunc} UnStrStr
 !error "Original-user staging requires currentUser installer mode"
 !endif
 !define WC_STAGE_ORIGINAL_USER_SETTINGS "${__FILEDIR__}\stage-original-user-settings.ps1"
+!define WC_SETTINGS_STAGE_SERVICE "${__FILEDIR__}\settings-stage-service.ps1"
 Var WCUserStageServiceRunning
 !endif
 !define WC_REPAIR_SHARED_SETTINGS "${__FILEDIR__}\repair-shared-settings.ps1"
@@ -147,35 +148,15 @@ Var WCUserStageServiceRunning
 !macroend
 
 !ifdef WC_EXPERIMENTAL_USER_STAGE_ONLY
-; Restore the prior running state after a rejected stop/stage. A stop request
-; can still be pending when we get here, so poll before requesting start and
-; verify RUNNING rather than treating an accepted start request as success.
 Function WC_RestoreUserStageService
+  !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
+  nsExec::ExecToStack /TIMEOUT=150000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-settings-stage-service.ps1" -Action Restore'
+  Pop $0
+  Pop $1
   StrCpy $R6 0
-  StrCpy $R4 0
-  wc_user_stage_restore_poll:
-    nsExec::ExecToStack 'sc.exe query ${WC_SERVICE_NAME}'
-    Pop $0
-    Pop $1
-    ${If} $0 == 0
-      ${StrStr} $R7 $1 "RUNNING"
-      ${If} $R7 != ""
-        StrCpy $R6 1
-        Return
-      ${EndIf}
-      ${StrStr} $R7 $1 "STOPPED"
-      ${If} $R7 != ""
-        nsExec::ExecToStack 'sc.exe start ${WC_SERVICE_NAME}'
-        Pop $0
-        Pop $1
-      ${EndIf}
-    ${EndIf}
-    ${If} $R4 >= 60
-      Return
-    ${EndIf}
-    Sleep 1000
-    IntOp $R4 $R4 + 1
-    Goto wc_user_stage_restore_poll
+  ${If} $0 == 0
+    StrCpy $R6 1
+  ${EndIf}
 FunctionEnd
 !endif
 
@@ -266,26 +247,29 @@ FunctionEnd
   ; Stop with the service's full advertised budget before replacing its
   ; executable. Older service binaries may take longer to dismount a Vault.
   !ifdef WC_EXPERIMENTAL_USER_STAGE_ONLY
-    ; Remember service state so a rejected pre-stage can restore availability.
-    StrCpy $WCUserStageServiceRunning 0
-    nsExec::ExecToStack 'sc.exe query ${WC_SERVICE_NAME}'
+    ; Query numeric SCM state using ServiceController, independent of locale.
+    InitPluginsDir
+    File /oname=$PLUGINSDIR\wincommander-settings-stage-service.ps1 "${WC_SETTINGS_STAGE_SERVICE}"
+    !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
+    nsExec::ExecToStack /TIMEOUT=30000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-settings-stage-service.ps1" -Action Status'
     Pop $0
     Pop $1
-    ${If} $0 == 0
-      ${StrStr} $R7 $1 "RUNNING"
-      ${If} $R7 != ""
-        StrCpy $WCUserStageServiceRunning 1
-      ${Else}
-        ${StrStr} $R7 $1 "STOPPED"
-        ${If} $R7 == ""
-          Abort "WinCommander service is changing state; retry the update."
-        ${EndIf}
-      ${EndIf}
-    ${ElseIf} $0 != 1060
-      Abort "WinCommander could not inspect its service before staging."
+    StrCpy $WCUserStageServiceRunning 0
+    ${If} $0 == 4
+      StrCpy $WCUserStageServiceRunning 1
+    ${ElseIf} $0 != 1
+    ${AndIf} $0 != 0
+      Abort "WinCommander could not safely inspect its service before staging."
     ${EndIf}
+    nsExec::ExecToStack /TIMEOUT=225000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-settings-stage-service.ps1" -Action Stop'
+    Pop $0
+    Pop $1
+    ${If} $0 != 0
+      !insertmacro WC_ABORT_STOP_FAILURE "preinstall" "WinCommander could not stop its service for settings staging."
+    ${EndIf}
+  !else
+    !insertmacro WC_STOP_OWNED_SERVICE_OR_ABORT "preinstall" ""
   !endif
-  !insertmacro WC_STOP_OWNED_SERVICE_OR_ABORT "preinstall" ""
   !ifdef WC_EXPERIMENTAL_USER_STAGE_ONLY
     ; The helper handles fresh installs and fails closed if an existing
     ; profile has lost its app binary. It never selects the new store.
