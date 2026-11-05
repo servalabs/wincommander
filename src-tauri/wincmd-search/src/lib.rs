@@ -37,7 +37,7 @@ pub mod tokenize;
 pub mod types;
 pub mod watch;
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -69,6 +69,7 @@ pub struct ExperimentalRebuildReport { pub indexed: usize, pub omitted: usize, p
 pub struct SearchEngine {
     path_policy: PathPolicy,
     watcher_invalid: Arc<AtomicBool>,
+    watcher_generation: Arc<AtomicU64>,
     path_mapper: Option<PathMapper>,
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     experimental_fresh: bool,
@@ -340,6 +341,7 @@ impl SearchEngine {
         Ok(Self {
             path_policy,
             watcher_invalid: Arc::new(AtomicBool::new(false)),
+            watcher_generation: Arc::new(AtomicU64::new(0)),
             path_mapper: None,
             #[cfg(all(windows, feature = "experimental-encrypted-search"))]
             experimental_fresh: false,
@@ -452,11 +454,17 @@ impl SearchEngine {
         // ── Step 1: register watcher before spawning the worker ──────────
         // The engine owns the watcher so dropping/taking it closes `tx` and
         // wakes the drain loop.  On error, proceed crawl-only (as before).
-        let (tx, rx) = mpsc::channel::<FsEventAction>();
-        let watching = if reconcile_first {
-            watch::watch_roots_strict(&roots, skip.clone(), exclusions.clone(), max_bytes, tx, Arc::clone(&self.watcher_invalid))
+        let (rx, watching) = if reconcile_first {
+            // Bounded queue: overflow invalidates the cache and triggers a
+            // full reconciliation rather than dropping events silently.
+            let (tx, rx) = mpsc::sync_channel::<FsEventAction>(1024);
+            let watching = watch::watch_roots_strict(&roots, skip.clone(), exclusions.clone(), max_bytes, tx,
+                Arc::clone(&self.watcher_invalid), Arc::clone(&self.watcher_generation));
+            (rx, watching)
         } else {
-            watch_roots(&roots, skip.clone(), exclusions.clone(), max_bytes, tx)
+            let (tx, rx) = mpsc::channel::<FsEventAction>();
+            let watching = watch_roots(&roots, skip.clone(), exclusions.clone(), max_bytes, tx);
+            (rx, watching)
         };
         match watching {
             Ok(w) => { *self.watcher.lock().unwrap() = Some(w); }
@@ -495,7 +503,23 @@ impl SearchEngine {
             }
         }
 
+        let invalid = Arc::clone(&self.watcher_invalid);
+        let invalid_generation = Arc::clone(&self.watcher_generation);
+        let recovery_config = self.config.clone();
+        #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+        let recovery_index_id = self.experimental_id;
         let handle = thread::spawn(move || {
+            let recovery = if reconcile_first {
+                match SearchEngine::from_index(recovery_config, Arc::clone(&ci), Arc::clone(&path_policy)) {
+                    #[allow(unused_mut)]
+                    Ok(mut engine) => {
+                        #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+                        { engine.experimental_id = recovery_index_id; }
+                        Some(engine)
+                    }
+                    Err(error) => { status.lock().unwrap().last_error = Some(error.to_string()); return; }
+                }
+            } else { None };
             // ── Step 2: crawl (moved off the caller thread) + full index ─
             let files = collect_files(&roots, &exclusions, &skip, max_bytes);
             {
@@ -620,6 +644,26 @@ impl SearchEngine {
                     }
                 }
 
+                // Reconcile after uncertain events once pending writes have
+                // committed. The generation check prevents a concurrent event
+                // from being cleared by an older completed scan.
+                if invalid.load(Ordering::SeqCst) && !dirty {
+                    if let Some(engine) = &recovery {
+                        let observed = invalid_generation.load(Ordering::SeqCst);
+                        match engine.reconcile_sync(&stop, usize::MAX) {
+                            Ok(report) if report.complete => {
+                                if invalid_generation.load(Ordering::SeqCst) == observed {
+                                    invalid.store(false, Ordering::SeqCst);
+                                    if invalid_generation.load(Ordering::SeqCst) != observed {
+                                        invalid.store(true, Ordering::SeqCst);
+                                    }
+                                }
+                            }
+                            Ok(_) => { status.lock().unwrap().last_error = Some("Search reconciliation incomplete; retrying".into()); }
+                            Err(error) => { status.lock().unwrap().last_error = Some(format!("Search reconciliation failed; retrying: {error}")); }
+                        }
+                    }
+                }
                 // Commit once the debounce window has elapsed since the last
                 // event, releasing the writer so other instances can proceed.
                 if dirty && last_event_at.elapsed() >= COMMIT_DEBOUNCE {
@@ -991,6 +1035,29 @@ mod tests {
         assert!(engine.search(&query).is_err());
         assert!(engine.get_chunks(1).is_err());
         assert!(engine.status().last_error.unwrap().contains("reopen"));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn strict_watcher_automatically_reconciles_a_deleted_file() {
+        let data = TempDir::new().unwrap(); let index = TempDir::new().unwrap();
+        let file = data.path().join("memo.txt");
+        fs::write(&file, b"watcheddeletiontoken").unwrap();
+        let config = make_config(index.path().into(), vec![data.path().into()]);
+        let engine = SearchEngine::open(config).unwrap();
+        engine.start_indexing_internal(true).unwrap();
+        let query = ContentQuery { terms: "watcheddeletiontoken".into(), roots: vec![], limit: 10, offset: 0, keyword_only: true };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while engine.search(&query).map(|hits| hits.is_empty()).unwrap_or(true) {
+            assert!(std::time::Instant::now() < deadline, "initial indexing did not finish");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        fs::remove_file(file).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            if engine.search(&query).map(|hits| hits.is_empty()).unwrap_or(false) { break; }
+            assert!(std::time::Instant::now() < deadline, "deletion was not reconciled");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
     }
     #[test]
     fn strict_reconciliation_start_fails_when_watcher_cannot_register() {

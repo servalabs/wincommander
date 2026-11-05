@@ -7,7 +7,7 @@
 use globset::GlobSet;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::PathBuf;
-use std::sync::{mpsc, Arc, atomic::{AtomicBool, Ordering}};
+use std::sync::{mpsc, Arc, atomic::{AtomicBool, AtomicU64, Ordering}};
 
 use crate::crawler::{doc_id_for, path_is_skipped};
 use crate::error::{Result, SearchError};
@@ -109,31 +109,47 @@ pub fn watch_roots(
     roots: &[PathBuf], skip_paths: Vec<PathBuf>, exclusions: GlobSet,
     max_file_bytes: u64, tx: mpsc::Sender<FsEventAction>,
 ) -> Result<RecommendedWatcher> {
-    watch_roots_impl(roots, skip_paths, exclusions, max_file_bytes, tx, None)
+    watch_roots_impl(roots, skip_paths, exclusions, max_file_bytes, EventSink::Unbounded(tx), None)
 }
 
 pub(crate) fn watch_roots_strict(
     roots: &[PathBuf], skip_paths: Vec<PathBuf>, exclusions: GlobSet,
-    max_file_bytes: u64, tx: mpsc::Sender<FsEventAction>, invalid: Arc<AtomicBool>,
+    max_file_bytes: u64, tx: mpsc::SyncSender<FsEventAction>, invalid: Arc<AtomicBool>, generation: Arc<AtomicU64>,
 ) -> Result<RecommendedWatcher> {
-    watch_roots_impl(roots, skip_paths, exclusions, max_file_bytes, tx, Some(invalid))
+    watch_roots_impl(roots, skip_paths, exclusions, max_file_bytes, EventSink::Bounded(tx), Some((invalid, generation)))
 }
 
+enum EventSink {
+    Unbounded(mpsc::Sender<FsEventAction>),
+    Bounded(mpsc::SyncSender<FsEventAction>),
+}
+fn invalidate(state: &(Arc<AtomicBool>, Arc<AtomicU64>)) {
+    state.1.fetch_add(1, Ordering::SeqCst);
+    state.0.store(true, Ordering::SeqCst);
+}
+fn enqueue(sink: &EventSink, action: FsEventAction, invalid: &Option<(Arc<AtomicBool>, Arc<AtomicU64>)>) {
+    match sink {
+        EventSink::Unbounded(tx) => { let _ = tx.send(action); },
+        EventSink::Bounded(tx) => if tx.try_send(action).is_err() {
+            if let Some(state) = invalid { invalidate(state); }
+        },
+    }
+}
 fn watch_roots_impl(
     roots: &[PathBuf], skip_paths: Vec<PathBuf>, exclusions: GlobSet,
-    max_file_bytes: u64, tx: mpsc::Sender<FsEventAction>, invalid: Option<Arc<AtomicBool>>,
+    max_file_bytes: u64, tx: EventSink, invalid: Option<(Arc<AtomicBool>, Arc<AtomicU64>)>,
 ) -> Result<RecommendedWatcher> {
     let strict = invalid.is_some();
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
-        if let Some(flag) = &invalid {
+        if let Some(state) = &invalid {
             if needs_reconciliation(&res, &skip_paths, &exclusions) {
-                flag.store(true, Ordering::Release);
+                invalidate(state);
                 return;
             }
         }
         if let Ok(event) = res {
             if let Some(action) = apply_fs_event(&event, &skip_paths, &exclusions, max_file_bytes) {
-                let _ = tx.send(action);
+                enqueue(&tx, action, &invalid);
             }
         }
     })
@@ -164,10 +180,23 @@ mod tests {
         let root = TempDir::new().unwrap();
         let missing = root.path().join("missing");
         let exclusions = crate::crawler::build_globset(&[]).unwrap();
-        let (tx, _rx) = std::sync::mpsc::channel();
-        assert!(watch_roots_strict(&[missing], vec![], exclusions, 1024, tx, Arc::new(AtomicBool::new(false))).is_err());
+        let (tx, _rx) = std::sync::mpsc::sync_channel(2);
+        assert!(watch_roots_strict(&[missing], vec![], exclusions, 1024, tx, Arc::new(AtomicBool::new(false)), Arc::new(AtomicU64::new(0))).is_err());
     }
 
+    #[test]
+    fn strict_queue_overflow_requests_reconciliation() {
+        let (tx, _rx) = mpsc::sync_channel(1);
+        let sink = EventSink::Bounded(tx);
+        let flag = Arc::new(AtomicBool::new(false));
+        let generation = Arc::new(AtomicU64::new(0));
+        let state = Some((Arc::clone(&flag), Arc::clone(&generation)));
+        enqueue(&sink, FsEventAction::Delete(1), &state);
+        assert!(!flag.load(Ordering::SeqCst));
+        enqueue(&sink, FsEventAction::Delete(2), &state);
+        assert!(flag.load(Ordering::SeqCst));
+        assert_eq!(generation.load(Ordering::SeqCst), 1);
+    }
     #[test]
     fn strict_classification_flags_errors_deletes_and_two_path_renames() {
         let glob = no_exclusions();

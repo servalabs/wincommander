@@ -40,6 +40,14 @@ pub(crate) fn revision_ns(path: &Path) -> std::io::Result<u64> {
 fn confirmed_missing(path: &Path) -> bool {
     matches!(std::fs::symlink_metadata(path), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
 }
+// These configuration rules are independent of filesystem accessibility.
+fn explicitly_out_of_scope(path: &Path, config: &crate::types::IndexConfig, exclusions: &globset::GlobSet) -> bool {
+    config.roots.is_empty()
+        || !crate::index::path_in_roots(&path.to_string_lossy(), &config.roots)
+        || crate::crawler::path_is_skipped(path, &config.skip_paths)
+        || crate::index::path_in_roots(&path.to_string_lossy(), std::slice::from_ref(&config.index_dir))
+        || path.components().any(|part| exclusions.is_match(part.as_os_str()))
+}
 struct StoredFile {
     id: DocId,
     path: PathBuf,
@@ -237,12 +245,15 @@ impl SearchEngine {
             }
         }
         if complete {
+            #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+            let exclusions = crate::crawler::build_globset(&self.config.exclusions)?;
             for file in &existing {
                 if !seen.contains(&file.id) || !self.permits_path(&file.path) {
                     // For encrypted-cache recovery, inability to observe or
                     // authorize an existing path is not proof of deletion.
                     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
-                    if self.experimental_id.is_some() && !confirmed_missing(&file.path) {
+                    if self.experimental_id.is_some() && !confirmed_missing(&file.path)
+                        && !explicitly_out_of_scope(&file.path, &self.config, &exclusions) {
                         complete = false;
                         continue;
                     }
@@ -264,6 +275,18 @@ mod tests {
     use super::*;
     use crate::types::{ContentQuery, IndexConfig};
 
+    #[test]
+    fn configured_removed_root_and_exclusions_are_out_of_scope() {
+        let base = tempfile::tempdir().unwrap();
+        let allowed = base.path().join("included");
+        let removed = base.path().join("removed").join("a.txt");
+        let excluded = allowed.join("private").join("b.txt");
+        let config = IndexConfig { roots: vec![allowed.clone()], exclusions: vec!["private".into()], skip_paths: vec![], max_file_bytes: 100, index_dir: base.path().join("index") };
+        let glob = crate::crawler::build_globset(&config.exclusions).unwrap();
+        assert!(explicitly_out_of_scope(&removed, &config, &glob));
+        assert!(explicitly_out_of_scope(&excluded, &config, &glob));
+        assert!(!explicitly_out_of_scope(&allowed.join("normal.txt"), &config, &glob));
+    }
     #[test]
     fn missing_path_check_does_not_treat_existing_file_as_deleted() {
         let root = tempfile::tempdir().unwrap();
