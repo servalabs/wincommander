@@ -186,8 +186,9 @@ fn verify_source(input: &[u8], old_material: &[u8; 32], sections: &[(String, Str
 }
 
 /// Stage only to an absent path, hold the newly created file, and verify an
-/// independently opened, bounded readback. This does not activate a generation
-/// or protect against a later path replacement after the handles are dropped.
+/// independently opened, bounded readback. The supplied path is not bound to
+/// a trusted destination and its ancestors are not pinned. Handles are dropped
+/// before any activation. These are production blockers, not a cutover proof.
 fn stage_new_with_hook(
     path: &Path,
     candidate: &[u8],
