@@ -803,9 +803,9 @@ pub(super) fn migrate_explicitly() -> Result<(), String> {
         // first marker. This assumes the first rollout has never selected a
         // prior generation; losing all old cutover artifacts is undetectable.
         let probe = held.borrow_mut().prepare()?;
-        cutover::provision_first_migration(&owner._ownership, &anchor, &root, &|| {
+        cutover::provision_first_migration_with_stage(&owner._ownership, &anchor, &root, &|stage| {
             super::settings_generation_maintenance::verify_known_writers_stopped()?;
-            held.borrow_mut().verify_generation(&probe)
+            held.borrow_mut().verify_generation(stage.unwrap_or(&probe))
         })?;
     }
     stage_and_select(&owner._ownership, &anchor, &root,

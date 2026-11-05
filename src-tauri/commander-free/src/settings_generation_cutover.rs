@@ -108,20 +108,41 @@ impl SelectedFile {
 /// verified current source and enforce maintenance for all ordinary writers.
 /// Marker absence cannot detect restoration/deletion of a previous cutover;
 /// this is acceptable only under the documented first-rollout assumption.
+#[cfg(test)]
 pub(super) fn provision_first_migration(
     guard: &super::settings_generation_ownership::SettingsGenerationLock,
     anchor: &ProtectedFileAnchor, root: &Path, verify_source_and_maintenance: &impl Fn() -> Result<(), String>,
 ) -> Result<(), String> {
+    provision_first_migration_with_stage(guard, anchor, root, &|stage| {
+        if stage.is_some() { return Err("existing settings cutover artifacts require recovery".into()); }
+        verify_source_and_maintenance()
+    })
+
+}
+
+/// Accept an unselected staged candidate only after verifying it against the
+/// currently held source. Never overwrite stale or unauthentic staged bytes.
+pub(super) fn provision_first_migration_with_stage(
+    guard: &super::settings_generation_ownership::SettingsGenerationLock,
+    anchor: &ProtectedFileAnchor, root: &Path,
+    verify_source_and_maintenance: &impl Fn(Option<&[u8]>) -> Result<(), String>,
+) -> Result<(), String> {
     guard.require_exclusive().map_err(|e| e.to_string())?;
     if anchor.read()?.is_some() { return Err("settings cutover anchor already exists".into()); }
-    for name in [".settings-cutover-candidate.v1", ".settings-generation.v1"] {
-        if super::settings_rotation_trial::read_generation_file(&root.join(name), 16 * 1024 * 1024 * 2 + 65_536)?.is_some() {
-            return Err("existing settings cutover artifacts require recovery".into());
-        }
+    let stage_path = root.join(".settings-cutover-candidate.v1");
+    let selected = root.join(".settings-generation.v1");
+    let read = |path: &Path| super::settings_rotation_trial::read_generation_file(path, 16 * 1024 * 1024 * 2 + 65_536);
+    if read(&selected)?.is_some() { return Err("existing selected settings require recovery".into()); }
+    let stage = read(&stage_path)?;
+    verify_source_and_maintenance(stage.as_deref())?;
+    if read(&stage_path)? != stage || read(&selected)?.is_some() {
+        return Err("settings cutover artifacts changed; originals preserved".into());
     }
-    verify_source_and_maintenance()?;
     anchor.provision_legacy()?;
-    verify_source_and_maintenance()?;
+    verify_source_and_maintenance(stage.as_deref())?;
+    if read(&stage_path)? != stage || read(&selected)?.is_some() {
+        return Err("settings cutover artifacts changed; recovery required".into());
+    }
     Ok(())
 }
 

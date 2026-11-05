@@ -601,3 +601,23 @@ fn first_existing_migration_checks_maintenance_and_preserves_f6_source() {
     assert_eq!(owner.read_all().unwrap()["f6-keystore"], f6);
     assert_eq!(std::fs::read_to_string(source_path).unwrap(), encrypted_f6);
 }
+
+#[test]
+#[cfg_attr(windows, ignore = "requires elevated machine-lock ACL provisioning; run explicitly in Windows acceptance")]
+fn first_migration_authenticates_preexisting_staged_candidate_before_anchor() {
+    let root = tempfile::tempdir().unwrap(); provision_test_lock(root.path());
+    let old = [42; 32]; let input = sections(&old);
+    let owner = LockedSelectedGeneration::acquire(root.path()).unwrap();
+    let anchor = ProtectedFileAnchor::new(root.path(), StoreScope::Machine);
+    let candidate = prepare(&old, &input).unwrap();
+    let stage = root.path().join(".settings-cutover-candidate.v1");
+    std::fs::write(&stage, &candidate).unwrap();
+    let wrong = [&input[..1], &[("changed".into(), "stale".into())]].concat();
+    assert!(cutover::provision_first_migration_with_stage(&owner._ownership, &anchor, root.path(), &|bytes| verify_source(bytes.unwrap(), &old, &wrong)).is_err());
+    assert!(anchor.read().unwrap().is_none());
+    assert_eq!(std::fs::read(&stage).unwrap(), candidate);
+    cutover::provision_first_migration_with_stage(&owner._ownership, &anchor, root.path(), &|bytes| verify_source(bytes.unwrap(), &old, &input)).unwrap();
+    stage_and_select(&owner._ownership, &anchor, root.path(), || panic!("reuse exact staged bytes"), &|bytes| verify_source(bytes, &old, &input)).unwrap();
+    assert_eq!(std::fs::read(stage).unwrap(), candidate);
+    assert_eq!(owner.read_all().unwrap()["payments"]["token"], "second secret");
+}
