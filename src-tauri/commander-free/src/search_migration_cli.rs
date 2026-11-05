@@ -47,6 +47,33 @@ pub fn run(phase: &str) -> Result<String, String> {
     let old = parent.join("fts");
     let selection = parent.join(".wincommander-encrypted-selection");
     match phase {
+        "stage" => {
+            let guard = SearchOperationFence::acquire_exclusive(&parent)
+                .map_err(|_| "Cannot acquire offline search maintenance lock.")?;
+            match classify(&parent, &old, &selection)? {
+                State::Fresh => Ok("fresh".into()),
+                State::NeedsRebuild => {
+                    // No settings or user roots are read in the installer.
+                    let config = wincmd_search::types::IndexConfig {
+                        roots: Vec::new(), exclusions: Vec::new(), skip_paths: Vec::new(),
+                        max_file_bytes: 50 * 1024 * 1024, index_dir: old.clone(),
+                    };
+                    let policy: wincmd_search::PathPolicy = std::sync::Arc::new(|_| false);
+                    SearchEngine::rebuild_offline_and_select(config, policy, &selection, &guard)
+                        .map_err(|e| e.to_string())?;
+                    SearchEngine::verify_selected_generation(&old, &selection).map_err(|e| e.to_string())?;
+                    Ok("staged reconciliation=pending old-cache=retained".into())
+                },
+                State::NeedsQuarantine => {
+                    SearchEngine::verify_selected_generation(&old, &selection).map_err(|e| e.to_string())?;
+                    Ok("staged reconciliation=pending old-cache=retained".into())
+                },
+                State::Quarantined => {
+                    SearchEngine::verify_quarantined_selection(&old, &selection).map_err(|e| e.to_string())?;
+                    Ok("already-quarantined".into())
+                },
+            }
+        }
         "quarantine" => {
             let guard = SearchOperationFence::acquire_exclusive(&parent)
                 .map_err(|_| "Cannot acquire offline search maintenance lock.")?;

@@ -504,6 +504,26 @@ impl SearchEngine {
         engine.select_experimental_candidate(selection_dir)?;
         Ok(report)
     }
+    /// Authenticate and open the selected encrypted index without moving or
+    /// changing the existing legacy cache.
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    pub fn verify_selected_generation(old: &std::path::Path, selection_dir: &std::path::Path) -> Result<()> {
+        use crate::encrypted_generation_prototype::{inspect, PinnedSelectionStore, UserProtector};
+        use crate::encrypted_index_prototype::tantivy_trial::TrialDirectory;
+        use crate::read_only::{AccessMode, CheckedDirectory};
+        let parent = old.parent().ok_or_else(|| SearchError::Config("invalid legacy index path".into()))?;
+        if !old.is_absolute() || selection_dir.parent() != Some(parent) {
+            return Err(SearchError::Config("invalid selection parent".into()));
+        }
+        let _pins = CheckedDirectory::pin_root_path(parent)?;
+        let mut selection = PinnedSelectionStore::open(selection_dir)?;
+        let selected = inspect(&mut selection, &UserProtector)?
+            .ok_or_else(|| SearchError::Config("encrypted selection missing".into()))?;
+        let generation = parent.join(format!(".wincommander-encrypted-{}", hex::encode(selected.index_id)));
+        let directory = TrialDirectory::open_protected(&generation, AccessMode::GuardedReader, &selected.index_id, true)?;
+        tantivy::Index::open(directory).map_err(|_| SearchError::Config("encrypted index cannot be opened".into()))?;
+        Ok(())
+    }
     /// Offline phase: authenticate the selected encrypted generation before
     /// moving the legacy cache under the helper's own exclusive fence.
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
