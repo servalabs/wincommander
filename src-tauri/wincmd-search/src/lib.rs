@@ -528,6 +528,26 @@ impl SearchEngine {
         tantivy::Index::open(directory).map_err(|_| SearchError::Config("encrypted index cannot be opened".into()))?;
         Ok(crate::encrypted_legacy_quarantine::quarantine_with_fence(old, &selected.index_id, fence)?)
     }
+    /// Accept only the authenticated, protected scope file recreated by a
+    /// selected app; any other legacy-directory entry remains a conflict.
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    pub fn experimental_scope_only(old: &std::path::Path) -> Result<bool> {
+        use crate::encrypted_key_prototype::{Protector, UserDpapi};
+        use crate::read_only::{AccessMode, CheckedDirectory};
+        let _pins = CheckedDirectory::pin_root_path(old)?;
+        let mut count = 0usize;
+        for entry in std::fs::read_dir(old)? {
+            let entry = entry?; count += 1;
+            if count > 1 || entry.file_name() != std::ffi::OsStr::new("scope-v2.dpapi") { return Ok(false); }
+        }
+        if count != 1 { return Ok(false); }
+        let dir = CheckedDirectory::open(old, AccessMode::GuardedReader)?;
+        let protected = dir.atomic_read_bounded(std::path::Path::new("scope-v2.dpapi"), crate::encrypted_scope::MAX_PROTECTED_SCOPE)
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        let clear = UserDpapi.unprotect(&protected)?;
+        if clear.len() < 8 { return Ok(false); }
+        Ok(crate::encrypted_scope::same_scope(&clear, &clear[8..]).unwrap_or(false))
+    }
     /// Read-only post-handoff check. The installer must hold its exclusive
     /// operation fence for the entire call; this helper never owns that lock.
     /// It verifies the DPAPI selector and authenticates the encrypted manifest,
@@ -547,6 +567,7 @@ impl SearchEngine {
             match std::fs::symlink_metadata(old) {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
                 Err(e) => Err(e.into()),
+                Ok(_) if Self::experimental_scope_only(old)? => Ok(()),
                 Ok(_) => Err(SearchError::Config("legacy index still present".into())),
             }
         };
@@ -1312,6 +1333,14 @@ mod tests {
         let before_verify = snapshot(root.path());
         SearchEngine::verify_quarantined_selection(&old, &selector).unwrap();
         assert_eq!(snapshot(root.path()), before_verify, "read-only verification changed files");
+        // A later app start recreates only the encrypted scope file in the old
+        // directory. A second upgrade must accept it without moving or deleting it.
+        publish_experimental_scope(&old, b"scope", |_| Ok(())).unwrap();
+        assert!(SearchEngine::experimental_scope_only(&old).unwrap());
+        SearchEngine::verify_quarantined_selection(&old, &selector).unwrap();
+        assert!(old.join("scope-v2.dpapi").is_file());
+        fs::remove_file(old.join("scope-v2.dpapi")).unwrap();
+        fs::remove_dir(&old).unwrap();
         let displaced = root.path().join("displaced-backup");
         fs::rename(&backup, &displaced).unwrap();
         assert!(SearchEngine::verify_quarantined_selection(&old, &selector).is_err());
