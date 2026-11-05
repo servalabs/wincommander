@@ -58,7 +58,22 @@ pub(crate) fn acquire() -> Result<SearchOperationFence, String> {
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         match SearchOperationFence::acquire_shared(&parent) {
-            Ok(guard) => return Ok(guard),
+            Ok(guard) => {
+                // A helper marks the roll-forward intent before handing its
+                // exclusive lock to the installer. If startup wins the small
+                // release-to-commit gap, do not treat the update as complete.
+                let selection = parent.join(".wincommander-encrypted-selection");
+                match std::fs::symlink_metadata(&selection) {
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
+                    Err(_) => return Err("Cannot inspect pending search migration.".into()),
+                    Ok(_) => match wincmd_search::SearchEngine::inspect_search_migration(&selection) {
+                        Ok(None) => {},
+                        Ok(Some(_)) => return Err("WinCommander update needs to finish or be retried before search can start.".into()),
+                        Err(_) => return Err("Cannot verify the pending search migration; retry the update.".into()),
+                    },
+                }
+                return Ok(guard);
+            },
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock && Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(100));
             },
