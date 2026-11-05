@@ -350,7 +350,8 @@ pub(crate) fn prepare_release_challenge_request(
     licence: &RefreshLicence<'_>, now: u64,
 ) -> Result<Vec<u8>, &'static str> {
     let credential = load_confirmed(binding, receipt_trust, now)?;
-    let body = checked_refresh_wire(binding, licence)?;
+    let body = crate::license_cache::with_verified_release_wire(licence.payload, licence.signature, licence.hybrid,
+        licence.last_verified_at, binding.licence_id, binding.device_hash, Ok)?;
     wire::release_challenge_request(&credential, &body)
 }
 
@@ -360,7 +361,8 @@ pub(crate) fn prepare_release_request(
     licence: &RefreshLicence<'_>, challenge: &[u8], now: u64,
 ) -> Result<Vec<u8>, &'static str> {
     let credential = load_confirmed(binding, receipt_trust, now)?;
-    let body = checked_refresh_wire(binding, licence)?;
+    let body = crate::license_cache::with_verified_release_wire(licence.payload, licence.signature, licence.hybrid,
+        licence.last_verified_at, binding.licence_id, binding.device_hash, Ok)?;
     wire::release_request(&credential, body, challenge, now)
 }
 
@@ -401,13 +403,11 @@ pub(crate) async fn release_from_machine_cache() -> Result<(), &'static str> {
     receipt_policy.purpose = wincmd_pq_experiment::Purpose::LicenceEnrolment;
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
         .map_err(|_| INVALID)?.as_secs();
-    if release_pending::remove_prepared_cache(&receipt_policy, now)? {
-        return crate::license_cache::ensure_paid_history_released();
-    }
-    if release_pending::verify_completed_recovery(&receipt_policy, now)? {
-        return crate::license_cache::ensure_paid_history_released();
-    }
-    let cache = crate::license_cache::load_release_licence_snapshot()?;
+    let completed = release_pending::remove_prepared_cache(&receipt_policy, now)?
+        || release_pending::verify_completed_recovery(&receipt_policy, now)?;
+    if completed && crate::license_cache::ensure_paid_history_released().is_ok() { return Ok(()); }
+    let cache = if completed { crate::license_cache::load_retained_release_snapshot()? }
+        else { crate::license_cache::load_release_licence_snapshot()? };
     let binding = Binding { licence_id: &cache.licence_id, device_hash: &cache.device_hash,
         issuer_origin: wire::LICENCE_ORIGIN };
     let licence = RefreshLicence { payload: &cache.payload, signature: &cache.signature,

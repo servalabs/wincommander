@@ -144,8 +144,63 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
         payload: trial_payload, hybrid: Some(String::from_utf8(trial_hybrid).unwrap()), seats_used: None, seat_limit: None };
     let trial_record = ledger::advance(None, None, &trial, &cache(&trial), &public, &current, None).unwrap();
     assert!(ledger::ensure_paid_history_released(&trial_record, &public, &current, None).is_ok());
+    assert_eq!(ledger::next_unreleased_paid(&trial_record, &public, &current, None).unwrap(), None);
     let mixed = ledger::advance(Some(&generation_record), None, &trial, &cache(&trial), &public, &current, None).unwrap();
     assert!(ledger::ensure_paid_history_released(&mixed, &public, &current, None).is_err());
+    assert_eq!(ledger::next_unreleased_paid(&mixed, &public, &current, None).unwrap(), Some(cache(&generation_two)));
+    assert_eq!(ledger::exact_retained_cache(&mixed, &generation_two, 99).unwrap(), cache(&generation_two));
+    assert!(ledger::exact_retained_cache(&mixed, &generation_two, 100).is_err());
+    assert!(ledger::exact_retained_cache(&mixed, &generation_one_later, 99).is_err());
+    let root = std::env::temp_dir().join(format!("wincmd-retained-test-{}", uuid::Uuid::new_v4()));
+    fs::create_dir(&root).unwrap();
+    let no_cache = root.join("license.json");
+    let recovery_key = format!(r"SOFTWARE\WinCommanderRetainedRecoveryTest-{}", uuid::Uuid::new_v4());
+    let recovery_anchor = anchor::Anchor::test_user(recovery_key.clone());
+    recovery_anchor.write(&mixed).unwrap();
+    let selected = load_retained_release_with_anchor(&no_cache, &public, &current, &recovery_anchor).unwrap();
+    assert_eq!(selected.licence_id, "lic-a");
+    assert_eq!(selected.payload, generation_two.payload);
+    assert!(with_verified_anchor_mode(&no_cache, &generation_two, 99, &public, &current, &recovery_anchor, true, || Ok(())).is_ok());
+    assert!(with_verified_anchor_mode(&no_cache, &generation_two, 99, &public, &current, &recovery_anchor, false, || Ok(())).is_err());
+    assert!(with_verified_anchor_mode(&no_cache, &generation_two, 100, &public, &current, &recovery_anchor, true, || Ok(())).is_err());
+    fs::write(&no_cache, cache(&trial)).unwrap();
+    assert!(load_retained_release_with_anchor(&no_cache, &public, &current, &recovery_anchor).is_err());
+    assert!(with_verified_anchor_mode(&no_cache, &generation_two, 99, &public, &current, &recovery_anchor, true, || Ok(())).is_err());
+    fs::remove_file(&no_cache).unwrap();
+    std::thread::scope(|scope| {
+        let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let path_ref = &no_cache;
+        let generation_ref = &generation_two;
+        let public_ref = &public;
+        let trust_ref = &current;
+        let key_copy = recovery_key.clone();
+        let trial_cache = cache(&trial);
+        let reader = scope.spawn(move || {
+            let anchor = anchor::Anchor::test_user(key_copy);
+            with_verified_anchor_mode(path_ref, generation_ref, 99, public_ref, trust_ref,
+                &anchor, true, || { locked_tx.send(()).unwrap(); release_rx.recv().unwrap(); Ok(()) })
+        });
+        locked_rx.recv().unwrap();
+        let writer = scope.spawn(move || {
+            started_tx.send(()).unwrap();
+            let _guard = crate::licence_security_lock().unwrap();
+            fs::write(path_ref, trial_cache).unwrap();
+            done_tx.send(()).unwrap();
+        });
+        started_rx.recv().unwrap();
+        assert!(done_rx.recv_timeout(std::time::Duration::from_millis(100)).is_err());
+        release_tx.send(()).unwrap();
+        reader.join().unwrap().unwrap();
+        writer.join().unwrap();
+        done_rx.recv().unwrap();
+    });
+    assert!(with_verified_anchor_mode(&no_cache, &generation_two, 99, &public, &current, &recovery_anchor, true, || Ok(())).is_err());
+    fs::remove_file(&no_cache).unwrap();
+    anchor::remove_test_key(&recovery_key).unwrap();
+    fs::remove_dir(&root).unwrap();
     let mut tampered: serde_json::Value = serde_json::from_slice(&trial_record).unwrap();
     tampered["records"][0] = "{}".into();
     assert!(ledger::ensure_paid_history_released(&serde_json::to_vec(&tampered).unwrap(), &public, &current, None).is_err());
@@ -346,9 +401,11 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
     let real_completion = ledger::mark_release_completed(&released, &generation_two, 99, &real_journal,
         &real_request, &real_acknowledgement, &public, &current, None).unwrap();
     assert!(ledger::ensure_paid_history_released(&real_completion, &public, &current, None).is_ok());
+    assert_eq!(ledger::next_unreleased_paid(&real_completion, &public, &current, None).unwrap(), None);
     let real_next_activation = ledger::advance(Some(&real_completion), None, &generation_three_same_second,
         &cache(&generation_three_same_second), &public, &current, None).unwrap();
     assert!(ledger::ensure_paid_history_released(&real_next_activation, &public, &current, None).is_err());
+    assert_eq!(ledger::next_unreleased_paid(&real_next_activation, &public, &current, None).unwrap(), Some(cache(&generation_three_same_second)));
     let new_wire = build_refresh_wire(&generation_three_same_second, &public, &current, "lic-a", "device").unwrap();
     assert_eq!(ledger::can_replace_completed_release(&real_next_activation, &generation_three_same_second, 99,
         &cache(&generation_three_same_second), &[4; 32], &real_acknowledgement, &public, &current, None), Ok(false));

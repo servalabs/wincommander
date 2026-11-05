@@ -310,6 +310,13 @@ pub(crate) fn load_release_licence_snapshot() -> Result<DeviceLicenceSnapshot, &
 }
 
 #[cfg(feature = "experimental-pq-licence")]
+pub(crate) fn load_retained_release_snapshot() -> Result<DeviceLicenceSnapshot, &'static str> {
+    let public = service_public_key().ok_or("license verification is unavailable")?;
+    let trust = hybrid_trust::configured()?;
+    rollback::load_retained_release_snapshot(&machine_license_cache_path()?, public, &trust.policy())
+}
+
+#[cfg(feature = "experimental-pq-licence")]
 pub(crate) fn ensure_paid_history_released() -> Result<(), &'static str> {
     let public = service_public_key().ok_or("license verification is unavailable")?;
     let trust = hybrid_trust::configured()?;
