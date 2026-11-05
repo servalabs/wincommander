@@ -16,6 +16,23 @@ pub(crate) fn backup_name(index_id: &[u8; 16]) -> io::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    #[test]
+    fn replaced_source_is_not_moved_for_recorded_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let old = root.path().join("old"); let original = root.path().join("original");
+        std::fs::create_dir(&old).unwrap();
+        std::fs::write(old.join("original.txt"), b"original").unwrap();
+        let intent = crate::encrypted_migration_transaction::Intent::capture([1; 16], [2; 16], &old).unwrap();
+        std::fs::rename(&old, &original).unwrap();
+        std::fs::create_dir(&old).unwrap();
+        std::fs::write(old.join("different.txt"), b"different").unwrap();
+        let fence = crate::encrypted_search_fence::SearchOperationFence::acquire_exclusive(root.path()).unwrap();
+        assert!(quarantine_expected(&old, &[2; 16], &fence, intent.identity()).is_err());
+        assert_eq!(std::fs::read(old.join("different.txt")).unwrap(), b"different");
+        assert_eq!(std::fs::read(original.join("original.txt")).unwrap(), b"original");
+        assert!(!root.path().join(backup_name(&[2; 16]).unwrap()).exists());
+    }
     #[test]
     fn backup_name_is_deterministic_and_scoped_to_generation() {
         assert_eq!(backup_name(&[1; 16]).unwrap(), backup_name(&[1; 16]).unwrap());
