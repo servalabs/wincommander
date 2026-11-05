@@ -98,9 +98,14 @@ impl ContentIndex {
 
     fn open_mode(dir: &Path, mode: AccessMode, protected: Option<([u8; 16], bool)>) -> Result<Self> {
         let read_only = mode != AccessMode::Writable;
-        crate::read_only::validate_storage(dir)?;
-        if !read_only {
-            std::fs::create_dir_all(dir)?;
+        // The ordinary path retains its existing initialization behavior.
+        // An encrypted root must already exist and is validated only after
+        // TrialDirectory has pinned its ancestors; never create it here.
+        if protected.is_none() {
+            crate::read_only::validate_storage(dir)?;
+            if !read_only {
+                std::fs::create_dir_all(dir)?;
+            }
         }
 
         let version_file = dir.join(SCHEMA_VERSION_FILE);

@@ -139,6 +139,13 @@ impl SearchEngine {
         if generation.to_string_lossy().eq_ignore_ascii_case(&old.to_string_lossy()) {
             return Err(SearchError::Config("encrypted generation must differ from old index".into()));
         }
+        // Hold every parent open without delete sharing before the first
+        // filesystem mutation. create_dir is exclusive and never replaces an
+        // interrupted or existing generation; recovery must explicitly reopen.
+        let _parent_pins = crate::read_only::CheckedDirectory::pin_root_path(parent)?;
+        if !existing {
+            std::fs::create_dir(&generation)?;
+        }
         // Avoid ingesting either index if a user's search root contains them.
         config.skip_paths.push(old);
         config.skip_paths.push(generation.clone());
