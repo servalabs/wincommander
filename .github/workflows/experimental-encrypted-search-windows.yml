@@ -38,6 +38,7 @@ jobs:
             'missing_selector_with_prior_backup_cannot_be_marked_fresh',
             'interrupted_origin_without_selector_fails_closed_and_preserves_proof',
             'interrupted_origin_recovers_valid_authenticated_candidate',
+            'interrupted_origin_rejects_changed_source_or_manifest',
             'search_migration_intent_recovers_and_respects_replacement_boundary',
             'application_entry_rebuilds_then_refuses_corrupt_selector',
             'fresh_install_can_build_select_and_reopen_without_legacy_index',

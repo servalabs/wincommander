@@ -1492,6 +1492,33 @@ mod tests {
     }
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     #[test]
+    fn interrupted_origin_rejects_changed_source_or_manifest() {
+        use sha2::{Digest, Sha256};
+        use tantivy::directory::Directory;
+        let root = TempDir::new().unwrap(); let old = root.path().join("fts");
+        let selection = root.path().join(".wincommander-encrypted-selection");
+        fs::create_dir(&selection).unwrap();
+        let config = make_config(old.clone(), vec![]); let id = [46; 16];
+        let mut candidate = SearchEngine::open_experimental_encrypted_with_policy(config.clone(), Arc::new(|_| false), id, false).unwrap();
+        candidate.rebuild_experimental_candidate().unwrap();
+        let generation = root.path().join(format!(".wincommander-encrypted-{}", hex::encode(id)));
+        let directory = crate::encrypted_index_prototype::tantivy_trial::TrialDirectory::open_protected(
+            &generation, crate::read_only::AccessMode::Writable, &id, true).unwrap();
+        let mut manifest = directory.atomic_read(std::path::Path::new("meta.json")).unwrap();
+        let digest: [u8; 32] = Sha256::digest(&manifest).into();
+        crate::encrypted_generation_prototype::record_origin(&selection, &id, true, &digest, &old).unwrap();
+        manifest.push(b' '); // Still JSON, but no longer the approved manifest.
+        directory.atomic_write(std::path::Path::new("meta.json"), &manifest).unwrap();
+        drop(directory); drop(candidate);
+        assert!(SearchEngine::open_or_rebuild_experimental_with_policy(config.clone(), Arc::new(|_| true)).is_err());
+        assert!(!selection.join("candidate-proof.v1").exists());
+        let original = root.path().join("original");
+        fs::rename(&old, &original).unwrap(); fs::create_dir(&old).unwrap();
+        assert!(SearchEngine::open_or_rebuild_experimental_with_policy(config, Arc::new(|_| true)).is_err());
+        assert!(original.is_dir()); assert!(!selection.join("candidate-proof.v1").exists());
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    #[test]
     fn interrupted_origin_recovers_valid_authenticated_candidate() {
         let root = TempDir::new().unwrap(); let old = root.path().join("fts");
         let selection = root.path().join(".wincommander-encrypted-selection");
