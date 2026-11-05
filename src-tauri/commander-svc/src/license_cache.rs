@@ -103,6 +103,28 @@ struct PersistedTokenEnvelope<'a> {
 /// location. Callers never choose a path and the service assigns the refresh
 /// timestamp itself.
 pub fn store(args: serde_json::Value) -> Result<(), &'static str> {
+    #[cfg(feature = "experimental-pq-licence")]
+    { store_inner(args, None) }
+    #[cfg(not(feature = "experimental-pq-licence"))]
+    { store_inner(args) }
+}
+
+#[cfg(feature = "experimental-pq-licence")]
+pub(crate) fn store_activation(
+    pending: &crate::licence_activation_intent::PendingActivation,
+    verified: &crate::licence_activation_intent::VerifiedActivation,
+) -> Result<(), &'static str> {
+    let response = serde_json::to_vec(&serde_json::json!({ "ok": true,
+        "payload": verified.payload, "signature": verified.signature, "hybrid": verified.hybrid,
+        "seatsUsed": verified.seats_used, "seatLimit": verified.seat_limit })).map_err(|_| "license cache request is invalid")?;
+    crate::licence_activation_intent::verify_response(pending, &response, now_unix())?;
+    store_inner(serde_json::json!({ "payload": verified.payload, "signature": verified.signature,
+        "hybrid": verified.hybrid, "seatsUsed": verified.seats_used, "seatLimit": verified.seat_limit }), Some(pending))
+}
+
+fn store_inner(args: serde_json::Value,
+    #[cfg(feature = "experimental-pq-licence")] pending: Option<&crate::licence_activation_intent::PendingActivation>,
+) -> Result<(), &'static str> {
     let request: StoreLicenseCacheRequest =
         serde_json::from_value(args).map_err(|_| "license cache request is invalid")?;
     let public_key = service_public_key().ok_or("license verification is unavailable")?;
@@ -132,7 +154,10 @@ pub fn store(args: serde_json::Value) -> Result<(), &'static str> {
     let path = machine_license_cache_path()?;
     #[cfg(feature = "experimental-pq-licence")]
     {
-        rollback::write(&path, &request, &bytes, public_key, &trust.policy())
+        match pending {
+            Some(pending) => rollback::write_activation(&path, &request, &bytes, public_key, &trust.policy(), pending),
+            None => rollback::write(&path, &request, &bytes, public_key, &trust.policy()),
+        }
     }
     #[cfg(not(feature = "experimental-pq-licence"))]
     {
@@ -572,6 +597,23 @@ fn validate_dual_request(
         return Err("hybrid license does not match the classical license");
     }
     Ok(())
+}
+
+/// Verify service-received activation bytes with only service-build trust.
+#[cfg(feature = "experimental-pq-licence")]
+pub(crate) fn verify_activation_envelope(payload: &str, signature: &str, hybrid: &str)
+    -> Result<(), &'static str> {
+    let public = service_public_key().ok_or("license verification is unavailable")?;
+    let trust = hybrid_trust::configured()?;
+    verify_activation_envelope_with(payload, signature, hybrid, public, &trust.policy())
+}
+
+#[cfg(feature = "experimental-pq-licence")]
+pub(crate) fn verify_activation_envelope_with(payload: &str, signature: &str, hybrid: &str,
+    public: &str, trust: &wincmd_pq_experiment::jws::Trust<'_>) -> Result<(), &'static str> {
+    let request = StoreLicenseCacheRequest { payload: payload.into(), signature: signature.into(),
+        hybrid: Some(hybrid.into()), seats_used: None, seat_limit: None };
+    validate_dual_request(&request, public, trust)
 }
 
 fn service_public_key() -> Option<&'static str> {

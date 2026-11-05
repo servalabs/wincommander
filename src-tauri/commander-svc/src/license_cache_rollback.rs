@@ -19,6 +19,7 @@ pub(super) fn ensure_paid_history_released(
     let historical = history::configured(trust)?;
     let _lock = WRITE_LOCK.lock().map_err(|_| "license cache lock is unavailable")?;
     let _process_lock = crate::licence_security_lock()?;
+    crate::licence_activation_intent::ensure_idle_locked()?;
     super::release_gate::ensure_idle()?;
     let anchor = anchor::Anchor::machine_named(r"SOFTWARE\ServaLabs\WinCommander\HybridLicence");
     let retained = anchor.read().map_err(|_| "license security record is unavailable")?
@@ -56,6 +57,14 @@ pub(super) fn write(
     write_with_anchor(path, candidate, bytes, public_key, trust, &anchor)
 }
 
+pub(super) fn write_activation(
+    path: &Path, candidate: &StoreLicenseCacheRequest, bytes: &[u8], public_key: &str,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>, pending: &crate::licence_activation_intent::PendingActivation,
+) -> Result<(), &'static str> {
+    let anchor = anchor::Anchor::machine_named(r"SOFTWARE\ServaLabs\WinCommander\HybridLicence");
+    write_with_gate_mode(path, candidate, bytes, public_key, trust, &anchor, &super::release_gate::machine(), Some(pending))
+}
+
 fn write_with_anchor(
     path: &Path,
     candidate: &StoreLicenseCacheRequest,
@@ -71,11 +80,23 @@ fn write_with_gate(
     path: &Path, candidate: &StoreLicenseCacheRequest, bytes: &[u8], public_key: &str,
     trust: &wincmd_pq_experiment::jws::Trust<'_>, anchor: &anchor::Anchor, gate: &anchor::Anchor,
 ) -> Result<(), &'static str> {
+    write_with_gate_mode(path, candidate, bytes, public_key, trust, anchor, gate, None)
+}
+
+fn write_with_gate_mode(
+    path: &Path, candidate: &StoreLicenseCacheRequest, bytes: &[u8], public_key: &str,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>, anchor: &anchor::Anchor, gate: &anchor::Anchor,
+    pending: Option<&crate::licence_activation_intent::PendingActivation>,
+) -> Result<(), &'static str> {
     let old_trust = history::configured(trust)?;
     let _lock = WRITE_LOCK
         .lock()
         .map_err(|_| "license cache lock is unavailable")?;
     let _process_lock = crate::licence_security_lock()?;
+    match pending {
+        Some(pending) => crate::licence_activation_intent::ensure_matches_locked(pending)?,
+        None => crate::licence_activation_intent::ensure_idle_locked()?,
+    }
     super::release_gate::ensure_idle_at(gate)?;
     let existing = read_cache(path)?;
     if let Some(existing) = existing.as_deref() {
@@ -146,6 +167,7 @@ fn write_renewal_with_gate(
         .lock()
         .map_err(|_| "license cache lock is unavailable")?;
     let _process_lock = crate::licence_security_lock()?;
+    crate::licence_activation_intent::ensure_idle_locked()?;
     super::release_gate::ensure_idle_at(gate)?;
     let existing = read_cache(path)?.ok_or("license cache is unavailable")?;
     let retained = anchor
@@ -418,7 +440,8 @@ pub(super) fn verify_current(
     public_key: &str,
     trust: &wincmd_pq_experiment::jws::Trust<'_>,
 ) -> Result<(), &'static str> {
-    with_verified_current(path, candidate, expected_time, public_key, trust, || Ok(()))
+    with_verified_current(path, candidate, expected_time, public_key, trust,
+        crate::licence_activation_intent::ensure_idle_locked)
 }
 
 /// Run a short, non-blocking operation while the verified cache cannot change.

@@ -307,6 +307,24 @@ pub(super) async fn post_release(body: zeroize::Zeroizing<Vec<u8>>) -> Result<Ve
     post_body(&client, &format!("{LICENCE_ORIGIN}/experimental/device/release"), bytes.into()).await
 }
 
+/// Fixed-origin activation transport; the encrypted intent remains pending on
+/// every failure, including a timeout after the server may have committed.
+pub(super) async fn post_activation(body: zeroize::Zeroizing<Vec<u8>>) -> Result<Vec<u8>, &'static str> {
+    if body.is_empty() || body.len() > 16 * 1024 { return Err(INVALID); }
+    let client = required_hybrid_client()?;
+    let bytes = bytes::Bytes::from_owner(body);
+    // A distinct route prevents an older Worker from silently ignoring the
+    // operation ID and allocating an unrecoverable non-idempotent seat.
+    post_body(&client, &format!("{LICENCE_ORIGIN}/license/activate/v2"), bytes.into()).await
+}
+
+pub(super) async fn post_activation_ack(body: zeroize::Zeroizing<Vec<u8>>) -> Result<Vec<u8>, &'static str> {
+    if body.is_empty() || body.len() > 16 * 1024 { return Err(INVALID); }
+    let client = required_hybrid_client()?;
+    let bytes = bytes::Bytes::from_owner(body);
+    post_body(&client, &format!("{LICENCE_ORIGIN}/license/activate/v2/ack"), bytes.into()).await
+}
+
 /// Proof that this process sent the exact acknowledgement and received a
 /// successful, bounded response over the fixed hybrid-only transport.
 pub(super) struct AcknowledgementConfirmation([u8; 32]);

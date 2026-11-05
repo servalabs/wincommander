@@ -1596,6 +1596,20 @@ async fn get_license_status_inner() -> Result<serde_json::Value, String> {
 
 #[tauri::command]
 pub async fn activate_license(license_key: String) -> Result<serde_json::Value, String> {
+    #[cfg(all(windows, feature = "experimental-pq-licence"))]
+    {
+        let key = zeroize::Zeroizing::new(license_key);
+        let trimmed = key.trim();
+        if trimmed.is_empty() || trimmed.len() > 256 { return Err("License key is required.".into()); }
+        let response = crate::svc_client::call(wincmd_shared::svc::ACTIVATE_HYBRID_LICENSE_VERB,
+            serde_json::json!({"licenseKey": trimmed})).await;
+        if !matches!(response, Ok(value) if value == serde_json::json!({"activated": true})) {
+            return Err("Secure activation could not be confirmed. Keep WinCommander installed and retry.".into());
+        }
+        return get_license_status().await;
+    }
+    #[cfg(not(all(windows, feature = "experimental-pq-licence")))]
+    {
     let (api_base, public_key_b64) = get_config()?;
     let license_key = zeroize::Zeroizing::new(license_key);
     let trimmed = license_key.trim();
@@ -1680,6 +1694,7 @@ pub async fn activate_license(license_key: String) -> Result<serde_json::Value, 
 
     let status = status_from_cached(&cached, &claims, Some("License activated.".to_string()));
     serde_json::to_value(status).map_err(|e| e.to_string())
+    }
 }
 
 /// Background refresh path. A fresh, verified paid token is returned locally;

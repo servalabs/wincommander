@@ -91,6 +91,12 @@ mod fleet_runtime_env;
 #[cfg(all(windows, feature = "experimental-pq-licence"))]
 #[allow(dead_code)] // Not connected to enrolment or production licence decisions.
 mod licence_device_credential;
+#[cfg(all(windows, feature = "experimental-pq-licence"))]
+#[allow(dead_code)] // Activation transport and IPC are not yet connected.
+mod licence_activation_intent;
+#[cfg(all(windows, feature = "experimental-pq-licence"))]
+#[allow(dead_code)] // Service-owned activation is still disconnected.
+mod licence_machine_identity;
 mod shield_journal;
 mod vault_access;
 

@@ -308,6 +308,92 @@ fn checked_refresh_wire(
     )
 }
 
+/// This transport cannot clear a pending activation or accept caller URLs.
+pub(crate) async fn post_activation(body: Zeroizing<Vec<u8>>) -> Result<Vec<u8>, &'static str> {
+    wire::post_activation(body).await
+}
+
+fn with_activation_credential<T>(
+    pending: &crate::licence_activation_intent::PendingActivation,
+    verified: &crate::licence_activation_intent::VerifiedActivation,
+    completed: Option<(&[u8], &str)>,
+    operation: impl FnOnce(&ConfirmedCredential) -> Result<T, &'static str>,
+) -> Result<T, &'static str> {
+    let cache = crate::license_cache::load_device_licence_snapshot()?;
+    if cache.payload != verified.payload || cache.signature != verified.signature || cache.hybrid != verified.hybrid
+        || cache.licence_id != verified.licence_id || cache.device_hash != pending.device_hash() { return Err(INVALID); }
+    let binding = Binding { licence_id: &cache.licence_id, device_hash: &cache.device_hash, issuer_origin: wire::LICENCE_ORIGIN };
+    let trust = crate::license_cache::configured_device_receipt_trust()?;
+    let mut policy = trust.policy();
+    policy.purpose = wincmd_pq_experiment::Purpose::LicenceEnrolment;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|_| INVALID)?.as_secs();
+    let _guard = LOCK.lock().map_err(|_| INVALID)?;
+    crate::license_cache::with_verified_refresh_wire(&cache.payload, &cache.signature, &cache.hybrid,
+        cache.last_verified_at, &cache.licence_id, &cache.device_hash, |_| {
+            crate::license_cache::release_gate::ensure_idle()?;
+            match completed {
+                Some((payload, receipt)) => crate::licence_activation_intent::ensure_completed_matches_locked(pending, payload, receipt)?,
+                None => crate::licence_activation_intent::ensure_matches_locked(pending)?,
+            }
+            let store = selected_machine_anchor_locked(&binding, &policy, now)?;
+            let bytes = store.read().map_err(|_| INVALID)?.ok_or(INVALID)?;
+            let credential = decode_confirmed(&MachineDpapi, &binding, &policy, &bytes, now)?;
+            operation(&credential)
+        })
+}
+
+/// Construct, send and verify the service-owned device acknowledgement. The
+/// exact pending cache and credential are rechecked after the network await.
+pub(crate) async fn acknowledge_activation(
+    pending: &crate::licence_activation_intent::PendingActivation,
+    verified: &crate::licence_activation_intent::VerifiedActivation,
+) -> Result<(), &'static str> {
+    let (payload, body) = with_activation_credential(pending, verified, None, |credential| {
+        let payload = crate::licence_activation_intent::acknowledgement_payload(pending, verified, &credential.id)?;
+        let proof = Zeroizing::new(wincmd_pq_experiment::licence_device_proof::sign_activation_acknowledgement(credential.secret(), &payload)?);
+        let mut body = Zeroizing::new(Vec::new());
+        #[derive(Serialize)]
+        struct Request<'a> { payload: &'a str, proof: &'a str }
+        let text = std::str::from_utf8(&payload).map_err(|_| INVALID)?;
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+        let proof_text = Zeroizing::new(URL_SAFE_NO_PAD.encode(proof.as_ref()));
+        serde_json::to_writer(&mut *body, &Request { payload: text, proof: &proof_text }).map_err(|_| INVALID)?;
+        Ok((payload, body))
+    })?;
+    let response = wire::post_activation_ack(body).await?;
+    let receipt = wire::enrolment_receipt(&response)?;
+    let trust = crate::license_cache::configured_device_receipt_trust()?;
+    let mut policy = trust.policy();
+    policy.purpose = wincmd_pq_experiment::Purpose::LicenceActivationAck;
+    let authenticated = wincmd_pq_experiment::jws::verify(receipt.as_bytes(), &policy).map_err(|_| INVALID)?;
+    if authenticated.payload != payload { return Err(INVALID); }
+    with_activation_credential(pending, verified, None, |credential| {
+        let current = crate::licence_activation_intent::acknowledgement_payload(pending, verified, &credential.id)?;
+        if current != payload { return Err(INVALID); }
+        crate::licence_activation_intent::complete_locked(pending, &payload, &receipt)
+    })
+}
+
+/// A lost IPC reply is resolved from the exact protected receipt and current
+/// cache/credential, without issuing a new activation generation.
+pub(crate) fn verify_completed_activation(evidence: &crate::licence_activation_intent::CompletedEvidence)
+    -> Result<(), &'static str> {
+    let cache = crate::license_cache::load_device_licence_snapshot()?;
+    let response = serde_json::to_vec(&serde_json::json!({"ok": true, "payload": cache.payload,
+        "signature": cache.signature, "hybrid": cache.hybrid})).map_err(|_| INVALID)?;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|_| INVALID)?.as_secs();
+    let verified = crate::licence_activation_intent::verify_response(&evidence.pending, &response, now)?;
+    let trust = crate::license_cache::configured_device_receipt_trust()?;
+    let mut policy = trust.policy();
+    policy.purpose = wincmd_pq_experiment::Purpose::LicenceActivationAck;
+    let authenticated = wincmd_pq_experiment::jws::verify(evidence.receipt.as_bytes(), &policy).map_err(|_| INVALID)?;
+    if authenticated.payload != evidence.payload { return Err(INVALID); }
+    with_activation_credential(&evidence.pending, &verified, Some((&evidence.payload, &evidence.receipt)), |credential| {
+        let current = crate::licence_activation_intent::acknowledgement_payload(&evidence.pending, &verified, &credential.id)?;
+        if current == evidence.payload { Ok(()) } else { Err(INVALID) }
+    })
+}
+
 fn checked_renewal_wire(binding: &Binding<'_>, licence: &RefreshLicence<'_>) -> Result<Vec<u8>, &'static str> {
     crate::license_cache::with_verified_refresh_wire(
         licence.payload, licence.signature, licence.hybrid, licence.last_verified_at,

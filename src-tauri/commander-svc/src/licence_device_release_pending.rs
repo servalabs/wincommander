@@ -249,6 +249,34 @@ pub(crate) fn verify_completed_recovery(
     Ok(verified.is_some())
 }
 
+/// Authorize a new intent only while the exact released generation, signed
+/// activation receipt, completed journal, and credential remain locked.
+pub(crate) fn restart_after_completed_release(
+    evidence: &crate::licence_activation_intent::CompletedEvidence,
+) -> Result<crate::licence_activation_intent::PendingActivation, &'static str> {
+    let trust = crate::license_cache::configured_device_receipt_trust()?;
+    let mut policy = trust.policy();
+    policy.purpose = wincmd_pq_experiment::Purpose::LicenceEnrolment;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| INVALID)?.as_secs();
+    let _guard = LOCK.lock().map_err(|_| INVALID)?;
+    crate::license_cache::with_completed_release_recovery(|journal, snapshot, body| {
+        let binding = Binding { licence_id: &journal.licence_id, device_hash: &journal.device_hash,
+            issuer_origin: wire::LICENCE_ORIGIN };
+        let anchor = selected_machine_anchor_locked(&binding, &policy, now)?;
+        let bytes = anchor.read().map_err(|_| INVALID)?.ok_or(INVALID)?;
+        let credential = decode_confirmed(&MachineDpapi, &binding, &policy, &bytes, now)?;
+        let store = release_anchor(&binding)?;
+        let before = store.read().map_err(|_| INVALID)?.ok_or(INVALID)?;
+        let saved = verify_prepared_ack(&store, &crate::license_cache::release_gate::machine(),
+            &MachineDpapi, &binding, &credential, &body, journal)?;
+        let after = store.read().map_err(|_| INVALID)?.ok_or(INVALID)?;
+        if before != after { return Err(INVALID); }
+        crate::license_cache::verify_release_completed_locked(journal, snapshot, &saved.request, &after)?;
+        crate::licence_activation_intent::restart_after_release_locked(evidence, journal, &policy)
+    })?.ok_or(INVALID)
+}
+
 fn verify_prepared_ack(
     store: &anchor::Anchor, gate: &anchor::Anchor, protector: &dyn Protector, binding: &Binding<'_>,
     credential: &ConfirmedCredential, body: &[u8], journal: &crate::license_cache::release_gate::PreparedRelease,
@@ -268,6 +296,7 @@ pub(crate) fn stage(
     binding: &Binding<'_>, trust: &wincmd_pq_experiment::jws::Trust<'_>, licence: &RefreshLicence<'_>, now: u64, request: &[u8],
 ) -> Result<Zeroizing<Vec<u8>>, &'static str> {
     with_current(binding, trust, licence, now, |store, credential, body| {
+        crate::licence_activation_intent::ensure_idle_locked()?;
         let previous = completed_previous_record(store, &MachineDpapi, binding, credential, body, licence)?;
         stage_guarded_replacing(store, &crate::license_cache::release_gate::machine(), &MachineDpapi,
             binding, credential, body, request, previous.as_deref())
