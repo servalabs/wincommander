@@ -244,6 +244,7 @@ fn native_disk_roundtrip_does_not_write_indexed_text_as_plaintext() {
 // are not ready for production. It exercises Tantivy's real Directory contract.
 mod tantivy_trial {
     use super::*;
+    use crate::read_only::{AccessMode, CheckedDirectory};
     use std::{
         fmt,
         io::BufWriter,
@@ -259,9 +260,14 @@ mod tantivy_trial {
         HasLen,
     };
 
+    // Trial cap; release sizing must be supported by real large-index measurements.
+    const MAX_ATOMIC_PLAINTEXT: usize = 8 * 1024 * 1024;
+    const MAX_ATOMIC_CIPHERTEXT: usize =
+        HEADER + MAX_ATOMIC_PLAINTEXT + MAX_ATOMIC_PLAINTEXT.div_ceil(CHUNK) * OVERHEAD + FOOTER;
+
     #[derive(Clone)]
     struct TrialDirectory {
-        inner: MmapDirectory,
+        inner: CheckedDirectory,
         key: [u8; 32],
     }
     impl fmt::Debug for TrialDirectory {
@@ -478,17 +484,28 @@ mod tantivy_trial {
             Ok(BufWriter::new(Box::new(writer)))
         }
         fn atomic_read(&self, path: &Path) -> Result<Vec<u8>, OpenReadError> {
-            let bytes = self.inner.atomic_read(path)?;
+            let bytes = self
+                .inner
+                .atomic_read_bounded(path, MAX_ATOMIC_CIPHERTEXT)?;
             let mut f = ProtectedFile::open(
                 io::Cursor::new(bytes),
                 &self.key,
                 name(path).map_err(|e| OpenReadError::wrap_io_error(e, path.into()))?,
             )
             .map_err(|e| OpenReadError::wrap_io_error(e, path.into()))?;
+            if f.len > MAX_ATOMIC_PLAINTEXT {
+                return Err(OpenReadError::wrap_io_error(
+                    io::Error::other("index manifest exceeds limit"),
+                    path.into(),
+                ));
+            }
             f.read(0..f.len)
                 .map_err(|e| OpenReadError::wrap_io_error(e, path.into()))
         }
         fn atomic_write(&self, path: &Path, data: &[u8]) -> io::Result<()> {
+            if data.len() > MAX_ATOMIC_PLAINTEXT {
+                return Err(io::Error::other("index manifest exceeds limit"));
+            }
             let mut encrypted = Vec::new();
             encrypt(&mut encrypted, &self.key, name(path)?, data)?;
             self.inner.atomic_write(path, &encrypted)
@@ -515,7 +532,7 @@ mod tantivy_trial {
         };
         let dir = tempfile::tempdir().unwrap();
         let directory = TrialDirectory {
-            inner: MmapDirectory::open(dir.path()).unwrap(),
+            inner: CheckedDirectory::open(dir.path(), AccessMode::Writable).unwrap(),
             key: [9; 32],
         };
         let mut schema = Schema::builder();
@@ -637,5 +654,127 @@ mod tantivy_trial {
         assert!(writer.terminate().is_err());
         let stored = output.lock().unwrap().clone();
         assert!(ProtectedFile::open(io::Cursor::new(stored), &key, "failed.idx").is_err());
+    }
+
+    #[test]
+    fn checked_shared_reader_searches_but_cannot_mutate() {
+        use tantivy::{
+            collector::Count,
+            doc,
+            query::QueryParser,
+            schema::{Schema, TEXT},
+            Index,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let writer_dir = TrialDirectory {
+            inner: CheckedDirectory::open(dir.path(), AccessMode::Writable).unwrap(),
+            key: [23; 32],
+        };
+        let mut schema = Schema::builder();
+        let body = schema.add_text_field("body", TEXT);
+        let index = Index::create(writer_dir.clone(), schema.build(), Default::default()).unwrap();
+        let mut writer = index.writer(50_000_000).unwrap();
+        writer
+            .add_document(doc!(body => "sharedreadtoken"))
+            .unwrap();
+        writer.commit().unwrap();
+        let reader_dir = TrialDirectory {
+            inner: CheckedDirectory::open(dir.path(), AccessMode::SharedReader).unwrap(),
+            key: [23; 32],
+        };
+        assert!(reader_dir.open_write(Path::new("forbidden")).is_err());
+        assert!(reader_dir
+            .atomic_write(Path::new("meta.json"), b"forbidden")
+            .is_err());
+        assert!(reader_dir.delete(Path::new("meta.json")).is_err());
+        let read_index = Index::open(reader_dir).unwrap();
+        let query = QueryParser::for_index(&read_index, vec![body])
+            .parse_query("sharedreadtoken")
+            .unwrap();
+        assert_eq!(
+            read_index
+                .reader()
+                .unwrap()
+                .searcher()
+                .search(&query, &Count)
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn bounded_atomic_manifest_rejects_large_input_without_replacing_existing() {
+        let dir = tempfile::tempdir().unwrap();
+        let directory = TrialDirectory {
+            inner: CheckedDirectory::open(dir.path(), AccessMode::Writable).unwrap(),
+            key: [24; 32],
+        };
+        let path = Path::new("manifest.json");
+        directory.atomic_write(path, b"valid manifest").unwrap();
+        assert!(directory
+            .atomic_write(path, &vec![0; MAX_ATOMIC_PLAINTEXT + 1])
+            .is_err());
+        assert_eq!(directory.atomic_read(path).unwrap(), b"valid manifest");
+        directory
+            .inner
+            .atomic_write(path, &vec![0; MAX_ATOMIC_CIPHERTEXT + 1])
+            .unwrap();
+        assert!(directory.atomic_read(path).is_err());
+    }
+
+    #[test]
+    fn checked_shared_reader_waits_for_writer_metadata_lock() {
+        use std::{sync::mpsc, thread, time::Duration};
+        use tantivy::directory::META_LOCK;
+        let dir = tempfile::tempdir().unwrap();
+        let writer = TrialDirectory {
+            inner: CheckedDirectory::open(dir.path(), AccessMode::Writable).unwrap(),
+            key: [25; 32],
+        };
+        let reader = TrialDirectory {
+            inner: CheckedDirectory::open(dir.path(), AccessMode::SharedReader).unwrap(),
+            key: [25; 32],
+        };
+        let held = writer.acquire_lock(&META_LOCK).unwrap();
+        let (tx, rx) = mpsc::channel();
+        let handle = thread::spawn(move || {
+            tx.send(reader.acquire_lock(&META_LOCK).is_ok()).unwrap();
+        });
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        drop(held);
+        assert!(rx.recv_timeout(Duration::from_secs(5)).unwrap());
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn atomic_manifest_reads_never_observe_a_partial_replacement() {
+        use std::thread;
+        let dir = tempfile::tempdir().unwrap();
+        let writable = TrialDirectory {
+            inner: CheckedDirectory::open(dir.path(), AccessMode::Writable).unwrap(),
+            key: [27; 32],
+        };
+        let shared = TrialDirectory {
+            inner: CheckedDirectory::open(dir.path(), AccessMode::SharedReader).unwrap(),
+            key: [27; 32],
+        };
+        let path = Path::new("manifest.json");
+        writable.atomic_write(path, &vec![1; 64 * 1024]).unwrap();
+        let writer = thread::spawn(move || {
+            for n in 0..20 {
+                writable
+                    .atomic_write(path, &vec![if n % 2 == 0 { 2 } else { 1 }; 64 * 1024])
+                    .unwrap();
+            }
+        });
+        for _ in 0..40 {
+            let value = shared.atomic_read(path).unwrap();
+            assert_eq!(value.len(), 64 * 1024);
+            assert!(value.iter().all(|b| *b == 1) || value.iter().all(|b| *b == 2));
+        }
+        writer.join().unwrap();
     }
 }

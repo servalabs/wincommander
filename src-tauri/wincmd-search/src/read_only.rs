@@ -102,6 +102,39 @@ fn validate_storage_once(root: &Path) -> io::Result<()> {
 }
 
 impl CheckedDirectory {
+    #[cfg(test)]
+    pub(crate) fn atomic_read_bounded(
+        &self,
+        path: &Path,
+        max: usize,
+    ) -> Result<Vec<u8>, OpenReadError> {
+        use std::io::Read;
+        self.check(path, false)
+            .map_err(|e| OpenReadError::wrap_io_error(e, path.into()))?;
+        // One opened handle preserves atomic-replace snapshot semantics; limit
+        // the read itself rather than trusting a racy metadata size check.
+        let file = std::fs::File::open(self.root.join(path)).map_err(|e| {
+            if e.kind() == io::ErrorKind::NotFound {
+                OpenReadError::FileDoesNotExist(path.into())
+            } else {
+                OpenReadError::wrap_io_error(e, path.into())
+            }
+        })?;
+        let limit = max
+            .checked_add(1)
+            .ok_or_else(|| OpenReadError::wrap_io_error(denied(), path.into()))?;
+        let mut bytes = Vec::new();
+        file.take(limit as u64)
+            .read_to_end(&mut bytes)
+            .map_err(|e| OpenReadError::wrap_io_error(e, path.into()))?;
+        if bytes.len() > max {
+            return Err(OpenReadError::wrap_io_error(
+                io::Error::other("index manifest exceeds limit"),
+                path.into(),
+            ));
+        }
+        Ok(bytes)
+    }
     #[cfg(all(test, windows))]
     pub(crate) fn direct_for_test(root: &Path, mode: AccessMode) -> tantivy::Result<Self> {
         validate_storage(root)?;
