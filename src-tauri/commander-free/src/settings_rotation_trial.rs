@@ -84,6 +84,9 @@ fn open(input: &[u8]) -> Result<BTreeMap<String, Value>, String> {
     if bundle.format != FORMAT {
         return Err("unsupported settings generation".into());
     }
+    if !bundle.ciphertext.starts_with("enc:v2:") {
+        return Err("settings generation requires a context-bound ciphertext".into());
+    }
     let protected = Zeroizing::new(
         B64.decode(&bundle.protected_material)
             .map_err(|_| "invalid settings material")?,

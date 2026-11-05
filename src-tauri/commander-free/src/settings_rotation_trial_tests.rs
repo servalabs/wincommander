@@ -120,3 +120,33 @@ fn legacy_v1_section_is_preserved_in_fresh_generation() {
     let bundle = prepare(&old, &[("settings".into(), encoded)]).unwrap();
     assert_eq!(open(&bundle).unwrap()["settings"]["old"], true);
 }
+
+#[test]
+fn unscoped_legacy_ciphertext_is_rejected_for_new_generation() {
+    use super::super::{nonce_from_bytes, Aead, Aes256Gcm, KeyInit, FORMAT_PREFIX_V1};
+    let old = [42; 32];
+    let candidate = prepare(&old, &sections(&old)).unwrap();
+    let mut bundle: Bundle = serde_json::from_slice(&candidate).unwrap();
+    let protected = B64.decode(&bundle.protected_material).unwrap();
+    let material = Zeroizing::new(dpapi_unprotect(&protected).unwrap());
+    let material: &[u8; 32] = material.as_slice().try_into().unwrap();
+    let key = derive_section_key(material, None).unwrap();
+    let nonce_bytes = [9u8; 12];
+    let cipher = Aes256Gcm::new((&key).into());
+    let payload = cipher
+        .encrypt(
+            nonce_from_bytes(&nonce_bytes).unwrap(),
+            br#"{"settings":{}}"#.as_ref(),
+        )
+        .unwrap();
+    let mut raw = nonce_bytes.to_vec();
+    raw.extend(payload);
+    bundle.ciphertext = format!("{FORMAT_PREFIX_V1}{}", B64.encode(raw));
+    let substituted = serde_json::to_vec(&bundle).unwrap();
+    assert!(open(&substituted).is_err());
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("generation");
+    std::fs::write(&path, &candidate).unwrap();
+    assert!(publish(&path, &substituted, &crate::datastore_io::atomic_write).is_err());
+    assert_eq!(std::fs::read(path).unwrap(), candidate);
+}
