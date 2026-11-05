@@ -212,7 +212,7 @@ impl CheckedDirectory {
             FILE_RENAME_INFO, FILE_RENAME_INFO_0, FILE_SHARE_READ, FileDispositionInfo, FileRenameInfo,
             SetFileInformationByHandle};
         use std::os::windows::fs::MetadataExt;
-        let pins = self.pin_mutation_root(path)?;
+        let pins = self.pin_mutation_root(path).map_err(|e| io::Error::new(e.kind(), format!("pin root: {e}")))?;
         after_pin();
         self.check(path, true)?;
         let root = pins.last().ok_or_else(denied)?;
@@ -220,11 +220,12 @@ impl CheckedDirectory {
         let temp_name = format!(".encrypted-index-{}.tmp", hex::encode(random));
         let mut file = std::fs::OpenOptions::new().write(true).access_mode(FILE_GENERIC_WRITE | DELETE | FILE_READ_ATTRIBUTES)
             .share_mode(FILE_SHARE_READ).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
-            .create_new(true).open(self.root.join(temp_name))?;
+            .create_new(true).open(self.root.join(temp_name)).map_err(|e| io::Error::new(e.kind(), format!("create temp: {e}")))?;
         let result = (|| -> io::Result<()> {
             let meta = file.metadata()?;
             if !meta.is_file() || meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 { return Err(denied()); }
-            file.write_all(data)?; file.sync_all()?;
+            file.write_all(data).map_err(|e| io::Error::new(e.kind(), format!("write temp: {e}")))?;
+            file.sync_all().map_err(|e| io::Error::new(e.kind(), format!("sync temp: {e}")))?;
             before_rename();
             let name: Vec<u16> = path.as_os_str().encode_wide().collect();
             let name_bytes = name.len().checked_mul(2).ok_or_else(denied)?;
@@ -240,7 +241,8 @@ impl CheckedDirectory {
                 (*rename).FileNameLength = u32::try_from(name_bytes).map_err(|_| denied())?;
                 std::ptr::copy_nonoverlapping(name.as_ptr(), std::ptr::addr_of_mut!((*rename).FileName).cast::<u16>(), name.len());
                 if SetFileInformationByHandle(file.as_raw_handle(), FileRenameInfo, rename.cast(), u32::try_from(len).map_err(|_| denied())?) == 0 {
-                    return Err(io::Error::last_os_error());
+                    let error = io::Error::last_os_error();
+                    return Err(io::Error::new(error.kind(), format!("rename temp: {error}")));
                 }
             }
             Ok(())
