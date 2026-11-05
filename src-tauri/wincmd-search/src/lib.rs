@@ -17,6 +17,8 @@ mod encrypted_key_prototype;
 mod encrypted_migration_prototype;
 #[cfg(any(test, all(windows, feature = "experimental-encrypted-search")))]
 mod encrypted_generation_prototype;
+#[cfg(any(test, all(windows, feature = "experimental-encrypted-search")))]
+mod encrypted_strict_crawl;
 pub mod chunk;
 pub mod crawler;
 #[cfg(windows)]
@@ -63,6 +65,14 @@ pub type PathMapper = Arc<dyn Fn(&std::path::Path) -> Option<std::path::PathBuf>
 pub struct SearchEngine {
     path_policy: PathPolicy,
     path_mapper: Option<PathMapper>,
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    experimental_fresh: bool,
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    experimental_id: Option<[u8; 16]>,
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    experimental_verified: AtomicBool,
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    experimental_selection: Option<crate::encrypted_generation_prototype::PinnedSelectionStore>,
     config: IndexConfig,
     ci: Arc<ContentIndex>,
     status: Arc<Mutex<IndexStatus>>,
@@ -156,7 +166,81 @@ impl SearchEngine {
         config.skip_paths.push(generation.clone());
         config.index_dir = generation;
         let ci = Arc::new(ContentIndex::open_experimental_encrypted(&config.index_dir, index_id, existing)?);
-        Self::from_index(config, ci, path_policy)
+        let mut engine = Self::from_index(config, ci, path_policy)?;
+        engine.experimental_fresh = !existing;
+        engine.experimental_id = Some(index_id);
+        Ok(engine)
+    }
+    /// Build only a newly created, unselected candidate. Traversal and
+    /// extraction failures abort instead of becoming silent omissions. This
+    /// verifies a completed pass, not a stable snapshot of changing files;
+    /// caller still owns source coordination and the cross-process lease.
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    pub fn rebuild_experimental_candidate(&mut self) -> Result<usize> {
+        if !self.experimental_fresh {
+            return Err(SearchError::Config("encrypted candidate is not fresh".into()));
+        }
+        // A failed or interrupted pass is never retried in-place.
+        self.experimental_fresh = false;
+        let exclusions = build_globset(&self.config.exclusions)?;
+        let files = crate::encrypted_strict_crawl::collect(
+            &self.config.roots, &exclusions, &self.config.skip_paths, self.config.max_file_bytes,
+        )?;
+        let mut seen = std::collections::HashSet::new();
+        let mut writer = self.ci.writer()?;
+        let mut indexed = 0usize;
+        for meta in files {
+            if !(self.path_policy)(&meta.path) { continue; }
+            if !seen.insert(meta.doc_id) {
+                return Err(SearchError::Config("duplicate source document identity".into()));
+            }
+            let doc = match crate::extract::extract_text(meta) {
+                Ok(doc) => doc,
+                Err(SearchError::Unsupported(_)) => continue,
+                Err(error) => return Err(error),
+            };
+            if !(self.path_policy)(&doc.meta.path) {
+                return Err(SearchError::Config("source policy changed during rebuild".into()));
+            }
+            self.ci.upsert(&mut writer, &doc.meta, &doc.title, &doc.body, &doc.props)?;
+            indexed += 1;
+        }
+        self.ci.commit(&mut writer)?;
+        let reader = self.ci.index.reader()?;
+        if reader.searcher().num_docs() != indexed as u64 {
+            return Err(SearchError::Config("encrypted candidate document count mismatch".into()));
+        }
+        self.experimental_verified.store(true, Ordering::Release);
+        Ok(indexed)
+    }
+    /// Stage an immutable creation proof only after a successful strict pass.
+    /// Caller must hold the migration lease, authorize selection_dir, and
+    /// verify source stability inside verify_source. This does not establish
+    /// crash durability, rollback resistance, or enable release selection.
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    pub fn record_experimental_candidate(
+        &mut self,
+        selection_dir: &std::path::Path,
+        verify_source: impl FnOnce() -> Result<()>,
+    ) -> Result<()> {
+        use sha2::{Digest, Sha256};
+        use tantivy::directory::Directory;
+        use crate::encrypted_generation_prototype::{PinnedSelectionStore, UserProtector};
+        let id = self.experimental_id.ok_or_else(|| SearchError::Config("not an encrypted candidate".into()))?;
+        if !self.experimental_verified.load(Ordering::Acquire) {
+            return Err(SearchError::Config("candidate has not passed strict rebuild".into()));
+        }
+        verify_source()?;
+        let directory = crate::encrypted_index_prototype::tantivy_trial::TrialDirectory::open_protected(
+            &self.config.index_dir, crate::read_only::AccessMode::GuardedReader, &id, true,
+        )?;
+        let manifest = directory.atomic_read(std::path::Path::new("meta.json"))
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        let digest: [u8; 32] = Sha256::digest(&manifest).into();
+        let mut selection = PinnedSelectionStore::open(selection_dir)?;
+        crate::encrypted_generation_prototype::publish(&mut selection, &UserProtector, id, || Ok(digest))?;
+        self.experimental_selection = Some(selection);
+        Ok(())
     }
     /// Caller must hold its cross-process volume guard until this engine is dropped.
     pub fn open_existing(config: IndexConfig) -> Result<Self> {
@@ -211,6 +295,14 @@ impl SearchEngine {
         Ok(Self {
             path_policy,
             path_mapper: None,
+            #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+            experimental_fresh: false,
+            #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+            experimental_id: None,
+            #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+            experimental_verified: AtomicBool::new(false),
+            #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+            experimental_selection: None,
             config,
             ci,
             status,
@@ -236,6 +328,10 @@ impl SearchEngine {
     ///
     /// Used internally and in tests where background-thread timing is undesirable.
     pub fn index_files_sync(&self, files: Vec<FileMeta>) -> Result<()> {
+        #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+        if self.experimental_fresh { return Err(SearchError::Config("strict candidate rebuild required".into())); }
+        #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+        self.experimental_verified.store(false, Ordering::Release);
         let mut writer = self.ci.writer()?;
         {
             let mut s = self.status.lock().unwrap();
@@ -276,6 +372,10 @@ impl SearchEngine {
     ///    writer, apply, commit.  No `LockBusy` is possible because the crawl
     ///    writer is already gone.
     pub fn start_indexing(&self) -> Result<()> {
+        #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+        if self.experimental_fresh { return Err(SearchError::Config("strict candidate rebuild required".into())); }
+        #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+        self.experimental_verified.store(false, Ordering::Release);
         let ci = Arc::clone(&self.ci);
         let path_policy = Arc::clone(&self.path_policy);
         let status = Arc::clone(&self.status);
@@ -650,6 +750,19 @@ mod tests {
     }
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     #[test]
+    fn failed_strict_crawl_cannot_create_candidate_proof() {
+        let root = TempDir::new().unwrap();
+        let old = root.path().join("legacy");
+        let proof = root.path().join("proof");
+        fs::create_dir(&old).unwrap(); fs::create_dir(&proof).unwrap();
+        let config = make_config(old, vec![root.path().join("missing")]);
+        let mut engine = SearchEngine::open_experimental_encrypted_with_policy(config, Arc::new(|_| true), [77; 16], false).unwrap();
+        assert!(engine.rebuild_experimental_candidate().is_err());
+        assert!(engine.record_experimental_candidate(&proof, || Ok(())).is_err());
+        assert!(!proof.join("candidate-proof.v1").exists());
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    #[test]
     fn experimental_engine_rebuilds_separate_generation_without_touching_legacy() {
         let root = TempDir::new().unwrap();
         let old = root.path().join("legacy");
@@ -659,12 +772,18 @@ mod tests {
         fs::write(old.join("meta.json"), b"legacyindexsecrettoken").unwrap();
         fs::write(data.join("memo.txt"), b"secret protectedenginetoken").unwrap();
         let config = make_config(old.clone(), vec![root.path().to_path_buf()]);
-        let engine = SearchEngine::open_experimental_encrypted_with_policy(config.clone(), Arc::new(|_| true), [55; 16], false).unwrap();
+        let mut engine = SearchEngine::open_experimental_encrypted_with_policy(config.clone(), Arc::new(|_| true), [55; 16], false).unwrap();
         let generation = engine.config.index_dir.clone();
         assert_ne!(generation, old);
         let exclusions = build_globset(&engine.config.exclusions).unwrap();
         let files = collect_files(&engine.config.roots, &exclusions, &engine.config.skip_paths, engine.config.max_file_bytes);
         assert!(files.iter().all(|f| !f.path.starts_with(&old) && !f.path.starts_with(&generation)));
+        assert_eq!(engine.rebuild_experimental_candidate().unwrap(), 1);
+        assert!(engine.rebuild_experimental_candidate().is_err());
+        let proof = root.path().join("proof");
+        fs::create_dir(&proof).unwrap();
+        engine.record_experimental_candidate(&proof, || Ok(())).unwrap();
+        assert!(proof.join("candidate-proof.v1").exists());
         // Even directly supplied file metadata must not reintroduce either index.
         let all = collect_files(&engine.config.roots, &exclusions, &[], engine.config.max_file_bytes);
         engine.index_files_sync(all).unwrap();

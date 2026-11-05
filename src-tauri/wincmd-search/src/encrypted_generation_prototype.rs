@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Experimental selection record. It does not fence old writers or prove
+//! Experimental immutable creation-proof record; not an active selector. It does not fence old writers or prove
 //! completeness: callers must retain an exclusive migration lease and verify
 //! the entire generation and source state before publishing or using it.
 use std::io;
@@ -8,12 +8,12 @@ const RECORD_LEN: usize = 8 + 16 + 32;
 const MAX_PROTECTED: usize = 65536;
 
 #[derive(Debug, PartialEq, Eq)]
-struct Selection { index_id: [u8; 16], manifest_digest: [u8; 32] }
-trait Protect {
+pub(crate) struct Selection { index_id: [u8; 16], creation_digest: [u8; 32] }
+pub(crate) trait Protect {
     fn seal(&self, plain: &[u8]) -> io::Result<Vec<u8>>;
     fn open(&self, protected: &[u8]) -> io::Result<Vec<u8>>;
 }
-trait Store {
+pub(crate) trait Store {
     fn read(&mut self) -> io::Result<Option<Vec<u8>>>;
     // Atomic no-replace attempt. Directory-entry durability is NOT established;
     // an error has an unknown outcome.
@@ -24,15 +24,15 @@ fn encode(selection: &Selection) -> [u8; RECORD_LEN] {
     let mut out = [0; RECORD_LEN];
     out[..8].copy_from_slice(MAGIC);
     out[8..24].copy_from_slice(&selection.index_id);
-    out[24..].copy_from_slice(&selection.manifest_digest);
+    out[24..].copy_from_slice(&selection.creation_digest);
     out
 }
 fn decode(value: &[u8]) -> io::Result<Selection> {
     if value.len() != RECORD_LEN || &value[..8] != MAGIC { return Err(invalid()); }
     let index_id = value[8..24].try_into().map_err(|_| invalid())?;
-    let manifest_digest = value[24..].try_into().map_err(|_| invalid())?;
+    let creation_digest = value[24..].try_into().map_err(|_| invalid())?;
     if index_id == [0; 16] { return Err(invalid()); }
-    Ok(Selection { index_id, manifest_digest })
+    Ok(Selection { index_id, creation_digest })
 }
 fn inspect(store: &mut impl Store, protector: &impl Protect) -> io::Result<Option<Selection>> {
     let Some(record) = store.read()? else { return Ok(None); };
@@ -42,9 +42,9 @@ fn inspect(store: &mut impl Store, protector: &impl Protect) -> io::Result<Optio
 // The verifier must authenticate the exact complete candidate, establish the
 // source snapshot, and return its manifest digest under the migration lease.
 // Selection alone is never a proof of current source completeness or freshness.
-fn publish(store: &mut impl Store, protector: &impl Protect, index_id: [u8; 16], verify: impl FnOnce() -> io::Result<[u8; 32]>) -> io::Result<Selection> {
+pub(crate) fn publish(store: &mut impl Store, protector: &impl Protect, index_id: [u8; 16], verify: impl FnOnce() -> io::Result<[u8; 32]>) -> io::Result<Selection> {
     if index_id == [0; 16] { return Err(invalid()); }
-    let selection = Selection { index_id, manifest_digest: verify()? };
+    let selection = Selection { index_id, creation_digest: verify()? };
     if let Some(current) = inspect(store, protector)? {
         return if current == selection { Ok(current) } else { Err(invalid()) };
     }
@@ -52,12 +52,12 @@ fn publish(store: &mut impl Store, protector: &impl Protect, index_id: [u8; 16],
     if sealed.is_empty() || sealed.len() > MAX_PROTECTED { return Err(invalid()); }
     store.create_once(&sealed)?;
     // No blind success after an ambiguous or substituted publication.
-    if inspect(store, protector)? != Some(Selection { index_id, manifest_digest: selection.manifest_digest }) { return Err(invalid()); }
+    if inspect(store, protector)? != Some(Selection { index_id, creation_digest: selection.creation_digest }) { return Err(invalid()); }
     Ok(selection)
 }
 
 #[cfg(windows)]
-struct UserProtector;
+pub(crate) struct UserProtector;
 #[cfg(windows)]
 impl Protect for UserProtector {
     fn seal(&self, plain: &[u8]) -> io::Result<Vec<u8>> {
@@ -73,7 +73,7 @@ impl Protect for UserProtector {
 // root is an existing, independently authorized, flat selection directory.
 // Its ancestor handles and the selected file remain held for this lifetime.
 #[cfg(windows)]
-struct PinnedSelectionStore {
+pub(crate) struct PinnedSelectionStore {
     directory: crate::read_only::CheckedDirectory,
     root: std::path::PathBuf,
     _pins: Vec<std::fs::File>,
@@ -81,7 +81,7 @@ struct PinnedSelectionStore {
 }
 #[cfg(windows)]
 impl PinnedSelectionStore {
-    fn open(root: &std::path::Path) -> io::Result<Self> {
+    pub(crate) fn open(root: &std::path::Path) -> io::Result<Self> {
         use crate::read_only::{AccessMode, CheckedDirectory};
         let pins = CheckedDirectory::pin_root_path(root)?;
         let directory = CheckedDirectory::open(root, AccessMode::Writable).map_err(|e| io::Error::other(e.to_string()))?;
@@ -95,7 +95,7 @@ impl Store for PinnedSelectionStore {
         use windows_sys::Win32::Storage::FileSystem::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ};
         if self.held.is_none() {
             let file = match std::fs::OpenOptions::new().read(true).share_mode(FILE_SHARE_READ)
-                .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT).open(self.root.join("selected.v1")) {
+                .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT).open(self.root.join("candidate-proof.v1")) {
                     Ok(file) => file,
                     Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
                     Err(e) => return Err(e),
@@ -117,7 +117,7 @@ impl Store for PinnedSelectionStore {
     }
     fn create_once(&mut self, bytes: &[u8]) -> io::Result<()> {
         if bytes.is_empty() || bytes.len() > MAX_PROTECTED { return Err(invalid()); }
-        self.directory.atomic_create_pinned(std::path::Path::new("selected.v1"), bytes)
+        self.directory.atomic_create_pinned(std::path::Path::new("candidate-proof.v1"), bytes)
     }
 }
 
@@ -171,11 +171,11 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut store = PinnedSelectionStore::open(root.path()).unwrap();
         publish(&mut store, &UserProtector, [1; 16], || Ok([2; 32])).unwrap();
-        let path = root.path().join("selected.v1");
+        let path = root.path().join("candidate-proof.v1");
         assert!(std::fs::remove_file(&path).is_err());
         drop(store);
         let mut reopened = PinnedSelectionStore::open(root.path()).unwrap();
-        assert_eq!(inspect(&mut reopened, &UserProtector).unwrap(), Some(Selection { index_id: [1; 16], manifest_digest: [2; 32] }));
+        assert_eq!(inspect(&mut reopened, &UserProtector).unwrap(), Some(Selection { index_id: [1; 16], creation_digest: [2; 32] }));
         assert!(publish(&mut reopened, &UserProtector, [3; 16], || Ok([4; 32])).is_err());
     }
 }
