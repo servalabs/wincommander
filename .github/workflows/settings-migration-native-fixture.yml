@@ -108,6 +108,9 @@ jobs:
           !insertmacro NSIS_HOOK_PREINSTALL
           !insertmacro NSIS_HOOK_POSTINSTALL
           SectionEnd
+          Function .onInstSuccess
+          !insertmacro WC_COMMIT_SEARCH_TRANSACTION
+          FunctionEnd
           "@ | Set-Content -Encoding ascii -LiteralPath $fixture
           & $nsis $fixture
           if ($LASTEXITCODE -ne 0) { throw 'Gated NSIS hook fixture failed to compile.' }
@@ -178,3 +181,15 @@ jobs:
           }
           & $probe $lock
           if ($LASTEXITCODE -ne 0) { throw 'NSIS lock survived installer process termination.' }
+      - name: Verify transaction preparation and commit protocol
+        shell: pwsh
+        run: |
+          cargo build --locked --manifest-path tools/settings-migration-ci/Cargo.toml --bin search_phase_stub
+          if ($LASTEXITCODE -ne 0) { throw 'Search phase stub did not compile.' }
+          $root = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)) 'WinCommander'
+          $helper = (Resolve-Path 'tools/settings-migration-ci/target/debug/search_phase_stub.exe').Path
+          $script = 'src-tauri/commander-free/nsis/search-migration-phase.ps1'
+          $token = (& pwsh -NoProfile -NonInteractive -File $script -Phase prepare -ExecutablePath $helper -InstallDirectory $root | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or $token -cnotmatch '^[0-9a-f]{32}$') { throw 'Transaction token was not generated.' }
+          $result = (& pwsh -NoProfile -NonInteractive -File $script -Phase commit -Transaction $token -ExecutablePath $helper -InstallDirectory $root | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or $result -cne 'committed') { throw 'Transaction commit was not confirmed.' }

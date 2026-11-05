@@ -33,7 +33,7 @@ ${Using:StrFunc} UnStrStr
 !ifdef WC_EXPERIMENTAL_SEARCH_FENCE
 !define WC_HOLD_SEARCH_MAINTENANCE "${__FILEDIR__}\hold-search-maintenance.ps1"
 !define WC_SEARCH_MIGRATION_PHASE "${__FILEDIR__}\search-migration-phase.ps1"
-Var WCSearchMoved
+Var WCSearchTransaction
 Var WCSearchFenceHandle
 !endif
 Var WCUserStageServiceRunning
@@ -169,32 +169,37 @@ Function WC_RestoreUserStageService
 FunctionEnd
 !endif
 
-!ifdef WC_EXPERIMENTAL_SEARCH_FENCE
-; Restore only a backup that this installer invocation confirmed it moved.
-; R6 is 1 on success/no action and 0 if manual recovery is required.
-Function WC_RestoreMovedSearch
-  StrCpy $R6 1
-  ${If} $WCSearchMoved == 1
-    ${If} $WCSearchFenceHandle != 0
-      System::Call 'kernel32::CloseHandle(p $WCSearchFenceHandle) i .r0'
-      StrCpy $WCSearchFenceHandle 0
-      ${If} $0 == 0
-        StrCpy $R6 0
-        Return
+; Called only after POSTINSTALL succeeds. Release the installer-owned lock,
+; then commit under a newly acquired exclusive lock and revalidate selection.
+; A contending runtime or failure leaves the authenticated marker pending.
+!macro WC_COMMIT_SEARCH_TRANSACTION
+  !ifdef WC_EXPERIMENTAL_SEARCH_FENCE
+    ${If} $WCSearchTransaction != "NONE"
+      ${If} $WCSearchFenceHandle != 0
+        System::Call 'kernel32::CloseHandle(p $WCSearchFenceHandle) i .r0'
+        ${If} $0 == 0
+          DetailPrint "Search update could not release its maintenance lock. Retry setup."
+          SetErrorLevel 1
+          Quit
+        ${EndIf}
+        StrCpy $WCSearchFenceHandle 0
       ${EndIf}
+      !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
+      nsExec::ExecToStack /TIMEOUT=600000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-search-migration-phase.ps1" -Phase commit -Transaction "$WCSearchTransaction" -ExecutablePath "$PLUGINSDIR\wincommander-search-fence.exe" -InstallDirectory "$INSTDIR"'
+      Pop $0
+      Pop $1
+      ${If} $0 != 0
+        DetailPrint "Search update remains pending. Close WinCommander and retry this setup."
+        ${IfNot} ${Silent}
+          MessageBox MB_ICONSTOP "Search update remains pending. Close WinCommander and retry this setup. Your previous search index is preserved."
+        ${EndIf}
+        SetErrorLevel 1
+        Quit
+      ${EndIf}
+      StrCpy $WCSearchTransaction "NONE"
     ${EndIf}
-    !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
-    nsExec::ExecToStack /TIMEOUT=600000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-search-migration-phase.ps1" -Phase restore -ExecutablePath "$PLUGINSDIR\wincommander-search-fence.exe" -InstallDirectory "$INSTDIR"'
-    Pop $0
-    Pop $1
-    ${If} $0 != 0
-      StrCpy $R6 0
-    ${Else}
-      StrCpy $WCSearchMoved 0
-    ${EndIf}
-  ${EndIf}
-FunctionEnd
-!endif
+  !endif
+!macroend
 
 ; Invoke only after every installation step and migration commit has succeeded.
 !macro WC_RELEASE_SEARCH_BEFORE_LAUNCH
@@ -328,24 +333,21 @@ FunctionEnd
     ; The helper duplicates verified file and directory handles into this
     ; installer. Only this process acquires and owns the exclusive lock.
     InitPluginsDir
-    StrCpy $WCSearchMoved 0
+    StrCpy $WCSearchTransaction "NONE"
     StrCpy $WCSearchFenceHandle 0
     File /oname=$PLUGINSDIR\wincommander-search-fence.exe "${MAINBINARYSRCPATH}"
     File /oname=$PLUGINSDIR\wincommander-hold-search-maintenance.ps1 "${WC_HOLD_SEARCH_MAINTENANCE}"
     File /oname=$PLUGINSDIR\wincommander-search-migration-phase.ps1 "${WC_SEARCH_MIGRATION_PHASE}"
-    ; Quarantine holds its own exclusive lock. Release it, then take the
-    ; installer lock and authenticate/recheck before replacing any binaries.
+    ; Prepare records a durable transaction and marks roll-forward before
+    ; releasing its exclusive lock. Failures after this point require retry.
     !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
-    nsExec::ExecToStack /TIMEOUT=600000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-search-migration-phase.ps1" -Phase quarantine -ExecutablePath "$PLUGINSDIR\wincommander-search-fence.exe" -InstallDirectory "$INSTDIR"'
+    nsExec::ExecToStack /TIMEOUT=600000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-search-migration-phase.ps1" -Phase prepare -ExecutablePath "$PLUGINSDIR\wincommander-search-fence.exe" -InstallDirectory "$INSTDIR"'
     Pop $0
     Pop $1
     ${If} $0 != 0
-      !insertmacro WC_ABORT_STOP_FAILURE "preinstall" "WinCommander could not quarantine its existing search index."
+      !insertmacro WC_ABORT_STOP_FAILURE "preinstall" "Search preparation needs recovery. Close WinCommander and retry setup."
     ${EndIf}
-    ${StrStr} $R7 $1 "WINCOMMANDER_SEARCH_MIGRATION_OUTCOME:moved"
-    ${If} $R7 != ""
-      StrCpy $WCSearchMoved 1
-    ${EndIf}
+    ${TrimNewLines} "$1" $WCSearchTransaction
     System::Call 'kernel32::GetCurrentProcessId() i .R6'
     !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
     nsExec::ExecToStack /TIMEOUT=90000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-hold-search-maintenance.ps1" -ExecutablePath "$PLUGINSDIR\wincommander-search-fence.exe" -InstallerProcessId $R6'
@@ -365,40 +367,14 @@ FunctionEnd
       StrCpy $0 0
     ${EndIf}
     ${If} $0 != 1
-      Call WC_RestoreMovedSearch
-      ${If} $R6 != 1
-        ${If} $WCUserStageServiceRunning == 1
-          Call WC_RestoreUserStageService
-          ${If} $R6 != 1
-            Abort "Search backup recovery and service restart both failed. Existing data remains in its backup; manual recovery is required."
-          ${EndIf}
-        ${EndIf}
-        Abort "Search migration failed and the prior index could not be restored. Existing data remains in its backup; recovery is required."
-      ${EndIf}
-      ${If} $WCUserStageServiceRunning == 1
-        Call WC_RestoreUserStageService
-        ${If} $R6 != 1
-          Abort "Search maintenance failed and the service could not restart. Existing app and settings remain in place."
-        ${EndIf}
-      ${EndIf}
-      Abort "WinCommander could not establish search maintenance. Existing app and settings remain in place."
+      !insertmacro WC_ABORT_STOP_FAILURE "preinstall" "Search update is pending. Close WinCommander and retry setup."
     ${EndIf}
     !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
     nsExec::ExecToStack /TIMEOUT=600000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-search-migration-phase.ps1" -Phase verify -ExecutablePath "$PLUGINSDIR\wincommander-search-fence.exe" -InstallDirectory "$INSTDIR"'
     Pop $0
     Pop $1
     ${If} $0 != 0
-      Call WC_RestoreMovedSearch
-      ${If} $R6 != 1
-        ${If} $WCUserStageServiceRunning == 1
-          Call WC_RestoreUserStageService
-          ${If} $R6 != 1
-            Abort "Search backup recovery and service restart both failed. Existing data remains in its backup; manual recovery is required."
-          ${EndIf}
-        ${EndIf}
-        Abort "Search verification failed and the prior index could not be restored. Existing data remains in its backup; recovery is required."
-      ${EndIf}
-      !insertmacro WC_ABORT_STOP_FAILURE "preinstall" "WinCommander could not verify the protected search index."
+      !insertmacro WC_ABORT_STOP_FAILURE "preinstall" "Search verification is pending. Close WinCommander and retry setup."
     ${EndIf}
   !endif
   !ifdef WC_EXPERIMENTAL_USER_STAGE_ONLY
@@ -413,10 +389,7 @@ FunctionEnd
       Pop $1
       !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "user-settings-stage" "$0" "$1"
       ${If} $0 != 0
-        !ifdef WC_EXPERIMENTAL_SEARCH_FENCE
-          Call WC_RestoreMovedSearch
-          ${If} $R6 != 1
-            ${If} $WCUserStageServiceRunning == 1
+        ${If} $WCUserStageServiceRunning == 1
               Call WC_RestoreUserStageService
               ${If} $R6 != 1
                 Abort "Search backup recovery and service restart both failed. Existing data remains in its backup; manual recovery is required."

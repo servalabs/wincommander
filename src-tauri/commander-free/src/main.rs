@@ -7,6 +7,23 @@
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     #[cfg(windows)]
+    if args.first().map(String::as_str) == Some("--search-migration-transaction") {
+        #[cfg(feature = "experimental-encrypted-search")]
+        {
+            let enabled = std::env::var_os("WINCOMMANDER_EXPERIMENTAL_SEARCH_MIGRATION").as_deref() == Some(std::ffi::OsStr::new("1"));
+            let result = if enabled && args.len() == 3 {
+                wincommander_lib::search_migration_cli::run_transaction(&args[1], &args[2])
+            } else { Err("Search migration transaction is disabled or invalid.".into()) };
+            match result {
+                Ok(outcome) => println!("WINCOMMANDER_SEARCH_TRANSACTION_OUTCOME:{outcome}"),
+                Err(error) => { eprintln!("{error}"); std::process::exit(1); },
+            }
+            return;
+        }
+        #[cfg(not(feature = "experimental-encrypted-search"))]
+        std::process::exit(1);
+    }
+    #[cfg(windows)]
     if args.first().map(String::as_str) == Some("--search-migration-lab") {
         #[cfg(feature = "experimental-encrypted-search")]
         {
