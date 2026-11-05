@@ -36,6 +36,8 @@ ${Using:StrFunc} UnStrStr
 !ifdef WC_EXPERIMENTAL_SEARCH_FENCE
 !define WC_HOLD_SEARCH_MAINTENANCE "${__FILEDIR__}\hold-search-maintenance.ps1"
 !define WC_SEARCH_MIGRATION_PHASE "${__FILEDIR__}\search-migration-phase.ps1"
+Var WCSearchMoved
+Var WCSearchFenceHandle
 !endif
 Var WCUserStageServiceRunning
 !endif
@@ -170,6 +172,33 @@ Function WC_RestoreUserStageService
 FunctionEnd
 !endif
 
+!ifdef WC_EXPERIMENTAL_SEARCH_FENCE
+; Restore only a backup that this installer invocation confirmed it moved.
+; R6 is 1 on success/no action and 0 if manual recovery is required.
+Function WC_RestoreMovedSearch
+  StrCpy $R6 1
+  ${If} $WCSearchMoved == 1
+    ${If} $WCSearchFenceHandle != 0
+      System::Call 'kernel32::CloseHandle(p $WCSearchFenceHandle) i .r0'
+      StrCpy $WCSearchFenceHandle 0
+      ${If} $0 == 0
+        StrCpy $R6 0
+        Return
+      ${EndIf}
+    ${EndIf}
+    !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
+    nsExec::ExecToStack /TIMEOUT=600000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-search-migration-phase.ps1" -Phase restore -ExecutablePath "$PLUGINSDIR\wincommander-search-fence.exe" -InstallDirectory "$INSTDIR"'
+    Pop $0
+    Pop $1
+    ${If} $0 != 0
+      StrCpy $R6 0
+    ${Else}
+      StrCpy $WCSearchMoved 0
+    ${EndIf}
+  ${EndIf}
+FunctionEnd
+!endif
+
 !macro WC_ABORT_STOP_FAILURE stage message
   !ifdef WC_EXPERIMENTAL_USER_STAGE_ONLY
     !if "${stage}" == "preinstall"
@@ -284,6 +313,8 @@ FunctionEnd
     ; The helper duplicates verified file and directory handles into this
     ; installer. Only this process acquires and owns the exclusive lock.
     InitPluginsDir
+    StrCpy $WCSearchMoved 0
+    StrCpy $WCSearchFenceHandle 0
     File /oname=$PLUGINSDIR\wincommander-search-fence.exe "${MAINBINARYSRCPATH}"
     File /oname=$PLUGINSDIR\wincommander-hold-search-maintenance.ps1 "${WC_HOLD_SEARCH_MAINTENANCE}"
     File /oname=$PLUGINSDIR\wincommander-search-migration-phase.ps1 "${WC_SEARCH_MIGRATION_PHASE}"
@@ -296,6 +327,10 @@ FunctionEnd
     ${If} $0 != 0
       !insertmacro WC_ABORT_STOP_FAILURE "preinstall" "WinCommander could not quarantine its existing search index."
     ${EndIf}
+    ${StrStr} $R7 $1 "WINCOMMANDER_SEARCH_MIGRATION_OUTCOME:moved"
+    ${If} $R7 != ""
+      StrCpy $WCSearchMoved 1
+    ${EndIf}
     System::Call 'kernel32::GetCurrentProcessId() i .R6'
     !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
     nsExec::ExecToStack /TIMEOUT=90000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-hold-search-maintenance.ps1" -ExecutablePath "$PLUGINSDIR\wincommander-search-fence.exe" -InstallerProcessId $R6'
@@ -304,6 +339,7 @@ FunctionEnd
     ${If} $0 == 0
       ; nsExec returns a newline-terminated decimal handle owned by this process.
       ${TrimNewLines} "$1" $R5
+      StrCpy $WCSearchFenceHandle $R5
       System::Call '*(i 0, i 0, i 0, i 0, i 0) p.r0'
       ${If} $0 != 0
         System::Call 'kernel32::LockFileEx(p $R5, i 3, i 0, i -1, i -1, p r0) i .r1'
@@ -314,6 +350,10 @@ FunctionEnd
       StrCpy $0 0
     ${EndIf}
     ${If} $0 != 1
+      Call WC_RestoreMovedSearch
+      ${If} $R6 != 1
+        Abort "Search migration failed and the prior index could not be restored. Existing data remains in its backup; recovery is required."
+      ${EndIf}
       ${If} $WCUserStageServiceRunning == 1
         Call WC_RestoreUserStageService
         ${If} $R6 != 1
@@ -327,6 +367,10 @@ FunctionEnd
     Pop $0
     Pop $1
     ${If} $0 != 0
+      Call WC_RestoreMovedSearch
+      ${If} $R6 != 1
+        Abort "Search verification failed and the prior index could not be restored. Existing data remains in its backup; recovery is required."
+      ${EndIf}
       !insertmacro WC_ABORT_STOP_FAILURE "preinstall" "WinCommander could not verify the protected search index."
     ${EndIf}
   !endif
@@ -342,6 +386,12 @@ FunctionEnd
       Pop $1
       !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "user-settings-stage" "$0" "$1"
       ${If} $0 != 0
+        !ifdef WC_EXPERIMENTAL_SEARCH_FENCE
+          Call WC_RestoreMovedSearch
+          ${If} $R6 != 1
+            Abort "Settings staging failed and the prior search index could not be restored. Existing data remains in its backup; recovery is required."
+          ${EndIf}
+        !endif
         ${If} $WCUserStageServiceRunning == 1
           Call WC_RestoreUserStageService
           ${If} $R6 != 1
