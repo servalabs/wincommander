@@ -406,6 +406,27 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
         &cache(&generation_three_same_second), &public, &current, None).unwrap();
     assert!(ledger::ensure_paid_history_released(&real_next_activation, &public, &current, None).is_err());
     assert_eq!(ledger::next_unreleased_paid(&real_next_activation, &public, &current, None).unwrap(), Some(cache(&generation_three_same_second)));
+    // No entitlement is restored: an exact retained newer generation may
+    // replace only the matching completed record, while a live conflicting
+    // cache, changed timestamp or credential still stops recovery.
+    reopened_anchor.write(&real_next_activation).unwrap();
+    {
+        let _guard = WRITE_LOCK.lock().unwrap();
+        let _process_lock = crate::licence_security_lock().unwrap();
+        let check = |candidate: &StoreLicenseCacheRequest, time: u64, credential: &[u8; 32]| {
+            can_replace_completed_release_with_anchor(&retired_path, candidate, time, credential,
+                &real_acknowledgement, &public, &current, None, &reopened_anchor)
+        };
+        assert_eq!(check(&generation_three_same_second, 99, &[3; 32]), Ok(true));
+        assert_eq!(check(&generation_three_same_second, 99, &[4; 32]), Ok(false));
+        assert!(check(&generation_three_same_second, 100, &[3; 32]).is_err());
+        assert!(check(&generation_two, 99, &[3; 32]).is_err());
+        assert!(!retired_path.exists());
+        fs::write(&retired_path, cache(&trial)).unwrap();
+        assert!(check(&generation_three_same_second, 99, &[3; 32]).is_err());
+        fs::remove_file(&retired_path).unwrap();
+    }
+    reopened_anchor.write(&completed_bytes).unwrap();
     let new_wire = build_refresh_wire(&generation_three_same_second, &public, &current, "lic-a", "device").unwrap();
     assert_eq!(ledger::can_replace_completed_release(&real_next_activation, &generation_three_same_second, 99,
         &cache(&generation_three_same_second), &[4; 32], &real_acknowledgement, &public, &current, None), Ok(false));

@@ -177,6 +177,18 @@ fn with_current<T>(
         })
 }
 
+/// A missing cache is recoverable only for the exact unfinished protected
+/// operation, not merely because some signed historic record exists.
+pub(crate) fn matches_in_progress(
+    binding: &Binding<'_>, trust: &wincmd_pq_experiment::jws::Trust<'_>, licence: &RefreshLicence<'_>, now: u64,
+) -> Result<bool, &'static str> {
+    with_current(binding, trust, licence, now, |_, credential, body| {
+        let context = release_entropy(binding, credential, body)?;
+        crate::license_cache::release_gate::matches_in_progress_at(
+            &crate::license_cache::release_gate::machine(), &context)
+    })
+}
+
 fn prepare_finalization_locked(
     binding: &Binding<'_>, credential: &ConfirmedCredential, body: &[u8], request: &[u8], licence: &RefreshLicence<'_>,
 ) -> Result<(), &'static str> {

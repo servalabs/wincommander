@@ -152,6 +152,18 @@ fn idle_at(store: &Anchor) -> Result<bool, &'static str> {
     Ok(read(store, &context)?.version == 3)
 }
 
+/// Only the credential and request context which owns an unfinished gate may
+/// resume from retained history. A completed gate is not a retry authority.
+pub(crate) fn matches_in_progress_at(store: &Anchor, expected: &[u8; 32]) -> Result<bool, &'static str> {
+    if !store.exists().map_err(|_| INVALID)? { return Ok(false); }
+    let bytes = store.read().map_err(|_| INVALID)?.ok_or(INVALID)?;
+    let marker: Marker = serde_json::from_slice(&bytes).map_err(|_| INVALID)?;
+    let context: [u8; 32] = URL_SAFE_NO_PAD.decode(&marker.context).map_err(|_| INVALID)?
+        .try_into().map_err(|_| INVALID)?;
+    let marker = read(store, &context)?;
+    Ok(marker.version != 3 && &context == expected)
+}
+
 /// A failed write remains fenced, including an empty key created before failure.
 pub(crate) fn begin_at(store: &Anchor, context: &[u8; 32]) -> Result<(), &'static str> {
     if !idle_at(store)? {
@@ -264,6 +276,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn in_progress_gate_survives_process_restart() {
+        const CHILD_PATH: &str = "WINCMD_TEST_RELEASE_RETRY_GATE";
+        if let Ok(path) = std::env::var(CHILD_PATH) {
+            let reopened = Anchor::test_user(path);
+            assert!(matches_in_progress_at(&reopened, &[19; 32]).unwrap());
+            assert!(!matches_in_progress_at(&reopened, &[20; 32]).unwrap());
+            check_request_at(&reopened, &[19; 32], Some(b"saved request")).unwrap();
+            return;
+        }
+        let path = format!(r"SOFTWARE\WinCommanderReleaseRestartTest-{}", uuid::Uuid::new_v4());
+        let store = Anchor::test_user(path.clone());
+        begin_at(&store, &[19; 32]).unwrap();
+        bind_request_at(&store, &[19; 32], b"saved request").unwrap();
+        drop(store);
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "license_cache::release_gate::tests::in_progress_gate_survives_process_restart"])
+            .env(CHILD_PATH, &path).output().unwrap();
+        super::super::licence_device_anchor::remove_test_key(&path).unwrap();
+        assert!(child.status.success());
+        assert!(String::from_utf8_lossy(&child.stdout).contains("1 passed"));
+    }
+
+    #[test]
     fn release_marker_survives_reopen_and_allows_only_exact_request() {
         let path = format!(
             r"SOFTWARE\WinCommanderReleaseGateTest-{}",
@@ -271,16 +306,20 @@ mod tests {
         );
         let store = Anchor::test_user(path.clone());
         let context = [7; 32];
+        assert!(!matches_in_progress_at(&store, &context).unwrap());
         assert!(ensure_idle_at(&store).is_ok());
         assert!(check_request_at(&store, &context, None).is_ok());
         assert!(check_request_at(&store, &context, Some(b"request")).is_err());
         begin_at(&store, &context).unwrap();
+        assert!(matches_in_progress_at(&store, &context).unwrap());
+        assert!(!matches_in_progress_at(&store, &[8; 32]).unwrap());
         assert!(ensure_idle_at(&store).is_err());
         assert!(begin_at(&store, &[8; 32]).is_err());
         check_request_at(&store, &context, None).unwrap();
         assert!(check_request_at(&store, &context, Some(b"request")).is_err());
         bind_request_at(&store, &context, b"request").unwrap();
         let reopened = Anchor::test_user(path.clone());
+        assert!(matches_in_progress_at(&reopened, &context).unwrap());
         begin_at(&reopened, &context).unwrap();
         check_request_at(&reopened, &context, Some(b"request")).unwrap();
         assert!(check_request_at(&reopened, &context, Some(b"changed")).is_err());
@@ -319,6 +358,7 @@ mod tests {
         assert!(finish_at(&reopened, &complete, b"wrong").is_err());
         assert!(ensure_idle_at(&reopened).is_err());
         finish_at(&reopened, &complete, b"request").unwrap();
+        assert!(!matches_in_progress_at(&reopened, &context).unwrap());
         assert!(ensure_idle_at(&Anchor::test_user(path.clone())).is_ok());
         assert!(prepared_at(&reopened).unwrap().is_none());
         assert!(completed_at(&reopened).unwrap().is_some());
@@ -344,6 +384,7 @@ mod tests {
             .unwrap();
         assert!(begin_at(&reopened, &context).is_err());
         reopened.write(b"damaged").unwrap();
+        assert!(matches_in_progress_at(&reopened, &context).is_err());
         assert!(begin_at(&reopened, &context).is_err());
         assert!(ensure_idle_at(&reopened).is_err());
         super::super::licence_device_anchor::remove_test_key(&path).unwrap();
