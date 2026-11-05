@@ -378,34 +378,18 @@ FunctionEnd
     ${EndIf}
   !endif
   !ifdef WC_EXPERIMENTAL_USER_STAGE_ONLY
-    ; The helper handles fresh installs and fails closed if an existing
-    ; profile has lost its app binary. It never selects the new store.
-      InitPluginsDir
-      File /oname=$PLUGINSDIR\wincommander-settings-stage.exe "${MAINBINARYSRCPATH}"
-      File /oname=$PLUGINSDIR\wincommander-stage-original-user-settings.ps1 "${WC_STAGE_ORIGINAL_USER_SETTINGS}"
-      !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
-      nsExec::ExecToStack /TIMEOUT=600000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-stage-original-user-settings.ps1" -ExecutablePath "$PLUGINSDIR\wincommander-settings-stage.exe" -InstallDirectory "$INSTDIR"'
-      Pop $0
-      Pop $1
-      !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "user-settings-stage" "$0" "$1"
-      ${If} $0 != 0
-        ${If} $WCUserStageServiceRunning == 1
-              Call WC_RestoreUserStageService
-              ${If} $R6 != 1
-                Abort "Search backup recovery and service restart both failed. Existing data remains in its backup; manual recovery is required."
-              ${EndIf}
-            ${EndIf}
-            Abort "Settings staging failed and the prior search index could not be restored. Existing data remains in its backup; recovery is required."
-          ${EndIf}
-        !endif
-        ${If} $WCUserStageServiceRunning == 1
-          Call WC_RestoreUserStageService
-          ${If} $R6 != 1
-            Abort "User settings staging failed and the WinCommander service could not restart. Existing app and settings remain in place."
-          ${EndIf}
-        ${EndIf}
-        Abort "WinCommander could not stage user settings. Existing app and settings remain in place."
-      ${EndIf}
+    ; User settings remain in their original authoritative store.
+    InitPluginsDir
+    File /oname=$PLUGINSDIR\wincommander-settings-stage.exe "${MAINBINARYSRCPATH}"
+    File /oname=$PLUGINSDIR\wincommander-stage-original-user-settings.ps1 "${WC_STAGE_ORIGINAL_USER_SETTINGS}"
+    !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
+    nsExec::ExecToStack /TIMEOUT=600000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-stage-original-user-settings.ps1" -ExecutablePath "$PLUGINSDIR\wincommander-settings-stage.exe" -InstallDirectory "$INSTDIR"'
+    Pop $0
+    Pop $1
+    !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "user-settings-stage" "$0" "$1"
+    ${If} $0 != 0
+      !insertmacro WC_ABORT_STOP_FAILURE "preinstall" "WinCommander could not stage user settings. Existing app and settings remain in place."
+    ${EndIf}
   !endif
   !insertmacro WC_LOAD_PROGRAMDATA_OR_ABORT "preinstall"
   IfFileExists "$R5\WinCommander\license_cache.json" 0 wc_no_upgrade_license_to_backup
