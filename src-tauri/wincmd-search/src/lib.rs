@@ -431,6 +431,35 @@ impl SearchEngine {
         self.config.skip_paths.push(backup.clone());
         Ok(backup)
     }
+    /// Rebuild a disposable encrypted cache under an offline exclusive fence.
+    /// Failed candidates remain in place and the original cache is untouched.
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    pub fn rebuild_offline_and_select(config: IndexConfig, policy: PathPolicy,
+        selection_dir: &std::path::Path, fence: &crate::encrypted_search_fence::SearchOperationFence) -> Result<ExperimentalRebuildReport> {
+        use rand::{rngs::OsRng, RngCore};
+        use crate::read_only::CheckedDirectory;
+        let old = &config.index_dir;
+        let parent = old.parent().ok_or_else(|| SearchError::Config("invalid legacy index path".into()))?;
+        if !old.is_absolute() || selection_dir.parent() != Some(parent) {
+            return Err(SearchError::Config("invalid search selection parent".into()));
+        }
+        fence.require_exclusive_for(parent)?;
+        let _pins = CheckedDirectory::pin_root_path(parent)?;
+        crate::encrypted_search_maintenance::verify_known_writers_stopped().map_err(SearchError::Config)?;
+        match std::fs::create_dir(selection_dir) {
+            Ok(()) => {}, Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}, Err(e) => return Err(e.into()),
+        }
+        let _selection_pins = CheckedDirectory::pin_root_path(selection_dir)?;
+        if std::fs::read_dir(selection_dir)?.next().transpose()?.is_some() {
+            return Err(SearchError::Config("search selection already exists; recovery required".into()));
+        }
+        let mut id = [0u8; 16]; OsRng.fill_bytes(&mut id);
+        if id == [0; 16] { return Err(SearchError::Config("cannot create encrypted index identity".into())); }
+        let mut engine = Self::open_experimental_encrypted_with_policy(config, policy, id, false)?;
+        let report = engine.rebuild_experimental_candidate()?;
+        engine.select_experimental_candidate(selection_dir)?;
+        Ok(report)
+    }
     /// Offline phase: authenticate the selected encrypted generation before
     /// moving the legacy cache under the helper's own exclusive fence.
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
@@ -1118,6 +1147,25 @@ mod tests {
         assert!(SearchEngine::open_experimental_encrypted_with_policy(config, Arc::new(|_| true), identity, false).is_err());
         assert_eq!(fs::read(candidate.join("meta.json")).unwrap(), before);
         assert_eq!(fs::read(old.join("meta.json")).unwrap(), b"legacy intact");
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    #[test]
+    fn offline_rebuild_selects_encrypted_generation_and_preserves_old_cache() {
+        let root = TempDir::new().unwrap();
+        let old = root.path().join("legacy");
+        let data = root.path().join("data");
+        let selection = root.path().join("selector");
+        fs::create_dir(&old).unwrap(); fs::create_dir(&data).unwrap();
+        fs::write(old.join("meta.json"), b"old cache preserved").unwrap();
+        fs::write(data.join("doc.txt"), b"confidentialofflinerebuild").unwrap();
+        let guard = crate::encrypted_search_fence::SearchOperationFence::acquire_exclusive(root.path()).unwrap();
+        let config = make_config(old.clone(), vec![data]);
+        let report = SearchEngine::rebuild_offline_and_select(config, Arc::new(|_| true), &selection, &guard).unwrap();
+        assert_eq!(report.indexed, 1);
+        assert_eq!(fs::read(old.join("meta.json")).unwrap(), b"old cache preserved");
+        let backup = SearchEngine::quarantine_selected_with_fence(&old, &selection, &guard).unwrap();
+        SearchEngine::verify_quarantined_selection(&old, &selection).unwrap();
+        assert_eq!(fs::read(backup.join("meta.json")).unwrap(), b"old cache preserved");
     }
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     #[test]

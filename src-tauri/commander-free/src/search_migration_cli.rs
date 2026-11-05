@@ -5,7 +5,7 @@ use std::{io, path::Path};
 use wincmd_search::{SearchEngine, encrypted_search_fence::SearchOperationFence};
 
 #[derive(Debug, PartialEq, Eq)]
-enum State { Fresh, NeedsQuarantine, Quarantined }
+enum State { Fresh, NeedsRebuild, NeedsQuarantine, Quarantined }
 fn present(path: &Path) -> io::Result<bool> {
     match std::fs::symlink_metadata(path) {
         Ok(_) => Ok(true),
@@ -17,9 +17,12 @@ fn classify(parent: &Path, old: &Path, selection: &Path) -> Result<State, String
     let old_exists = present(old).map_err(|_| "Cannot inspect the old search index.")?;
     let selection_exists = present(selection).map_err(|_| "Cannot inspect the encrypted search selection.")?;
     match (old_exists, selection_exists) {
-        (true, true) => Ok(State::NeedsQuarantine),
+        (true, true) => {
+            if present(&selection.join("candidate-proof.v1")).map_err(|_| "Cannot inspect search selection proof.")? { Ok(State::NeedsQuarantine) }
+            else { Ok(State::NeedsRebuild) }
+        },
         (false, true) => Ok(State::Quarantined),
-        (true, false) => Err("The encrypted search selection is missing; the old index was retained.".into()),
+        (true, false) => Ok(State::NeedsRebuild),
         (false, false) => {
             // Missing selector is fresh only if no evidence of an earlier
             // encrypted generation or quarantined plaintext backup remains.
@@ -51,6 +54,14 @@ pub fn run(phase: &str) -> Result<(), String> {
                 .map_err(|_| "Cannot acquire offline search maintenance lock.")?;
             match classify(&parent, &old, &selection)? {
                 State::Fresh => Ok(()),
+                State::NeedsRebuild => {
+                    let (config, policy) = crate::file_search::offline_index_plan()?;
+                    if config.index_dir != old { return Err("Search profile changed during migration.".into()); }
+                    SearchEngine::rebuild_offline_and_select(config, policy, &selection, &guard)
+                        .map_err(|e| e.to_string())?;
+                    SearchEngine::quarantine_selected_with_fence(&old, &selection, &guard)
+                        .map(|_| ()).map_err(|e| e.to_string())
+                },
                 State::NeedsQuarantine => SearchEngine::quarantine_selected_with_fence(&old, &selection, &guard)
                     .map(|_| ()).map_err(|e| e.to_string()),
                 State::Quarantined => SearchEngine::verify_quarantined_selection(&old, &selection)
@@ -61,7 +72,7 @@ pub fn run(phase: &str) -> Result<(), String> {
             State::Fresh => Ok(()),
             State::Quarantined => SearchEngine::verify_quarantined_selection(&old, &selection)
                 .map_err(|e| e.to_string()),
-            State::NeedsQuarantine => Err("The old search index is still present.".into()),
+            State::NeedsRebuild | State::NeedsQuarantine => Err("The old search index is still present.".into()),
         },
         _ => Err("Invalid search migration phase.".into()),
     }
@@ -80,8 +91,10 @@ mod tests {
         assert!(classify(root.path(), &old, &selection).is_err());
         std::fs::remove_dir(root.path().join(".wincommander-encrypted-interrupted")).unwrap();
         std::fs::create_dir(&old).unwrap();
-        assert!(classify(root.path(), &old, &selection).is_err());
+        assert_eq!(classify(root.path(), &old, &selection).unwrap(), State::NeedsRebuild);
         std::fs::create_dir(&selection).unwrap();
+        assert_eq!(classify(root.path(), &old, &selection).unwrap(), State::NeedsRebuild);
+        std::fs::write(selection.join("candidate-proof.v1"), b"not-a-valid-proof").unwrap();
         assert_eq!(classify(root.path(), &old, &selection).unwrap(), State::NeedsQuarantine);
         std::fs::remove_dir(&old).unwrap();
         assert_eq!(classify(root.path(), &old, &selection).unwrap(), State::Quarantined);
