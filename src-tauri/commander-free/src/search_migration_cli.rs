@@ -159,7 +159,7 @@ pub fn run_transaction(phase: &str, token_hex: &str) -> Result<String, String> {
                 State::Quarantined => {
                     match SearchEngine::inspect_search_migration(&selection).map_err(|e| e.to_string())? {
                         Some((existing, true)) if existing == token => {
-                            SearchEngine::verify_quarantined_selection(&old, &selection).map_err(|e| e.to_string())?;
+                            SearchEngine::mark_search_replacement(&old, &selection, token, &guard).map_err(|e| e.to_string())?;
                             return Ok("replacement-pending reconciliation=pending".into());
                         },
                         None => {
