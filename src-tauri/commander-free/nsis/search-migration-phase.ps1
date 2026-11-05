@@ -31,7 +31,11 @@ try {
         try {
             $stdout = $process.StandardOutput.ReadToEndAsync()
             $stderr = $process.StandardError.ReadToEndAsync()
-            $process.WaitForExit()
+            if (-not $process.WaitForExit(540000)) {
+                $process.Kill()
+                $process.WaitForExit()
+                throw 'Search migration helper timed out; retry setup to recover.'
+            }
             if ($process.ExitCode -ne 0) { throw "Search migration helper returned exit code $($process.ExitCode)." }
             $output = $stdout.Result.Trim()
             if (-not $output.StartsWith($Prefix, [StringComparison]::Ordinal)) { throw 'Search migration outcome was not confirmed.' }
