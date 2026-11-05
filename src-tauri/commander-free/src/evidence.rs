@@ -145,10 +145,9 @@ pub fn evidence_clear() -> Result<(), String> {
     let key = key_path()?;
     let machine = crate::paths::machine_state_file(LEGACY_MACHINE_LEDGER_FILENAME)?;
     let profile = legacy_ledger_path()?;
-    storage::clear_user_requested(&path, &machine, profile.as_deref(), &key,
-        &crate::paths::atomic_write_machine_state, &|old| {
-            clear_io::clear_file(old)
-        })
+    let user = clear_io::current_user()?;
+    storage::clear_user_requested(&path, &machine, profile.as_deref(), &key, &user,
+        &crate::paths::atomic_write_machine_state, &clear_io::snapshot, &clear_io::clear_file)
 }
 
 #[cfg(test)]
