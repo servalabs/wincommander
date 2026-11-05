@@ -7,7 +7,7 @@ use zeroize::Zeroizing;
 const MAX_PROTECTED: usize = 65536;
 const KEY_MAGIC: &[u8; 8] = b"WCIDXK01";
 const KEY_RECORD_LEN: usize = 8 + 16 + 32;
-trait Protector {
+pub(crate) trait Protector {
     fn protect(&self, value: &[u8]) -> io::Result<Vec<u8>>;
     fn unprotect(&self, value: &[u8]) -> io::Result<Zeroizing<Vec<u8>>>;
 }
@@ -128,7 +128,7 @@ impl PinnedIndexKey {
 // DPAPI user scope: do not set CRYPTPROTECT_LOCAL_MACHINE. Not yet wired to a
 // real key store. No runtime fallback or new-key creation on unprotect failure.
 #[cfg(windows)]
-struct UserDpapi;
+pub(crate) struct UserDpapi;
 #[cfg(windows)]
 impl UserDpapi {
     fn transform(&self, input: &[u8], protect: bool) -> io::Result<Zeroizing<Vec<u8>>> {

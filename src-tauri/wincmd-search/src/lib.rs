@@ -15,6 +15,8 @@ mod encrypted_cutover_prototype;
 mod encrypted_key_prototype;
 #[cfg(test)]
 mod encrypted_migration_prototype;
+#[cfg(any(test, all(windows, feature = "experimental-encrypted-search")))]
+mod encrypted_generation_prototype;
 pub mod chunk;
 pub mod crawler;
 #[cfg(windows)]
