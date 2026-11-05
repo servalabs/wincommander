@@ -88,11 +88,31 @@ fn free_prepared_messages_interoperate_with_offline_signer() {
     ));
     assert!(run(
         signer,
-        &["ed25519", &p("ed.key"), &p("ed.msg"), &p("ed.sig")]
+        &[
+            "ed25519",
+            &p("ed.key"),
+            &p("ed.msg"),
+            &p("installer"),
+            &p("trust"),
+            "99.0.0",
+            "stable",
+            "7",
+            &p("ed.sig")
+        ]
     ));
     assert!(run(
         signer,
-        &["mldsa65", &p("pq.key"), &p("pq.msg"), &p("pq.sig")]
+        &[
+            "mldsa65",
+            &p("pq.key"),
+            &p("pq.msg"),
+            &p("installer"),
+            &p("trust"),
+            "99.0.0",
+            "stable",
+            "7",
+            &p("pq.sig")
+        ]
     ));
     assert!(run(
         prep,
@@ -195,20 +215,58 @@ fn staged_manifest_to_signed_release_to_offline_check() {
     ]));
     std::fs::write(file("ed.key"), ed.to_bytes()).unwrap();
     std::fs::write(file("pq.key"), pq.to_pkcs8v1().unwrap().as_ref()).unwrap();
+    std::fs::write(file("wrong.key"), [43; 32]).unwrap();
     let signer = env!("CARGO_BIN_EXE_wincmd-pq-offline-sign");
     let sign = |algorithm: &str, key: &str, message: &str, output: &str| {
         Command::new(signer)
-            .args([algorithm, &p(key), &p(message), &p(output)])
+            .args([
+                algorithm,
+                &p(key),
+                &p(message),
+                &p("pro.exe"),
+                &p("trust.json"),
+                "3.7.0",
+                "pro",
+                "7",
+                &p(output),
+            ])
             .output()
             .unwrap()
             .status
             .success()
     };
     assert!(!sign("ed25519", "ed.key", "pq.msg", "wrong.sig"));
+    assert!(!sign("ed25519", "wrong.key", "ed.msg", "wrong.sig"));
+    std::fs::write(file("pro.exe"), b"wrong artifact").unwrap();
+    assert!(!sign("ed25519", "ed.key", "ed.msg", "wrong.sig"));
+    std::fs::write(file("pro.exe"), artifact).unwrap();
     let message = std::fs::read_to_string(file("ed.msg")).unwrap();
     let (header, payload) = message.split_once('.').unwrap();
     let mut header: serde_json::Value =
         serde_json::from_slice(&URL_SAFE_NO_PAD.decode(header).unwrap()).unwrap();
+    let mut wrong_kid = header.clone();
+    wrong_kid["kid"] = "unapproved".into();
+    std::fs::write(
+        file("wrong.msg"),
+        format!(
+            "{}.{}",
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&wrong_kid).unwrap()),
+            payload
+        ),
+    )
+    .unwrap();
+    assert!(!sign("ed25519", "ed.key", "wrong.msg", "wrong.sig"));
+    let incomplete = URL_SAFE_NO_PAD.encode(br#"{"format":"wincommander-pro-release-v1"}"#);
+    std::fs::write(
+        file("wrong.msg"),
+        format!(
+            "{}.{}",
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header).unwrap()),
+            incomplete
+        ),
+    )
+    .unwrap();
+    assert!(!sign("ed25519", "ed.key", "wrong.msg", "wrong.sig"));
     header["purpose"] = "licence".into();
     std::fs::write(
         file("wrong.msg"),
@@ -247,6 +305,7 @@ fn staged_manifest_to_signed_release_to_offline_check() {
     ));
     for name in [
         "ed.key",
+        "wrong.key",
         "pq.key",
         "wrong.msg",
         "latest.json",

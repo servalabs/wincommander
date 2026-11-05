@@ -58,14 +58,16 @@ prepared message with its separately held key. Build it with
 `--features experimental-signer --bin wincmd-pq-offline-sign`:
 
 ```text
-wincmd-pq-offline-sign ed25519 ed-private-seed.bin ed.msg ed.sig
-wincmd-pq-offline-sign mldsa65 pq-private-pkcs8.der pq.msg pq.sig
+wincmd-pq-offline-sign ed25519 ed-private-seed.bin ed.msg pro.exe trusted-keys.json 3.7.0 pro 7 ed.sig
+wincmd-pq-offline-sign mldsa65 pq-private-pkcs8.der pq.msg pro.exe trusted-keys.json 3.7.0 pro 7 pq.sig
 ```
 
 The Ed25519 input is a raw 32-byte seed; the ML-DSA-65 input is PKCS#8 DER.
-The tool refuses existing output files and only accepts the release-purpose
-messages used by the Free and Pro preparation tools. It does not validate
-the artifact, independently approve trust keys, provide secure key storage,
+The tool refuses existing output files, validates the artifact and complete
+release metadata, matches the private key against independently supplied
+trust, and reconstructs the exact message. For Free, use the installer,
+Free trust, and `stable` or `beta` instead of `pro`. It does not independently
+approve trust keys, provide secure key storage,
 or publish a release. Run each signer only after independently reviewing the
 artifact and signing inputs, and run the corresponding `finish` and offline
 verification steps. Keep private key files out of the repository and logs.
