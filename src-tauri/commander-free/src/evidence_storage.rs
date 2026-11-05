@@ -30,6 +30,8 @@ pub(super) struct Ledger {
     machine_source_digest: Option<String>,
     #[serde(default)]
     machine_source_length: Option<u64>,
+    #[serde(default)]
+    clear_pending: bool,
 }
 impl Drop for KeyState {
     fn drop(&mut self) {
@@ -205,6 +207,7 @@ pub(super) fn read(
                 skip_future_imports: false,
                 machine_source_digest: None,
                 machine_source_length: None,
+                clear_pending: false,
             };
             let bytes = serde_json::to_vec(&value).map_err(|_| "Cannot encode evidence")?;
             let sealed = crate::datastore::encode_section(&state.material, &bytes, SCOPE)?;
@@ -339,7 +342,10 @@ pub(super) fn read_with_machine_source(
         return Err("Old protected evidence requires manual recovery; original preserved".into());
     }
     let mut ledger = read(path, &|| Ok(None), key_path, persist)?;
-    if !ledger.skip_future_imports {
+    if ledger.clear_pending {
+        return Err("Evidence clear was interrupted; retry clear before using the timeline".into());
+    }
+    if !ledger.skip_future_imports || ledger.machine_source_digest.is_some() {
         let source = machine_snapshot(machine_source)?;
         if let Some(raw) = source {
             let fingerprint = digest(&raw);
@@ -419,9 +425,145 @@ pub(super) fn read_with_machine_source(
     read(path, legacy, key_path, persist)
 }
 
+/// Clear the protected machine ledger, the old machine ledger, and at most the
+/// calling profile's old ledger. Caller holds the same mutex as old writers.
+/// A persisted intent prevents old plaintext from being re-imported on restart.
+pub(super) fn clear_user_requested(
+    path: &Path,
+    machine_source: &Path,
+    current_profile: Option<&Path>,
+    key_path: &Path,
+    persist: &impl Fn(&Path, &[u8]) -> Result<(), String>,
+    erase_old: &impl Fn(&Path) -> Result<(), String>,
+) -> Result<(), String> {
+    if path == machine_source || path == key_path || machine_source == key_path
+        || current_profile.is_some_and(|p| p == path || p == key_path || p == machine_source) {
+        return Err("Evidence clear locations are invalid".into());
+    }
+    let mut ledger = read(path, &|| Ok(None), key_path, persist)?;
+    ledger.entries.clear();
+    ledger.skip_future_imports = true;
+    ledger.machine_source_digest = Some(digest(""));
+    ledger.machine_source_length = Some(0);
+    ledger.clear_pending = true;
+    write(path, key_path, &ledger, persist)
+        .map_err(|e| format!("Evidence clear could not start: {e}"))?;
+    erase_old(machine_source)
+        .map_err(|e| format!("Evidence clear incomplete; retry clear: {e}"))?;
+    if let Some(profile) = current_profile {
+        erase_old(profile)
+            .map_err(|e| format!("Evidence clear incomplete for this user; retry clear: {e}"))?;
+    }
+    ledger.clear_pending = false;
+    write(path, key_path, &ledger, persist)
+        .map_err(|e| format!("Evidence clear needs finalization; retry clear: {e}"))?;
+    Ok(())
+}
+
 #[cfg(all(test, windows))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn user_clear_finishes_machine_and_current_profile_and_imports_later_old_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let protected = dir.path().join("protected");
+        let machine = dir.path().join("machine");
+        let profile = dir.path().join("profile");
+        let other = dir.path().join("other-profile");
+        let key = dir.path().join("key");
+        let old = format!("{}\n", serde_json::to_string(&entry()).unwrap());
+        for path in [&machine, &profile, &other] { fs::write(path, &old).unwrap(); }
+        let erase = |p: &Path| -> Result<(), String> {
+            if p.exists() { fs::write(p, b"").map_err(|e| e.to_string())?; }
+            Ok(())
+        };
+        clear_user_requested(&protected, &machine, Some(&profile), &key,
+            &crate::datastore_io::atomic_write, &erase).unwrap();
+        assert!(fs::read(&machine).unwrap().is_empty());
+        assert!(fs::read(&profile).unwrap().is_empty());
+        assert_eq!(fs::read_to_string(&other).unwrap(), old);
+        let blank = read_with_machine_source(&protected, &machine, &|| Ok(Some(profile.clone())), &key,
+            &crate::datastore_io::atomic_write).unwrap();
+        assert!(blank.entries.is_empty());
+        let mut new_event = entry(); new_event.summary = "after clear".into();
+        fs::write(&machine, format!("{}\n", serde_json::to_string(&new_event).unwrap())).unwrap();
+        let later = read_with_machine_source(&protected, &machine, &|| Ok(Some(profile)), &key,
+            &crate::datastore_io::atomic_write).unwrap();
+        assert_eq!(later.entries.len(), 1);
+        assert_eq!(later.entries[0].summary, "after clear");
+    }
+
+    #[test]
+    fn interrupted_clear_blocks_reimport_and_retry_finishes() {
+        let dir = tempfile::tempdir().unwrap();
+        let protected = dir.path().join("protected");
+        let machine = dir.path().join("machine");
+        let profile = dir.path().join("profile");
+        let key = dir.path().join("key");
+        let old = format!("{}\n", serde_json::to_string(&entry()).unwrap());
+        fs::write(&machine, &old).unwrap(); fs::write(&profile, &old).unwrap();
+        let erase_fail_profile = |p: &Path| -> Result<(), String> {
+            if p == profile { return Err("injected profile failure".into()); }
+            fs::write(p, b"").map_err(|e| e.to_string())
+        };
+        assert!(clear_user_requested(&protected, &machine, Some(&profile), &key,
+            &crate::datastore_io::atomic_write, &erase_fail_profile).is_err());
+        assert!(fs::read(&machine).unwrap().is_empty());
+        assert_eq!(fs::read_to_string(&profile).unwrap(), old);
+        let error = read_with_machine_source(&protected, &machine, &|| Ok(None), &key,
+            &crate::datastore_io::atomic_write).err().unwrap();
+        assert!(error.contains("interrupted"));
+        let erase = |p: &Path| fs::write(p, b"").map_err(|e| e.to_string());
+        clear_user_requested(&protected, &machine, Some(&profile), &key,
+            &crate::datastore_io::atomic_write, &erase).unwrap();
+        assert!(fs::read(&profile).unwrap().is_empty());
+        assert!(read_with_machine_source(&protected, &machine, &|| Ok(None), &key,
+            &crate::datastore_io::atomic_write).unwrap().entries.is_empty());
+    }
+
+    #[test]
+    fn finalization_failure_is_reported_and_clear_can_be_retried() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let dir = tempfile::tempdir().unwrap();
+        let protected = dir.path().join("protected");
+        let machine = dir.path().join("machine");
+        let key = dir.path().join("key");
+        fs::write(&machine, format!("{}\n", serde_json::to_string(&entry()).unwrap())).unwrap();
+        let writes = AtomicUsize::new(0);
+        let persist = |target: &Path, bytes: &[u8]| {
+            if target == protected && writes.fetch_add(1, Ordering::SeqCst) == 1 {
+                return Err("injected finalization failure".into());
+            }
+            crate::datastore_io::atomic_write(target, bytes)
+        };
+        let erase = |p: &Path| fs::write(p, b"").map_err(|e| e.to_string());
+        assert!(clear_user_requested(&protected, &machine, None, &key, &persist, &erase).is_err());
+        assert!(fs::read(&machine).unwrap().is_empty());
+        assert!(read_with_machine_source(&protected, &machine, &|| Ok(None), &key,
+            &crate::datastore_io::atomic_write).err().unwrap().contains("interrupted"));
+        clear_user_requested(&protected, &machine, None, &key, &crate::datastore_io::atomic_write, &erase).unwrap();
+        assert!(read_with_machine_source(&protected, &machine, &|| Ok(None), &key,
+            &crate::datastore_io::atomic_write).unwrap().entries.is_empty());
+    }
+
+    #[test]
+    fn failed_clear_intent_keeps_legacy_source_and_is_retryable() {
+        let dir = tempfile::tempdir().unwrap();
+        let protected = dir.path().join("protected"); let machine = dir.path().join("machine");
+        let key = dir.path().join("key");
+        let old = format!("{}\n", serde_json::to_string(&entry()).unwrap());
+        fs::write(&machine, &old).unwrap();
+        let persist = |target: &Path, bytes: &[u8]| {
+            if target == protected { return Err("injected intent failure".into()); }
+            crate::datastore_io::atomic_write(target, bytes)
+        };
+        let erase = |p: &Path| fs::write(p, b"").map_err(|e| e.to_string());
+        assert!(clear_user_requested(&protected, &machine, None, &key, &persist, &erase).is_err());
+        assert_eq!(fs::read_to_string(&machine).unwrap(), old);
+        clear_user_requested(&protected, &machine, None, &key, &crate::datastore_io::atomic_write, &erase).unwrap();
+        assert!(fs::read(&machine).unwrap().is_empty());
+    }
 
     fn entry() -> EvidenceEntry {
         EvidenceEntry {
@@ -518,6 +660,7 @@ mod tests {
                 skip_future_imports: false,
                 machine_source_digest: None,
                 machine_source_length: None,
+                clear_pending: false,
             },
             &crate::datastore_io::atomic_write,
         )
@@ -579,6 +722,7 @@ mod tests {
             skip_future_imports: false,
             machine_source_digest: None,
             machine_source_length: None,
+            clear_pending: false,
         })
         .unwrap();
         let sealed = crate::datastore::encode_section(&state.material, &bytes, SCOPE).unwrap();
@@ -615,6 +759,7 @@ mod tests {
                 skip_future_imports: false,
                 machine_source_digest: None,
                 machine_source_length: None,
+                clear_pending: false,
             },
             &crate::datastore_io::atomic_write,
         )
@@ -643,6 +788,7 @@ mod tests {
                 skip_future_imports: false,
                 machine_source_digest: None,
                 machine_source_length: None,
+                clear_pending: false,
             },
             &crate::datastore_io::atomic_write,
         )
@@ -680,6 +826,7 @@ mod tests {
                 skip_future_imports: false,
                 machine_source_digest: None,
                 machine_source_length: None,
+                clear_pending: false,
             },
             &crate::datastore_io::atomic_write,
         )
@@ -716,6 +863,7 @@ mod tests {
                 skip_future_imports: false,
                 machine_source_digest: None,
                 machine_source_length: None,
+                clear_pending: false,
             },
             &crate::datastore_io::atomic_write,
         )
@@ -778,6 +926,7 @@ mod tests {
                 skip_future_imports: false,
                 machine_source_digest: None,
                 machine_source_length: None,
+                clear_pending: false,
             },
             &|target, bytes| {
                 published.lock().unwrap().push(target.to_path_buf());

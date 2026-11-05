@@ -28,6 +28,8 @@ use std::path::PathBuf;
 
 #[path = "evidence_storage.rs"]
 mod storage;
+#[path = "evidence_clear_io.rs"]
+mod clear_io;
 #[path = "fleet_lifecycle_mutex.rs"]
 #[allow(dead_code)]
 mod mutex;
@@ -141,16 +143,39 @@ pub fn evidence_clear() -> Result<(), String> {
     let _lock = acquire_evidence_lock()?;
     let path = ledger_path()?;
     let key = key_path()?;
-    let mut ledger = read_ledger(&path, &key)?;
-    ledger.entries.clear();
-    ledger.skip_future_imports = true;
-    storage::write(&path, &key, &ledger, &crate::paths::atomic_write_machine_state)?;
-    Ok(())
+    let machine = crate::paths::machine_state_file(LEGACY_MACHINE_LEDGER_FILENAME)?;
+    let profile = legacy_ledger_path()?;
+    storage::clear_user_requested(&path, &machine, profile.as_deref(), &key,
+        &crate::paths::atomic_write_machine_state, &|old| {
+            clear_io::clear_file(old)
+        })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn new_guard_coordinates_with_old_machine_state_guard() {
+        use std::{sync::mpsc, thread, time::Duration};
+        let resource = format!("evidence-test-{}", uuid::Uuid::new_v4().simple());
+        let name = format!(r"Global\WinCommander_{resource}_lock");
+        let held = mutex::acquire_named(&name, 5_000).unwrap();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let child = thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            let result = crate::paths::acquire_machine_state_lock(&resource).is_ok();
+            done_tx.send(result).unwrap();
+        });
+        started_rx.recv().unwrap();
+        let blocked = matches!(done_rx.recv_timeout(Duration::from_millis(100)), Err(mpsc::RecvTimeoutError::Timeout));
+        drop(held);
+        let acquired = done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        child.join().unwrap();
+        assert!(blocked && acquired);
+    }
 
     #[test]
     fn entry_round_trips_and_omits_empty_detail() {
