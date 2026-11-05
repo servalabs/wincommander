@@ -143,6 +143,18 @@ fn with_current<T>(
         })
 }
 
+fn prepare_finalization_locked(
+    binding: &Binding<'_>, credential: &ConfirmedCredential, body: &[u8], request: &[u8], licence: &RefreshLicence<'_>,
+) -> Result<(), &'static str> {
+    let context = release_entropy(binding, credential, body)?;
+    let gate = crate::license_cache::release_gate::machine();
+    crate::license_cache::release_gate::check_request_at(&gate, &context, Some(request))?;
+    crate::license_cache::mark_acknowledged_release_locked(licence.payload, licence.signature, licence.hybrid, licence.last_verified_at)?;
+    let (cache, generation) = crate::license_cache::released_snapshot_locked(licence.payload, licence.signature, licence.hybrid, licence.last_verified_at)?;
+    crate::license_cache::release_gate::prepare_finalization_at(&gate, &context, request, binding.licence_id,
+        binding.device_hash, &credential.id, generation, &cache)
+}
+
 /// Save and read back before any network send. Existing state cannot be replaced.
 pub(crate) fn stage(
     binding: &Binding<'_>, trust: &wincmd_pq_experiment::jws::Trust<'_>, licence: &RefreshLicence<'_>, now: u64, request: &[u8],
@@ -170,8 +182,8 @@ pub(crate) fn load(
     with_current(binding, trust, licence, now, |store, credential, body| {
         let saved = load_guarded(store, &crate::license_cache::release_gate::machine(), &MachineDpapi,
             binding, credential, body)?;
-        if saved.as_ref().is_some_and(|item| item.acknowledged) {
-            crate::license_cache::mark_acknowledged_release_locked(licence.payload, licence.signature, licence.hybrid, licence.last_verified_at)?;
+        if let Some(item) = saved.as_ref().filter(|item| item.acknowledged) {
+            prepare_finalization_locked(binding, credential, body, &item.request, licence)?;
         }
         Ok(saved)
     })
@@ -225,7 +237,7 @@ pub(crate) fn record_acknowledgement(
         let context = release_entropy(binding, credential, body)?;
         crate::license_cache::release_gate::check_request(&context, Some(request))?;
         acknowledge_locked(store, &MachineDpapi, binding, credential, body, request, confirmation)?;
-        crate::license_cache::mark_acknowledged_release_locked(licence.payload, licence.signature, licence.hybrid, licence.last_verified_at)
+        prepare_finalization_locked(binding, credential, body, request, licence)
     })
 }
 

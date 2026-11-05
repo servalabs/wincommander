@@ -132,6 +132,23 @@ pub(super) fn verify_current_for_release(
     verify_current_inner(retained, candidate, expected_time, bytes, public_key, trust, old_trust, true)
 }
 
+/// Verify both the exact signed cache and its durable released-generation floor.
+pub(super) fn verify_released_current(
+    retained: &[u8], candidate: &StoreLicenseCacheRequest, expected_time: u64, bytes: &[u8], public_key: &str,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>, old_trust: Option<&history::HistoricalTrust>,
+) -> Result<(), &'static str> {
+    verify_current_for_release(retained, candidate, expected_time, bytes, public_key, trust, old_trust)?;
+    let ledger = parse_ledger(retained)?;
+    let claims: SignedClaims = serde_json::from_str(&candidate.payload).map_err(|_| "license cache is invalid")?;
+    let generation = checked_activation_generation(claims.activation_generation)?
+        .ok_or("license activation generation is invalid")?;
+    if !ledger.released.iter().any(|entry| claims.license_id.as_deref() == Some(entry.license_id.as_str())
+        && claims.device_hash == entry.device_hash && generation == entry.generation) {
+        return Err("license release has no matching security record");
+    }
+    Ok(())
+}
+
 fn verify_current_inner(
     retained: &[u8], candidate: &StoreLicenseCacheRequest, expected_time: u64, bytes: &[u8], public_key: &str,
     trust: &wincmd_pq_experiment::jws::Trust<'_>, old_trust: Option<&history::HistoricalTrust>, allow_released: bool,

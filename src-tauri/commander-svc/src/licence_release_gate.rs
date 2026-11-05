@@ -10,13 +10,44 @@ mod release_path;
 
 const INVALID: &str = "license release is in progress or unavailable";
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct Marker {
     version: u8,
     context: String,
     #[serde(deserialize_with = "required_request")]
     request: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    finalization: Option<Finalization>,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct Finalization {
+    version: u8,
+    phase: String,
+    licence_id: String,
+    device_hash: String,
+    credential_id: String,
+    generation: u64,
+    cache: String,
+    cache_digest: String,
+}
+
+fn canonical_fixed(value: &str, length: usize) -> bool {
+    URL_SAFE_NO_PAD.decode(value).ok().filter(|bytes| bytes.len() == length && URL_SAFE_NO_PAD.encode(bytes) == value).is_some()
+}
+
+fn valid_finalization(value: &Finalization) -> bool {
+    if value.version != 1 || value.phase != "prepared"
+        || value.licence_id.is_empty() || value.licence_id.len() > 512
+        || value.device_hash.is_empty() || value.device_hash.len() > 512
+        || !canonical_fixed(&value.credential_id, 32) || value.generation == 0 || value.generation > 9_007_199_254_740_991 {
+        return false;
+    }
+    let Ok(cache) = URL_SAFE_NO_PAD.decode(&value.cache) else { return false; };
+    !cache.is_empty() && cache.len() <= 32 * 1024 && URL_SAFE_NO_PAD.encode(&cache) == value.cache
+        && canonical_fixed(&value.cache_digest, 32) && digest(&cache) == value.cache_digest
 }
 
 fn required_request<'de, D: serde::Deserializer<'de>>(
@@ -35,7 +66,9 @@ fn digest(value: &[u8]) -> String {
 fn read(store: &Anchor, context: &[u8; 32]) -> Result<Marker, &'static str> {
     let bytes = store.read().map_err(|_| INVALID)?.ok_or(INVALID)?;
     let marker: Marker = serde_json::from_slice(&bytes).map_err(|_| INVALID)?;
-    if marker.version != 1
+    if !matches!(marker.version, 1 | 2)
+        || (marker.version == 1 && marker.finalization.is_some())
+        || (marker.version == 2 && marker.finalization.is_none())
         || marker.context != URL_SAFE_NO_PAD.encode(context)
         || marker.request.as_ref().is_some_and(|value| {
             URL_SAFE_NO_PAD
@@ -44,6 +77,7 @@ fn read(store: &Anchor, context: &[u8; 32]) -> Result<Marker, &'static str> {
                 .filter(|bytes| bytes.len() == 32 && URL_SAFE_NO_PAD.encode(bytes) == *value)
                 .is_none()
         })
+        || marker.finalization.as_ref().is_some_and(|value| marker.request.is_none() || !valid_finalization(value))
     {
         return Err(INVALID);
     }
@@ -54,7 +88,7 @@ fn persist(store: &Anchor, marker: &Marker, context: &[u8; 32]) -> Result<(), &'
     let bytes = serde_json::to_vec(marker).map_err(|_| INVALID)?;
     store.write(&bytes).map_err(|_| INVALID)?;
     let reopened = read(store, context)?;
-    if reopened.request != marker.request {
+    if &reopened != marker {
         return Err(INVALID);
     }
     Ok(())
@@ -83,9 +117,30 @@ pub(crate) fn begin_at(store: &Anchor, context: &[u8; 32]) -> Result<(), &'stati
             version: 1,
             context: URL_SAFE_NO_PAD.encode(context),
             request: None,
+            finalization: None,
         },
         context,
     )
+}
+
+/// The caller has verified the acknowledged request, released ledger floor and
+/// exact cache under the credential, cache and process locks. No deletion or
+/// gate clearing is authorized by this preparation alone.
+pub(crate) fn prepare_finalization_at(
+    store: &Anchor, context: &[u8; 32], request: &[u8], licence_id: &str, device_hash: &str,
+    credential_id: &[u8; 32], generation: u64, cache: &[u8],
+) -> Result<(), &'static str> {
+    let mut marker = read(store, context)?;
+    if request.is_empty() || marker.request.as_deref() != Some(digest(request).as_str()) { return Err(INVALID); }
+    let journal = Finalization { version: 1, phase: "prepared".into(), licence_id: licence_id.into(),
+        device_hash: device_hash.into(), credential_id: URL_SAFE_NO_PAD.encode(credential_id), generation,
+        cache: URL_SAFE_NO_PAD.encode(cache), cache_digest: digest(cache) };
+    if !valid_finalization(&journal) { return Err(INVALID); }
+    match &marker.finalization {
+        Some(existing) if existing == &journal => Ok(()),
+        Some(_) => Err(INVALID),
+        None => { marker.version = 2; marker.finalization = Some(journal); persist(store, &marker, context) }
+    }
 }
 
 /// A staged request becomes the only request this operation may send or retry.
@@ -161,6 +216,26 @@ mod tests {
         check_request_at(&reopened, &context, Some(b"request")).unwrap();
         assert!(check_request_at(&reopened, &context, Some(b"changed")).is_err());
         assert!(check_request_at(&reopened, &context, None).is_err());
+        let prepare = |cache: &[u8], generation: u64| prepare_finalization_at(
+            &reopened, &context, b"request", "licence", "device", &[3; 32], generation, cache);
+        assert!(prepare_finalization_at(&reopened, &context, b"other", "licence", "device", &[3; 32], 2, b"cache").is_err());
+        assert!(prepare(b"cache", 0).is_err());
+        prepare(b"cache", 2).unwrap();
+        prepare(b"cache", 2).unwrap();
+        assert!(prepare(b"different", 2).is_err());
+        assert!(prepare(b"cache", 3).is_err());
+        assert!(ensure_idle_at(&Anchor::test_user(path.clone())).is_err());
+        assert!(read(&Anchor::test_user(path.clone()), &context).unwrap().finalization.is_some());
+        let bytes = reopened.read().unwrap().unwrap();
+        let mut damaged: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        damaged["finalization"]["cache_digest"] = URL_SAFE_NO_PAD.encode([4; 32]).into();
+        reopened.write(&serde_json::to_vec(&damaged).unwrap()).unwrap();
+        assert!(prepare(b"cache", 2).is_err());
+        let mut missing: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        missing.as_object_mut().unwrap().remove("finalization");
+        reopened.write(&serde_json::to_vec(&missing).unwrap()).unwrap();
+        assert!(prepare(b"cache", 2).is_err());
+        reopened.write(&bytes).unwrap();
         reopened
             .write(
                 format!(

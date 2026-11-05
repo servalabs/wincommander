@@ -460,6 +460,31 @@ fn mark_acknowledged_release_with_anchor(
     Ok(())
 }
 
+/// The caller holds the cache and process locks. The returned copy is suitable
+/// for a protected recovery journal, not for restoring an entitlement.
+pub(super) fn released_snapshot_locked(
+    path: &Path, candidate: &StoreLicenseCacheRequest, expected_time: u64, public_key: &str,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>,
+) -> Result<(Vec<u8>, u64), &'static str> {
+    let anchor = anchor::Anchor::machine_named(r"SOFTWARE\ServaLabs\WinCommander\HybridLicence");
+    released_snapshot_with_anchor(path, candidate, expected_time, public_key, trust, &anchor)
+}
+
+fn released_snapshot_with_anchor(
+    path: &Path, candidate: &StoreLicenseCacheRequest, expected_time: u64, public_key: &str,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>, anchor: &anchor::Anchor,
+) -> Result<(Vec<u8>, u64), &'static str> {
+    let old_trust = history::configured(trust)?;
+    let bytes = read_cache(path)?.ok_or("license cache is unavailable")?;
+    let retained = anchor.read().map_err(|_| "license security record is unavailable")?
+        .ok_or("license security record is unavailable")?;
+    ledger::verify_released_current(&retained, candidate, expected_time, &bytes, public_key, trust, old_trust.as_ref())?;
+    let claims: SignedClaims = serde_json::from_str(&candidate.payload).map_err(|_| "license cache is invalid")?;
+    let generation = checked_activation_generation(claims.activation_generation)?
+        .ok_or("license activation generation is invalid")?;
+    Ok((bytes, generation))
+}
+
 #[cfg(test)]
 fn check_previous(
     bytes: &[u8],

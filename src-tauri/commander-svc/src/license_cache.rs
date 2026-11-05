@@ -403,6 +403,16 @@ pub(crate) fn mark_acknowledged_release_locked(payload: &str, signature: &str, h
 }
 
 #[cfg(feature = "experimental-pq-licence")]
+pub(crate) fn released_snapshot_locked(payload: &str, signature: &str, hybrid: &str, last_verified_at: u64)
+    -> Result<(Vec<u8>, u64), &'static str> {
+    let request = StoreLicenseCacheRequest { payload: payload.into(), signature: signature.into(),
+        hybrid: Some(hybrid.into()), seats_used: None, seat_limit: None };
+    let public = service_public_key().ok_or("license verification is unavailable")?;
+    let trust = hybrid_trust::configured()?;
+    rollback::released_snapshot_locked(&machine_license_cache_path()?, &request, last_verified_at, public, &trust.policy())
+}
+
+#[cfg(feature = "experimental-pq-licence")]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DeviceRenewalResponse {

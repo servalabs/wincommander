@@ -133,6 +133,8 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
     assert!(ledger::advance(Some(&generation_record), None, &generation_missing_later, &cache(&generation_missing_later), &public, &current, None).is_err());
     assert!(ledger::advance(Some(&generation_record), None, &generation_three_same_second, &cache(&generation_three_same_second), &public, &current, None).is_ok());
     let released = ledger::mark_released(&generation_record, &generation_two, 99, &cache(&generation_two), &public, &current, None).unwrap();
+    assert!(ledger::verify_released_current(&generation_record, &generation_two, 99, &cache(&generation_two), &public, &current, None).is_err());
+    assert!(ledger::verify_released_current(&released, &generation_two, 99, &cache(&generation_two), &public, &current, None).is_ok());
     let released_legacy = ledger::mark_released(&cache(&generation_two), &generation_two, 99, &cache(&generation_two), &public, &current, None).unwrap();
     assert_eq!(ledger::mark_released(&released_legacy, &generation_two, 99, &cache(&generation_two), &public, &current, None).unwrap(), released_legacy);
     assert!(ledger::advance(Some(&released_legacy), None, &generation_two, &cache(&generation_two), &public, &current, None).is_err());
@@ -241,6 +243,7 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
     let retired_anchor = anchor::Anchor::test_user(retired_anchor_path.clone());
     fs::write(&retired_path, cache(&generation_two)).unwrap();
     retired_anchor.write(&generation_record).unwrap();
+    assert!(released_snapshot_with_anchor(&retired_path, &generation_two, 99, &public, &current, &retired_anchor).is_err());
     assert!(mark_acknowledged_release_with_anchor(&retired_path, &generation_two, 100, &public, &current, &retired_anchor).is_err());
     assert_eq!(retired_anchor.read().unwrap().unwrap(), generation_record);
     retired_anchor.write(b"damaged").unwrap();
@@ -248,6 +251,7 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
     assert_eq!(fs::read(&retired_path).unwrap(), cache(&generation_two));
     retired_anchor.write(&generation_record).unwrap();
     mark_acknowledged_release_with_anchor(&retired_path, &generation_two, 99, &public, &current, &retired_anchor).unwrap();
+    assert_eq!(released_snapshot_with_anchor(&retired_path, &generation_two, 99, &public, &current, &retired_anchor).unwrap(), (cache(&generation_two), 2));
     let reopened_anchor = anchor::Anchor::test_user(retired_anchor_path.clone());
     assert!(verify_with_anchor(&retired_path, &generation_two, 99, &public, &current, &reopened_anchor).is_err());
     assert!(with_verified_anchor_mode(&retired_path, &generation_two, 99, &public, &current, &reopened_anchor, true, || Ok(())).is_ok());
