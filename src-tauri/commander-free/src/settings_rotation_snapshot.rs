@@ -50,6 +50,32 @@ fn pin_directories(path: &Path) -> Result<Vec<File>, String> {
     Ok(pins)
 }
 
+// Both directory trees stay pinned by the returned handles. This detects a
+// disagreement between the known-folder root and the legacy live resolver;
+// it does not authorize ACLs or prevent an old process using another path.
+fn pin_matching_machine_roots(trusted: &Path) -> Result<Vec<File>, String> {
+    use windows_sys::Win32::Storage::FileSystem::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION};
+    let live_base = std::env::var("ProgramData").or_else(|_| std::env::var("ALLUSERSPROFILE"))
+        .map_err(|_| UNAVAILABLE)?;
+    let live = PathBuf::from(live_base).join(crate::paths::APP_DIR_NAME);
+    let mut trusted_pins = pin_directories(trusted)?;
+    let live_pins = pin_directories(&live)?;
+    let mut first = BY_HANDLE_FILE_INFORMATION::default();
+    let mut second = BY_HANDLE_FILE_INFORMATION::default();
+    let a = trusted_pins.last().ok_or(UNAVAILABLE)?;
+    let b = live_pins.last().ok_or(UNAVAILABLE)?;
+    // SAFETY: pinned directory handles and both result buffers remain live.
+    if unsafe { GetFileInformationByHandle(a.as_raw_handle(), &mut first) } == 0
+        || unsafe { GetFileInformationByHandle(b.as_raw_handle(), &mut second) } == 0
+        || first.dwVolumeSerialNumber != second.dwVolumeSerialNumber
+        || first.nFileIndexHigh != second.nFileIndexHigh
+        || first.nFileIndexLow != second.nFileIndexLow {
+        return Err(UNAVAILABLE.into());
+    }
+    trusted_pins.extend(live_pins);
+    Ok(trusted_pins)
+}
+
 fn open_locked(path: &Path, limit: u64) -> Result<File, String> {
     let file = OpenOptions::new().read(true).share_mode(FILE_SHARE_READ)
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT).open(path).map_err(|_| UNAVAILABLE)?;
@@ -129,9 +155,9 @@ fn known_machine_root() -> Result<PathBuf, String> {
 impl Snapshot {
     /// Machine-only entry point. The inherited machine-data resolver uses the
     /// Windows known-folder API. Production cutover must establish that this
-    /// root has the same file identity as the live datastore root: its current
-    /// resolver is environment-based and can point elsewhere. It must also
-    /// verify authorized directory ACLs and fail closed when install mode is
+    /// root has the same file identity as the live datastore root; this trial
+    /// checks the current process's resolver and pins both roots. Production
+    /// must also verify authorized directory ACLs and fail closed when install mode is
     /// uncertain: the existing install-mode test can fall back to machine mode.
     /// These requirements are not implemented by this test-only entry point.
     pub(super) fn capture_machine() -> Result<Self, String> {
@@ -139,7 +165,10 @@ impl Snapshot {
             return Err("machine settings rotation is unavailable for a current-user install".into());
         }
         let root = known_machine_root()?;
-        Self::capture(&root)
+        let root_pins = pin_matching_machine_roots(&root)?;
+        let mut snapshot = Self::capture(&root)?;
+        snapshot._directories.extend(root_pins);
+        Ok(snapshot)
     }
 
     /// Test fixture / internal seam. Caller must independently authorize root.
