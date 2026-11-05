@@ -357,6 +357,68 @@ fn prepare_ack_locked(store: &anchor::Anchor, protector: &dyn Protector, binding
     wire::release_acknowledgement_request(credential, body, &saved.request)
 }
 
+/// Disposable HKCU/DPAPI fixture for the signed-ledger integration test.
+#[cfg(test)]
+pub(crate) fn test_make_acknowledged_record(body: &[u8]) -> ([u8; 32], Vec<u8>, Vec<u8>) {
+    let path = format!(r"SOFTWARE\WinCommanderReleaseIntegrationOld-{}", uuid::Uuid::new_v4());
+    let gate_path = format!(r"SOFTWARE\WinCommanderReleaseIntegrationGate-{}", uuid::Uuid::new_v4());
+    let store = anchor::Anchor::test_user(path.clone());
+    let gate = anchor::Anchor::test_user(gate_path.clone());
+    let binding = Binding { licence_id: "lic-a", device_hash: "device", issuer_origin: "https://license.example" };
+    let credential = ConfirmedCredential { id: [3; 32], secret: Zeroizing::new([6; 32]) };
+    let context = release_entropy(&binding, &credential, body).unwrap();
+    let digest: [u8; 32] = Sha256::digest(body).into();
+    let challenge = serde_json::to_vec(&serde_json::json!({ "ok": true, "credentialId": URL_SAFE_NO_PAD.encode(credential.id),
+        "nonce": URL_SAFE_NO_PAD.encode([7; 32]), "requestDigest": URL_SAFE_NO_PAD.encode(digest), "expiresAt": 1060 })).unwrap();
+    let request = wire::release_request(&credential, body.to_vec(), &challenge, 1000).unwrap();
+    stage_guarded(&store, &gate, &MachineDpapi, &binding, &credential, body, &request).unwrap();
+    confirm_locked(&store, &MachineDpapi, &binding, &credential, body, &request, br#"{"ok":true}"#).unwrap();
+    let ack = prepare_ack_locked(&store, &MachineDpapi, &binding, &credential, body).unwrap();
+    let proof = wire::test_acknowledgement_confirmation(&ack, br#"{"ok":true}"#).unwrap();
+    acknowledge_locked(&store, &MachineDpapi, &binding, &credential, body, &request, &proof).unwrap();
+    let record = store.read().unwrap().unwrap();
+    anchor::remove_test_key(&path).unwrap();
+    anchor::remove_test_key(&gate_path).unwrap();
+    (context, request.to_vec(), record)
+}
+
+/// Exercises real DPAPI and registry writes with the real ledger authorizer
+/// supplied by the calling test; this does not use production HKLM keys.
+#[cfg(test)]
+pub(crate) fn test_rotate_completed_record(
+    previous: &[u8], body: &[u8], authorize: impl Fn(&[u8]) -> Result<bool, &'static str>,
+) {
+    let path = format!(r"SOFTWARE\WinCommanderReleaseIntegrationNew-{}", uuid::Uuid::new_v4());
+    let gate_path = format!(r"SOFTWARE\WinCommanderReleaseIntegrationGate-{}", uuid::Uuid::new_v4());
+    let store = anchor::Anchor::test_user(path.clone());
+    let gate = anchor::Anchor::test_user(gate_path.clone());
+    let binding = Binding { licence_id: "lic-a", device_hash: "device", issuer_origin: "https://license.example" };
+    let credential = ConfirmedCredential { id: [3; 32], secret: Zeroizing::new([6; 32]) };
+    store.write(previous).unwrap();
+    let allowed = completed_previous_record_with(&store, &MachineDpapi, &binding, &credential, body, |bytes| authorize(bytes)).unwrap().unwrap();
+    assert_eq!(allowed, previous);
+    let digest: [u8; 32] = Sha256::digest(body).into();
+    let challenge = serde_json::to_vec(&serde_json::json!({ "ok": true, "credentialId": URL_SAFE_NO_PAD.encode(credential.id),
+        "nonce": URL_SAFE_NO_PAD.encode([8; 32]), "requestDigest": URL_SAFE_NO_PAD.encode(digest), "expiresAt": 1060 })).unwrap();
+    let request = wire::release_request(&credential, body.to_vec(), &challenge, 1000).unwrap();
+    let context = release_entropy(&binding, &credential, body).unwrap();
+    // Crash after the gate, then after the new sealed record but before binding.
+    crate::license_cache::release_gate::begin_at(&gate, &context).unwrap();
+    assert_eq!(store.read().unwrap().unwrap(), previous);
+    let reopened_store = anchor::Anchor::test_user(path.clone());
+    let reopened_gate = anchor::Anchor::test_user(gate_path.clone());
+    crate::license_cache::release_gate::check_request_at(&reopened_gate, &context, None).unwrap();
+    let retry = completed_previous_record_with(&reopened_store, &MachineDpapi, &binding, &credential, body, |bytes| authorize(bytes)).unwrap().unwrap();
+    assert_eq!(retry, allowed);
+    save_locked_replacing(&reopened_store, &MachineDpapi, &binding, &credential, body, &request, Some(&retry)).unwrap();
+    let resumed = load_guarded(&reopened_store, &reopened_gate, &MachineDpapi, &binding, &credential, body).unwrap().unwrap();
+    assert_eq!(resumed.request.as_slice(), request);
+    assert_eq!(stage_guarded(&reopened_store, &reopened_gate, &MachineDpapi, &binding, &credential, body, &request).unwrap().as_slice(), request);
+    assert!(stage_guarded_replacing(&reopened_store, &reopened_gate, &MachineDpapi, &binding, &credential, body, &request, Some(previous)).is_err());
+    anchor::remove_test_key(&path).unwrap();
+    anchor::remove_test_key(&gate_path).unwrap();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

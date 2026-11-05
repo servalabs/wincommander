@@ -319,6 +319,24 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
     reopened_anchor.write(&completed_bytes).unwrap();
     let next_activation = ledger::advance(Some(&completed_bytes), None, &generation_three_same_second,
         &cache(&generation_three_same_second), &public, &current, None).unwrap();
+    let old_wire = build_refresh_wire(&generation_two, &public, &current, "lic-a", "device").unwrap();
+    let (real_context, real_request, real_acknowledgement) = crate::licence_device_credential::test_make_acknowledged_record(&old_wire);
+    let real_journal = super::super::release_gate::PreparedRelease { context: real_context, licence_id: "lic-a".into(),
+        device_hash: "device".into(), credential_id: [3; 32], generation: 2, cache: cache(&generation_two) };
+    let real_completion = ledger::mark_release_completed(&released, &generation_two, 99, &real_journal,
+        &real_request, &real_acknowledgement, &public, &current, None).unwrap();
+    let real_next_activation = ledger::advance(Some(&real_completion), None, &generation_three_same_second,
+        &cache(&generation_three_same_second), &public, &current, None).unwrap();
+    let new_wire = build_refresh_wire(&generation_three_same_second, &public, &current, "lic-a", "device").unwrap();
+    assert_eq!(ledger::can_replace_completed_release(&real_next_activation, &generation_three_same_second, 99,
+        &cache(&generation_three_same_second), &[4; 32], &real_acknowledgement, &public, &current, None), Ok(false));
+    let mut altered_acknowledgement = real_acknowledgement.clone();
+    altered_acknowledgement[0] ^= 1;
+    assert_eq!(ledger::can_replace_completed_release(&real_next_activation, &generation_three_same_second, 99,
+        &cache(&generation_three_same_second), &[3; 32], &altered_acknowledgement, &public, &current, None), Ok(false));
+    crate::licence_device_credential::test_rotate_completed_record(&real_acknowledgement, &new_wire, |record|
+        ledger::can_replace_completed_release(&real_next_activation, &generation_three_same_second, 99,
+            &cache(&generation_three_same_second), &[3; 32], record, &public, &current, None));
     let may_replace = |record: &[u8], credential: &[u8; 32]| ledger::can_replace_completed_release(&next_activation,
         &generation_three_same_second, 99, &cache(&generation_three_same_second), credential, record, &public, &current, None);
     assert_eq!(may_replace(b"sealed acknowledgement", &[3; 32]), Ok(true));

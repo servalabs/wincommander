@@ -16,6 +16,9 @@ mod wire;
 #[path = "licence_device_release_pending.rs"]
 mod release_pending;
 
+#[cfg(test)]
+pub(crate) use release_pending::{test_make_acknowledged_record, test_rotate_completed_record};
+
 const INVALID: &str = "device credential is invalid or unavailable";
 pub(crate) const RETRY_LATER: &str = "Licence service is busy. Wait two minutes and retry.";
 const LIMIT: usize = 64 * 1024;
