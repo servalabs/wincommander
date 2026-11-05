@@ -8,7 +8,7 @@ use aes_gcm::{
 use rand::{rngs::OsRng, RngCore};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::ops::Range;
 
@@ -48,7 +48,9 @@ fn file_cipher(master: &[u8; 32], id: &[u8; 32]) -> io::Result<Aes256Gcm> {
     mac.update(b"wincommander-search-file-key-v2");
     mac.update(id);
     let mut key = Zeroizing::new([0u8; 32]);
-    key.copy_from_slice(&mac.finalize().into_bytes());
+    let mut derived = mac.finalize().into_bytes();
+    key.copy_from_slice(&derived);
+    derived.zeroize();
     Ok(Aes256Gcm::new((&*key).into()))
 }
 
@@ -487,14 +489,14 @@ pub(crate) mod tantivy_trial {
             sink.write_all(&n)?;
             sink.write_all(&encrypted)?;
             self.chunks = self.chunks.checked_add(1).ok_or_else(invalid)?;
-            self.plain.fill(0);
+            self.plain.zeroize();
             self.plain.clear();
             Ok(())
         }
     }
     impl Drop for TrialWriter {
         fn drop(&mut self) {
-            self.plain.fill(0);
+            self.plain.zeroize();
         }
     }
     impl Write for TrialWriter {
