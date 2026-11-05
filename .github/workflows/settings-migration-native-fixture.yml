@@ -102,6 +102,7 @@ jobs:
           !define INSTALLMODE "currentUser"
           !define MAINBINARYSRCPATH "$payload"
           !define WC_EXPERIMENTAL_USER_STAGE_ONLY
+          !define WC_EXPERIMENTAL_SEARCH_FENCE
           !include "$hook"
           Section
           !insertmacro NSIS_HOOK_PREINSTALL
@@ -125,3 +126,10 @@ jobs:
           & pwsh -NoProfile -NonInteractive -File $script -Action Restore
           if ($LASTEXITCODE -ne 255) { throw 'Missing-service restoration was not rejected.' }
           $global:LASTEXITCODE = 0
+      - name: Verify cross-process maintenance lifetime
+        shell: pwsh
+        run: |
+          $env:RUSTFLAGS = '-D warnings'
+          $output = cargo test --locked --manifest-path tools/settings-migration-ci/Cargo.toml --features experimental-settings-generation search_fence_lasts_until_parent_process_exits -- --nocapture --test-threads=1 2>&1 | Out-String
+          Write-Host $output
+          if ($LASTEXITCODE -ne 0 -or $output -notmatch 'test result: ok\. 1 passed; 0 failed; 0 ignored') { throw 'Cross-process fence fixture did not pass.' }
