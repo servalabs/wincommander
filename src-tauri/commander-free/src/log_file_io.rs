@@ -121,9 +121,15 @@ pub(super) fn append_line(path: &Path, line: &str) -> Result<(), String> {
     }
     #[cfg(windows)]
     {
-        use std::os::windows::fs::MetadataExt;
-        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
-        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        use std::os::windows::{fs::MetadataExt, io::AsRawHandle};
+        use windows_sys::Win32::Storage::FileSystem::{
+            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_REPARSE_POINT,
+        };
+        let mut information: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+            || unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut information) } == 0
+            || information.nNumberOfLinks != 1
+        {
             return Err("invalid log file".into());
         }
     }
@@ -364,6 +370,18 @@ mod tests {
         assert!(std::fs::rename(&parent, &moved).is_err());
         drop(held);
         std::fs::rename(&parent, &moved).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn append_rejects_hard_links_without_touching_target() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("target.txt");
+        let path = directory.path().join("wincommander.log");
+        std::fs::write(&target, b"target remains unchanged").unwrap();
+        std::fs::hard_link(&target, &path).unwrap();
+        assert!(append_encrypted(&path, || sealed("2026-11-05", "private")).is_err());
+        assert_eq!(std::fs::read(target).unwrap(), b"target remains unchanged");
     }
 
     #[cfg(windows)]
