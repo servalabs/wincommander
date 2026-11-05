@@ -26,6 +26,7 @@ ${Using:StrFunc} UnStrStr
 !error "Original-user staging requires currentUser installer mode"
 !endif
 !define WC_STAGE_ORIGINAL_USER_SETTINGS "${__FILEDIR__}\stage-original-user-settings.ps1"
+Var WCUserStageServiceRunning
 !endif
 !define WC_REPAIR_SHARED_SETTINGS "${__FILEDIR__}\repair-shared-settings.ps1"
 !define WC_REPAIR_VAULT_DRIVER_ACCESS "${__FILEDIR__}\..\..\..\tools\repair-vault-driver-access.ps1"
@@ -217,6 +218,26 @@ ${Using:StrFunc} UnStrStr
   !insertmacro WC_CLOSE_OWNED_DESKTOP_APP_OR_ABORT "preinstall"
   ; Stop with the service's full advertised budget before replacing its
   ; executable. Older service binaries may take longer to dismount a Vault.
+  !ifdef WC_EXPERIMENTAL_USER_STAGE_ONLY
+    ; Remember service state so a rejected pre-stage can restore availability.
+    StrCpy $WCUserStageServiceRunning 0
+    nsExec::ExecToStack 'sc.exe query ${WC_SERVICE_NAME}'
+    Pop $0
+    Pop $1
+    ${If} $0 == 0
+      ${StrStr} $R7 $1 "RUNNING"
+      ${If} $R7 != ""
+        StrCpy $WCUserStageServiceRunning 1
+      ${Else}
+        ${StrStr} $R7 $1 "STOPPED"
+        ${If} $R7 == ""
+          Abort "WinCommander service is changing state; retry the update."
+        ${EndIf}
+      ${EndIf}
+    ${ElseIf} $0 != 1060
+      Abort "WinCommander could not inspect its service before staging."
+    ${EndIf}
+  !endif
   !insertmacro WC_STOP_OWNED_SERVICE_OR_ABORT "preinstall" ""
   !ifdef WC_EXPERIMENTAL_USER_STAGE_ONLY
     ; The helper handles fresh installs and fails closed if an existing
@@ -230,6 +251,15 @@ ${Using:StrFunc} UnStrStr
       Pop $1
       !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "user-settings-stage" "$0" "$1"
       ${If} $0 != 0
+        ${If} $WCUserStageServiceRunning == 1
+          nsExec::ExecToStack 'sc.exe start ${WC_SERVICE_NAME}'
+          Pop $0
+          Pop $1
+          ${If} $0 != 0
+          ${AndIf} $0 != 1056
+            Abort "User settings staging failed and the WinCommander service could not restart. Existing app and settings remain in place."
+          ${EndIf}
+        ${EndIf}
         Abort "WinCommander could not stage user settings. Existing app and settings remain in place."
       ${EndIf}
   !endif

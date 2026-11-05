@@ -21,7 +21,12 @@ try {
     }
     $installed = Join-Path $actual 'wincommander-free.exe'
     $binaryMissing = $false
-    try { [void][IO.File]::GetAttributes($installed) }
+    try {
+        $attributes = [IO.File]::GetAttributes($installed)
+        if (($attributes -band [IO.FileAttributes]::Directory) -or ($attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            throw 'The installed app is not a regular file.'
+        }
+    }
     catch [IO.FileNotFoundException] { $binaryMissing = $true }
     catch [IO.DirectoryNotFoundException] { $binaryMissing = $true }
     if ($binaryMissing) {
