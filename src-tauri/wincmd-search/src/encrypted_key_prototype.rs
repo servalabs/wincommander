@@ -5,6 +5,8 @@ use std::io;
 use zeroize::Zeroizing;
 
 const MAX_PROTECTED: usize = 65536;
+const KEY_MAGIC: &[u8; 8] = b"WCIDXK01";
+const KEY_RECORD_LEN: usize = 8 + 16 + 32;
 trait Protector {
     fn protect(&self, value: &[u8]) -> io::Result<Vec<u8>>;
     fn unprotect(&self, value: &[u8]) -> io::Result<Zeroizing<Vec<u8>>>;
@@ -19,21 +21,27 @@ fn invalid() -> io::Error { io::Error::new(io::ErrorKind::InvalidData, "protecte
 
 // Caller must determine has_index under a cross-process exclusion covering both
 // index state and key creation. A boolean alone is NOT a production fence.
-fn load_or_create(store: &mut impl KeyStore, protector: &impl Protector, has_index: bool) -> io::Result<Zeroizing<[u8; 32]>> {
+// The expected index identity must come from independently trusted durable state;
+// a record beside the key is not a trusted identity or rollback anchor.
+fn load_or_create(store: &mut impl KeyStore, protector: &impl Protector, index_id: &[u8; 16], has_index: bool) -> io::Result<Zeroizing<[u8; 32]>> {
     match store.read()? {
         Some(protected) => {
             if protected.is_empty() || protected.len() > MAX_PROTECTED { return Err(invalid()); }
             let plain = protector.unprotect(&protected)?;
             let mut key = Zeroizing::new([0; 32]);
-            if plain.len() != key.len() { return Err(invalid()); }
-            key.copy_from_slice(&plain);
+            if plain.len() != KEY_RECORD_LEN || &plain[..8] != KEY_MAGIC || &plain[8..24] != index_id { return Err(invalid()); }
+            key.copy_from_slice(&plain[24..]);
             Ok(key)
         }
         None if has_index => Err(io::Error::new(io::ErrorKind::NotFound, "existing search index key missing")),
         None => {
             let mut key = Zeroizing::new([0; 32]);
             OsRng.fill_bytes(key.as_mut());
-            let protected = protector.protect(key.as_ref())?;
+            let mut record = Zeroizing::new([0u8; KEY_RECORD_LEN]);
+            record[..8].copy_from_slice(KEY_MAGIC);
+            record[8..24].copy_from_slice(index_id);
+            record[24..].copy_from_slice(key.as_ref());
+            let protected = protector.protect(record.as_ref())?;
             if protected.is_empty() || protected.len() > MAX_PROTECTED { return Err(invalid()); }
             store.create_new(&protected)?;
             Ok(key)
@@ -102,27 +110,44 @@ mod tests {
     #[test]
     fn creates_once_and_reopens_same_key() {
         let mut store = Memory::default();
-        let first = load_or_create(&mut store, &Stub, false).unwrap();
-        let second = load_or_create(&mut store, &Stub, true).unwrap();
+        let first = load_or_create(&mut store, &Stub, &[1; 16], false).unwrap();
+        let second = load_or_create(&mut store, &Stub, &[1; 16], true).unwrap();
         assert_eq!(&*first, &*second);
     }
     #[test]
     fn missing_existing_key_and_permission_errors_never_create_key() {
         let mut store = Memory::default();
-        assert_eq!(load_or_create(&mut store, &Stub, true).unwrap_err().kind(), io::ErrorKind::NotFound);
+        assert_eq!(load_or_create(&mut store, &Stub, &[1; 16], true).unwrap_err().kind(), io::ErrorKind::NotFound);
         assert!(store.value.is_none());
         store.fail_read = true;
-        assert_eq!(load_or_create(&mut store, &Stub, false).unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(load_or_create(&mut store, &Stub, &[1; 16], false).unwrap_err().kind(), io::ErrorKind::PermissionDenied);
         assert!(store.value.is_none());
     }
     #[test]
     fn corrupt_key_and_creation_race_are_errors_not_replacements() {
         let mut store = Memory { value: Some(vec![3; 31]), ..Default::default() };
-        assert!(load_or_create(&mut store, &Stub, true).is_err());
+        assert!(load_or_create(&mut store, &Stub, &[1; 16], true).is_err());
         assert_eq!(store.value, Some(vec![3; 31]));
         let mut racing = Memory { conflict: true, ..Default::default() };
-        assert_eq!(load_or_create(&mut racing, &Stub, false).unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(load_or_create(&mut racing, &Stub, &[1; 16], false).unwrap_err().kind(), io::ErrorKind::AlreadyExists);
         assert!(racing.value.is_none());
+    }
+    #[test]
+    fn keys_are_bound_to_the_expected_index_and_bad_records_fail_closed() {
+        let mut store = Memory::default();
+        let key = load_or_create(&mut store, &Stub, &[1; 16], false).unwrap();
+        let saved = store.value.clone().unwrap();
+        assert_eq!(load_or_create(&mut store, &Stub, &[2; 16], true).unwrap_err().kind(), io::ErrorKind::InvalidData);
+        assert_eq!(store.value.as_ref().unwrap(), &saved);
+        assert_eq!(&*key, &*load_or_create(&mut store, &Stub, &[1; 16], true).unwrap());
+        for length in [0, 7, 8, 23, 24, KEY_RECORD_LEN - 1] {
+            store.value = Some(saved[..length].to_vec());
+            assert!(load_or_create(&mut store, &Stub, &[1; 16], true).is_err());
+        }
+        let mut wrong_format = saved;
+        wrong_format[0] ^= 1;
+        store.value = Some(wrong_format);
+        assert!(load_or_create(&mut store, &Stub, &[1; 16], true).is_err());
     }
     #[cfg(windows)]
     #[test]
