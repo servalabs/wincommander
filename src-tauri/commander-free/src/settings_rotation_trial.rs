@@ -30,10 +30,16 @@ struct Bundle {
 pub(super) enum StoreScope { Machine, CurrentUser }
 impl StoreScope {
     fn protect(self, bytes: &[u8]) -> Result<Vec<u8>, String> {
-        match self { Self::Machine => dpapi_protect(bytes), Self::CurrentUser => user_dpapi_protect(bytes) }
+        match self { Self::Machine => dpapi_protect(bytes), Self::CurrentUser => user_dpapi_protect(bytes).map_err(|_| Self::user_unavailable()) }
     }
     fn unprotect(self, bytes: &[u8]) -> Result<Vec<u8>, String> {
-        match self { Self::Machine => dpapi_unprotect(bytes), Self::CurrentUser => user_dpapi_unprotect(bytes) }
+        match self { Self::Machine => dpapi_unprotect(bytes), Self::CurrentUser => user_dpapi_unprotect(bytes).map_err(|_| Self::user_unavailable()) }
+    }
+    fn user_unavailable() -> String {
+        "Could not unlock or protect your settings. Sign in to the same Windows account with its user profile loaded, then retry; existing data has been preserved.".into()
+    }
+    fn access_error(self, error: String) -> String {
+        match self { Self::Machine => error, Self::CurrentUser => Self::user_unavailable() }
     }
     fn section_scope(self, name: &str) -> String {
         format!("{}:{name}", match self { Self::Machine => "machine", Self::CurrentUser => "user-install" })
@@ -44,9 +50,19 @@ impl StoreScope {
 #[serde(deny_unknown_fields)]
 struct Generation {
     scope: StoreScope,
+    f6_initialized: bool,
     sections: BTreeMap<String, Value>,
     source_sections: BTreeMap<String, String>,
     source_key_digest: String,
+}
+
+fn matching_section<'a>(sections: &'a BTreeMap<String, Value>, name: &str) -> Option<&'a str> {
+    let folded = name.to_lowercase();
+    sections.keys().find(|existing| existing.to_lowercase() == folded).map(String::as_str)
+}
+pub(super) fn valid_f6(value: &Value) -> bool {
+    value.get("signing_seed_hex").and_then(Value::as_str)
+        .is_some_and(|seed| seed.len() == 64 && seed.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
 fn source_digest(bytes: &[u8]) -> String {
@@ -105,8 +121,14 @@ fn prepare_for(scope: StoreScope, old_material: &[u8; 32], sections: &[(String, 
         }
         source_sections.insert(name.clone(), source_digest(encoded.as_bytes()));
     }
+    let f6_initialized = match matching_section(&values, "f6-keystore") {
+        Some(name) if valid_f6(&values[name]) => true,
+        Some(_) => return Err("existing device signing key is empty or invalid; originals preserved".into()),
+        None => false,
+    };
     let generation = Generation {
         scope,
+        f6_initialized,
         sections: values,
         source_sections,
         source_key_digest: source_digest(old_material),
@@ -179,6 +201,10 @@ fn open_generation(input: &[u8]) -> Result<Generation, String> {
         }
         || generation.source_sections.values().any(|digest| !valid_digest(digest))
         || !valid_digest(&generation.source_key_digest)
+        || match matching_section(&generation.sections, "f6-keystore") {
+            Some(name) => !generation.f6_initialized || !valid_f6(&generation.sections[name]),
+            None => generation.f6_initialized,
+        }
     {
         return Err("invalid settings generation".into());
     }
@@ -422,7 +448,7 @@ impl LockedSelectedGeneration {
         let root_pins = source_snapshot::pin_directories(root)?;
         let ownership = match scope {
             StoreScope::Machine => super::settings_generation_ownership::SettingsGenerationLock::try_acquire_machine(root, false),
-            StoreScope::CurrentUser => super::settings_generation_ownership::SettingsGenerationLock::try_acquire(root),
+            StoreScope::CurrentUser => super::settings_generation_ownership::SettingsGenerationLock::try_acquire_user(root, false),
         }.map_err(|error| format!("settings generation ownership unavailable: {error}"))?;
         Ok(Self { _ownership: ownership, #[cfg(windows)] _root_pins: root_pins,
             path: root.join(".settings-generation.v1"), authority: root.join(".settings-generation.authority.v1"), scope })
@@ -482,7 +508,7 @@ impl LockedSelectedGeneration {
         let selected = read_generation_file(&self.path, MAX_TOTAL * 2 + 65_536)?;
         // Never finalize authority for a corrupt or unauthenticated generation.
         if let Some(bytes) = selected.as_ref() {
-            if open_generation(bytes)?.scope != self.scope { return Err("settings generation scope mismatch".into()); }
+            if open_generation(bytes).map_err(|error| self.scope.access_error(error))?.scope != self.scope { return Err("settings generation scope mismatch".into()); }
         }
         let authority = read_generation_file(&self.authority, 65_536)?;
         let state = super::settings_generation_authority::recover(
@@ -528,7 +554,7 @@ impl ReadOnlySelectedGeneration {
         let root_pins = source_snapshot::pin_directories(root)?;
         let ownership = match scope {
             StoreScope::Machine => super::settings_generation_ownership::SettingsGenerationLock::try_acquire_machine(root, true),
-            StoreScope::CurrentUser => super::settings_generation_ownership::SettingsGenerationLock::try_acquire_shared(root),
+            StoreScope::CurrentUser => super::settings_generation_ownership::SettingsGenerationLock::try_acquire_user(root, true),
         }.map_err(|error| format!("settings generation shared ownership unavailable: {error}"))?;
         Ok(Self { _ownership: ownership, #[cfg(windows)] _root_pins: root_pins,
             path: root.join(".settings-generation.v1"), authority: root.join(".settings-generation.authority.v1"), scope })
@@ -553,7 +579,7 @@ impl ReadOnlySelectedGeneration {
 fn inspect_generation_files(path: &Path, authority_path: &Path, scope: StoreScope) -> Result<StartupView, String> {
     let selected = read_generation_file(path, MAX_TOTAL * 2 + 65_536)?;
     let authority = read_generation_file(authority_path, 65_536)?;
-    let generation = selected.as_deref().map(open_generation).transpose()?;
+    let generation = selected.as_deref().map(open_generation).transpose().map_err(|error| scope.access_error(error))?;
     if generation.as_ref().is_some_and(|g| g.scope != scope) { return Err("settings generation scope mismatch".into()); }
     match super::settings_generation_authority::inspect(authority.as_deref(), selected.as_deref(), &|bytes| scope.unprotect(bytes))? {
         super::settings_generation_authority::Inspection::Stable => Ok(StartupView::Selected(generation.ok_or("selected settings generation unavailable")?.sections)),
@@ -567,10 +593,14 @@ pub(super) fn read_with_legacy(root: &Path, scope: StoreScope, section: &str, le
     let owner = ReadOnlySelectedGeneration::acquire(root, scope)?;
     match owner.inspect_startup()? {
         StartupView::Legacy => legacy(),
-        StartupView::Selected(mut sections) => match sections.remove(section) {
-            Some(value) => Ok(value),
-            None if section == "f6-keystore" => Err("device signing key is missing from the selected settings generation".into()),
-            None => Ok(Value::Object(Default::default())),
+        StartupView::Selected(mut sections) => {
+            let name = matching_section(&sections, section).map(str::to_owned);
+            match name.and_then(|name| sections.remove(&name)) {
+                Some(value) => Ok(value),
+                // Missing F6 is safe only because open_generation checked its
+                // authenticated never-initialized state; rollback remains open.
+                None => Ok(Value::Object(Default::default())),
+            }
         },
         StartupView::RecoveryRequired => Err("settings generation requires authorized recovery".into()),
     }
@@ -581,27 +611,52 @@ pub(super) fn write_with_legacy(root: &Path, scope: StoreScope, section: &str, v
     let owner = LockedSelectedGeneration::acquire_for(root, scope)?;
     match inspect_generation_files(&owner.path, &owner.authority, scope)? {
         StartupView::Legacy => legacy(),
-        StartupView::Selected(sections) => {
-            if section == "f6-keystore" && !sections.contains_key(section) { return Err("device signing key is missing from the selected settings generation".into()); }
-            owner.write_section(section, value.clone())
-        },
+        StartupView::Selected(_) => owner.write_section(section, value.clone()),
         StartupView::RecoveryRequired => Err("settings generation requires authorized recovery".into()),
     }
 }
 
-/// Resolve and pin the machine root for the explicit lab route. Current-user
-/// and standard-user access are not yet production validated.
-#[cfg(windows)]
-pub(super) fn experimental_machine_root() -> Result<(PathBuf, Vec<std::fs::File>), String> {
-    if crate::paths::current_user_install_uses_local_datastore() {
-        return Err("experimental generation routing is unavailable for current-user installs".into());
+/// Holds exclusive ownership across settings preflight and the final write.
+/// Root/lock ACL and old-version fencing remain activation prerequisites.
+#[cfg(all(windows, feature = "experimental-settings-generation"))]
+pub(super) struct RuntimeWriteGuard {
+    owner: LockedSelectedGeneration,
+    _root_pins: Vec<std::fs::File>,
+    selected: bool,
+}
+#[cfg(all(windows, feature = "experimental-settings-generation"))]
+impl RuntimeWriteGuard {
+    pub(super) fn selected(&self) -> bool { self.selected }
+    pub(super) fn write(&self, section: &str, value: &Value) -> Result<(), String> {
+        if !self.selected { return Err("settings generation is not selected".into()); }
+        self.owner.write_section(section, value.clone())
     }
-    let root = source_snapshot::known_root(StoreScope::Machine)?;
-    let pins = source_snapshot::pin_matching_roots(&root, StoreScope::Machine)?;
+}
+#[cfg(all(windows, feature = "experimental-settings-generation"))]
+pub(super) fn begin_experimental_write() -> Result<RuntimeWriteGuard, String> {
+    let (root, pins, scope) = experimental_runtime_root()?;
+    let owner = LockedSelectedGeneration::acquire_for(&root, scope)?;
+    let selected = match inspect_generation_files(&owner.path, &owner.authority, owner.scope)? {
+        StartupView::Legacy => false,
+        StartupView::Selected(_) => true,
+        StartupView::RecoveryRequired => return Err("settings generation requires authorized recovery".into()),
+    };
+    Ok(RuntimeWriteGuard { owner, _root_pins: pins, selected })
+}
+
+/// Resolve and pin the selected store root for the explicit lab route.
+/// ACL and cross-user/noninteractive behavior remain unvalidated on Windows.
+#[cfg(windows)]
+pub(super) fn experimental_runtime_root() -> Result<(PathBuf, Vec<std::fs::File>, StoreScope), String> {
+    let scope = if crate::paths::current_user_install_uses_local_datastore() { StoreScope::CurrentUser } else { StoreScope::Machine };
+    let root = source_snapshot::known_root(scope)?;
+    let pins = source_snapshot::pin_matching_roots(&root, scope)?;
     let root_handle = pins.last().ok_or("settings root unavailable")?;
-    super::settings_generation_acl_windows::verify_machine_root_handle(root_handle)
-        .map_err(|_| "settings root permissions are not authorized")?;
-    Ok((root, pins))
+    match scope {
+        StoreScope::Machine => super::settings_generation_acl_windows::verify_machine_root_handle(root_handle),
+        StoreScope::CurrentUser => super::settings_generation_acl_windows::verify_current_user_root_handle(root_handle),
+    }.map_err(|_| "settings root permissions are not authorized")?;
+    Ok((root, pins, scope))
 }
 
 /// Read-only startup decision; callers must not fall back to legacy when this
@@ -641,11 +696,13 @@ fn updated_generation(input: &[u8], section: &str, value: Value) -> Result<Vec<u
     let mut generation = open_generation(input)?;
     if section.is_empty() || section.len() > 128 { return Err("invalid settings section".into()); }
     validate_section_name(section)?;
-    if !generation.sections.contains_key(section)
-        && (generation.sections.len() >= MAX_SECTIONS || generation.sections.keys().any(|name| name.to_lowercase() == section.to_lowercase())) {
-        return Err("duplicate or excessive settings sections".into());
+    let existing = matching_section(&generation.sections, section).map(str::to_owned);
+    if existing.is_none() && generation.sections.len() >= MAX_SECTIONS { return Err("excessive settings sections".into()); }
+    if section.eq_ignore_ascii_case("f6-keystore") {
+        if !valid_f6(&value) { return Err("device signing key is empty or invalid; existing key preserved".into()); }
+        generation.f6_initialized = true;
     }
-    generation.sections.insert(section.to_owned(), value);
+    generation.sections.insert(existing.unwrap_or_else(|| section.to_owned()), value);
     let candidate = seal_generation(&generation)?;
     let reopened = open_generation(&candidate)?;
     if reopened.sections != generation.sections { return Err("settings generation readback mismatch".into()); }

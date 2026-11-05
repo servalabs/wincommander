@@ -5,8 +5,10 @@ main-branch format and guarded-key writes. A Windows build with the non-default
 `experimental-settings-generation` feature AND process environment variable
 `WINCOMMANDER_EXPERIMENTAL_SETTINGS_GENERATION=1` routes machine-section reads
 and writes through the experimental lock and authority guard. It does not
-provision the lock or initialize a generation. Current-user installs reject
-this opt-in. Do not ship or enable it before the checks below.
+provision the lock or initialize a generation. Current-user installations use
+user-scoped DPAPI for the new generation and fail with an account/profile
+recovery message if Windows cannot unlock it; they never retry the new generation
+with machine-scope protection. Do not ship or enable it before the checks below.
 
 The machine installer has a possible privileged provisioning point in
 `NSIS_HOOK_POSTINSTALL`, after `WC_REPAIR_SHARED_MACHINE_DATA_ACL_OR_ABORT`.
@@ -50,3 +52,13 @@ stable pair is `Selected`, and a pending pair is `RecoveryRequired`. Missing
 provisioned lock, invalid files or scope mismatch are errors. The explicit Windows lab opt-in uses this decision in datastore reads and
 writes, not a separately wired application startup step. Before routing, a trusted external marker must also
 distinguish a first legacy start from deletion or rollback of both files.
+
+For a current-user installation, the gated route requires a pinned LocalAppData
+root and a pre-provisioned lock whose ACL matches the current Windows account.
+The legacy user key keeps its existing compatibility handling; newly selected
+generations use the current user's DPAPI scope. SSH/noninteractive access may
+therefore require the same account's profile to be loaded and has not been
+accepted until tested. Experimental F6 state distinguishes a verified source
+with no signing key from an existing key; an existing empty or malformed seed
+fails closed. Restoring both old generation and authority remains an unsolved
+rollback case without a trusted anchor.

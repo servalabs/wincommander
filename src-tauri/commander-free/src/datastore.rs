@@ -630,8 +630,8 @@ pub fn load(section: &str) -> Result<Value, String> {
     validate_section_name(section)?;
     #[cfg(all(windows, feature = "experimental-settings-generation"))]
     if experimental_generation_routing_enabled() {
-        let (root, _pins) = settings_rotation_trial::experimental_machine_root()?;
-        return settings_rotation_trial::read_with_legacy(&root, settings_rotation_trial::StoreScope::Machine, section, || load_legacy(section));
+        let (root, _pins, scope) = settings_rotation_trial::experimental_runtime_root()?;
+        return settings_rotation_trial::read_with_legacy(&root, scope, section, || load_legacy_guarded(section));
     }
     load_legacy(section)
 }
@@ -657,6 +657,19 @@ fn load_legacy(section: &str) -> Result<Value, String> {
     serde_json::from_slice(&bytes).map_err(|e| format!("Failed to parse section '{section}': {e}"))
 }
 
+#[cfg(all(windows, feature = "experimental-settings-generation"))]
+fn load_legacy_guarded(section: &str) -> Result<Value, String> {
+    let value = load_legacy(section)?;
+    if section.eq_ignore_ascii_case("f6-keystore") {
+        let path = crate::paths::datastore_data_dir()?.join(STORE_SUBDIR).join(format!("{section}.dat"));
+        let exists = path.try_exists().map_err(|_| "cannot inspect device signing key; existing data preserved")?;
+        if exists && !settings_rotation_trial::valid_f6(&value) {
+            return Err("device signing key is empty or invalid; existing data preserved".into());
+        }
+    }
+    Ok(value)
+}
+
 fn read_section_file(path: &std::path::Path, section: &str) -> Result<Option<String>, String> {
     match fs::read_to_string(path) {
         Ok(raw) => Ok(Some(raw)),
@@ -669,15 +682,25 @@ fn read_section_file(path: &std::path::Path, section: &str) -> Result<Option<Str
 // not be written unless the material used for it has been protected and can
 // still be reopened; otherwise a copied disk exposes both ciphertext and key.
 pub(crate) struct SettingsWriteMaterial {
-    material: zeroize::Zeroizing<[u8; 32]>,
+    material: Option<zeroize::Zeroizing<[u8; 32]>>,
+    #[cfg(all(windows, feature = "experimental-settings-generation"))]
+    runtime: Option<settings_rotation_trial::RuntimeWriteGuard>,
     _material_guard: Option<std::fs::File>,
 }
 
 pub(crate) fn settings_write_material() -> Result<SettingsWriteMaterial, String> {
+    #[cfg(all(windows, feature = "experimental-settings-generation"))]
+    let runtime = if experimental_generation_routing_enabled() {
+        Some(settings_rotation_trial::begin_experimental_write()?)
+    } else { None };
+    #[cfg(all(windows, feature = "experimental-settings-generation"))]
+    if runtime.as_ref().is_some_and(|guard| guard.selected()) {
+        return Ok(SettingsWriteMaterial { material: None, runtime, _material_guard: None });
+    }
     let material = install_material()?;
     #[cfg(not(windows))]
     return Ok(SettingsWriteMaterial {
-        material: zeroize::Zeroizing::new(material),
+        material: Some(zeroize::Zeroizing::new(material)),
         _material_guard: None,
     });
 
@@ -697,7 +720,9 @@ pub(crate) fn settings_write_material() -> Result<SettingsWriteMaterial, String>
             }
         })?;
         Ok(SettingsWriteMaterial {
-            material: zeroize::Zeroizing::new(material),
+            material: Some(zeroize::Zeroizing::new(material)),
+            #[cfg(feature = "experimental-settings-generation")]
+            runtime,
             _material_guard: Some(file),
         })
     }
@@ -768,16 +793,17 @@ pub(crate) fn save_with_material(
     material: &SettingsWriteMaterial,
 ) -> Result<(), String> {
     #[cfg(all(windows, feature = "experimental-settings-generation"))]
-    if experimental_generation_routing_enabled() {
-        let (root, _pins) = settings_rotation_trial::experimental_machine_root()?;
-        return settings_rotation_trial::write_with_legacy(&root, settings_rotation_trial::StoreScope::Machine, section, data, || save_legacy_with_material(section, data, material));
+    if let Some(runtime) = &material.runtime {
+        if runtime.selected() { return runtime.write(section, data); }
+        // The same runtime guard remains held throughout this legacy write.
     }
     save_legacy_with_material(section, data, material)
 }
 
 fn save_legacy_with_material(section: &str, data: &Value, material: &SettingsWriteMaterial) -> Result<(), String> {
     let path = section_path(section)?;
-    let key = derive_section_key(&material.material, None)?;
+    let source = material.material.as_ref().ok_or("legacy settings key unavailable")?;
+    let key = derive_section_key(source, None)?;
     let bytes = serde_json::to_vec(data)
         .map_err(|e| format!("Failed to serialise section '{section}': {e}"))?;
     let encoded = encode_section(&key, &bytes, &format!("machine:{section}"))?;

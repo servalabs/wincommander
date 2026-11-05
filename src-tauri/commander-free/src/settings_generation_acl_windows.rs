@@ -6,10 +6,11 @@
 #![allow(dead_code)]
 use std::{fs::File, io, os::windows::{ffi::OsStrExt, io::{AsRawHandle, FromRawHandle}}, path::Path};
 use windows_sys::Win32::{
-    Foundation::{LocalFree, ERROR_ALREADY_EXISTS, INVALID_HANDLE_VALUE},
-    Security::{Authorization::{ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo, SE_FILE_OBJECT},
-        EqualSid, GetAce, GetSecurityDescriptorControl, GetSecurityDescriptorDacl, GetSecurityDescriptorOwner,
-        ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION, SECURITY_ATTRIBUTES},
+    Foundation::{CloseHandle, LocalFree, ERROR_ALREADY_EXISTS, INVALID_HANDLE_VALUE},
+    Security::{Authorization::{ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo, SE_FILE_OBJECT},
+        EqualSid, GetAce, GetSecurityDescriptorControl, GetSecurityDescriptorDacl, GetSecurityDescriptorOwner, GetTokenInformation,
+        TokenUser, TOKEN_QUERY, TOKEN_USER, ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION, SECURITY_ATTRIBUTES},
+    System::Threading::{GetCurrentProcess, OpenProcessToken},
     Storage::FileSystem::{CreateFileW, GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, CREATE_NEW, OPEN_EXISTING,
         FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE},
 };
@@ -121,11 +122,58 @@ pub(super) fn verify_machine_root_handle(file: &File) -> io::Result<()> {
     verify(file, &Descriptor::from_sddl(MACHINE_ROOT_SDDL)?, true)
 }
 
+fn current_user_sid() -> io::Result<String> {
+    let mut token = std::ptr::null_mut();
+    // SAFETY: output token is initialized by Windows on success.
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 { return Err(io::Error::last_os_error()); }
+    struct Token(windows_sys::Win32::Foundation::HANDLE);
+    impl Drop for Token { fn drop(&mut self) { unsafe { CloseHandle(self.0); } } }
+    let token = Token(token);
+    let mut needed = 0u32;
+    unsafe { GetTokenInformation(token.0, TokenUser, std::ptr::null_mut(), 0, &mut needed); }
+    if needed < std::mem::size_of::<TOKEN_USER>() as u32 || needed > 65_536 { return Err(io::Error::other("cannot determine current Windows user")); }
+    let mut storage = vec![0usize; (needed as usize).div_ceil(std::mem::size_of::<usize>())];
+    if unsafe { GetTokenInformation(token.0, TokenUser, storage.as_mut_ptr().cast(), needed, &mut needed) } == 0 { return Err(io::Error::last_os_error()); }
+    let sid = unsafe { (*(storage.as_ptr().cast::<TOKEN_USER>())).User.Sid };
+    let mut text = std::ptr::null_mut();
+    if sid.is_null() || unsafe { ConvertSidToStringSidW(sid, &mut text) } == 0 || text.is_null() { return Err(io::Error::last_os_error()); }
+    let mut len = 0usize;
+    // SAFETY: Windows returns an allocated, NUL-terminated SID string.
+    let result = unsafe {
+        while *text.add(len) != 0 { len += 1; }
+        let result = String::from_utf16(std::slice::from_raw_parts(text, len)).map_err(|_| io::Error::other("invalid current Windows user"));
+        LocalFree(text.cast());
+        result
+    };
+    result
+}
+fn current_user_descriptor(directory: bool) -> io::Result<Descriptor> {
+    let sid = current_user_sid()?;
+    let flags = if directory { "OICI" } else { "" };
+    Descriptor::from_sddl(&format!("O:{sid}D:P(A;{flags};FA;;;SY)(A;{flags};FA;;;BA)(A;{flags};FA;;;{sid})"))
+}
+/// Verify the pinned current-user root; ancestor and profile ownership checks
+/// remain separate prerequisites for enabling the lab route.
+pub(super) fn verify_current_user_root_handle(file: &File) -> io::Result<()> {
+    verify(file, &current_user_descriptor(true)?, true)
+}
+/// Verify the exact current-user lock handle before acquiring its range lock.
+pub(super) fn verify_current_user_lock_handle(file: &File) -> io::Result<()> {
+    verify(file, &current_user_descriptor(false)?, false)
+}
+
 /// Create once or verify an existing lock; never replace or repair an unknown
 /// descriptor. Call only from an elevated, gated provisioning flow after the
 /// caller has authorized and pinned the product root and its ancestors.
 pub(super) fn provision_or_verify(root: &Path) -> io::Result<()> {
-    let descriptor = Descriptor::expected()?;
+    provision_with(root, Descriptor::expected()?)
+}
+/// Provision the current-user lock only after the caller has pinned and
+/// authorized its profile root. Existing descriptors are never modified.
+pub(super) fn provision_user_or_verify(root: &Path) -> io::Result<()> {
+    provision_with(root, current_user_descriptor(false)?)
+}
+fn provision_with(root: &Path, descriptor: Descriptor) -> io::Result<()> {
     let mut attributes = descriptor.attributes();
     let name: Vec<u16> = root.join(".settings-generation.lock").as_os_str().encode_wide().chain(Some(0)).collect();
     // SAFETY: the path and security attributes remain valid through CreateFileW.

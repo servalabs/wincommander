@@ -11,6 +11,13 @@ fn provision_test_lock(root: &std::path::Path) {
     std::fs::write(root.join(".settings-generation.lock"), b"").unwrap();
 }
 
+fn provision_user_test_lock(root: &std::path::Path) {
+    #[cfg(windows)]
+    crate::datastore::settings_generation_acl_windows::provision_user_or_verify(root).unwrap();
+    #[cfg(not(windows))]
+    std::fs::write(root.join(".settings-generation.lock"), b"").unwrap();
+}
+
 fn sections(key: &[u8; 32]) -> Vec<(String, String)> {
     let old = derive_section_key(key, None).unwrap();
     [
@@ -323,7 +330,7 @@ fn selected_generation_preserves_f6_and_legacy_and_recovers_after_restart() {
     let old = [42; 32];
     let mut input = sections(&old);
     let old_key = derive_section_key(&old, None).unwrap();
-    let f6 = serde_json::to_vec(&json!({"signing_seed_hex": "a1b2c3"})).unwrap();
+    let f6 = serde_json::to_vec(&json!({"signing_seed_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})).unwrap();
     input.push(("f6-keystore".into(), encode_section(&old_key, &f6, "machine:f6-keystore").unwrap()));
     let legacy = root.path().join("f6-keystore.dat");
     std::fs::write(&legacy, &input[2].1).unwrap();
@@ -331,7 +338,7 @@ fn selected_generation_preserves_f6_and_legacy_and_recovers_after_restart() {
     let candidate = prepare(&old, &input).unwrap();
     select_initial_generation(&path, &candidate, &old, &input, &crate::datastore_io::publish_new).unwrap();
     let restarted = std::fs::read(&path).unwrap();
-    assert_eq!(open(&restarted).unwrap()["f6-keystore"]["signing_seed_hex"], "a1b2c3");
+    assert_eq!(open(&restarted).unwrap()["f6-keystore"]["signing_seed_hex"], "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
     assert_eq!(std::fs::read_to_string(&legacy).unwrap(), input[2].1);
     let another_candidate = prepare(&old, &input).unwrap();
     select_initial_generation(&path, &another_candidate, &old, &input, &crate::datastore_io::publish_new).unwrap();
@@ -377,8 +384,10 @@ fn selected_generation_update_preserves_other_sections_and_fails_closed() {
     let contents = open(&updated).unwrap();
     assert_eq!(contents["settings"]["changed"], true);
     assert_eq!(contents["payments"]["token"], "second secret");
-    assert!(update_selected_generation(&path, "SETTINGS", json!({}), &crate::datastore_io::atomic_write).is_err());
-    assert_eq!(std::fs::read(&path).unwrap(), updated);
+    update_selected_generation(&path, "SETTINGS", json!({"case_changed": true}), &crate::datastore_io::atomic_write).unwrap();
+    let case_update = open(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(case_update["settings"]["case_changed"], true);
+    assert!(!case_update.contains_key("SETTINGS"));
     update_selected_generation(&path, "new-section", json!({"enabled": true}), &crate::datastore_io::atomic_write).unwrap();
     let added = open(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(added["new-section"]["enabled"], true);
@@ -449,12 +458,12 @@ fn initial_generation_accepts_mixed_legacy_and_individually_wrapped_sections() {
     let old = [42; 32];
     let mut input = sections(&old);
     let wrapped = crate::datastore::settings_section_envelope::seal(
-        "machine:f6-keystore", br#"{"signing_seed_hex":"abc123"}"#, dpapi_protect, dpapi_unprotect,
+        "machine:f6-keystore", br#"{"signing_seed_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#, dpapi_protect, dpapi_unprotect,
     ).unwrap();
     input.push(("f6-keystore".into(), wrapped));
     let candidate = prepare(&old, &input).unwrap();
     verify_source(&candidate, &old, &input).unwrap();
-    assert_eq!(open(&candidate).unwrap()["f6-keystore"]["signing_seed_hex"], "abc123");
+    assert_eq!(open(&candidate).unwrap()["f6-keystore"]["signing_seed_hex"], "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
 }
 
 #[test]
@@ -463,15 +472,15 @@ fn current_user_generation_preserves_mixed_sections_and_rejects_machine_scope() 
     let old = [42; 32];
     let mut input = sections(&old);
     let wrapped = crate::datastore::settings_section_envelope::seal(
-        "user-install:f6-keystore", br#"{"signing_seed_hex":"userseed"}"#, user_dpapi_protect, user_dpapi_unprotect,
+        "user-install:f6-keystore", br#"{"signing_seed_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#, user_dpapi_protect, user_dpapi_unprotect,
     ).unwrap();
     input.push(("f6-keystore".into(), wrapped));
     let candidate = prepare_for(StoreScope::CurrentUser, &old, &input).unwrap();
     verify_source_for(StoreScope::CurrentUser, &candidate, &old, &input).unwrap();
     assert!(verify_source_for(StoreScope::Machine, &candidate, &old, &input).is_err());
-    assert_eq!(open(&candidate).unwrap()["f6-keystore"]["signing_seed_hex"], "userseed");
+    assert_eq!(open(&candidate).unwrap()["f6-keystore"]["signing_seed_hex"], "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
     let root = tempfile::tempdir().unwrap();
-    provision_test_lock(root.path());
+    provision_user_test_lock(root.path());
     let selected = root.path().join(".settings-generation.v1");
     let authority = root.path().join(".settings-generation.authority.v1");
     std::fs::write(&selected, &candidate).unwrap();
@@ -524,7 +533,7 @@ fn startup_inspection_distinguishes_legacy_pending_selected_and_corrupt() {
     let old = [42; 32];
     let mut input = sections(&old);
     let key = derive_section_key(&old, None).unwrap();
-    input.push(("f6-keystore".into(), encode_section(&key, br#"{"signing_seed_hex":"preserve"}"#, "machine:f6-keystore").unwrap()));
+    input.push(("f6-keystore".into(), encode_section(&key, br#"{"signing_seed_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#, "machine:f6-keystore").unwrap()));
     let candidate = prepare(&old, &input).unwrap();
     let selected = root.path().join(".settings-generation.v1");
     let authority = root.path().join(".settings-generation.authority.v1");
@@ -538,7 +547,7 @@ fn startup_inspection_distinguishes_legacy_pending_selected_and_corrupt() {
     owner.read_reconciled(true).unwrap(); // fixture stands in for source verification
     drop(owner);
     let StartupView::Selected(values) = inspect_startup_once(root.path(), StoreScope::Machine).unwrap() else { panic!("expected selected generation"); };
-    assert_eq!(values["f6-keystore"]["signing_seed_hex"], "preserve");
+    assert_eq!(values["f6-keystore"]["signing_seed_hex"], "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
     std::fs::write(&selected, b"corrupt").unwrap();
     assert!(inspect_startup_once(root.path(), StoreScope::Machine).is_err());
 }
@@ -557,7 +566,7 @@ fn guarded_runtime_routes_legacy_selected_and_pending_without_losing_signing_key
     let old = [42; 32];
     let mut input = sections(&old);
     let key = derive_section_key(&old, None).unwrap();
-    input.push(("f6-keystore".into(), encode_section(&key, br#"{"signing_seed_hex":"preserve"}"#, "machine:f6-keystore").unwrap()));
+    input.push(("f6-keystore".into(), encode_section(&key, br#"{"signing_seed_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#, "machine:f6-keystore").unwrap()));
     let candidate = prepare(&old, &input).unwrap();
     let selected = root.path().join(".settings-generation.v1");
     let authority = root.path().join(".settings-generation.authority.v1");
@@ -570,14 +579,14 @@ fn guarded_runtime_routes_legacy_selected_and_pending_without_losing_signing_key
     owner.read_reconciled(true).unwrap(); // fixture stands in for source verification
     drop(owner);
     let signed = read_with_legacy(root.path(), StoreScope::Machine, "f6-keystore", || { panic!("must not fall back") }).unwrap();
-    assert_eq!(signed["signing_seed_hex"], "preserve");
+    assert_eq!(signed["signing_seed_hex"], "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
     write_with_legacy(root.path(), StoreScope::Machine, "settings", &json!({"updated": true}), || { panic!("must not fall back") }).unwrap();
     assert_eq!(read_with_legacy(root.path(), StoreScope::Machine, "f6-keystore", || { panic!("must not fall back") }).unwrap(), signed);
 }
 
 #[test]
 #[cfg_attr(windows, ignore = "requires elevated machine-lock ACL provisioning; run explicitly in Windows acceptance")]
-fn selected_runtime_refuses_missing_signing_key_without_legacy_fallback() {
+fn selected_runtime_creates_only_authenticated_never_initialized_f6() {
     let root = tempfile::tempdir().unwrap();
     provision_test_lock(root.path());
     let old = [42; 32];
@@ -589,6 +598,26 @@ fn selected_runtime_refuses_missing_signing_key_without_legacy_fallback() {
     let owner = LockedSelectedGeneration::acquire(root.path()).unwrap();
     owner.read_reconciled(true).unwrap(); // fixture stands in for guarded source verification
     drop(owner);
-    assert!(read_with_legacy(root.path(), StoreScope::Machine, "f6-keystore", || panic!("must not fall back")).is_err());
-    assert!(write_with_legacy(root.path(), StoreScope::Machine, "f6-keystore", &json!({"signing_seed_hex":"new"}), || panic!("must not fall back")).is_err());
+    assert_eq!(read_with_legacy(root.path(), StoreScope::Machine, "f6-keystore", || panic!("must not fall back")).unwrap(), json!({}));
+    assert!(write_with_legacy(root.path(), StoreScope::Machine, "f6-keystore", &json!({}), || panic!("must not fall back")).is_err());
+    assert!(write_with_legacy(root.path(), StoreScope::Machine, "f6-keystore", &json!({"signing_seed_hex":"bad"}), || panic!("must not fall back")).is_err());
+    let valid = json!({"signing_seed_hex": "a".repeat(64)});
+    write_with_legacy(root.path(), StoreScope::Machine, "f6-keystore", &valid, || panic!("must not fall back")).unwrap();
+    assert_eq!(read_with_legacy(root.path(), StoreScope::Machine, "F6-KEYSTORE", || panic!("must not fall back")).unwrap(), valid);
+}
+
+#[test]
+fn invalid_preexisting_or_initialized_f6_fails_closed() {
+    let old = [42; 32];
+    let old_key = derive_section_key(&old, None).unwrap();
+    for value in [json!({}), json!({"signing_seed_hex":"bad"}), json!({"signing_seed_hex": 4})] {
+        let mut input = sections(&old);
+        input.push(("f6-keystore".into(), encode_section(&old_key, &serde_json::to_vec(&value).unwrap(), "machine:f6-keystore").unwrap()));
+        assert!(prepare(&old, &input).is_err());
+    }
+    let input = sections(&old);
+    let candidate = prepare(&old, &input).unwrap();
+    let mut state = open_generation(&candidate).unwrap();
+    state.f6_initialized = true;
+    assert!(open_generation(&seal_generation(&state).unwrap()).is_err());
 }

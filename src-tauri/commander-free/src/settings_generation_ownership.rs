@@ -11,10 +11,11 @@ impl SettingsGenerationLock {
     // Generic caller-authorized seam remains test-only/unrouted. Machine-store
     // callers must use the verified variants below; user-scope ACLs require a
     // distinct policy before production use.
-    pub(super) fn try_acquire(root: &Path) -> io::Result<Self> { Self::try_acquire_mode(root, false, false, std::time::Duration::from_secs(2)) }
-    pub(super) fn try_acquire_shared(root: &Path) -> io::Result<Self> { Self::try_acquire_mode(root, true, false, std::time::Duration::from_secs(2)) }
-    pub(super) fn try_acquire_machine(root: &Path, shared: bool) -> io::Result<Self> { Self::try_acquire_mode(root, shared, true, std::time::Duration::from_secs(2)) }
-    fn try_acquire_mode(root: &Path, shared: bool, verify_machine_acl: bool, timeout: std::time::Duration) -> io::Result<Self> {
+    pub(super) fn try_acquire(root: &Path) -> io::Result<Self> { Self::try_acquire_mode(root, false, None, std::time::Duration::from_secs(2)) }
+    pub(super) fn try_acquire_shared(root: &Path) -> io::Result<Self> { Self::try_acquire_mode(root, true, None, std::time::Duration::from_secs(2)) }
+    pub(super) fn try_acquire_machine(root: &Path, shared: bool) -> io::Result<Self> { Self::try_acquire_mode(root, shared, Some(false), std::time::Duration::from_secs(2)) }
+    pub(super) fn try_acquire_user(root: &Path, shared: bool) -> io::Result<Self> { Self::try_acquire_mode(root, shared, Some(true), std::time::Duration::from_secs(2)) }
+    fn try_acquire_mode(root: &Path, shared: bool, verify_user_acl: Option<bool>, timeout: std::time::Duration) -> io::Result<Self> {
         let path = root.join(".settings-generation.lock");
         let mut options = OpenOptions::new();
         // Lock file must be pre-provisioned with the intended cross-user ACL.
@@ -47,13 +48,14 @@ impl SettingsGenerationLock {
             }
         }
         #[cfg(windows)]
-        if verify_machine_acl {
+        if let Some(user) = verify_user_acl {
             // Verify this exact handle, retained with delete sharing denied
             // through acquisition and the guard's complete lifetime.
-            super::settings_generation_acl_windows::verify_machine_handle(&file)?;
+            if user { super::settings_generation_acl_windows::verify_current_user_lock_handle(&file)?; }
+            else { super::settings_generation_acl_windows::verify_machine_handle(&file)?; }
         }
         #[cfg(not(windows))]
-        let _ = verify_machine_acl; // portable fixtures only; no Windows ACL assurance.
+        let _ = verify_user_acl; // portable fixtures only; no Windows ACL assurance.
         let started = std::time::Instant::now();
         loop {
             let result = if shared { file.try_lock_shared() } else { file.try_lock() };
@@ -77,7 +79,7 @@ mod tests {
     // during process launch, so serialize the parent-side fixture tests.
     static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
     fn immediate(root: &Path, shared: bool) -> io::Result<SettingsGenerationLock> {
-        SettingsGenerationLock::try_acquire_mode(root, shared, false, std::time::Duration::ZERO)
+        SettingsGenerationLock::try_acquire_mode(root, shared, None, std::time::Duration::ZERO)
     }
     #[test]
     fn guard_excludes_other_owners_and_releases_on_drop() {
@@ -115,12 +117,12 @@ mod tests {
         std::fs::write(dir.path().join(".settings-generation.lock"), b"").unwrap();
         let guard = immediate(dir.path(), false).unwrap();
         let path = dir.path().to_path_buf();
-        let reader = std::thread::spawn(move || SettingsGenerationLock::try_acquire_mode(&path, true, false, std::time::Duration::from_secs(1)));
+        let reader = std::thread::spawn(move || SettingsGenerationLock::try_acquire_mode(&path, true, None, std::time::Duration::from_secs(1)));
         std::thread::sleep(std::time::Duration::from_millis(100));
         drop(guard);
         drop(reader.join().unwrap().unwrap());
         let _guard = immediate(dir.path(), false).unwrap();
-        let error = match SettingsGenerationLock::try_acquire_mode(dir.path(), true, false, std::time::Duration::from_millis(50)) {
+        let error = match SettingsGenerationLock::try_acquire_mode(dir.path(), true, None, std::time::Duration::from_millis(50)) {
             Ok(_) => panic!("reader unexpectedly acquired writer lock"),
             Err(e) => e,
         };
