@@ -12,7 +12,7 @@ fn example_pending() -> PendingActivation {
     let credential_secret = [5; 32];
     PendingActivation { operation_id: "b".repeat(64), licence_key: "secret".into(),
         device_hash: "a".repeat(64), portable: false, credential_id, credential_secret,
-        credential_commitment: credential_commitment(&credential_id, &credential_secret) }
+        credential_commitment: credential_commitment(&credential_id, &credential_secret), reactivation: None }
 }
 
 #[test]
@@ -22,6 +22,42 @@ fn commitment_matches_wire_vector_without_disclosing_secret() {
     let body = pending.request_body().unwrap();
     assert!(!String::from_utf8_lossy(&body).contains(&hex_bytes(&pending.credential_secret)));
     assert_ne!(pending.credential_commitment, credential_commitment(&pending.credential_id, &[6; 32]));
+}
+
+#[test]
+fn reactivation_witness_matches_cross_runtime_vector_and_binds_operation() {
+    let mut pending = example_pending();
+    let previous = PreviousCredential { id: &pending.credential_id, secret: &pending.credential_secret,
+        licence_id: "licence", generation: 7 };
+    let witness = reactivation_witness(&pending.operation_id, &pending.device_hash, &previous).unwrap();
+    assert_eq!(witness.proof, "kao9Ske4UPTEMa76Bh79GhyzOwAkPg7Rwv1QmIG9EDE");
+    pending.reactivation = Some(witness);
+    let request = pending.request_body().unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&request).unwrap();
+    assert_eq!(json["reactivationProof"], "kao9Ske4UPTEMa76Bh79GhyzOwAkPg7Rwv1QmIG9EDE");
+    assert_eq!(serde_json::from_str::<serde_json::Value>(json["reactivationPayload"].as_str().unwrap()).unwrap()["generation"], 7);
+    pending.operation_id = "c".repeat(64);
+    assert!(pending.request_body().is_err());
+}
+
+#[test]
+fn reactivation_witness_survives_restart_with_same_protected_credential() {
+    let (path, gate_path) = paths();
+    let store = Anchor::test_user(path.clone());
+    let gate = Anchor::test_user(gate_path);
+    let id = [4; 32]; let secret = [5; 32];
+    let old = PreviousCredential { id: &id, secret: &secret, licence_id: "licence", generation: 7 };
+    let first = { let _lock = crate::licence_security_lock().unwrap();
+        begin_locked(&store, &gate, &MachineDpapi, "secret", &"a".repeat(64), false, Some(old)).unwrap() };
+    assert_eq!(first.credential_id, id);
+    assert_eq!(first.credential_secret, secret);
+    let original = first.request_body().unwrap();
+    let reopened = load_at(&Anchor::test_user(path.clone()), &MachineDpapi).unwrap().unwrap();
+    assert_eq!(reopened.request_body().unwrap().as_slice(), original.as_slice());
+    let mut forged = reopened;
+    forged.reactivation.as_mut().unwrap().proof = "A".repeat(43);
+    assert!(forged.request_body().is_err());
+    super::super::license_cache::licence_device_anchor::remove_test_key(&path).unwrap();
 }
 
 #[test]
@@ -93,7 +129,7 @@ fn completed_intent_never_reissues_same_operation_after_lost_reply() {
 
 #[test]
 fn signed_response_must_bind_exact_pending_operation_and_machine() {
-    let pending = example_pending();
+    let mut pending = example_pending();
     let claims = serde_json::json!({"license_id":"licence", "device_hash":pending.device_hash,
         "activation_operation_id":pending.operation_id, "activation_generation":1,
         "activation_credential_id":hex_bytes(&pending.credential_id), "activation_credential_commitment":pending.credential_commitment,
@@ -123,7 +159,16 @@ fn signed_response_must_bind_exact_pending_operation_and_machine() {
     }
     let mut missing = claims.clone(); missing.as_object_mut().unwrap().remove("activation_operation_id");
     assert!(verify_response_with(&pending, &body(missing), 150, verify).is_err());
-    assert!(verify_response_with(&pending, &body(claims), 150, |_, _, _| Err(INVALID)).is_err());
+    assert!(verify_response_with(&pending, &body(claims.clone()), 150, |_, _, _| Err(INVALID)).is_err());
+    let previous = PreviousCredential { id: &pending.credential_id, secret: &pending.credential_secret,
+        licence_id: "licence", generation: 7 };
+    pending.reactivation = Some(reactivation_witness(&pending.operation_id, &pending.device_hash, &previous).unwrap());
+    let mut same_generation = claims.clone(); same_generation["activation_generation"] = serde_json::json!(7);
+    assert!(verify_response_with(&pending, &body(same_generation), 150, verify).is_err());
+    let mut new_generation = claims; new_generation["activation_generation"] = serde_json::json!(8);
+    assert!(verify_response_with(&pending, &body(new_generation.clone()), 150, verify).is_ok());
+    new_generation["license_id"] = serde_json::json!("other-licence");
+    assert!(verify_response_with(&pending, &body(new_generation), 150, verify).is_err());
 }
 
 #[test]

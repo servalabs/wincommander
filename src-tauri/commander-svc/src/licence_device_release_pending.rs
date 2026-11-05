@@ -273,7 +273,8 @@ pub(crate) fn restart_after_completed_release(
         let after = store.read().map_err(|_| INVALID)?.ok_or(INVALID)?;
         if before != after { return Err(INVALID); }
         crate::license_cache::verify_release_completed_locked(journal, snapshot, &saved.request, &after)?;
-        crate::licence_activation_intent::restart_after_release_locked(evidence, journal, &policy)
+        crate::licence_activation_intent::restart_after_release_locked(evidence, journal, &policy,
+            &credential.id, credential.secret())
     })?.ok_or(INVALID)
 }
 
