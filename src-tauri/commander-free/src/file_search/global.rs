@@ -31,13 +31,23 @@ pub(super) fn with_engine<T>(
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     let _replacement = super::locks::IndexReplacementLock::acquire()?;
     let mut write = cell().write().map_err(|_| "Search state is unavailable.")?;
+    // Another request may have initialized the same configuration while this
+    // request waited for the replacement lock.
+    if let Some(current) = write.as_ref().filter(|c| c.signature == signature) {
+        return operation(&current.engine);
+    }
     if let Some(old) = write.take() {
         old.engine.stop();
     }
-    std::fs::create_dir_all(&config.index_dir)
-        .map_err(|_| "Cannot create the ordinary search index.")?;
-    validate_directory(&config.index_dir)?;
-    crate::paths::harden_dir_acl(&config.index_dir);
+    // Legacy setup can create files and modify ACLs, so the experimental
+    // encrypted path must not run it before its own pinned-root checks.
+    #[cfg(not(all(windows, feature = "experimental-encrypted-search")))]
+    {
+        std::fs::create_dir_all(&config.index_dir)
+            .map_err(|_| "Cannot create the ordinary search index.")?;
+        validate_directory(&config.index_dir)?;
+        crate::paths::harden_dir_acl(&config.index_dir);
+    }
     let blocked = protected.to_vec();
     let policy: wincmd_search::PathPolicy = Arc::new(move |path| privacy::ordinary_allowed(path, &blocked));
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
@@ -81,6 +91,17 @@ pub(super) fn publish_scope(
     exclusions: &[String],
     protected: &[PathBuf],
 ) -> Result<(), String> {
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    {
+        let bytes = serde_json::to_vec(&serde_json::json!({"version": 1, "roots": roots,
+            "exclusions": exclusions, "blocked_roots": protected}))
+            .map_err(|e| e.to_string())?;
+        return wincmd_search::publish_experimental_scope(directory, &bytes, |path| {
+            validate_directory(path).map_err(std::io::Error::other)
+        }).map_err(|error| format!("Cannot publish the search scope: {error}"));
+    }
+    #[cfg(not(all(windows, feature = "experimental-encrypted-search")))]
+    {
     std::fs::create_dir_all(directory).map_err(|_| "Cannot store the search scope.")?;
     validate_directory(directory)?;
     let path = directory.join("scope-v1.json");
@@ -94,6 +115,7 @@ pub(super) fn publish_scope(
         return Ok(());
     }
     std::fs::write(path, bytes).map_err(|_| "Cannot publish the ordinary search scope.".into())
+    }
 }
 
 #[cfg(all(test, windows))]

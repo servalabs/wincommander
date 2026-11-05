@@ -65,6 +65,41 @@ pub type PathMapper = Arc<dyn Fn(&std::path::Path) -> Option<std::path::PathBuf>
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExperimentalRebuildReport { pub indexed: usize, pub omitted: usize, pub skipped_links: usize }
+/// Experimental scope publication while holding each existing ancestor. The
+/// caller must authorize the user root; it remains plaintext for Pro today.
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
+pub fn publish_experimental_scope(
+    directory: &std::path::Path,
+    bytes: &[u8],
+    validate: impl FnOnce(&std::path::Path) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    use crate::read_only::{AccessMode, CheckedDirectory};
+    use tantivy::directory::error::OpenReadError;
+    if bytes.len() > 1024 * 1024 { return Err(std::io::Error::other("scope exceeds limit")); }
+    let parent = directory.parent().ok_or_else(|| std::io::Error::other("invalid scope path"))?;
+    let user_root = parent.parent().ok_or_else(|| std::io::Error::other("invalid scope parent"))?;
+    let _user_pins = CheckedDirectory::pin_root_path(user_root)?;
+    match std::fs::create_dir(parent) {
+        Ok(()) => {}, Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {},
+        Err(error) => return Err(error),
+    }
+    let _parent_pins = CheckedDirectory::pin_root_path(parent)?;
+    match std::fs::create_dir(directory) {
+        Ok(()) => {}, Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {},
+        Err(error) => return Err(error),
+    }
+    let _root_pins = CheckedDirectory::pin_root_path(directory)?;
+    validate(directory)?;
+    let checked = CheckedDirectory::open(directory, AccessMode::Writable)
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    let path = std::path::Path::new("scope-v1.json");
+    match checked.atomic_read_bounded(path, 1024 * 1024) {
+        Ok(previous) if previous == bytes => return Ok(()),
+        Ok(_) | Err(OpenReadError::FileDoesNotExist(_)) => {},
+        Err(error) => return Err(std::io::Error::other(error.to_string())),
+    }
+    checked.atomic_write_pinned(path, bytes)
+}
 /// Facade: owns the index and orchestrates crawl → extract → chunk → index.
 pub struct SearchEngine {
     path_policy: PathPolicy,
@@ -937,6 +972,17 @@ mod tests {
         assert!(SearchEngine::open_experimental_encrypted_with_policy(config, Arc::new(|_| true), identity, false).is_err());
         assert_eq!(fs::read(candidate.join("meta.json")).unwrap(), before);
         assert_eq!(fs::read(old.join("meta.json")).unwrap(), b"legacy intact");
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    #[test]
+    fn experimental_scope_publication_requires_validated_pinned_root() {
+        let root = TempDir::new().unwrap();
+        let dir = root.path().join("file-search").join("fts");
+        assert!(publish_experimental_scope(&dir, b"scope", |_| Err(std::io::Error::other("denied"))).is_err());
+        assert!(!dir.join("scope-v1.json").exists());
+        publish_experimental_scope(&dir, b"scope", |_| Ok(())).unwrap();
+        assert_eq!(fs::read(dir.join("scope-v1.json")).unwrap(), b"scope");
+        publish_experimental_scope(&dir, b"scope", |_| Ok(())).unwrap();
     }
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     #[test]
