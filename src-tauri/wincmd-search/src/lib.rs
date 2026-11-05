@@ -656,6 +656,13 @@ impl SearchEngine {
                                     invalid.store(false, Ordering::SeqCst);
                                     if invalid_generation.load(Ordering::SeqCst) != observed {
                                         invalid.store(true, Ordering::SeqCst);
+                                    } else {
+                                        let mut state = status.lock().unwrap();
+                                        if state.last_error.as_deref().is_some_and(|message|
+                                            message.starts_with("Search reconciliation failed; retrying:")
+                                                || message == "Search reconciliation incomplete; retrying") {
+                                            state.last_error = None;
+                                        }
                                     }
                                 }
                             }
@@ -1035,6 +1042,30 @@ mod tests {
         assert!(engine.search(&query).is_err());
         assert!(engine.get_chunks(1).is_err());
         assert!(engine.status().last_error.unwrap().contains("reopen"));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn oversized_update_removes_old_indexed_content() {
+        let data = TempDir::new().unwrap(); let index = TempDir::new().unwrap();
+        let file = data.path().join("memo.txt");
+        fs::write(&file, b"smallcontenttoken").unwrap();
+        let mut config = make_config(index.path().into(), vec![data.path().into()]);
+        config.max_file_bytes = 64;
+        let engine = SearchEngine::open(config).unwrap();
+        engine.start_indexing_internal(true).unwrap();
+        let query = ContentQuery { terms: "smallcontenttoken".into(), roots: vec![], limit: 10, offset: 0, keyword_only: true };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while engine.search(&query).map(|hits| hits.is_empty()).unwrap_or(true) {
+            assert!(std::time::Instant::now() < deadline, "initial indexing did not finish");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        fs::write(&file, vec![b'x'; 128]).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            if engine.search(&query).map(|hits| hits.is_empty()).unwrap_or(false) { break; }
+            assert!(std::time::Instant::now() < deadline, "oversized update was not reconciled");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
     }
     #[cfg(unix)]
     #[test]

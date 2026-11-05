@@ -91,7 +91,7 @@ pub fn apply_fs_event(
 // Delete identities may change after a path disappears, and rename events may
 // contain two paths. Force a full rescan instead of silently guessing. Errors
 // or an explicit backend rescan flag also make the cache unsafe to serve.
-fn needs_reconciliation(event: &notify::Result<Event>, skip: &[PathBuf], exclusions: &GlobSet) -> bool {
+fn needs_reconciliation(event: &notify::Result<Event>, skip: &[PathBuf], exclusions: &GlobSet, max_bytes: u64) -> bool {
     let event = match event { Ok(event) => event, Err(_) => return true };
     if event.need_rescan() { return true; }
     let relevant = |path: &PathBuf| !path_is_skipped(path, skip) && !path_is_excluded(path, exclusions);
@@ -100,7 +100,10 @@ fn needs_reconciliation(event: &notify::Result<Event>, skip: &[PathBuf], exclusi
     }
     if matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_)) {
         return event.paths.is_empty() || event.paths.iter().filter(|path| relevant(path))
-            .any(|path| path.is_dir() || std::fs::metadata(path).is_err());
+            .any(|path| match std::fs::metadata(path) {
+                Ok(meta) => meta.is_dir() || meta.len() > max_bytes,
+                Err(_) => true,
+            });
     }
     false
 }
@@ -142,7 +145,7 @@ fn watch_roots_impl(
     let strict = invalid.is_some();
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
         if let Some(state) = &invalid {
-            if needs_reconciliation(&res, &skip_paths, &exclusions) {
+            if needs_reconciliation(&res, &skip_paths, &exclusions, max_file_bytes) {
                 invalidate(state);
                 return;
             }
@@ -198,16 +201,25 @@ mod tests {
         assert_eq!(generation.load(Ordering::SeqCst), 1);
     }
     #[test]
+    fn growing_beyond_size_limit_requires_reconciliation() {
+        let root = TempDir::new().unwrap();
+        let path = root.path().join("data.txt");
+        std::fs::write(&path, b"more than limit").unwrap();
+        let event = Ok(make_event(EventKind::Modify(ModifyKind::Data(DataChange::Content)), &path));
+        assert!(needs_reconciliation(&event, &[], &no_exclusions(), 4));
+        assert!(!needs_reconciliation(&event, &[], &no_exclusions(), 100));
+    }
+    #[test]
     fn strict_classification_flags_errors_deletes_and_two_path_renames() {
         let glob = no_exclusions();
         let bad: notify::Result<Event> = Err(notify::Error::generic("lost events"));
-        assert!(needs_reconciliation(&bad, &[], &glob));
+        assert!(needs_reconciliation(&bad, &[], &glob, 1024));
         let root = TempDir::new().unwrap();
         let old = root.path().join("old"); let new = root.path().join("new");
         let deletion = Ok(make_event(EventKind::Remove(RemoveKind::File), &old));
-        assert!(needs_reconciliation(&deletion, &[], &glob));
+        assert!(needs_reconciliation(&deletion, &[], &glob, 1024));
         let rename = Ok(Event { kind: EventKind::Modify(ModifyKind::Name(notify::event::RenameMode::Both)), paths: vec![old, new], attrs: Default::default() });
-        assert!(needs_reconciliation(&rename, &[], &glob));
+        assert!(needs_reconciliation(&rename, &[], &glob, 1024));
     }
     fn make_event(kind: EventKind, path: &Path) -> Event {
         Event {
