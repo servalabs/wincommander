@@ -30,6 +30,10 @@ pub(super) struct Ledger {
     machine_source_digest: Option<String>,
     #[serde(default)]
     machine_source_length: Option<u64>,
+    #[serde(default)]
+    machine_source_records: Option<Vec<[u8; 32]>>,
+    #[serde(default)]
+    history_gap_unverified: bool,
 }
 impl Drop for KeyState {
     fn drop(&mut self) {
@@ -122,6 +126,34 @@ fn parse_machine_legacy(raw: &str) -> Result<Vec<EvidenceEntry>, String> {
     parse_legacy(raw)
 }
 
+fn entry_hashes(entries: &[EvidenceEntry]) -> Result<Vec<[u8; 32]>, String> {
+    entries
+        .iter()
+        .map(|entry| {
+            let bytes = serde_json::to_vec(entry).map_err(|_| "Cannot compare evidence")?;
+            let mut hash = [0; 32];
+            hash.copy_from_slice(&Sha256::digest(bytes));
+            Ok(hash)
+        })
+        .collect()
+}
+
+fn unique_rollover(previous: &[[u8; 32]], current: &[[u8; 32]]) -> Result<usize, String> {
+    if previous.len() != MAX_ENTRIES || current.len() != MAX_ENTRIES {
+        return Err("Old evidence was truncated or replaced; original preserved".into());
+    }
+    let mut overlap = None;
+    for length in 1..=MAX_ENTRIES {
+        if previous[MAX_ENTRIES - length..] == current[..length] {
+            if overlap.replace(length).is_some() {
+                return Err("Old evidence rollover is ambiguous; original preserved".into());
+            }
+        }
+    }
+    overlap
+        .ok_or_else(|| "Old evidence rollover has no verifiable overlap; original preserved".into())
+}
+
 pub(super) fn write(
     path: &Path,
     key_path: &Path,
@@ -205,6 +237,8 @@ pub(super) fn read(
                 skip_future_imports: false,
                 machine_source_digest: None,
                 machine_source_length: None,
+                machine_source_records: None,
+                history_gap_unverified: false,
             };
             let bytes = serde_json::to_vec(&value).map_err(|_| "Cannot encode evidence")?;
             let sealed = crate::datastore::encode_section(&state.material, &bytes, SCOPE)?;
@@ -344,66 +378,84 @@ pub(super) fn read_with_machine_source(
         if let Some(raw) = source {
             let fingerprint = digest(&raw);
             if ledger.machine_source_digest.as_deref() != Some(fingerprint.as_str()) {
-                let candidate = (|| -> Result<Vec<EvidenceEntry>, String> {
-                    if !raw.is_empty() && !raw.ends_with('\n') {
-                        return Err("Machine source has an incomplete final record".into());
-                    }
-                    let prior = match (&ledger.machine_source_digest, ledger.machine_source_length)
-                    {
-                        (None, None) => {
-                            let entries = parse_machine_legacy(&raw)?;
-                            let mut existing = std::collections::HashSet::<Vec<u8>>::new();
-                            for entry in &ledger.entries {
-                                existing.insert(
-                                    serde_json::to_vec(entry)
-                                        .map_err(|_| "Cannot compare evidence")?,
-                                );
+                let candidate =
+                    (|| -> Result<(Vec<EvidenceEntry>, Vec<[u8; 32]>, bool), String> {
+                        if !raw.is_empty() && !raw.ends_with('\n') {
+                            return Err("Machine source has an incomplete final record".into());
+                        }
+                        let full = parse_machine_legacy(&raw)?;
+                        let hashes = entry_hashes(&full)?;
+                        let mut rolled = false;
+                        let prior = match (
+                            &ledger.machine_source_digest,
+                            ledger.machine_source_length,
+                        ) {
+                            (None, None) => {
+                                let mut existing = std::collections::HashSet::<Vec<u8>>::new();
+                                for entry in &ledger.entries {
+                                    existing.insert(
+                                        serde_json::to_vec(entry)
+                                            .map_err(|_| "Cannot compare evidence")?,
+                                    );
+                                }
+                                for entry in &full {
+                                    if existing.contains(
+                                        &serde_json::to_vec(entry)
+                                            .map_err(|_| "Cannot compare evidence")?,
+                                    ) {
+                                        return Err(
+                                            "Ambiguous evidence records require review".into()
+                                        );
+                                    }
+                                }
+                                full.clone()
                             }
-                            for entry in &entries {
-                                if existing.contains(
-                                    &serde_json::to_vec(entry)
-                                        .map_err(|_| "Cannot compare evidence")?,
-                                ) {
-                                    return Err("Ambiguous evidence records require review".into());
+                            (Some(expected), Some(length)) => {
+                                let length =
+                                    usize::try_from(length).map_err(|_| "Invalid source length")?;
+                                let prefix = raw.get(..length);
+                                if prefix.is_some_and(|prefix| {
+                                    digest(prefix) == *expected
+                                        && (prefix.is_empty() || prefix.ends_with('\n'))
+                                }) {
+                                    let suffix = raw
+                                        .get(length..)
+                                        .ok_or("Machine source boundary is invalid")?;
+                                    parse_machine_legacy(suffix)?
+                                } else {
+                                    let previous = ledger.machine_source_records.as_deref()
+                                    .ok_or("Machine source was truncated or replaced; prior snapshot unavailable")?;
+                                    let overlap = unique_rollover(previous, &hashes)?;
+                                    rolled = true;
+                                    full[overlap..].to_vec()
                                 }
                             }
-                            entries
+                            _ => return Err("Machine source state requires manual recovery".into()),
+                        };
+                        if machine_snapshot(machine_source)?.as_deref() != Some(raw.as_str()) {
+                            return Err("Machine source changed during import".into());
                         }
-                        (Some(expected), Some(length)) => {
-                            let length =
-                                usize::try_from(length).map_err(|_| "Invalid source length")?;
-                            let prefix = raw
-                                .get(..length)
-                                .ok_or("Machine source was truncated or replaced")?;
-                            let suffix = raw
-                                .get(length..)
-                                .ok_or("Machine source boundary is invalid")?;
-                            if digest(prefix) != *expected
-                                || (!prefix.is_empty() && !prefix.ends_with('\n'))
-                            {
-                                return Err("Machine source was truncated or replaced".into());
-                            }
-                            parse_machine_legacy(suffix)?
-                        }
-                        _ => return Err("Machine source state requires manual recovery".into()),
-                    };
-                    if machine_snapshot(machine_source)?.as_deref() != Some(raw.as_str()) {
-                        return Err("Machine source changed during import".into());
-                    }
-                    Ok(prior)
-                })();
+                        Ok((prior, hashes, rolled))
+                    })();
                 {
-                    let mut prior = candidate.map_err(|error| {
+                    let (mut prior, hashes, rolled) = candidate.map_err(|error| {
                         format!("Old evidence import pending; original preserved: {error}")
                     })?;
-                    prior.append(&mut ledger.entries);
-                    prior.sort_by(|a, b| a.time.cmp(&b.time));
-                    if prior.len() > MAX_ENTRIES {
-                        prior.drain(..prior.len() - MAX_ENTRIES);
+                    let mut combined = std::mem::take(&mut ledger.entries);
+                    combined.append(&mut prior);
+                    combined.sort_by(|a, b| a.time.cmp(&b.time));
+                    if combined.len() > MAX_ENTRIES {
+                        combined.drain(..combined.len() - MAX_ENTRIES);
                     }
-                    ledger.entries = prior;
+                    ledger.entries = combined;
                     ledger.machine_source_digest = Some(fingerprint);
                     ledger.machine_source_length = Some(raw.len() as u64);
+                    ledger.machine_source_records = Some(hashes);
+                    ledger.history_gap_unverified |= rolled;
+                    if rolled {
+                        #[cfg(not(test))]
+                        crate::log::log_message("warn", "Old evidence rolled over; continuity before the overlap cannot be verified");
+                    }
                     write(path, key_path, &ledger, persist).map_err(|error| {
                         format!(
                             "Old evidence import could not be saved; original preserved: {error}"
@@ -518,6 +570,8 @@ mod tests {
                 skip_future_imports: false,
                 machine_source_digest: None,
                 machine_source_length: None,
+                machine_source_records: None,
+                history_gap_unverified: false,
             },
             &crate::datastore_io::atomic_write,
         )
@@ -579,6 +633,8 @@ mod tests {
             skip_future_imports: false,
             machine_source_digest: None,
             machine_source_length: None,
+            machine_source_records: None,
+            history_gap_unverified: false,
         })
         .unwrap();
         let sealed = crate::datastore::encode_section(&state.material, &bytes, SCOPE).unwrap();
@@ -615,6 +671,8 @@ mod tests {
                 skip_future_imports: false,
                 machine_source_digest: None,
                 machine_source_length: None,
+                machine_source_records: None,
+                history_gap_unverified: false,
             },
             &crate::datastore_io::atomic_write,
         )
@@ -643,6 +701,8 @@ mod tests {
                 skip_future_imports: false,
                 machine_source_digest: None,
                 machine_source_length: None,
+                machine_source_records: None,
+                history_gap_unverified: false,
             },
             &crate::datastore_io::atomic_write,
         )
@@ -680,6 +740,8 @@ mod tests {
                 skip_future_imports: false,
                 machine_source_digest: None,
                 machine_source_length: None,
+                machine_source_records: None,
+                history_gap_unverified: false,
             },
             &crate::datastore_io::atomic_write,
         )
@@ -716,6 +778,8 @@ mod tests {
                 skip_future_imports: false,
                 machine_source_digest: None,
                 machine_source_length: None,
+                machine_source_records: None,
+                history_gap_unverified: false,
             },
             &crate::datastore_io::atomic_write,
         )
@@ -778,6 +842,8 @@ mod tests {
                 skip_future_imports: false,
                 machine_source_digest: None,
                 machine_source_length: None,
+                machine_source_records: None,
+                history_gap_unverified: false,
             },
             &|target, bytes| {
                 published.lock().unwrap().push(target.to_path_buf());
@@ -1154,6 +1220,106 @@ mod tests {
             .len(),
             1
         );
+    }
+
+    fn numbered_line(number: usize) -> String {
+        let mut value = entry();
+        value.summary = format!("event-{number:04}");
+        format!("{}\n", serde_json::to_string(&value).unwrap())
+    }
+
+    #[test]
+    fn normal_rolling_writer_reconciles_a_unique_overlap() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("protected");
+        let old = dir.path().join("old-machine");
+        let key = dir.path().join("key");
+        let previous: String = (0..MAX_ENTRIES).map(numbered_line).collect();
+        fs::write(&old, previous).unwrap();
+        read_with_machine_source(
+            &path,
+            &old,
+            &|| Ok(None),
+            &key,
+            &crate::datastore_io::atomic_write,
+        )
+        .unwrap();
+        let rolled: String = (1..=MAX_ENTRIES).map(numbered_line).collect();
+        fs::write(&old, &rolled).unwrap();
+        let ledger = read_with_machine_source(
+            &path,
+            &old,
+            &|| Ok(None),
+            &key,
+            &crate::datastore_io::atomic_write,
+        )
+        .unwrap();
+        assert_eq!(ledger.entries.len(), MAX_ENTRIES);
+        assert!(ledger
+            .entries
+            .iter()
+            .any(|entry| entry.summary == "event-1000"));
+        assert_eq!(
+            ledger
+                .entries
+                .iter()
+                .filter(|entry| entry.summary == "event-1000")
+                .count(),
+            1
+        );
+        assert!(ledger.history_gap_unverified);
+        assert_eq!(fs::read_to_string(old).unwrap(), rolled);
+    }
+
+    #[test]
+    fn ambiguous_rolling_overlap_and_replacement_preserve_originals() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("protected");
+        let old = dir.path().join("old-machine");
+        let key = dir.path().join("key");
+        let repeated = numbered_line(7).repeat(MAX_ENTRIES);
+        fs::write(&old, repeated).unwrap();
+        read_with_machine_source(
+            &path,
+            &old,
+            &|| Ok(None),
+            &key,
+            &crate::datastore_io::atomic_write,
+        )
+        .unwrap();
+        let protected = fs::read(&path).unwrap();
+        let ambiguous = format!(
+            "{}{}",
+            numbered_line(7).repeat(MAX_ENTRIES - 1),
+            numbered_line(8)
+        );
+        fs::write(&old, &ambiguous).unwrap();
+        let error = read_with_machine_source(
+            &path,
+            &old,
+            &|| Ok(None),
+            &key,
+            &crate::datastore_io::atomic_write,
+        )
+        .err()
+        .unwrap();
+        assert!(error.contains("ambiguous"));
+        assert_eq!(fs::read(&path).unwrap(), protected);
+        assert_eq!(fs::read_to_string(&old).unwrap(), ambiguous);
+        let replacement: String = (1000..2000).map(numbered_line).collect();
+        fs::write(&old, &replacement).unwrap();
+        let error = read_with_machine_source(
+            &path,
+            &old,
+            &|| Ok(None),
+            &key,
+            &crate::datastore_io::atomic_write,
+        )
+        .err()
+        .unwrap();
+        assert!(error.contains("no verifiable overlap"));
+        assert_eq!(fs::read(&path).unwrap(), protected);
+        assert_eq!(fs::read_to_string(old).unwrap(), replacement);
     }
 
     #[test]
