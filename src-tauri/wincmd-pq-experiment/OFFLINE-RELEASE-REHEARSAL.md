@@ -93,6 +93,14 @@ The operator must keep the installer unchanged through publication and verify
 the ordinary release checks separately. These commands do not provide a key
 store, production signing ceremony, publishing, revocation or rollback.
 
+A previously signed record can be checked locally with
+`release-free.ps1 -Version 3.7.0 -StageOnly -SkipBuild -HybridSignedRecord <path>`.
+This requires approved release trust and possession proofs in the local release
+environment and verifies the record and existing installer offline before SBOM
+generation. It does not prove which keys an existing installer embeds or
+provide release provenance. Free publication remains blocked until the hybrid
+record is published and the installed update path is qualified.
+
 The local Free release staging command can prepare the same unsigned payload
 after its normal artifact checks: pass `-StageOnly -HybridPrepareTool` with the
 path to the built Free preparation tool, and optionally `-Beta`. It prints the

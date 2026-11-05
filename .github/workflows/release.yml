@@ -638,6 +638,12 @@ jobs:
             wincommander-free.sbom.cdx.json
           if-no-files-found: error
 
+      # The app requires versioned hybrid metadata, which this workflow does
+      # not yet publish. Do not expose a pointer to an unusable update.
+      - name: Block incomplete hybrid Free publication
+        shell: pwsh
+        run: throw 'Free publication is disabled until verified hybrid metadata publication is integrated.'
+
       # Upload immutable artifacts before the mutable latest.json pointer. A
       # client that sees a new manifest can therefore always fetch its setup and
       # minisign sidecar from the same R2 release.
