@@ -3,6 +3,22 @@ use super::*;
 static SERIAL: Mutex<()> = Mutex::new(());
 
 #[test]
+fn scan_scratch_does_not_expose_paths_on_disk() {
+    let index = index::ScanIndex::new().unwrap();
+    let marker = "scratch-secret-path-94252";
+    index.connection.execute(
+        "INSERT INTO directories(path,root) VALUES(?1,?1)",
+        [marker],
+    ).unwrap();
+    let path = index.directory.path().join("scan.sqlite");
+    let bytes = std::fs::read(&path).unwrap();
+    assert!(!bytes.windows(marker.len()).any(|window| window == marker.as_bytes()));
+    assert!(!bytes.starts_with(b"SQLite format 3\0"));
+    let other = rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    assert!(other.query_row("SELECT count(*) FROM directories", [], |row| row.get::<_, i64>(0)).is_err());
+}
+
+#[test]
 fn inventory_excludes_its_own_database_inside_the_scanned_folder() {
     let _serial = SERIAL.lock().unwrap();
     let root = tempfile::tempdir().unwrap();

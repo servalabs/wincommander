@@ -321,6 +321,37 @@ mod tests {
     use super::*;
     use std::sync::atomic::AtomicBool;
 
+    #[test]
+    fn vacuum_preserves_existing_plaintext_database_with_wal_and_without() {
+        for wal in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let path = temp.path().join("existing.sqlite");
+            let original = rusqlite::Connection::open(&path).unwrap();
+            if wal {
+                let mode: String = original.query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0)).unwrap();
+                assert_eq!(mode.to_lowercase(), "wal");
+                original.execute_batch("PRAGMA wal_autocheckpoint=0;").unwrap();
+            }
+            original.execute_batch("CREATE TABLE documents(value TEXT NOT NULL); INSERT INTO documents VALUES('existing-user-content');").unwrap();
+            assert!(has_sqlite_header(&path));
+            if wal { assert!(path.with_extension("sqlite-wal").exists()); }
+            let item = CachedCleanerItem {
+                id: "existing".into(), label: "Existing database".into(), root: path.clone(),
+                canonical_root: fs::canonicalize(&path).unwrap(), requires_plain_path: false,
+                files: vec![CachedFile { path: path.clone(), actual_bytes: 0, bytes: 0,
+                    minimum_age: Duration::ZERO, file_identity: None }],
+                operation: TargetOperation::Vacuum,
+            };
+            assert_eq!(vacuum_database(&item).unwrap().0, 1);
+            assert!(has_sqlite_header(&path));
+            let reopened = rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+            let value: String = reopened.query_row("SELECT value FROM documents", [], |row| row.get(0)).unwrap();
+            assert_eq!(value, "existing-user-content");
+            let integrity: String = reopened.query_row("PRAGMA quick_check", [], |row| row.get(0)).unwrap();
+            assert_eq!(integrity, "ok");
+        }
+    }
+
     #[cfg(windows)]
     fn old_cached_file(path: &Path) -> CachedFile {
         let file = fs::OpenOptions::new().write(true).open(path).unwrap();

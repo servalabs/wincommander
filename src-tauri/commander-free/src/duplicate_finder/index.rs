@@ -7,6 +7,7 @@ use rusqlite::{params, Connection, OpenFlags};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant, UNIX_EPOCH};
+use zeroize::Zeroizing;
 #[path = "scratch.rs"]
 mod scratch;
 
@@ -52,7 +53,31 @@ impl ScanIndex {
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NOFOLLOW,
         )
         .map_err(|error| error.to_string())?;
-        connection.execute_batch("PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF; PRAGMA temp_store=FILE; PRAGMA cache_size=-65536;
+        // Scratch databases cannot be resumed after process exit, so their key
+        // lives only in memory. Never leave SQLite temporary stores on disk.
+        let mut key = Zeroizing::new([0u8; 32]);
+        rand::RngCore::try_fill_bytes(&mut rand::rngs::OsRng, &mut *key)
+            .map_err(|_| "Cannot generate scan encryption key")?;
+        let key_hex = Zeroizing::new(hex::encode(&*key));
+        let raw_key = Zeroizing::new(format!("x'{}'", &*key_hex));
+        // The SQLCipher C API avoids making an additional SQL string containing
+        // the key. The connection and key buffer stay valid throughout the call.
+        let result = unsafe {
+            rusqlite::ffi::sqlite3_key(
+                connection.handle(),
+                raw_key.as_ptr().cast(),
+                raw_key.len() as i32,
+            )
+        };
+        if result != rusqlite::ffi::SQLITE_OK {
+            return Err("Cannot protect scan database".into());
+        }
+        let version: String = connection.pragma_query_value(None, "cipher_version", |row| row.get(0))
+            .map_err(|_| "Encrypted scan database is unavailable")?;
+        if version.is_empty() {
+            return Err("Encrypted scan database is unavailable".into());
+        }
+        connection.execute_batch("PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF; PRAGMA temp_store=MEMORY; PRAGMA cache_size=-65536;
             CREATE TABLE directories(path TEXT PRIMARY KEY, root TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0);
             CREATE INDEX pending_directories ON directories(done);
             CREATE TABLE files(id TEXT PRIMARY KEY, path TEXT UNIQUE NOT NULL, root TEXT NOT NULL, size INTEGER NOT NULL,
