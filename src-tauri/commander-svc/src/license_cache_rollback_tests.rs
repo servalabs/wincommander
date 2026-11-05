@@ -129,6 +129,26 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
     assert!(validate_dual_request(&with_generation(&next, Some(0), 103), &public, &current).is_err());
     assert!(validate_dual_request(&with_generation(&next, Some(9_007_199_254_740_992), 103), &public, &current).is_err());
     let generation_record = ledger::advance(None, None, &generation_two, &cache(&generation_two), &public, &current, None).unwrap();
+    assert!(ledger::ensure_paid_history_released(&generation_record, &public, &current, None).is_err());
+    let mut trial_value: serde_json::Value = serde_json::from_str(&generation_two.payload).unwrap();
+    trial_value["plan"] = "trial".into();
+    trial_value["license_id"] = "trial-device".into();
+    let trial_payload = trial_value.to_string();
+    let trial_hybrid = jws::sign::assemble(trial_payload.as_bytes(), 8, &current,
+        |message| Ok(new_ed.sign(message).to_bytes().to_vec()), |message| {
+            let mut sig = vec![0; 3309];
+            new_pq.sign(message, &mut sig).map_err(|_| VerifyError::InvalidSignature)?;
+            Ok(sig)
+        }).unwrap();
+    let trial = StoreLicenseCacheRequest { signature: general_purpose::URL_SAFE_NO_PAD.encode(classic.sign(trial_payload.as_bytes()).to_bytes()),
+        payload: trial_payload, hybrid: Some(String::from_utf8(trial_hybrid).unwrap()), seats_used: None, seat_limit: None };
+    let trial_record = ledger::advance(None, None, &trial, &cache(&trial), &public, &current, None).unwrap();
+    assert!(ledger::ensure_paid_history_released(&trial_record, &public, &current, None).is_ok());
+    let mixed = ledger::advance(Some(&generation_record), None, &trial, &cache(&trial), &public, &current, None).unwrap();
+    assert!(ledger::ensure_paid_history_released(&mixed, &public, &current, None).is_err());
+    let mut tampered: serde_json::Value = serde_json::from_slice(&trial_record).unwrap();
+    tampered["records"][0] = "{}".into();
+    assert!(ledger::ensure_paid_history_released(&serde_json::to_vec(&tampered).unwrap(), &public, &current, None).is_err());
     assert!(ledger::advance(Some(&generation_record), None, &generation_one_later, &cache(&generation_one_later), &public, &current, None).is_err());
     assert!(ledger::advance(Some(&generation_record), None, &generation_missing_later, &cache(&generation_missing_later), &public, &current, None).is_err());
     assert!(ledger::advance(Some(&generation_record), None, &generation_three_same_second, &cache(&generation_three_same_second), &public, &current, None).is_ok());
@@ -325,8 +345,10 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
         device_hash: "device".into(), credential_id: [3; 32], generation: 2, cache: cache(&generation_two) };
     let real_completion = ledger::mark_release_completed(&released, &generation_two, 99, &real_journal,
         &real_request, &real_acknowledgement, &public, &current, None).unwrap();
+    assert!(ledger::ensure_paid_history_released(&real_completion, &public, &current, None).is_ok());
     let real_next_activation = ledger::advance(Some(&real_completion), None, &generation_three_same_second,
         &cache(&generation_three_same_second), &public, &current, None).unwrap();
+    assert!(ledger::ensure_paid_history_released(&real_next_activation, &public, &current, None).is_err());
     let new_wire = build_refresh_wire(&generation_three_same_second, &public, &current, "lic-a", "device").unwrap();
     assert_eq!(ledger::can_replace_completed_release(&real_next_activation, &generation_three_same_second, 99,
         &cache(&generation_three_same_second), &[4; 32], &real_acknowledgement, &public, &current, None), Ok(false));
