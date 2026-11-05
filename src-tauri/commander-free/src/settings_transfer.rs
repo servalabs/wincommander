@@ -239,11 +239,11 @@ mod tests {
 
     #[test]
     fn accepts_json_settings_and_preserves_bytes() {
-        let json = "{\"settingsVersion\": 2}";
+        let json = "{\"settingsVersion\": 2, \"app\": {}}";
         assert_eq!(read_import(json.as_bytes()).unwrap(), json);
         assert!(!classify_import(json).unwrap());
         let oversized = format!(
-            "{{\"settingsVersion\":2,\"padding\":\"{}\"}}",
+            "{{\"settingsVersion\":2,\"app\":{{}},\"padding\":\"{}\"}}",
             "x".repeat(4 * 1024 * 1024)
         );
         assert!(classify_import(&oversized).unwrap_err().contains("4 MiB"));

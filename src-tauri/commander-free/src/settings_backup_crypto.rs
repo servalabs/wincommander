@@ -118,7 +118,7 @@ pub(super) fn encrypted(value: &serde_json::Value) -> Result<bool, String> {
             {
                 return Err("This settings backup requires a newer WinCommander version.".into());
             }
-            let recognized = ["settingsVersion", "app", "ideal", "current", "policy"];
+            let recognized = ["app", "ideal", "current", "policy"];
             if !recognized.iter().any(|name| object.contains_key(*name))
                 || ["app", "ideal", "current", "policy"]
                     .iter()
@@ -242,7 +242,8 @@ mod tests {
         assert!(encrypted(&changed).is_err());
         assert!(encrypted(&serde_json::json!({})).is_err());
         assert!(encrypted(&serde_json::json!({"app": 1})).is_err());
-        assert!(!encrypted(&serde_json::json!({"settingsVersion":2})).unwrap());
+        assert!(encrypted(&serde_json::json!({"settingsVersion":2})).is_err());
+        assert!(!encrypted(&serde_json::json!({"settingsVersion":2,"app":{}})).unwrap());
         for legacy in [
             serde_json::json!({"privacy":{"telemetry":{"windowsDisabled":true}}}),
             serde_json::json!({"settingsVersion":1,"tweaks":{"security":{"windowsUpdateDisabled":true}}}),
