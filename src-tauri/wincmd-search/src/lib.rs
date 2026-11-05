@@ -604,6 +604,94 @@ impl SearchEngine {
             .ok_or_else(|| SearchError::Config("encrypted selection missing".into()))?;
         Ok(crate::encrypted_legacy_quarantine::restore_with_fence(old, &selected.index_id, fence)?)
     }
+    /// Inspect a pending transaction after installer restart. The parent must
+    /// provide its established maintenance fence around subsequent actions.
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    pub fn inspect_search_migration(selection_dir: &std::path::Path) -> Result<Option<([u8; 16], bool)>> {
+        let store = crate::encrypted_migration_transaction::Store::open(selection_dir)?;
+        Ok(store.load()?.map(|intent| (intent.transaction, intent.replacement_pending)))
+    }
+
+    /// Persist intent before moving the old cache. Same-ID retries are
+    /// idempotent only when the original directory identity still matches.
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    pub fn begin_search_migration(old: &std::path::Path, selection_dir: &std::path::Path, transaction: [u8; 16],
+        fence: &crate::encrypted_search_fence::SearchOperationFence) -> Result<()> {
+        use crate::encrypted_generation_prototype::{inspect, PinnedSelectionStore, UserProtector};
+        use crate::encrypted_migration_transaction::{Intent, Store};
+        let parent = old.parent().ok_or_else(|| SearchError::Config("invalid legacy index path".into()))?;
+        if selection_dir.parent() != Some(parent) { return Err(SearchError::Config("invalid selection parent".into())); }
+        fence.require_exclusive_for(parent)?;
+        let mut selection = PinnedSelectionStore::open(selection_dir)?;
+        let selected = inspect(&mut selection, &UserProtector)?.ok_or_else(|| SearchError::Config("encrypted selection missing".into()))?;
+        let backup = parent.join(crate::encrypted_legacy_quarantine::backup_name(&selected.index_id)?);
+        let store = Store::open(selection_dir)?;
+        let existing = store.load()?;
+        let intent = match existing {
+            Some(value) if value.transaction == transaction && value.generation == selected.index_id && !value.replacement_pending => value,
+            Some(_) => return Err(SearchError::Config("another search migration needs recovery".into())),
+            None => { let value = Intent::capture(transaction, selected.index_id, old)?; store.prepare(&value)?; value },
+        };
+        let old_present = old.try_exists()?;
+        let backup_present = backup.try_exists()?;
+        match (old_present, backup_present) {
+            (true, false) if intent.matches_path(old)? => { Self::quarantine_selected_with_fence(old, selection_dir, fence)?; },
+            (false, true) if intent.matches_path(&backup)? => {},
+            _ => return Err(SearchError::Config("search migration paths changed; recovery required".into())),
+        }
+        Self::verify_quarantined_selection(old, selection_dir)?;
+        Ok(())
+    }
+
+    /// Set the roll-forward boundary before installer payload replacement.
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    pub fn mark_search_replacement(old: &std::path::Path, selection_dir: &std::path::Path, transaction: [u8; 16],
+        fence: &crate::encrypted_search_fence::SearchOperationFence) -> Result<()> {
+        fence.require_exclusive_for(old.parent().ok_or_else(|| SearchError::Config("invalid search parent".into()))?)?;
+        Self::verify_quarantined_selection(old, selection_dir)?;
+        let store = crate::encrypted_migration_transaction::Store::open(selection_dir)?;
+        let intent = store.load()?.ok_or_else(|| SearchError::Config("search migration intent missing".into()))?;
+        let backup = old.parent().unwrap().join(crate::encrypted_legacy_quarantine::backup_name(&intent.generation)?);
+        if intent.transaction != transaction || !intent.matches_path(&backup)? { return Err(SearchError::Config("search migration identity changed".into())); }
+        store.mark_replacement(&transaction)?; Ok(())
+    }
+
+    /// Complete only a marked and still authenticated migration.
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    pub fn commit_search_migration(old: &std::path::Path, selection_dir: &std::path::Path, transaction: [u8; 16],
+        fence: &crate::encrypted_search_fence::SearchOperationFence) -> Result<()> {
+        fence.require_exclusive_for(old.parent().ok_or_else(|| SearchError::Config("invalid search parent".into()))?)?;
+        Self::verify_quarantined_selection(old, selection_dir)?;
+        let store = crate::encrypted_migration_transaction::Store::open(selection_dir)?;
+        let intent = store.load()?.ok_or_else(|| SearchError::Config("search migration intent missing".into()))?;
+        let backup = old.parent().unwrap().join(crate::encrypted_legacy_quarantine::backup_name(&intent.generation)?);
+        if intent.transaction != transaction || !intent.replacement_pending || !intent.matches_path(&backup)? {
+            return Err(SearchError::Config("search migration is not ready to commit".into()));
+        }
+        store.clear_matching(&transaction)?; Ok(())
+    }
+
+    /// Abort is allowed only before payload replacement, and only restores the
+    /// exact original directory without overwriting any current legacy path.
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    pub fn abort_search_migration(old: &std::path::Path, selection_dir: &std::path::Path, transaction: [u8; 16],
+        fence: &crate::encrypted_search_fence::SearchOperationFence) -> Result<()> {
+        let parent = old.parent().ok_or_else(|| SearchError::Config("invalid search parent".into()))?;
+        fence.require_exclusive_for(parent)?;
+        let store = crate::encrypted_migration_transaction::Store::open(selection_dir)?;
+        let intent = store.load()?.ok_or_else(|| SearchError::Config("search migration intent missing".into()))?;
+        if intent.transaction != transaction || intent.replacement_pending { return Err(SearchError::Config("search migration must roll forward".into())); }
+        let backup = parent.join(crate::encrypted_legacy_quarantine::backup_name(&intent.generation)?);
+        match (old.try_exists()?, backup.try_exists()?) {
+            (true, false) if intent.matches_path(old)? => {},
+            (false, true) if intent.matches_path(&backup)? => {
+                crate::encrypted_legacy_quarantine::restore_with_fence(old, &intent.generation, fence)?;
+                if !intent.matches_path(old)? { return Err(SearchError::Config("restored search identity changed".into())); }
+            },
+            _ => return Err(SearchError::Config("search migration paths changed; recovery required".into())),
+        }
+        store.clear_matching(&transaction)?; Ok(())
+    }
     /// Locate the generation-specific quarantine path for inspection after an
     /// interrupted move. Existence alone is not proof of successful migration.
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
