@@ -122,6 +122,18 @@ pub(crate) fn store_activation(
         "hybrid": verified.hybrid, "seatsUsed": verified.seats_used, "seatLimit": verified.seat_limit }), Some(pending))
 }
 
+/// Staged trial retirement; no IPC or network path invokes this bridge yet.
+#[cfg(feature = "experimental-pq-licence")]
+#[allow(dead_code)] // Not exposed until the paired lifecycle is accepted.
+pub(crate) fn retire_trial(pending: &crate::licence_trial_intent::PendingTrial,
+    receipt: &str) -> Result<(), &'static str> {
+    let public = service_public_key().ok_or("license verification is unavailable")?;
+    let trust = hybrid_trust::configured()?;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| "license clock is unavailable")?.as_secs();
+    rollback::retire_trial(&machine_license_cache_path()?, pending, receipt, now, public, &trust.policy())
+}
+
 fn store_inner(args: serde_json::Value,
     #[cfg(feature = "experimental-pq-licence")] pending: Option<&crate::licence_activation_intent::PendingActivation>,
 ) -> Result<(), &'static str> {

@@ -327,6 +327,14 @@ pub(crate) async fn post_trial_custody(body: Zeroizing<Vec<u8>>) -> Result<Vec<u
     wire::post_trial_custody(body).await
 }
 
+pub(crate) async fn post_trial_settlement(body: Zeroizing<Vec<u8>>) -> Result<Vec<u8>, &'static str> {
+    wire::post_trial_settlement(body).await
+}
+
+pub(crate) async fn post_trial_retirement(body: Zeroizing<Vec<u8>>) -> Result<Vec<u8>, &'static str> {
+    wire::post_trial_retirement(body).await
+}
+
 fn with_activation_credential<T>(
     pending: &crate::licence_activation_intent::PendingActivation,
     verified: &crate::licence_activation_intent::VerifiedActivation,

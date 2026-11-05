@@ -9,7 +9,7 @@ fn paths() -> (String, String) {
 #[test]
 fn trial_credential_commitment_matches_activation_vector() {
     let pending = PendingTrial { operation_id: "b".repeat(64), device_hash: "a".repeat(64),
-        credential_id: [4; 32], credential_secret: [5; 32], issued: None, settlement: None };
+        credential_id: [4; 32], credential_secret: [5; 32], issued: None, issued_accepted_at: None, settlement: None, completed: false, retirement: None };
     assert_eq!(pending.credential_commitment(), "fdef1206908c31b0f3b9ecce79bfb437e32deabe702d7f6fbf529b14f44a136f");
     let request = pending.request_body().unwrap();
     assert_eq!(request.as_slice(), include_str!("fixtures/rust-trial-v4-request.json").trim_end().as_bytes());
@@ -25,7 +25,7 @@ fn trial_credential_commitment_matches_activation_vector() {
 #[test]
 fn trial_response_must_bind_identity_operation_credential_and_fixed_expiry() {
     let pending = PendingTrial { operation_id: "b".repeat(64), device_hash: "a".repeat(64),
-        credential_id: [4; 32], credential_secret: [5; 32], issued: None, settlement: None };
+        credential_id: [4; 32], credential_secret: [5; 32], issued: None, issued_accepted_at: None, settlement: None, completed: false, retirement: None };
     let exp = 100 + 16 * 24 * 60 * 60;
     let claims = serde_json::json!({ "license_id":format!("trial-{}", &pending.device_hash[..16]),
         "device_hash":pending.device_hash, "plan":"trial", "features":["paid"], "base_features":[],
@@ -59,13 +59,15 @@ fn trial_response_must_bind_identity_operation_credential_and_fixed_expiry() {
 #[test]
 fn trial_settlement_candidate_binds_exact_payload_and_credential() {
     let pending = PendingTrial { operation_id: "b".repeat(64), device_hash: "a".repeat(64),
-        credential_id: [4; 32], credential_secret: [5; 32], issued: None, settlement: None };
-    let trial = |payload: &str| VerifiedTrial { payload: payload.into(), operation_id: pending.operation_id.clone(),
+        credential_id: [4; 32], credential_secret: [5; 32], issued: None, issued_accepted_at: None, settlement: None, completed: false, retirement: None };
+    let trial = |payload: &str| VerifiedTrial { payload: payload.into(), hybrid: "synthetic-hybrid".into(), operation_id: pending.operation_id.clone(),
         device_hash: pending.device_hash.clone(), credential_id: pending.credential_id,
         credential_commitment: pending.credential_commitment(), expires_at: 200 };
     let request = settlement_request(&pending, &trial(r#"{"trial":"sample"}"#), 100).unwrap();
     let value: serde_json::Value = serde_json::from_slice(&request).unwrap();
     assert_eq!(value["proof"], "VcxsYGX4mkSq7mlhRssBAPi19rA5KAD2_EZmVh5MCvc");
+    assert_eq!(value["trialPayload"], r#"{"trial":"sample"}"#);
+    assert_eq!(value["hybridTrial"], "synthetic-hybrid");
     let payload: serde_json::Value = serde_json::from_str(value["payload"].as_str().unwrap()).unwrap();
     assert_eq!(payload["trial_payload_digest"], "d728a502237296cc1797ad7c6a43c3fd31b009df9f929a650b306e92f16b0003");
     assert_eq!(payload["credential_id"], URL_SAFE_NO_PAD.encode([4; 32]));
@@ -90,7 +92,7 @@ fn trial_settlement_candidate_binds_exact_payload_and_credential() {
 #[test]
 fn trial_retirement_candidate_binds_operation_and_fresh_id() {
     let pending = PendingTrial { operation_id: "b".repeat(64), device_hash: "a".repeat(64),
-        credential_id: [4; 32], credential_secret: [5; 32], issued: None, settlement: None };
+        credential_id: [4; 32], credential_secret: [5; 32], issued: None, issued_accepted_at: None, settlement: None, completed: false, retirement: None };
     let request = retirement_request(&pending, &"c".repeat(64)).unwrap();
     let value: serde_json::Value = serde_json::from_slice(&request).unwrap();
     assert_eq!(value["proof"], "hPu-0obRVwtd5HRwKQxMOWKSzouRbDOxeeaH58gW-Yw");
@@ -107,7 +109,7 @@ fn trial_response_requires_real_classical_and_hybrid_signatures() {
     use ed25519_dalek::{Signer, SigningKey};
     use wincmd_pq_experiment::{jws, Purpose, VerifyError};
     let pending = PendingTrial { operation_id: "b".repeat(64), device_hash: "a".repeat(64),
-        credential_id: [4; 32], credential_secret: [5; 32], issued: None, settlement: None };
+        credential_id: [4; 32], credential_secret: [5; 32], issued: None, issued_accepted_at: None, settlement: None, completed: false, retirement: None };
     let exp = 100 + 16 * 24 * 60 * 60;
     let payload = serde_json::json!({"license_id":format!("trial-{}", &pending.device_hash[..16]),
         "device_hash":pending.device_hash, "plan":"trial", "features":["paid"], "base_features":[],
@@ -142,7 +144,7 @@ fn trial_receipts_require_both_signatures_exact_payload_and_purpose() {
     use ed25519_dalek::{Signer, SigningKey};
     use wincmd_pq_experiment::{jws, Purpose, VerifyError};
     let pending = PendingTrial { operation_id: "b".repeat(64), device_hash: "a".repeat(64),
-        credential_id: [4; 32], credential_secret: [5; 32], issued: None, settlement: None };
+        credential_id: [4; 32], credential_secret: [5; 32], issued: None, issued_accepted_at: None, settlement: None, completed: false, retirement: None };
     let request = retirement_request(&pending, &"c".repeat(64)).unwrap();
     let body: serde_json::Value = serde_json::from_slice(&request).unwrap();
     let payload = body["payload"].as_str().unwrap();
@@ -245,10 +247,102 @@ fn trial_issued_and_settlement_evidence_survive_restart_and_refuse_replacement()
     record_settlement_at(&Anchor::test_user(path.clone()), &MachineDpapi, &pending, &receipt, 150, &trust, verify).unwrap();
     let final_state = load_at(&Anchor::test_user(path.clone()), &MachineDpapi).unwrap().unwrap();
     assert_eq!(final_state.settlement.as_deref(), Some(receipt.as_str()));
+    assert!(ensure_idle_at(&reopened, &MachineDpapi).is_err());
+    let cache = std::cell::RefCell::new(None::<String>);
+    {
+        let _lock = crate::licence_security_lock().unwrap();
+        assert!(finalize_at(&reopened, &MachineDpapi, &pending, 150, &trust, verify, |envelope| {
+            *cache.borrow_mut() = Some(envelope.payload.clone());
+            Err("simulated interruption after cache write")
+        }).is_err());
+    }
+    assert!(ensure_idle_at(&reopened, &MachineDpapi).is_err());
+    {
+        let _lock = crate::licence_security_lock().unwrap();
+        finalize_at(&reopened, &MachineDpapi, &pending, 150, &trust, verify, |envelope| {
+            assert_eq!(cache.borrow().as_deref(), Some(envelope.payload.as_str()));
+            Ok(())
+        }).unwrap();
+    }
+    assert!(ensure_idle_at(&Anchor::test_user(path.clone()), &MachineDpapi).is_ok());
+    let retirement_id = begin_retirement_at(&reopened, &MachineDpapi, &pending, 150, &trust, verify).unwrap();
+    assert_eq!(begin_retirement_at(&reopened, &MachineDpapi, &pending, 150, &trust, verify).unwrap(), retirement_id);
+    assert!(ensure_idle_at(&reopened, &MachineDpapi).is_err());
+    let old_trial = serde_json::json!({"plan":"trial", "device_hash":pending.device_hash}).to_string();
+    let paid = serde_json::json!({"plan":"pro", "device_hash":pending.device_hash}).to_string();
+    assert!(guard_cache_payload_at(&reopened, &MachineDpapi, &old_trial).is_err());
+    assert!(guard_cache_payload_at(&reopened, &MachineDpapi, &paid).is_ok());
+    {
+        let _lock = crate::licence_security_lock().unwrap();
+        assert!(finalize_at(&reopened, &MachineDpapi, &pending, 150, &trust, verify,
+            |_| panic!("retirement fence must prevent reactivation")).is_err());
+    }
+    let retirement = retirement_request(&pending, &retirement_id).unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&retirement).unwrap();
+    let retirement_policy = jws::Trust { purpose: Purpose::LicenceTrialRetirement, ..trust };
+    let retirement_receipt = String::from_utf8(jws::sign::assemble(value["payload"].as_str().unwrap().as_bytes(),
+        1, &retirement_policy, |message| Ok(ed.sign(message).to_bytes().to_vec()),
+        |message| { let mut value = vec![0; 3309]; pq.sign(message, &mut value)
+            .map_err(|_| VerifyError::InvalidSignature)?; Ok(value) }).unwrap()).unwrap();
+    {
+        let _lock = crate::licence_security_lock().unwrap();
+        assert!(finish_retirement_at(&reopened, &MachineDpapi, &pending, &retirement_receipt, 150, &trust, verify,
+            |_| Err("simulated cache removal failure")).is_err());
+    }
+    assert!(cache.borrow().is_some());
+    assert!(ensure_idle_at(&reopened, &MachineDpapi).is_err());
+    {
+        let _lock = crate::licence_security_lock().unwrap();
+        finish_retirement_at(&reopened, &MachineDpapi, &pending, &retirement_receipt, 150, &trust, verify, |envelope| {
+            assert_eq!(cache.borrow().as_deref(), Some(envelope.payload.as_str()));
+            *cache.borrow_mut() = None;
+            Ok(())
+        }).unwrap();
+    }
+    assert!(cache.borrow().is_none());
+    assert!(ensure_idle_at(&reopened, &MachineDpapi).is_ok());
+    assert!(guard_cache_payload_at(&reopened, &MachineDpapi, &old_trial).is_err());
     let raw = reopened.read().unwrap().unwrap();
     assert!(!raw.windows(16).any(|part| part == &pending.credential_secret[..16]));
     assert!(record_settlement_at(&reopened, &MachineDpapi, &pending, &receipt, exp, &trust, verify).is_err());
     super::super::license_cache::licence_device_anchor::remove_test_key(&path).unwrap();
+
+    // A lost settlement can be retired after expiry, but never granted.
+    let (expired_path, expired_gate_path) = paths();
+    let expired_store = Anchor::test_user(expired_path.clone());
+    let expired = begin_at(&expired_store, &Anchor::test_user(expired_gate_path), &MachineDpapi,
+        &"a".repeat(64), || Ok(())).unwrap();
+    let mut expired_claims = claims.clone();
+    expired_claims["trial_operation_id"] = serde_json::json!(expired.operation_id);
+    expired_claims["trial_credential_id"] = serde_json::json!(expired.credential_id.iter().map(|b| format!("{b:02x}")).collect::<String>());
+    expired_claims["trial_credential_commitment"] = serde_json::json!(expired.credential_commitment());
+    let expired_response = serde_json::to_vec(&serde_json::json!({"ok":true, "payload":expired_claims.to_string(),
+        "signature":"classical", "hybrid":"hybrid"})).unwrap();
+    assert!(begin_retirement_at(&expired_store, &MachineDpapi, &expired, exp, &trust, verify).is_err());
+    record_issued_at(&expired_store, &MachineDpapi, &expired, &expired_response, 150, verify).unwrap();
+    assert!(begin_retirement_at(&expired_store, &MachineDpapi, &expired, 150, &trust, verify).is_err());
+    let expired_id = begin_retirement_at(&expired_store, &MachineDpapi, &expired, exp, &trust, verify).unwrap();
+    let saved_expired = load_at(&expired_store, &MachineDpapi).unwrap().unwrap();
+    assert!(expired_custody_request(&saved_expired, exp, &trust, verify).is_ok());
+    assert!(ensure_idle_at(&expired_store, &MachineDpapi).is_err());
+    {
+        let _lock = crate::licence_security_lock().unwrap();
+        assert!(finalize_at(&expired_store, &MachineDpapi, &expired, exp, &trust, verify,
+            |_| panic!("expired trial must not reach cache")).is_err());
+    }
+    let expired_request = retirement_request(&saved_expired, &expired_id).unwrap();
+    let expired_value: serde_json::Value = serde_json::from_slice(&expired_request).unwrap();
+    let expired_receipt = String::from_utf8(jws::sign::assemble(expired_value["payload"].as_str().unwrap().as_bytes(),
+        1, &retirement_policy, |message| Ok(ed.sign(message).to_bytes().to_vec()),
+        |message| { let mut value = vec![0; 3309]; pq.sign(message, &mut value)
+            .map_err(|_| VerifyError::InvalidSignature)?; Ok(value) }).unwrap()).unwrap();
+    {
+        let _lock = crate::licence_security_lock().unwrap();
+        finish_retirement_at(&expired_store, &MachineDpapi, &expired, &expired_receipt, exp, &trust, verify,
+            |_| Ok(())).unwrap();
+    }
+    assert!(ensure_idle_at(&expired_store, &MachineDpapi).is_ok());
+    super::super::license_cache::licence_device_anchor::remove_test_key(&expired_path).unwrap();
 }
 
 #[test]

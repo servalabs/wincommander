@@ -330,7 +330,7 @@ pub(super) async fn post_trial_v4(body: zeroize::Zeroizing<Vec<u8>>) -> Result<V
     if body.is_empty() || body.len() > 16 * 1024 { return Err(INVALID); }
     let client = required_hybrid_client()?;
     let bytes = bytes::Bytes::from_owner(body);
-    post_body(&client, &format!("{LICENCE_ORIGIN}/trial/v4"), bytes.into()).await
+    post_body(&client, &format!("{LICENCE_ORIGIN}/experimental/trial/v4"), bytes.into()).await
 }
 
 /// Unwired secret-custody transport, restricted to the fixed hybrid origin.
@@ -339,6 +339,21 @@ pub(super) async fn post_trial_custody(body: zeroize::Zeroizing<Vec<u8>>) -> Res
     let client = required_hybrid_client()?;
     let bytes = bytes::Bytes::from_owner(body);
     post_body(&client, &format!("{LICENCE_ORIGIN}/experimental/trial/v4/enrol"), bytes.into()).await
+}
+
+/// Unwired trial exchanges use fixed paths and the required hybrid transport.
+pub(super) async fn post_trial_settlement(body: zeroize::Zeroizing<Vec<u8>>) -> Result<Vec<u8>, &'static str> {
+    if body.is_empty() || body.len() > 32 * 1024 { return Err(INVALID); }
+    let client = required_hybrid_client()?;
+    let bytes = bytes::Bytes::from_owner(body);
+    post_body(&client, &format!("{LICENCE_ORIGIN}/experimental/trial/v4/settle"), bytes.into()).await
+}
+
+pub(super) async fn post_trial_retirement(body: zeroize::Zeroizing<Vec<u8>>) -> Result<Vec<u8>, &'static str> {
+    if body.is_empty() || body.len() > 16 * 1024 { return Err(INVALID); }
+    let client = required_hybrid_client()?;
+    let bytes = bytes::Bytes::from_owner(body);
+    post_body(&client, &format!("{LICENCE_ORIGIN}/experimental/trial/v4/retire"), bytes.into()).await
 }
 
 /// Proof that this process sent the exact acknowledgement and received a
