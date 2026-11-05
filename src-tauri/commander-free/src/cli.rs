@@ -252,6 +252,14 @@ fn parse_action(args: &[String]) -> Result<Action, String> {
         ["commands", "describe", id] => Ok(Action::Describe((*id).to_string())),
         ["audit", "catalog"] => Ok(Action::AuditCatalog),
         ["run", id, rest @ ..] => {
+            // These commands carry a backup password. Reject before parsing or
+            // echoing parameters, including the CLI's dry-run preview.
+            if matches!(
+                *id,
+                "tauri:decrypt_settings_import_file" | "tauri:write_settings_export_file"
+            ) {
+                return Err("Settings backup passwords require the interactive window".into());
+            }
             let mut params = json!({});
             let mut dry_run = false;
             let mut confirmation = None;
@@ -1279,7 +1287,6 @@ mod tests {
         assert_eq!(backend["names"], r#"["a","b"]"#);
     }
 
-
     #[test]
     fn catalog_audit_does_not_call_intentional_ui_only_commands_missing() {
         let descriptions = catalog()
@@ -1298,6 +1305,25 @@ mod tests {
     /// value. On a read-only command no confirmation is checked, so the operator
     /// asked for a preview and got a live execution. The same swallow could
     /// smuggle `--safe-copy` through to the argv scan in `lib.rs::run`.
+    #[test]
+    fn backup_password_commands_reject_cli_before_reading_or_echoing_params() {
+        for command in [
+            "tauri:decrypt_settings_import_file",
+            "tauri:write_settings_export_file",
+        ] {
+            let argv = ["run", command, "--params", "secret-password", "--dry-run"]
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect::<Vec<_>>();
+            let error = match parse_action(&argv) {
+                Err(error) => error,
+                Ok(_) => panic!("backup command must be rejected"),
+            };
+            assert!(error.contains("interactive window"));
+            assert!(!error.contains("secret-password"));
+        }
+    }
+
     #[test]
     fn a_flag_is_never_accepted_as_an_option_value() {
         let argv: Vec<String> = ["run", "tauri:get_settings", "--confirm", "--dry-run"]

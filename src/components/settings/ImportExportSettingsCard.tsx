@@ -143,7 +143,7 @@ export default function ImportExportSettingsCard() {
                                 <strong>Export</strong> — save your configuration in a password-protected backup.
                             </div>
                             <div className="import-export-info__item">
-                                <strong>Import</strong> — load a previously exported JSON file and apply it to this device.
+                                <strong>Import</strong> — restore an encrypted backup or a version 2 plaintext JSON backup. Older version 1 and versionless backups cannot be imported.
                             </div>
                         </PopoverContent>
                     </Popover>

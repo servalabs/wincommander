@@ -33,6 +33,8 @@ WinCommander is the third option: a single, open-source command console that sho
 
 **No accounts. No cloud. Zero telemetry.** The app's only network calls are the update check and (if you buy Pro) license activation.
 
+Settings backups created in Backup & Restore are password-protected. Keep the password safe: a backup cannot be restored without it. Existing version 2 plaintext settings backups can still be imported; version 1 and versionless backups cannot be imported safely. Older plaintext backups remain readable to anyone who can access them.
+
 ## Install
 
 1. Download the latest installer from [Releases](https://github.com/servalabs/wincommander/releases).

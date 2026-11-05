@@ -15,6 +15,7 @@ const FORMAT: &str = "wincommander-encrypted-settings-v1";
 const AAD: &[u8] = b"WinCommander portable settings backup v1\0";
 const MAX_PLAINTEXT: usize = 4 * 1024 * 1024;
 pub(super) const MAX_FILE: u64 = 6 * 1024 * 1024;
+pub(super) const SUPPORTED_SETTINGS_VERSION: u64 = 2;
 const AUTH_ERROR: &str = "Password incorrect or backup damaged.";
 
 #[derive(Serialize, Deserialize)]
@@ -91,6 +92,32 @@ pub(super) fn encrypted(value: &serde_json::Value) -> Result<bool, String> {
             Err(AUTH_ERROR.into())
         }
         _ => {
+            // The import writer deserializes v2 directly; v1 root fields would
+            // otherwise be ignored and silently replaced with defaults.
+            if [
+                "privacy",
+                "tweaks",
+                "network",
+                "identity",
+                "apps",
+                "productivity",
+            ]
+            .iter()
+            .any(|name| object.contains_key(*name))
+                || object
+                    .get("settingsVersion")
+                    .and_then(serde_json::Value::as_u64)
+                    .is_none_or(|version| version < SUPPORTED_SETTINGS_VERSION)
+            {
+                return Err("This older settings backup cannot be imported safely.".into());
+            }
+            if object
+                .get("settingsVersion")
+                .and_then(serde_json::Value::as_u64)
+                .is_some_and(|version| version > SUPPORTED_SETTINGS_VERSION)
+            {
+                return Err("This settings backup requires a newer WinCommander version.".into());
+            }
             let recognized = ["settingsVersion", "app", "ideal", "current", "policy"];
             if !recognized.iter().any(|name| object.contains_key(*name))
                 || ["app", "ideal", "current", "policy"]
@@ -158,7 +185,7 @@ mod tests {
 
     #[test]
     fn portable_roundtrip_hides_secrets_and_uses_fresh_salt_and_nonce() {
-        let original = r#"{"app":{"flows":[{"secret":"do-not-expose"}]}}"#;
+        let original = r#"{"settingsVersion":2,"app":{"flows":[{"secret":"do-not-expose"}]}}"#;
         let first = encrypt(original, "a-long-backup-password").unwrap();
         let second = encrypt(original, "a-long-backup-password").unwrap();
         assert!(!first.contains("do-not-expose"));
@@ -216,15 +243,24 @@ mod tests {
         assert!(encrypted(&serde_json::json!({})).is_err());
         assert!(encrypted(&serde_json::json!({"app": 1})).is_err());
         assert!(!encrypted(&serde_json::json!({"settingsVersion":2})).unwrap());
+        for legacy in [
+            serde_json::json!({"privacy":{"telemetry":{"windowsDisabled":true}}}),
+            serde_json::json!({"settingsVersion":1,"tweaks":{"security":{"windowsUpdateDisabled":true}}}),
+            serde_json::json!({"settingsVersion":1,"app":{}}),
+        ] {
+            assert!(encrypted(&legacy)
+                .unwrap_err()
+                .contains("older settings backup"));
+        }
     }
 
     #[test]
     fn decrypts_independently_generated_argon2id_aes256_gcm_fixture() {
         // Produced by Node's independent Argon2id and AES-GCM implementation.
-        let backup = r#"{"format":"wincommander-encrypted-settings-v1","salt":"AAECAwQFBgcICQoLDA0ODw==","nonce":"EBESExQVFhcYGRob","ciphertext":"xvier34tOza3p5MDJsbEf/9IPpsoSgD5cM8="}"#;
+        let backup = r#"{"format":"wincommander-encrypted-settings-v1","salt":"AAECAwQFBgcICQoLDA0ODw==","nonce":"EBESExQVFhcYGRob","ciphertext":"xviMunp7aCOtqbGICmUdxkAswVogoL6p56mcxiqFlcFrChb6gNrRC7aZ5psnMw=="}"#;
         assert_eq!(
             decrypt(backup, "a-long-backup-password").unwrap(),
-            r#"{"app":{}}"#
+            r#"{"settingsVersion":2,"app":{}}"#
         );
     }
 }

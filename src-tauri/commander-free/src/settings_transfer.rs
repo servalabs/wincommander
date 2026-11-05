@@ -16,7 +16,11 @@ static TRANSFER_ACTIVE: AtomicBool = AtomicBool::new(false);
 struct TransferGuard;
 impl TransferGuard {
     fn begin() -> Result<Self, String> {
-        if crate::cli::tauri_runtime_active() {
+        Self::begin_for_runtime(crate::cli::tauri_runtime_active())
+    }
+
+    fn begin_for_runtime(cli_active: bool) -> Result<Self, String> {
+        if cli_active {
             return Err("Settings file selection requires an interactive window".into());
         }
         TRANSFER_ACTIVE
@@ -208,6 +212,19 @@ pub async fn decrypt_settings_import_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backup_reader_supports_current_settings_version() {
+        assert_eq!(
+            backup_crypto::SUPPORTED_SETTINGS_VERSION,
+            u64::from(crate::settings::SETTINGS_VERSION)
+        );
+    }
+
+    #[test]
+    fn file_transfer_and_decrypt_guard_rejects_cli_runtime() {
+        assert!(TransferGuard::begin_for_runtime(true).is_err());
+    }
 
     #[test]
     fn export_replaces_the_destination_only_with_a_complete_backup() {
