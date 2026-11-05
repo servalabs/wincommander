@@ -26,11 +26,19 @@ use windows_sys::Win32::Storage::FileSystem::{
 const LOCK_FILE: &str = ".fleet-machine-owner.lock";
 const UNAVAILABLE: &str = "fleet_owner_unavailable";
 
-/// Holds both the directory and exclusive lock-file handles for the complete
-/// store lifetime. Neither handle permits rename or deletion while held.
+/// Holds the exclusive lock and directory for the store lifetime. Production
+/// also retains the validated parent opened before the child store is created.
 pub(super) struct OwnerLease {
-    _directory: File,
     _lock: File,
+    _directory: File,
+    _parent: Option<File>,
+}
+
+impl OwnerLease {
+    pub(super) fn with_parent(mut self, parent: File) -> Self {
+        self._parent = Some(parent);
+        self
+    }
 }
 
 fn verify_handle(file: &File, directory: bool) -> Result<(), &'static str> {
@@ -50,17 +58,26 @@ fn verify_handle(file: &File, directory: bool) -> Result<(), &'static str> {
     crate::peer_auth_deployment_acl::verify_file_handle(file).map_err(|_| UNAVAILABLE)
 }
 
-pub(super) fn acquire(directory: &Path) -> Result<OwnerLease, &'static str> {
+fn checked_directory(directory: &Path) -> Result<File, &'static str> {
     if !directory.is_absolute() {
         return Err(UNAVAILABLE);
     }
-    let parent = OpenOptions::new()
+    let handle = OpenOptions::new()
         .access_mode(FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | 0x0002_0000) // READ_CONTROL
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
         .open(directory)
         .map_err(|_| UNAVAILABLE)?;
-    verify_handle(&parent, true)?;
+    verify_handle(&handle, true)?;
+    Ok(handle)
+}
+
+pub(super) fn protect_parent(directory: &Path) -> Result<File, &'static str> {
+    checked_directory(directory.parent().ok_or(UNAVAILABLE)?)
+}
+
+pub(super) fn acquire(directory: &Path) -> Result<OwnerLease, &'static str> {
+    let parent = checked_directory(directory)?;
     // The directory is protected, but its ACL may not have inheritable ACEs.
     // Supply a protected SYSTEM/Administrators DACL when creating the file;
     // Windows ignores this descriptor for an existing file, which is checked
@@ -119,8 +136,9 @@ pub(super) fn acquire(directory: &Path) -> Result<OwnerLease, &'static str> {
     let lock = unsafe { File::from_raw_handle(handle) };
     verify_handle(&lock, false)?;
     Ok(OwnerLease {
-        _directory: parent,
         _lock: lock,
+        _directory: parent,
+        _parent: None,
     })
 }
 

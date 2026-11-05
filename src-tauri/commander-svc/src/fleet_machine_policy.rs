@@ -41,18 +41,53 @@ pub(crate) fn system_store() -> Result<&'static FleetMachinePolicy, &'static str
     if let Some(store) = STORE.get() { return Ok(store); }
     let _guard = INIT.lock().map_err(|_| "store_unavailable")?;
     if let Some(store) = STORE.get() { return Ok(store); }
-    let base = std::env::var_os("ProgramData").ok_or("store_unavailable")?;
-    let dir = PathBuf::from(base).join("WinCommander").join("fleet-machine");
-    let store = open_system_store(dir)?;
+    let store = open_system_store(machine_store_dir()?)?;
     let _ = STORE.set(store);
     STORE.get().ok_or("store_unavailable")
 }
 
 #[cfg(windows)]
+fn machine_store_dir() -> Result<PathBuf, &'static str> {
+    use std::{ffi::OsString, os::windows::ffi::OsStringExt};
+    use windows_sys::Win32::{
+        System::Com::CoTaskMemFree,
+        UI::Shell::{FOLDERID_ProgramData, SHGetKnownFolderPath},
+    };
+    struct AllocatedPath(*mut u16);
+    impl Drop for AllocatedPath {
+        fn drop(&mut self) {
+            unsafe { CoTaskMemFree(self.0.cast()) };
+        }
+    }
+    let mut value = std::ptr::null_mut();
+    // Windows allocates this buffer; the guard frees it even on failure.
+    let result = unsafe {
+        SHGetKnownFolderPath(&FOLDERID_ProgramData, 0, std::ptr::null_mut(), &mut value)
+    };
+    let value = AllocatedPath(value);
+    if result < 0 || value.0.is_null() {
+        return Err("store_unavailable");
+    }
+    // The Windows API returns a NUL-terminated buffer valid until it is freed.
+    let length = (0..32768)
+        .find(|&offset| unsafe { *value.0.add(offset) } == 0)
+        .filter(|&length| length != 0)
+        .ok_or("store_unavailable")?;
+    let base = PathBuf::from(OsString::from_wide(unsafe {
+        std::slice::from_raw_parts(value.0, length)
+    }));
+    if !base.is_absolute() {
+        return Err("store_unavailable");
+    }
+    Ok(base.join("WinCommander").join("fleet-machine"))
+}
+
+#[cfg(windows)]
 fn open_system_store(dir: PathBuf) -> Result<FleetMachinePolicy, &'static str> {
+    let parent = machine_owner::protect_parent(&dir)?;
     let fs = WindowsFleetPolicyFs;
     fs.ensure_dir_secure(&dir).map_err(|_| "insecure_store")?;
-    let lease = machine_owner::acquire(&dir)?;
+    let lease = machine_owner::acquire(&dir)?.with_parent(parent);
     let mut store = FleetMachinePolicy::open(Box::new(fs), dir)?;
     store._owner = Some(lease);
     Ok(store)

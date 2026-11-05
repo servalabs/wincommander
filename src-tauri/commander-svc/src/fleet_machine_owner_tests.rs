@@ -36,6 +36,15 @@ fn test_name(name: &str) -> String {
     format!("{}::{name}", module_path!().split_once("::").unwrap().1)
 }
 
+fn assert_child_test_passed(output: &std::process::Output) {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "child test failed: {stdout}");
+    assert!(
+        stdout.contains("running 1 test") && stdout.contains("1 passed; 0 failed"),
+        "child did not run exactly one test: {stdout}"
+    );
+}
+
 #[test]
 fn owner_lease_child() {
     let Some(path) = std::env::var_os("WINCMD_FLEET_MACHINE_OWNER_TEST") else {
@@ -56,6 +65,34 @@ fn owner_lease_child() {
 }
 
 #[test]
+fn machine_root_environment_child() {
+    let Some(expected) = std::env::var_os("WINCMD_FLEET_MACHINE_ROOT_EXPECTED") else {
+        return;
+    };
+    assert_eq!(
+        super::super::machine_store_dir().unwrap(),
+        PathBuf::from(expected)
+    );
+}
+
+#[test]
+fn machine_root_is_stable_across_process_environments() {
+    let expected = super::super::machine_store_dir().unwrap();
+    for suffix in ["first", "second"] {
+        let fake = std::env::temp_dir().join(format!("untrusted-fleet-root-{suffix}"));
+        let result = Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg(test_name("machine_root_environment_child"))
+            .arg("--nocapture")
+            .env("ProgramData", fake)
+            .env("WINCMD_FLEET_MACHINE_ROOT_EXPECTED", &expected)
+            .output()
+            .unwrap();
+        assert_child_test_passed(&result);
+    }
+}
+
+#[test]
 fn exclusive_owner_contends_across_processes_and_releases_on_drop() {
     let root = ProtectedDir::new();
     let lease = acquire(&root.0).unwrap();
@@ -71,18 +108,60 @@ fn exclusive_owner_contends_across_processes_and_releases_on_drop() {
             .output()
             .unwrap()
     };
-    assert!(child("busy").status.success());
+    assert_child_test_passed(&child("busy"));
     drop(lease);
-    assert!(child("free").status.success());
+    assert_child_test_passed(&child("free"));
+}
+
+#[test]
+fn protected_parent_cannot_be_replaced_before_child_creation() {
+    let root = ProtectedDir::new();
+    let child = root.0.join("not-created");
+    let moved = root.0.with_extension("moved");
+    let parent = protect_parent(&child).unwrap();
+    let renamed = std::fs::rename(&root.0, &moved);
+    if renamed.is_ok() {
+        std::fs::rename(&moved, &root.0).unwrap();
+    }
+    assert!(renamed.is_err());
+    assert!(!child.exists());
+    drop(parent);
+    std::fs::rename(&root.0, &moved).unwrap();
+    std::fs::rename(&moved, &root.0).unwrap();
+}
+
+#[test]
+fn rejects_untrusted_writer_on_the_store_parent() {
+    let root = ProtectedDir::new();
+    let result = Command::new("icacls.exe")
+        .arg(&root.0)
+        .arg("/grant:r")
+        .arg("*S-1-1-0:(F)")
+        .output()
+        .unwrap();
+    assert!(result.status.success());
+    assert!(protect_parent(&root.0.join("fleet-machine")).is_err());
+    assert!(!root.0.join("fleet-machine").exists());
 }
 
 #[test]
 fn real_system_store_holds_ownership_until_dropped() {
     let root = ProtectedDir::new();
     let path = root.0.join("fleet-machine");
+    let moved_parent = root.0.with_extension("moved");
+    std::fs::rename(&root.0, &moved_parent).unwrap();
+    std::fs::rename(&moved_parent, &root.0).unwrap();
     let store = super::super::open_system_store(path.clone()).unwrap();
     assert!(super::super::open_system_store(path.clone()).is_err());
     assert!(std::fs::rename(&path, root.0.join("moved-store")).is_err());
+    let renamed = std::fs::rename(&root.0, &moved_parent);
+    if renamed.is_ok() {
+        std::fs::rename(&moved_parent, &root.0).unwrap();
+    }
+    assert!(
+        renamed.is_err(),
+        "the store parent must stay fixed while the service owns it"
+    );
     let busy = Command::new(std::env::current_exe().unwrap())
         .arg("--exact")
         .arg(test_name("owner_lease_child"))
@@ -90,7 +169,7 @@ fn real_system_store_holds_ownership_until_dropped() {
         .env("WINCMD_FLEET_MACHINE_OWNER_EXPECT", "busy")
         .output()
         .unwrap();
-    assert!(busy.status.success());
+    assert_child_test_passed(&busy);
     drop(store);
     assert!(super::super::open_system_store(path).is_ok());
 }
