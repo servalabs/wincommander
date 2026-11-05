@@ -28,9 +28,6 @@ ${Using:StrFunc} UnStrStr
 !define WC_MIGRATE_SYSTEM_MAINTENANCE_TASKS "${__FILEDIR__}\migrate-system-maintenance-tasks.ps1"
 !define WC_WIPE_TASK_MODULE "${__FILEDIR__}\..\..\wincmd-shared\scripts\auto-erase.ps1"
 !ifdef WC_EXPERIMENTAL_USER_STAGE_ONLY
-!if "${INSTALLMODE}" != "currentUser"
-!error "Original-user staging requires currentUser installer mode"
-!endif
 !define WC_STAGE_ORIGINAL_USER_SETTINGS "${__FILEDIR__}\stage-original-user-settings.ps1"
 !define WC_SETTINGS_STAGE_SERVICE "${__FILEDIR__}\settings-stage-service.ps1"
 !ifdef WC_EXPERIMENTAL_SEARCH_FENCE
@@ -199,6 +196,19 @@ Function WC_RestoreMovedSearch
 FunctionEnd
 !endif
 
+; Invoke only after every installation step and migration commit has succeeded.
+!macro WC_RELEASE_SEARCH_BEFORE_LAUNCH
+  !ifdef WC_EXPERIMENTAL_SEARCH_FENCE
+    ${If} $WCSearchFenceHandle != 0
+      System::Call 'kernel32::CloseHandle(p $WCSearchFenceHandle) i .r0'
+      ${If} $0 == 0
+        Abort "The search maintenance lock could not be released. Restart WinCommander after setup closes."
+      ${EndIf}
+      StrCpy $WCSearchFenceHandle 0
+    ${EndIf}
+  !endif
+!macroend
+
 !macro WC_ABORT_STOP_FAILURE stage message
   !ifdef WC_EXPERIMENTAL_USER_STAGE_ONLY
     !if "${stage}" == "preinstall"
@@ -277,6 +287,11 @@ FunctionEnd
 ; migration can run its old uninstaller before this hook, so keep the licence
 ; fallback for other update paths without relying on it for Pro preservation.
 !macro NSIS_HOOK_PREINSTALL
+  !ifdef WC_EXPERIMENTAL_USER_STAGE_ONLY
+    !if "${INSTALLMODE}" != "currentUser"
+      !error "Original-user staging requires currentUser installer mode"
+    !endif
+  !endif
   ; Start this install's evidence fresh, then retain it through POSTINSTALL so
   ; an update report includes the desktop close and the old-service shutdown.
   Delete "${WC_LIFECYCLE_DIAGNOSTIC_LOG}"
@@ -352,6 +367,12 @@ FunctionEnd
     ${If} $0 != 1
       Call WC_RestoreMovedSearch
       ${If} $R6 != 1
+        ${If} $WCUserStageServiceRunning == 1
+          Call WC_RestoreUserStageService
+          ${If} $R6 != 1
+            Abort "Search backup recovery and service restart both failed. Existing data remains in its backup; manual recovery is required."
+          ${EndIf}
+        ${EndIf}
         Abort "Search migration failed and the prior index could not be restored. Existing data remains in its backup; recovery is required."
       ${EndIf}
       ${If} $WCUserStageServiceRunning == 1
@@ -369,6 +390,12 @@ FunctionEnd
     ${If} $0 != 0
       Call WC_RestoreMovedSearch
       ${If} $R6 != 1
+        ${If} $WCUserStageServiceRunning == 1
+          Call WC_RestoreUserStageService
+          ${If} $R6 != 1
+            Abort "Search backup recovery and service restart both failed. Existing data remains in its backup; manual recovery is required."
+          ${EndIf}
+        ${EndIf}
         Abort "Search verification failed and the prior index could not be restored. Existing data remains in its backup; recovery is required."
       ${EndIf}
       !insertmacro WC_ABORT_STOP_FAILURE "preinstall" "WinCommander could not verify the protected search index."
@@ -389,6 +416,12 @@ FunctionEnd
         !ifdef WC_EXPERIMENTAL_SEARCH_FENCE
           Call WC_RestoreMovedSearch
           ${If} $R6 != 1
+            ${If} $WCUserStageServiceRunning == 1
+              Call WC_RestoreUserStageService
+              ${If} $R6 != 1
+                Abort "Search backup recovery and service restart both failed. Existing data remains in its backup; manual recovery is required."
+              ${EndIf}
+            ${EndIf}
             Abort "Settings staging failed and the prior search index could not be restored. Existing data remains in its backup; recovery is required."
           ${EndIf}
         !endif
