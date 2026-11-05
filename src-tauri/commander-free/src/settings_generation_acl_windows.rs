@@ -176,6 +176,7 @@ mod tests {
     // Requires an elevated Windows test process; run separately as an elevated
     // Administrator and as LocalSystem before the installer can use this seam.
     #[test]
+    #[ignore = "requires elevated Administrator and LocalSystem acceptance runs"]
     fn elevated_provision_is_idempotent_and_rejects_foreign_acl_without_modification() {
         use std::io::Write;
         let root = tempfile::tempdir().unwrap();

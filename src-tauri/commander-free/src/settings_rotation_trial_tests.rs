@@ -389,6 +389,7 @@ fn selected_generation_update_preserves_other_sections_and_fails_closed() {
 }
 
 #[test]
+#[cfg_attr(windows, ignore = "requires elevated machine-lock ACL provisioning; run explicitly in Windows acceptance")]
 fn locked_selected_generation_serializes_owners_and_never_falls_back() {
     let root = tempfile::tempdir().unwrap();
     provision_test_lock(root.path());
@@ -416,6 +417,7 @@ fn locked_selected_generation_serializes_owners_and_never_falls_back() {
 }
 
 #[test]
+#[cfg_attr(windows, ignore = "requires elevated machine-lock ACL provisioning; run explicitly in Windows acceptance")]
 fn selected_store_recovers_real_pending_files_at_each_publish_boundary() {
     let root = tempfile::tempdir().unwrap();
     provision_test_lock(root.path());
@@ -456,6 +458,7 @@ fn initial_generation_accepts_mixed_legacy_and_individually_wrapped_sections() {
 }
 
 #[test]
+#[cfg_attr(windows, ignore = "requires elevated machine-lock ACL provisioning; run explicitly in Windows acceptance")]
 fn current_user_generation_preserves_mixed_sections_and_rejects_machine_scope() {
     let old = [42; 32];
     let mut input = sections(&old);
@@ -484,6 +487,7 @@ fn current_user_generation_preserves_mixed_sections_and_rejects_machine_scope() 
 }
 
 #[test]
+#[cfg_attr(windows, ignore = "requires elevated machine-lock ACL provisioning; run explicitly in Windows acceptance")]
 fn shared_readers_never_repair_pending_authority_and_exclude_writers() {
     let root = tempfile::tempdir().unwrap();
     provision_test_lock(root.path());

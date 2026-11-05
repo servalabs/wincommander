@@ -32,3 +32,11 @@ and running older versions must be fenced. The current protected marker does
 not prevent rollback of both marker and generation; an external trusted anchor
 or an explicitly accepted recovery policy is still needed. Do not enable a
 runtime or installer route until these conditions and interruption tests pass.
+
+The Windows machine-lock fixture tests are marked ignored in ordinary test
+runs because they require an elevated token. Acceptance must explicitly run
+`cargo test -p commander-free elevated_provision_is_idempotent -- --ignored`
+and `cargo test -p commander-free settings_rotation_trial::tests -- --ignored`
+in both elevated Administrator and LocalSystem contexts, followed by separate
+standard-user versus privileged-process cross-account tests. An ignored test
+is not acceptance evidence.
