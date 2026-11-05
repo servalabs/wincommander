@@ -49,6 +49,9 @@ use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
 
+#[path = "settings_section_envelope.rs"]
+mod settings_section_envelope;
+
 const MATERIAL_FILENAME: &str = ".install.material";
 const USER_MATERIAL_FILENAME: &str = ".user-store.material";
 const PERSONAL_SECRETS_KEY_MARKER: &str = "personal-secrets-key.in-use";
@@ -590,9 +593,14 @@ pub fn load(section: &str) -> Result<Value, String> {
     let Some(raw) = read_section_file(&path, section)? else {
         return Ok(Value::Object(Default::default()));
     };
-    let material = install_material()?;
-    let key = derive_section_key(&material, None)?;
-    let bytes = decode_section(&key, raw.trim(), &format!("machine:{section}"))?;
+    let encoded = raw.trim();
+    let bytes = if encoded.starts_with(settings_section_envelope::PREFIX) {
+        settings_section_envelope::open(section, encoded, dpapi_unprotect)?
+    } else {
+        let material = install_material()?;
+        let key = derive_section_key(&material, None)?;
+        decode_section(&key, encoded, &format!("machine:{section}"))?
+    };
     serde_json::from_slice(&bytes).map_err(|e| format!("Failed to parse section '{section}': {e}"))
 }
 
@@ -707,10 +715,12 @@ pub(crate) fn save_with_material(
     material: &SettingsWriteMaterial,
 ) -> Result<(), String> {
     let path = section_path(section)?;
-    let key = derive_section_key(&material.material, None)?;
+    // Keep the existing material guard alive through publication for old
+    // writers; the new section has its own independently protected random key.
+    let _material_guard = material;
     let bytes = serde_json::to_vec(data)
         .map_err(|e| format!("Failed to serialise section '{section}': {e}"))?;
-    let encoded = encode_section(&key, &bytes, &format!("machine:{section}"))?;
+    let encoded = settings_section_envelope::seal(section, &bytes, dpapi_protect, dpapi_unprotect)?;
     atomic_write_bytes(&path, encoded.as_bytes())
         .map_err(|e| format!("Failed to write section '{section}': {e}"))
 }
