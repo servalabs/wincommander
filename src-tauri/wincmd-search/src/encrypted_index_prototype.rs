@@ -6,16 +6,20 @@ use aes_gcm::{
     Aes256Gcm, Nonce,
 };
 use rand::{rngs::OsRng, RngCore};
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
+use zeroize::Zeroizing;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::ops::Range;
 
-const MAGIC: &[u8; 8] = b"WCIDX001";
+const MAGIC: &[u8; 8] = b"WCIDX002";
 const CHUNK: usize = 64 * 1024;
 // Experimental denial-of-service bound. Large-index support must measure the
 // largest ranges Tantivy actually requests before choosing a release value.
 const MAX_READ_RANGE: usize = 8 * 1024 * 1024;
-const HEADER: usize = 24;
-const OVERHEAD: usize = 28; // 96-bit random nonce and 128-bit tag
+const HEADER: usize = 40;
+const MAX_FILE_CHUNKS: usize = 65_536; // at most 4 GiB and 65,537 GCM invocations per file key
+const OVERHEAD: usize = 28; // 96-bit per-file counter nonce and 128-bit tag
 const FOOTER: usize = 8 + OVERHEAD;
 
 fn invalid() -> io::Error {
@@ -24,7 +28,7 @@ fn invalid() -> io::Error {
 
 fn aad(name: &str, id: &[u8], label: &[u8], number: u64) -> Vec<u8> {
     let mut result = Vec::new();
-    result.extend_from_slice(b"wincommander-search-index-test-v1");
+    result.extend_from_slice(b"wincommander-search-index-test-v2");
     result.extend_from_slice(&(name.len() as u64).to_le_bytes());
     result.extend_from_slice(name.as_bytes());
     result.extend_from_slice(id);
@@ -36,20 +40,43 @@ fn nonce(n: &[u8]) -> io::Result<&Nonce<U12>> {
     n.try_into().map_err(|_| invalid())
 }
 
+// Each file gets a pseudorandom subkey under the protected index key. A fresh
+// 256-bit ID makes accidental cross-file key/nonce reuse negligible; the input
+// length and domain are fixed to avoid ambiguous derivation contexts.
+fn file_cipher(master: &[u8; 32], id: &[u8; 32]) -> io::Result<Aes256Gcm> {
+    let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(master).map_err(|_| invalid())?;
+    mac.update(b"wincommander-search-file-key-v2");
+    mac.update(id);
+    let mut key = Zeroizing::new([0u8; 32]);
+    key.copy_from_slice(&mac.finalize().into_bytes());
+    Ok(Aes256Gcm::new((&*key).into()))
+}
+
+fn chunk_nonce(number: u64) -> [u8; 12] {
+    let mut nonce = [0u8; 12];
+    nonce[4..].copy_from_slice(&number.to_le_bytes());
+    nonce
+}
+fn footer_nonce() -> [u8; 12] {
+    let mut nonce = [0u8; 12];
+    nonce[0] = 1;
+    nonce
+}
+
 fn encrypt<W: Write>(
     mut output: W,
     key: &[u8; 32],
     name: &str,
     plaintext: &[u8],
 ) -> io::Result<()> {
-    let cipher = Aes256Gcm::new(key.into());
-    let mut id = [0u8; 16];
+    if plaintext.len().div_ceil(CHUNK) > MAX_FILE_CHUNKS { return Err(invalid()); }
+    let mut id = [0u8; 32];
     OsRng.fill_bytes(&mut id);
+    let cipher = file_cipher(key, &id)?;
     output.write_all(MAGIC)?;
     output.write_all(&id)?;
     for (i, chunk) in plaintext.chunks(CHUNK).enumerate() {
-        let mut n = [0u8; 12];
-        OsRng.fill_bytes(&mut n);
+        let n = chunk_nonce(i as u64);
         let encrypted = cipher
             .encrypt(
                 nonce(&n)?,
@@ -63,8 +90,7 @@ fn encrypt<W: Write>(
         output.write_all(&encrypted)?;
     }
     let len = plaintext.len() as u64;
-    let mut n = [0u8; 12];
-    OsRng.fill_bytes(&mut n);
+    let n = footer_nonce();
     let tag = cipher
         .encrypt(
             nonce(&n)?,
@@ -83,7 +109,7 @@ struct ProtectedFile<R> {
     input: R,
     cipher: Aes256Gcm,
     name: String,
-    id: [u8; 16],
+    id: [u8; 32],
     len: usize,
 }
 impl<R: Read + Seek> ProtectedFile<R> {
@@ -98,7 +124,7 @@ impl<R: Read + Seek> ProtectedFile<R> {
         if &header[..8] != MAGIC {
             return Err(invalid());
         }
-        let id: [u8; 16] = header[8..].try_into().map_err(|_| invalid())?;
+        let id: [u8; 32] = header[8..].try_into().map_err(|_| invalid())?;
         input.seek(SeekFrom::End(-(FOOTER as i64)))?;
         let mut footer = [0u8; FOOTER];
         input.read_exact(&mut footer)?;
@@ -112,7 +138,8 @@ impl<R: Read + Seek> ProtectedFile<R> {
         if expected as u64 != file_len {
             return Err(invalid());
         }
-        let cipher = Aes256Gcm::new(key.into());
+        if len.div_ceil(CHUNK) > MAX_FILE_CHUNKS || footer[8..20] != footer_nonce() { return Err(invalid()); }
+        let cipher = file_cipher(key, &id)?;
         cipher
             .decrypt(
                 nonce(&footer[8..20])?,
@@ -169,6 +196,23 @@ impl<R: Read + Seek> ProtectedFile<R> {
 fn experimental_cipher_clears_sensitive_state_on_drop() {
     fn require_zeroize_on_drop<T: zeroize::ZeroizeOnDrop>() {}
     require_zeroize_on_drop::<Aes256Gcm>();
+}
+#[test]
+fn distinct_file_keys_use_bounded_disjoint_counter_nonces() {
+    let key = [14; 32];
+    let plaintext = vec![42; CHUNK + 1];
+    let mut first = Vec::new(); let mut second = Vec::new();
+    encrypt(&mut first, &key, "same-name", &plaintext).unwrap();
+    encrypt(&mut second, &key, "same-name", &plaintext).unwrap();
+    assert_ne!(&first[8..HEADER], &second[8..HEADER]);
+    assert_eq!(&first[HEADER..HEADER + 12], &chunk_nonce(0));
+    assert_eq!(&first[HEADER + CHUNK + OVERHEAD..HEADER + CHUNK + OVERHEAD + 12], &chunk_nonce(1));
+    assert_eq!(&first[first.len() - 28..first.len() - 16], &footer_nonce());
+    assert_ne!(chunk_nonce(0), footer_nonce());
+    // Substitution across fresh per-file keys must fail, even at equal offsets.
+    second[HEADER..HEADER + CHUNK + OVERHEAD].copy_from_slice(&first[HEADER..HEADER + CHUNK + OVERHEAD]);
+    let mut file = ProtectedFile::open(io::Cursor::new(second), &key, "same-name").unwrap();
+    assert!(file.read(0..1).is_err());
 }
 #[test]
 fn random_access_and_tampering_are_detected() {
@@ -399,7 +443,7 @@ pub(crate) mod tantivy_trial {
         _key_owner: Arc<KeyOwner>,
         cipher: Aes256Gcm,
         path: String,
-        id: [u8; 16],
+        id: [u8; 32],
         chunks: u64,
         total: u64,
         plain: Vec<u8>,
@@ -407,13 +451,13 @@ pub(crate) mod tantivy_trial {
     }
     impl TrialWriter {
         fn new(mut sink: WritePtr, owner: Arc<KeyOwner>, path: String) -> io::Result<Self> {
-            let mut id = [0; 16];
+            let mut id = [0; 32];
             OsRng.fill_bytes(&mut id);
             sink.write_all(MAGIC)?;
             sink.write_all(&id)?;
             Ok(Self {
                 sink: Some(sink),
-                cipher: Aes256Gcm::new(owner.key().into()),
+                cipher: file_cipher(owner.key(), &id)?,
                 _key_owner: owner,
                 path,
                 id,
@@ -427,8 +471,8 @@ pub(crate) mod tantivy_trial {
             if self.plain.is_empty() {
                 return Ok(());
             }
-            let mut n = [0; 12];
-            OsRng.fill_bytes(&mut n);
+            if self.chunks >= MAX_FILE_CHUNKS as u64 { return Err(invalid()); }
+            let n = chunk_nonce(self.chunks);
             let encrypted = self
                 .cipher
                 .encrypt(
@@ -501,8 +545,7 @@ pub(crate) mod tantivy_trial {
                 self.failed = true;
                 return Err(error);
             }
-            let mut n = [0; 12];
-            OsRng.fill_bytes(&mut n);
+            let n = footer_nonce();
             let tag = self
                 .cipher
                 .encrypt(

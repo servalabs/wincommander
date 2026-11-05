@@ -7486,6 +7486,7 @@ dependencies = [
  "calamine",
  "globset",
  "hex",
+ "hmac",
  "lopdf",
  "notify",
  "once_cell",

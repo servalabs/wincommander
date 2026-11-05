@@ -7,10 +7,11 @@ license = "AGPL-3.0-or-later"
 description = "Full-text file-content search for WinCommander (Free tier)"
 
 [features]
-experimental-encrypted-search = ["dep:aes-gcm", "dep:rand", "dep:zeroize", "dep:windows-sys"]
+experimental-encrypted-search = ["dep:aes-gcm", "dep:rand", "dep:zeroize", "dep:windows-sys", "dep:hmac"]
 
 [dependencies]
 aes-gcm = { version = "0.11", features = ["zeroize"], optional = true }
+hmac = { version = "0.13", features = ["zeroize"], optional = true }
 rand = { version = "0.8", optional = true }
 zeroize = { version = "1", optional = true }
 tantivy       = "0.27"
@@ -28,6 +29,7 @@ sha2          = "0.11"
 hex           = "0.4"
 
 [dev-dependencies]
+hmac = { version = "0.13", features = ["zeroize"] }
 tempfile = "3"
 aes-gcm = { version = "0.11", features = ["zeroize"] }
 zeroize = "1"
