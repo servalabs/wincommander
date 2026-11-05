@@ -3,7 +3,7 @@
 use std::{path::PathBuf, time::{Duration, Instant}};
 use wincmd_search::encrypted_search_fence::SearchOperationFence;
 
-pub(crate) fn acquire() -> Result<SearchOperationFence, String> {
+fn known_base() -> Result<PathBuf, String> {
     use std::os::windows::ffi::OsStringExt;
     use windows_sys::Win32::{System::Com::CoTaskMemFree, UI::Shell::{FOLDERID_LocalAppData, SHGetKnownFolderPath}};
     let mut raw = std::ptr::null_mut();
@@ -28,6 +28,21 @@ pub(crate) fn acquire() -> Result<SearchOperationFence, String> {
             configured.to_string_lossy().trim_end_matches(['\\', '/'])) {
         return Err("Windows profile location does not match the search configuration.".into());
     }
+    Ok(known)
+}
+
+pub(crate) fn verified_parent() -> Result<PathBuf, String> {
+    let known = known_base()?;
+    let app_name = option_env!("WINCMD_APP_DIR").unwrap_or("WinCommander");
+    let mut parts = std::path::Path::new(app_name).components();
+    if !matches!(parts.next(), Some(std::path::Component::Normal(_))) || parts.next().is_some() {
+        return Err("Invalid application data directory.".into());
+    }
+    Ok(known.join(app_name).join("file-search"))
+}
+
+pub(crate) fn acquire() -> Result<SearchOperationFence, String> {
+    let known = known_base()?;
     let app_name = option_env!("WINCMD_APP_DIR").unwrap_or("WinCommander");
     let parent = SearchOperationFence::prepare_from_known_folder(&known, app_name)
         .map_err(|_| "Cannot prepare the protected search migration lock.")?;

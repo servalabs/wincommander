@@ -1599,6 +1599,8 @@ fn setup_tauri_cli_runtime(app: &mut tauri::App) -> Result<(), Box<dyn std::erro
     Ok(())
 }
 
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
+pub mod search_migration_cli;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Keep the cooperating user-profile launch fence for this process lifetime.
