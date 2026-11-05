@@ -53,6 +53,43 @@ fn lock(path: &Path) -> Result<File, String> {
     }
 }
 
+// Keep each ancestor open without delete sharing, from root to leaf, so no
+// checked directory can be replaced by a junction before the file is opened.
+#[cfg(windows)]
+fn hold_ordinary_ancestors(path: &Path) -> Result<Vec<File>, String> {
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+    if !path.is_absolute() {
+        return Err("log path must be absolute".into());
+    }
+    let mut ancestors: Vec<_> = path
+        .parent()
+        .ok_or("log directory unavailable")?
+        .ancestors()
+        .collect();
+    ancestors.reverse();
+    let mut held = Vec::with_capacity(ancestors.len());
+    for ancestor in ancestors {
+        let directory = OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(ancestor)
+            .map_err(|_| "log directory unavailable")?;
+        let metadata = directory
+            .metadata()
+            .map_err(|_| "log directory unavailable")?;
+        if !metadata.is_dir() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err("invalid log directory".into());
+        }
+        held.push(directory);
+    }
+    Ok(held)
+}
+
 /// The callback may fail before any file is opened; failures never append.
 pub(super) fn append_encrypted(
     path: &Path,
@@ -66,6 +103,8 @@ pub(super) fn append_encrypted(
 }
 
 pub(super) fn append_line(path: &Path, line: &str) -> Result<(), String> {
+    #[cfg(windows)]
+    let _ancestors = hold_ordinary_ancestors(path)?;
     let _guard = lock(path)?;
     let mut options = OpenOptions::new();
     options.create(true).append(true);
@@ -312,6 +351,30 @@ mod tests {
 
     fn sealed(date: &str, _body: &str) -> Result<String, String> {
         Ok(format!("L2:{date}:authenticated-ciphertext"))
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn append_rejects_directory_links_without_touching_target() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("target");
+        let redirected = directory.path().join("redirected");
+        std::fs::create_dir(&target).unwrap();
+        let target_file = target.join("wincommander.log");
+        std::fs::write(&target_file, b"target remains unchanged").unwrap();
+        std::os::windows::fs::symlink_dir(&target, &redirected)
+            .expect("test requires symlink privilege");
+        assert!(
+            append_encrypted(&redirected.join("wincommander.log"), || sealed(
+                "2026-11-05",
+                "private"
+            ))
+            .is_err()
+        );
+        assert_eq!(
+            std::fs::read(target_file).unwrap(),
+            b"target remains unchanged"
+        );
     }
 
     #[cfg(windows)]
