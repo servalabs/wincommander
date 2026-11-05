@@ -30,11 +30,14 @@ try {
         catch [IO.FileNotFoundException] { $rootMissing = $true }
         catch [IO.DirectoryNotFoundException] { $rootMissing = $true }
         if ($rootMissing) { return }
-        $entries = [IO.Directory]::EnumerateFileSystemEntries($actual).GetEnumerator()
-        try {
-            if (-not $entries.MoveNext()) { return }
-        } finally { $entries.Dispose() }
-        throw 'Existing profile contents require recovery because the app binary is missing.'
+        # PREINSTALL already creates this diagnostic log on a fresh install.
+        # No other file or directory may be treated as an empty profile.
+        foreach ($entry in [IO.Directory]::EnumerateFileSystemEntries($actual)) {
+            if (-not [string]::Equals([IO.Path]::GetFileName($entry), 'installer-lifecycle.log', [StringComparison]::OrdinalIgnoreCase)) {
+                throw 'Existing profile contents require recovery because the app binary is missing.'
+            }
+        }
+        return
     }
     $helper = [IO.Path]::GetFullPath($ExecutablePath)
     if (-not [IO.File]::Exists($helper)) { throw 'Settings staging helper unavailable.' }
