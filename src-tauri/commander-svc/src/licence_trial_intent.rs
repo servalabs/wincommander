@@ -37,6 +37,106 @@ impl PendingTrial {
     fn credential_commitment(&self) -> String {
         crate::licence_activation_intent::credential_commitment(&self.credential_id, &self.credential_secret)
     }
+
+    fn request_body(&self) -> Result<Zeroizing<Vec<u8>>, &'static str> {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Request<'a> { device_hash: &'a str, app_id: &'static str, is_portable: bool,
+            operation_id: &'a str, trial_credential_id: String, trial_credential_commitment: String }
+        let mut body = Zeroizing::new(Vec::new());
+        let id = self.credential_id.iter().map(|byte| format!("{byte:02x}")).collect();
+        serde_json::to_writer(&mut *body, &Request { device_hash: &self.device_hash,
+            app_id: "com.servalabs.wincommander", is_portable: false, operation_id: &self.operation_id,
+            trial_credential_id: id, trial_credential_commitment: self.credential_commitment() }).map_err(|_| INVALID)?;
+        Ok(body)
+    }
+}
+
+#[derive(Deserialize)]
+struct TrialEnvelope { ok: bool, payload: String, signature: String, hybrid: String }
+
+struct VerifiedTrial { payload: String, operation_id: String, device_hash: String, credential_id: [u8; 32], credential_commitment: String, expires_at: u64 }
+
+#[derive(Deserialize)]
+struct TrialClaims {
+    license_id: String, device_hash: String, plan: String, features: Vec<String>, base_features: Vec<String>,
+    service_features: Vec<String>, service_exp: u64, iat: u64, exp: u64, license_exp: u64,
+    iss: String, sub: String, is_portable: bool, trial_operation_id: String,
+    trial_credential_id: String, trial_credential_commitment: String,
+}
+
+fn verify_response_with(pending: &PendingTrial, bytes: &[u8], now: u64,
+    verify: impl FnOnce(&str, &str, &str) -> Result<(), &'static str>) -> Result<VerifiedTrial, &'static str> {
+    if !valid_hex(&pending.device_hash) || !valid_hex(&pending.operation_id)
+        || bytes.is_empty() || bytes.len() > 64 * 1024 { return Err(INVALID); }
+    let envelope: TrialEnvelope = serde_json::from_slice(bytes).map_err(|_| INVALID)?;
+    if !envelope.ok || envelope.payload.is_empty() || envelope.signature.is_empty() || envelope.hybrid.is_empty() {
+        return Err(INVALID);
+    }
+    verify(&envelope.payload, &envelope.signature, &envelope.hybrid)?;
+    let claims: TrialClaims = serde_json::from_str(&envelope.payload).map_err(|_| INVALID)?;
+    let id: String = pending.credential_id.iter().map(|byte| format!("{byte:02x}")).collect();
+    if claims.license_id != format!("trial-{}", &pending.device_hash[..16]) || claims.device_hash != pending.device_hash
+        || claims.plan != "trial" || claims.features != ["paid"] || !claims.base_features.is_empty()
+        || claims.service_features != ["paid"] || claims.service_exp != claims.exp || claims.license_exp != claims.exp
+        || claims.iss != "wincommander-license-worker" || claims.sub != "com.servalabs.wincommander"
+        || claims.is_portable || claims.trial_operation_id != pending.operation_id || claims.trial_credential_id != id
+        || claims.trial_credential_commitment != pending.credential_commitment() || claims.iat > now.saturating_add(300)
+        || claims.exp <= now || claims.iat.checked_add(16 * 24 * 60 * 60) != Some(claims.exp) {
+        return Err(INVALID);
+    }
+    Ok(VerifiedTrial { payload: envelope.payload, operation_id: pending.operation_id.clone(),
+        device_hash: pending.device_hash.clone(), credential_id: pending.credential_id,
+        credential_commitment: pending.credential_commitment(), expires_at: claims.exp })
+}
+
+/// This verifies a response but deliberately does not persist or grant trial
+/// entitlement. A separately authenticated settlement is still required.
+fn verify_response(pending: &PendingTrial, bytes: &[u8], now: u64) -> Result<VerifiedTrial, &'static str> {
+    verify_response_with(pending, bytes, now, crate::license_cache::verify_activation_envelope)
+}
+
+/// Candidate settlement transcript. There is deliberately no transport or
+/// completion transition until the server custody protocol is specified.
+fn settlement_request(pending: &PendingTrial, trial: &VerifiedTrial, now: u64) -> Result<Zeroizing<Vec<u8>>, &'static str> {
+    use sha2::{Digest, Sha256};
+    let signed_payload = &trial.payload;
+    if signed_payload.is_empty() || signed_payload.len() > 16 * 1024 || trial.operation_id != pending.operation_id
+        || trial.device_hash != pending.device_hash || trial.credential_id != pending.credential_id
+        || trial.credential_commitment != pending.credential_commitment() || trial.expires_at <= now { return Err(INVALID); }
+    #[derive(Serialize)]
+    struct Claims<'a> { kind: &'static str, operation_id: &'a str, device_hash: &'a str,
+        trial_payload_digest: String, credential_id: String }
+    #[derive(Serialize)]
+    struct Request<'a> { payload: &'a str, proof: &'a str }
+    let digest = Sha256::digest(signed_payload.as_bytes()).iter().map(|byte| format!("{byte:02x}")).collect();
+    let payload = serde_json::to_string(&Claims { kind: "licence-trial-settlement-v1", operation_id: &pending.operation_id,
+        device_hash: &pending.device_hash, trial_payload_digest: digest, credential_id: URL_SAFE_NO_PAD.encode(pending.credential_id) })
+        .map_err(|_| INVALID)?;
+    let proof = Zeroizing::new(wincmd_pq_experiment::licence_device_proof::sign_trial_settlement(&pending.credential_secret, payload.as_bytes())?);
+    let proof_text = Zeroizing::new(URL_SAFE_NO_PAD.encode(proof.as_ref()));
+    let mut body = Zeroizing::new(Vec::new());
+    serde_json::to_writer(&mut *body, &Request { payload: &payload, proof: &proof_text }).map_err(|_| INVALID)?;
+    Ok(body)
+}
+
+/// Candidate transcript only: before this can be sent, a retirement ID and
+/// the exact request must be durably recorded, with a verified receipt.
+fn retirement_request(pending: &PendingTrial, retirement_id: &str) -> Result<Zeroizing<Vec<u8>>, &'static str> {
+    if !valid_hex(retirement_id) { return Err(INVALID); }
+    #[derive(Serialize)]
+    struct Claims<'a> { kind: &'static str, retirement_id: &'a str, operation_id: &'a str,
+        device_hash: &'a str, credential_id: String }
+    #[derive(Serialize)]
+    struct Request<'a> { payload: &'a str, proof: &'a str }
+    let payload = serde_json::to_string(&Claims { kind: "licence-trial-retirement-v1", retirement_id,
+        operation_id: &pending.operation_id, device_hash: &pending.device_hash,
+        credential_id: URL_SAFE_NO_PAD.encode(pending.credential_id) }).map_err(|_| INVALID)?;
+    let proof = Zeroizing::new(wincmd_pq_experiment::licence_device_proof::sign_trial_retirement(&pending.credential_secret, payload.as_bytes())?);
+    let proof_text = Zeroizing::new(URL_SAFE_NO_PAD.encode(proof.as_ref()));
+    let mut body = Zeroizing::new(Vec::new());
+    serde_json::to_writer(&mut *body, &Request { payload: &payload, proof: &proof_text }).map_err(|_| INVALID)?;
+    Ok(body)
 }
 
 fn valid_hex(value: &str) -> bool {

@@ -13,6 +13,28 @@ const RELEASE_REQUEST_DOMAIN: &[u8] = b"wincommander:licence-release-challenge-r
 const RELEASE_ACK_DOMAIN: &[u8] = b"wincommander:licence-release-ack:v1\0";
 const ACTIVATION_ACK_DOMAIN: &[u8] = b"wincommander:licence-activation-ack:v1\0";
 const REACTIVATION_DOMAIN: &[u8] = b"wincommander:licence-reactivation:v1\0";
+const TRIAL_SETTLEMENT_DOMAIN: &[u8] = b"wincommander:licence-trial-settlement:v1\0";
+const TRIAL_RETIREMENT_DOMAIN: &[u8] = b"wincommander:licence-trial-retirement:v1\0";
+
+/// Candidate trial retirement transcript; no server endpoint is enabled yet.
+pub fn sign_trial_retirement(secret: &[u8; 32], payload: &[u8]) -> Result<[u8; 32], &'static str> {
+    if payload.is_empty() || payload.len() > 16 * 1024 { return Err("invalid trial retirement"); }
+    let mut message = Vec::with_capacity(TRIAL_RETIREMENT_DOMAIN.len() + payload.len());
+    message.extend_from_slice(TRIAL_RETIREMENT_DOMAIN);
+    message.extend_from_slice(payload);
+    let key = hmac::Key::new(hmac::HMAC_SHA256, secret);
+    Ok(hmac::sign(&key, &message).as_ref().try_into().unwrap())
+}
+
+/// Candidate trial settlement transcript; no server endpoint is enabled yet.
+pub fn sign_trial_settlement(secret: &[u8; 32], payload: &[u8]) -> Result<[u8; 32], &'static str> {
+    if payload.is_empty() || payload.len() > 16 * 1024 { return Err("invalid trial settlement"); }
+    let mut message = Vec::with_capacity(TRIAL_SETTLEMENT_DOMAIN.len() + payload.len());
+    message.extend_from_slice(TRIAL_SETTLEMENT_DOMAIN);
+    message.extend_from_slice(payload);
+    let key = hmac::Key::new(hmac::HMAC_SHA256, secret);
+    Ok(hmac::sign(&key, &message).as_ref().try_into().unwrap())
+}
 
 pub fn sign_reactivation(secret: &[u8; 32], payload: &[u8]) -> Result<[u8; 32], &'static str> {
     if payload.is_empty() || payload.len() > 16 * 1024 { return Err("invalid reactivation witness"); }
