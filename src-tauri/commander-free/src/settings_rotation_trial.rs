@@ -624,6 +624,23 @@ pub(super) fn read_with_legacy(root: &Path, scope: StoreScope, section: &str, le
     }
 }
 
+/// Read an existing F6 key with shared ownership. Only authenticated absence
+/// permits the caller to attempt exclusive creation; that caller must re-read
+/// under exclusive ownership before generating anything.
+pub(super) fn read_f6_or_create(
+    root: &Path,
+    scope: StoreScope,
+    read_legacy: impl FnOnce() -> Result<Value, String>,
+    create_exclusive: impl FnOnce() -> Result<Value, String>,
+) -> Result<Value, String> {
+    let value = read_with_legacy(root, scope, "f6-keystore", read_legacy)?;
+    if valid_f6(&value) { return Ok(value); }
+    if value != Value::Object(Default::default()) {
+        return Err("device signing key is invalid; existing data preserved".into());
+    }
+    create_exclusive()
+}
+
 /// Keep exclusive ownership through either a legacy save or a selected write.
 pub(super) fn write_with_legacy(root: &Path, scope: StoreScope, section: &str, value: &Value, legacy: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
     let owner = LockedSelectedGeneration::acquire_for(root, scope)?;

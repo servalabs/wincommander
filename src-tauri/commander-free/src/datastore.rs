@@ -812,6 +812,16 @@ pub(crate) fn save_with_material(
 /// generating, saving and reopening the committed value in either generation.
 #[cfg(all(windows, feature = "experimental-settings-generation"))]
 pub(crate) fn guarded_f6_get_or_create(create: impl FnOnce() -> Result<Value, String>) -> Result<Value, String> {
+    let (root, _pins, scope) = settings_rotation_trial::experimental_runtime_root()?;
+    settings_rotation_trial::read_f6_or_create(&root, scope,
+        || load_legacy_guarded("f6-keystore"),
+        || guarded_f6_create_exclusive(create))
+}
+
+#[cfg(all(windows, feature = "experimental-settings-generation"))]
+fn guarded_f6_create_exclusive(create: impl FnOnce() -> Result<Value, String>) -> Result<Value, String> {
+    // Reacquire exclusive ownership and re-read after releasing the shared
+    // guard: another process may have created the key in the intervening time.
     let material = settings_write_material()?;
     let runtime = material.runtime.as_ref().ok_or("settings generation ownership unavailable")?;
     if runtime.selected() { return runtime.get_or_create_f6(create); }

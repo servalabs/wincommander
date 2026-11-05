@@ -663,3 +663,29 @@ fn concurrent_first_f6_creation_returns_one_committed_winner() {
     assert!(owner.write_section("f6-keystore", json!({"signing_seed_hex":"ff".repeat(32)})).is_err());
     assert_eq!(owner.read_all().unwrap()["f6-keystore"], values[0]);
 }
+
+#[test]
+#[cfg_attr(windows, ignore = "requires elevated machine-lock ACL provisioning; run explicitly in Windows acceptance")]
+fn f6_shared_read_avoids_write_and_missing_rechecks_winner_under_exclusive_lock() {
+    let root = tempfile::tempdir().unwrap();
+    provision_test_lock(root.path());
+    let old = [42; 32];
+    let input = sections(&old);
+    let candidate = prepare(&old, &input).unwrap();
+    let pending = crate::datastore::settings_generation_authority::pending(None, &candidate, &dpapi_protect, &dpapi_unprotect).unwrap();
+    std::fs::write(root.path().join(".settings-generation.authority.v1"), pending).unwrap();
+    std::fs::write(root.path().join(".settings-generation.v1"), candidate).unwrap();
+    let owner = LockedSelectedGeneration::acquire(root.path()).unwrap();
+    owner.read_reconciled(true).unwrap(); // fixture stands in for guarded snapshot verification
+    drop(owner);
+    let winner = json!({"signing_seed_hex": "b".repeat(64)});
+    // Simulate another process committing after the shared absence check.
+    let first = read_f6_or_create(root.path(), StoreScope::Machine, || panic!("no legacy fallback"), || {
+        let owner = LockedSelectedGeneration::acquire(root.path())?;
+        owner.write_section("f6-keystore", winner.clone())?;
+        owner.get_or_create_f6(|| panic!("must re-read committed winner"))
+    }).unwrap();
+    assert_eq!(first, winner);
+    let existing = read_f6_or_create(root.path(), StoreScope::Machine, || panic!("no legacy fallback"), || panic!("read must not need exclusive access")).unwrap();
+    assert_eq!(existing, winner);
+}
