@@ -269,4 +269,24 @@ mod tests {
         drop(guard);
         assert!(OpenOptions::new().append(true).open(&log).is_ok());
     }
+
+    #[test]
+    fn current_profile_checks_parent_handles_without_creating_data() {
+        const CHILD_ROOT: &str = "WINCOMMANDER_DEPENDENCY_GUARD_TEST_LOCAL";
+        if let Some(root) = std::env::var_os(CHILD_ROOT) {
+            assert!(check_current_user(true).is_ok());
+            assert!(!std::path::PathBuf::from(root)
+                .join(option_env!("WINCMD_APP_DIR").unwrap_or("WinCommander"))
+                .exists());
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("current_profile_checks_parent_handles_without_creating_data")
+            .env(CHILD_ROOT, root.path())
+            .env("LOCALAPPDATA", root.path())
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
 }
