@@ -597,13 +597,21 @@ impl SearchEngine {
         use crate::encrypted_key_prototype::{Protector, UserDpapi};
         use crate::read_only::{AccessMode, CheckedDirectory};
         let _pins = CheckedDirectory::pin_root_path(old)?;
-        let mut count = 0usize;
+        let mut scope_present = false;
+        let mut lock_present = false;
         for entry in std::fs::read_dir(old)? {
-            let entry = entry?; count += 1;
-            if count > 1 || entry.file_name() != std::ffi::OsStr::new("scope-v2.dpapi") { return Ok(false); }
+            let name = entry?.file_name();
+            if name == std::ffi::OsStr::new("scope-v2.dpapi") && !scope_present { scope_present = true; }
+            else if name == std::ffi::OsStr::new(".tantivy-writer.lock") && !lock_present { lock_present = true; }
+            else { return Ok(false); }
         }
-        if count != 1 { return Ok(false); }
+        if !scope_present { return Ok(false); }
         let dir = CheckedDirectory::open(old, AccessMode::GuardedReader)?;
+        if lock_present {
+            let lock = dir.atomic_read_bounded(std::path::Path::new(".tantivy-writer.lock"), 1)
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
+            if !lock.is_empty() { return Ok(false); }
+        }
         let protected = dir.atomic_read_bounded(std::path::Path::new("scope-v2.dpapi"), crate::encrypted_scope::MAX_PROTECTED_SCOPE)
             .map_err(|e| std::io::Error::other(e.to_string()))?;
         let clear = UserDpapi.unprotect(&protected)?;
@@ -1427,10 +1435,7 @@ mod tests {
         let engine = SearchEngine::open_or_rebuild_experimental_with_policy(config, Arc::new(|_| true)).unwrap();
         engine.stop(); drop(engine);
         // A fresh setup has no old backup but may later publish its scope.
-        if old.exists() {
-            for entry in fs::read_dir(&old).unwrap() { fs::remove_file(entry.unwrap().path()).unwrap(); }
-            fs::remove_dir(&old).unwrap();
-        }
+        // Keep the empty Tantivy writer lock created on first launch.
         publish_experimental_scope(&old, b"scope", |_| Ok(())).unwrap();
         let selection = root.path().join(".wincommander-encrypted-selection");
         SearchEngine::verify_fresh_scope_selection(&old, &selection).unwrap();
