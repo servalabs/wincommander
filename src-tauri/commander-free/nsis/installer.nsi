@@ -762,6 +762,9 @@ Section Install
 SectionEnd
 
 Function .onInstSuccess
+  !ifdef WC_EXPERIMENTAL_SEARCH_FENCE
+    !insertmacro WC_COMMIT_SEARCH_TRANSACTION
+  !endif
   ; Check for `/R` flag only in silent and passive installers because
   ; GUI installer has a toggle for the user to (re)start the app
   ${If} $PassiveMode = 1

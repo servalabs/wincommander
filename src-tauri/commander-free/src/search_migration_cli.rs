@@ -114,3 +114,70 @@ mod tests {
         assert_eq!(classify(root.path(), &old, &selection).unwrap(), State::Quarantined);
     }
 }
+
+/// Transactional installer entrypoints. The installer persists the random
+/// 16-byte token it receives; on restart `inspect` reports pending state.
+/// Marking replacement before handing the fence to NSIS is conservative:
+/// after that boundary an interrupted installer must roll forward.
+pub fn run_transaction(phase: &str, token_hex: &str) -> Result<String, String> {
+    let parent = if phase == "prepare" {
+        crate::file_search::runtime_fence::prepare_installer_parent()?
+    } else {
+        crate::file_search::runtime_fence::verified_parent()?
+    };
+    let old = parent.join("fts");
+    let selection = parent.join(".wincommander-encrypted-selection");
+    if phase == "inspect" {
+        if !present(&selection).map_err(|_| "Cannot inspect search selection.")? {
+            return Ok("none".into());
+        }
+        return Ok(match SearchEngine::inspect_search_migration(&selection).map_err(|e| e.to_string())? {
+            None => "none".into(),
+            Some((token, false)) => format!("intent {}", hex::encode(token)),
+            Some((token, true)) => format!("replacement-pending {}", hex::encode(token)),
+        });
+    }
+    let raw = hex::decode(token_hex).map_err(|_| "Invalid search migration transaction.")?;
+    let token: [u8; 16] = raw.try_into().map_err(|_| "Invalid search migration transaction.")?;
+    if token == [0; 16] { return Err("Invalid search migration transaction.".into()); }
+    let guard = SearchOperationFence::acquire_exclusive(&parent)
+        .map_err(|_| "Cannot acquire offline search maintenance lock.")?;
+    match phase {
+        "prepare" => {
+            match classify(&parent, &old, &selection)? {
+                State::Fresh => return Ok("fresh".into()),
+                State::NeedsRebuild => {
+                    let config = wincmd_search::types::IndexConfig {
+                        roots: Vec::new(), exclusions: Vec::new(), skip_paths: Vec::new(),
+                        max_file_bytes: 50 * 1024 * 1024, index_dir: old.clone(),
+                    };
+                    let policy: wincmd_search::PathPolicy = std::sync::Arc::new(|_| false);
+                    SearchEngine::rebuild_offline_and_select(config, policy, &selection, &guard)
+                        .map_err(|e| e.to_string())?;
+                },
+                State::NeedsQuarantine => {},
+                State::Quarantined => {
+                    match SearchEngine::inspect_search_migration(&selection).map_err(|e| e.to_string())? {
+                        Some((existing, true)) if existing == token => {
+                            SearchEngine::verify_quarantined_selection(&old, &selection).map_err(|e| e.to_string())?;
+                            return Ok("replacement-pending reconciliation=pending".into());
+                        },
+                        None => {
+                            SearchEngine::verify_quarantined_selection(&old, &selection).map_err(|e| e.to_string())?;
+                            return Ok("already-quarantined".into());
+                        },
+                        _ => {},
+                    }
+                },
+            }
+            SearchEngine::begin_search_migration(&old, &selection, token, &guard).map_err(|e| e.to_string())?;
+            SearchEngine::mark_search_replacement(&old, &selection, token, &guard).map_err(|e| e.to_string())?;
+            Ok("replacement-pending reconciliation=pending".into())
+        },
+        "abort" => SearchEngine::abort_search_migration(&old, &selection, token, &guard)
+            .map(|_| "restored".into()).map_err(|e| e.to_string()),
+        "commit" => SearchEngine::commit_search_migration(&old, &selection, token, &guard)
+            .map(|_| "committed".into()).map_err(|e| e.to_string()),
+        _ => Err("Invalid search migration transaction phase.".into()),
+    }
+}
