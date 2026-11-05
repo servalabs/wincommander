@@ -301,14 +301,9 @@ fn install_material_with_policy(require_protected: bool) -> Result<[u8; 32], Str
 }
 
 fn install_machine_material(directory: &std::path::Path, require_protected: bool) -> Result<[u8; 32], String> {
-    // Readers never mutate a legacy key. All updated writers take the same
-    // process-wide file lock before inspecting or replacing machine material.
-    #[cfg(windows)]
-    let _writer_lock = if require_protected {
-        Some(legacy_material_guard::acquire_writer_lock(directory)?)
-    } else { None };
     let path = directory.join(MATERIAL_FILENAME);
-    let raw = match read_material_file(&path)? {
+    #[allow(unused_mut)] // Re-read under the Windows-only legacy migration lock.
+    let mut raw = match read_material_file(&path)? {
         Some(raw) => raw,
         None => {
             let creation = ensure_material_can_be_created(path.parent().unwrap(), true, &[]);
@@ -327,6 +322,14 @@ fn install_machine_material(directory: &std::path::Path, require_protected: bool
             }
         }
     };
+    // Only legacy plaintext needs mutation. Protected keys remain usable by a
+    // standard user who has read-only access to the machine directory.
+    #[cfg(windows)]
+    let _writer_lock = if require_protected && raw.len() == 32 {
+        let lock = legacy_material_guard::acquire_writer_lock(directory)?;
+        raw = fs::read(&path).map_err(|_| "Could not recheck settings key; existing data preserved.".to_string())?;
+        Some(lock)
+    } else { None };
     if raw.len() == 32 {
         // Preserve readability, but do not create new ciphertext while its
         // legacy key remains exposed on disk.
@@ -1052,6 +1055,51 @@ mod tests {
         let wrapped = std::fs::read(path).unwrap();
         assert!(wrapped.len() > 32);
         assert_eq!(super::dpapi_unprotect(&wrapped).unwrap(), [0x42; 32]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "explicit acceptance: requires elevated Windows to set test ACLs and impersonate"]
+    fn protected_machine_key_is_usable_without_directory_write_access() {
+        use windows_sys::Win32::{
+            Foundation::{CloseHandle, HANDLE},
+            Security::{CreateRestrictedToken, CreateWellKnownSid, ImpersonateLoggedOnUser, RevertToSelf,
+                WinBuiltinAdministratorsSid, DISABLE_MAX_PRIVILEGE, SID_AND_ATTRIBUTES,
+                TOKEN_DUPLICATE, TOKEN_IMPERSONATE, TOKEN_QUERY},
+            System::Threading::{GetCurrentProcess, OpenProcessToken},
+        };
+        struct Handle(HANDLE);
+        impl Drop for Handle { fn drop(&mut self) { unsafe { CloseHandle(self.0); } } }
+        struct Revert;
+        impl Drop for Revert { fn drop(&mut self) { unsafe { RevertToSelf(); } } }
+
+        let directory = tempfile::tempdir().unwrap();
+        let icacls = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32").join("icacls.exe");
+        let status = std::process::Command::new(icacls).arg(directory.path()).args([
+            "/inheritance:r", "/grant:r", "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F", "*S-1-5-32-545:(OI)(CI)RX",
+        ]).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().unwrap();
+        assert!(status.success());
+        let key = [0x42; 32];
+        std::fs::write(directory.path().join(super::MATERIAL_FILENAME), super::dpapi_protect(&key).unwrap()).unwrap();
+
+        let mut raw = std::ptr::null_mut();
+        assert_ne!(unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_IMPERSONATE, &mut raw) }, 0);
+        let source = Handle(raw);
+        let mut admin = [0u32; 17];
+        let mut size = std::mem::size_of_val(&admin) as u32;
+        assert_ne!(unsafe { CreateWellKnownSid(WinBuiltinAdministratorsSid, std::ptr::null_mut(), admin.as_mut_ptr().cast(), &mut size) }, 0);
+        let deny = SID_AND_ATTRIBUTES { Sid: admin.as_mut_ptr().cast(), Attributes: 0 };
+        let mut raw = std::ptr::null_mut();
+        assert_ne!(unsafe { CreateRestrictedToken(source.0, DISABLE_MAX_PRIVILEGE, 1, &deny, 0,
+            std::ptr::null(), 0, std::ptr::null(), &mut raw) }, 0);
+        let restricted = Handle(raw);
+        assert_ne!(unsafe { ImpersonateLoggedOnUser(restricted.0) }, 0);
+        {
+            let _revert = Revert;
+            assert!(std::fs::write(directory.path().join("cannot-write"), b"probe").is_err());
+            assert_eq!(super::install_machine_material(directory.path(), true).unwrap(), key);
+            assert!(!directory.path().join(".install.material.lock").exists());
+        }
     }
     #[test]
     fn log_writes_reject_plaintext_unavailable_or_changed_material() {
