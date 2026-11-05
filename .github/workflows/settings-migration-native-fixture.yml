@@ -110,3 +110,6 @@ jobs:
           "@ | Set-Content -Encoding ascii -LiteralPath $fixture
           & $nsis $fixture
           if ($LASTEXITCODE -ne 0) { throw 'Gated NSIS hook fixture failed to compile.' }
+      - name: Exercise service state transitions without changing real services
+        shell: pwsh
+        run: ./tools/test-settings-stage-service.ps1
