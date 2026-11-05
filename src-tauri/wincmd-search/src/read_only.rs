@@ -191,8 +191,20 @@ impl CheckedDirectory {
         self.atomic_write_pinned_with_hooks(path, data, || {}, || {})
     }
 
+    // Key records must never overwrite a pre-existing key, including one
+    // created by another process after the operation begins.
+    #[cfg(all(test, windows))]
+    pub(crate) fn atomic_create_pinned(&self, path: &Path, data: &[u8]) -> io::Result<()> {
+        self.atomic_pinned_with_hooks(path, data, false, || {}, || {})
+    }
+
     #[cfg(all(test, windows))]
     fn atomic_write_pinned_with_hooks(&self, path: &Path, data: &[u8], after_pin: impl FnOnce(), before_rename: impl FnOnce()) -> io::Result<()> {
+        self.atomic_pinned_with_hooks(path, data, true, after_pin, before_rename)
+    }
+
+    #[cfg(all(test, windows))]
+    fn atomic_pinned_with_hooks(&self, path: &Path, data: &[u8], replace: bool, after_pin: impl FnOnce(), before_rename: impl FnOnce()) -> io::Result<()> {
         use rand::{rngs::OsRng, RngCore};
         use std::{io::Write, os::windows::{ffi::OsStrExt, fs::OpenOptionsExt, io::AsRawHandle}};
         use windows_sys::Win32::Storage::FileSystem::{DELETE, FILE_ATTRIBUTE_REPARSE_POINT,
@@ -223,7 +235,7 @@ impl CheckedDirectory {
             // SAFETY: allocation is aligned and covers the header, name and terminator;
             // the source and pinned root handles remain live throughout the call.
             unsafe {
-                (*rename).Anonymous = FILE_RENAME_INFO_0 { ReplaceIfExists: true };
+                (*rename).Anonymous = FILE_RENAME_INFO_0 { ReplaceIfExists: replace };
                 (*rename).RootDirectory = root.as_raw_handle();
                 (*rename).FileNameLength = u32::try_from(name_bytes).map_err(|_| denied())?;
                 std::ptr::copy_nonoverlapping(name.as_ptr(), std::ptr::addr_of_mut!((*rename).FileName).cast::<u16>(), name.len());
@@ -558,6 +570,26 @@ mod tests {
         if result.is_ok() { assert_eq!(std::fs::read(root.join(path)).unwrap(), b"third"); }
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn atomic_key_create_never_overwrites_existing_or_racing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("index");
+        std::fs::create_dir(&root).unwrap();
+        let directory = CheckedDirectory::open(&root, AccessMode::Writable).unwrap();
+        let key = Path::new("protected-key");
+        directory.atomic_create_pinned(key, b"first-protected-key").unwrap();
+        assert!(directory.atomic_create_pinned(key, b"replacement").is_err());
+        assert_eq!(std::fs::read(root.join(key)).unwrap(), b"first-protected-key");
+        let race = Path::new("racing-key");
+        let result = directory.atomic_pinned_with_hooks(race, b"candidate", false, || {
+            assert!(std::fs::rename(&root, dir.path().join("moved")).is_err());
+        }, || {
+            std::fs::write(root.join(race), b"other-process-key").unwrap();
+        });
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(root.join(race)).unwrap(), b"other-process-key");
+    }
     #[cfg(windows)]
     #[test]
     fn atomic_pinned_write_creates_a_new_manifest() {
