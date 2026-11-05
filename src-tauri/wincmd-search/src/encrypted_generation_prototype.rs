@@ -167,6 +167,15 @@ mod tests {
     }
     #[cfg(windows)]
     #[test]
+    fn dpapi_origin_is_bound_to_generation_and_cannot_be_reclassified() {
+        let root = tempfile::tempdir().unwrap();
+        record_origin(root.path(), &[7; 16], false).unwrap();
+        assert_eq!(inspect_origin(root.path(), &[7; 16]).unwrap(), Some(false));
+        assert!(inspect_origin(root.path(), &[8; 16]).is_err());
+        assert!(record_origin(root.path(), &[7; 16], true).is_err());
+    }
+    #[cfg(windows)]
+    #[test]
     fn dpapi_selection_reopens_without_replacing_and_keeps_file_pinned() {
         let root = tempfile::tempdir().unwrap();
         let mut store = PinnedSelectionStore::open(root.path()).unwrap();
