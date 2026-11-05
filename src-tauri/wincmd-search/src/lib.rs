@@ -1205,6 +1205,31 @@ mod tests {
     }
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     #[test]
+    fn offline_empty_cache_reconciles_with_live_roots_after_restart() {
+        let root = TempDir::new().unwrap();
+        let old = root.path().join("legacy");
+        let data = root.path().join("data");
+        let selection = root.path().join("selector");
+        fs::create_dir(&old).unwrap(); fs::create_dir(&data).unwrap();
+        fs::write(old.join("meta.json"), b"legacy saved").unwrap();
+        fs::write(data.join("doc.txt"), b"privatecatchupneedle").unwrap();
+        let guard = crate::encrypted_search_fence::SearchOperationFence::acquire_exclusive(root.path()).unwrap();
+        let empty_config = make_config(old.clone(), vec![]);
+        let report = SearchEngine::rebuild_offline_and_select(empty_config, Arc::new(|_| false), &selection, &guard).unwrap();
+        assert_eq!(report.indexed, 0);
+        let backup = SearchEngine::quarantine_selected_with_fence(&old, &selection, &guard).unwrap();
+        assert_eq!(fs::read(backup.join("meta.json")).unwrap(), b"legacy saved");
+        drop(guard);
+        // The helper has exited. The selected-open path must reconcile using
+        // the real current-user roots before returning a searchable engine.
+        let live_config = make_config(old, vec![data]);
+        let live = SearchEngine::open_experimental_selected_with_policy(live_config, Arc::new(|_| true), &selection).unwrap();
+        let query = ContentQuery { terms: "privatecatchupneedle".into(), roots: vec![], limit: 10, offset: 0, keyword_only: true };
+        assert_eq!(live.search(&query).unwrap().len(), 1);
+        live.stop();
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    #[test]
     fn offline_rebuild_selects_encrypted_generation_and_preserves_old_cache() {
         let root = TempDir::new().unwrap();
         let old = root.path().join("legacy");
