@@ -25,6 +25,21 @@ mod tests {
 }
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
 pub(crate) fn quarantine(old: &Path, index_id: &[u8; 16]) -> io::Result<PathBuf> {
+    move_to_sibling(old, &backup_name(index_id)?)
+}
+
+/// Explicit recovery only: do not overwrite a recreated legacy directory.
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
+pub(crate) fn restore(old: &Path, index_id: &[u8; 16]) -> io::Result<PathBuf> {
+    let parent = old.parent().ok_or_else(|| io::Error::other("invalid legacy index path"))?;
+    let name = old.file_name().and_then(|name| name.to_str())
+        .ok_or_else(|| io::Error::other("invalid legacy index name"))?;
+    let source = parent.join(backup_name(index_id)?);
+    move_to_sibling(&source, name)
+}
+
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
+fn move_to_sibling(old: &Path, destination_name: &str) -> io::Result<PathBuf> {
     use crate::read_only::{AccessMode, CheckedDirectory};
     use std::os::windows::{ffi::OsStrExt, fs::{MetadataExt, OpenOptionsExt}, io::AsRawHandle};
     use windows_sys::Win32::Storage::FileSystem::{
@@ -34,6 +49,10 @@ pub(crate) fn quarantine(old: &Path, index_id: &[u8; 16]) -> io::Result<PathBuf>
         FILE_RENAME_INFO_0, FILE_SHARE_READ, FILE_SHARE_WRITE, FileRenameInfo,
     };
     let denied = || io::Error::new(io::ErrorKind::PermissionDenied, "legacy search quarantine refused");
+    let mut destination = std::path::Path::new(destination_name).components();
+    if !matches!(destination.next(), Some(std::path::Component::Normal(_))) || destination.next().is_some() {
+        return Err(denied());
+    }
     let parent = old.parent().ok_or_else(denied)?;
     let parent_pins = CheckedDirectory::pin_root_path(parent)?;
     let parent_handle = parent_pins.last().ok_or_else(denied)?;
@@ -63,8 +82,8 @@ pub(crate) fn quarantine(old: &Path, index_id: &[u8; 16]) -> io::Result<PathBuf>
     if !metadata.is_dir() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 || identity(&handle)? != before {
         return Err(denied());
     }
-    let name = backup_name(index_id)?;
-    let wide: Vec<u16> = std::ffi::OsStr::new(&name).encode_wide().collect();
+    let name = destination_name;
+    let wide: Vec<u16> = std::ffi::OsStr::new(name).encode_wide().collect();
     let name_bytes = wide.len().checked_mul(2).ok_or_else(denied)?;
     let size = std::mem::offset_of!(FILE_RENAME_INFO, FileName)
         .checked_add(name_bytes).and_then(|n| n.checked_add(2)).ok_or_else(denied)?;

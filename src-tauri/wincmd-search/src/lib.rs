@@ -59,6 +59,13 @@ use query::merge_hits;
 use types::{ContentHit, ContentQuery, FileMeta, IndexConfig, IndexStatus};
 use watch::{watch_roots, FsEventAction};
 
+/// Explicit manual recovery of a quarantined legacy cache. Caller must hold
+/// the replacement lock and stop old binaries. It never overwrites a new
+/// legacy directory or falls back automatically to plaintext.
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
+pub fn restore_experimental_legacy_backup(old: &std::path::Path, index_id: &[u8; 16]) -> Result<std::path::PathBuf> {
+    Ok(crate::encrypted_legacy_quarantine::restore(old, index_id)?)
+}
 /// Application policy, checked immediately before extraction and persistence.
 pub type PathPolicy = Arc<dyn Fn(&std::path::Path) -> bool + Send + Sync>;
 
@@ -1069,6 +1076,13 @@ mod tests {
         assert_eq!(fs::read(backup.join("meta.json")).unwrap(), b"legacy retained");
         let query = ContentQuery { terms: "encryptedbackuptoken".into(), roots: vec![], limit: 10, offset: 0, keyword_only: true };
         assert_eq!(engine.search(&query).unwrap().len(), 1);
+        // Explicit recovery never replaces a newly created legacy directory.
+        fs::create_dir(&old).unwrap();
+        assert!(restore_experimental_legacy_backup(&old, &[90; 16]).is_err());
+        assert_eq!(fs::read(backup.join("meta.json")).unwrap(), b"legacy retained");
+        fs::remove_dir(&old).unwrap();
+        assert_eq!(restore_experimental_legacy_backup(&old, &[90; 16]).unwrap(), old);
+        assert_eq!(fs::read(old.join("meta.json")).unwrap(), b"legacy retained");
     }
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     #[test]
