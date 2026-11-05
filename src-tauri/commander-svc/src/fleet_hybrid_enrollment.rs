@@ -14,6 +14,7 @@ pub(super) struct ClaimMarker {
     session_id: u32,
     trust: FleetTrust,
     connection_revision: u64,
+    initial_pending: bool,
     request_hash: [u8; 32],
     expires: std::time::Instant,
 }
@@ -53,6 +54,9 @@ impl ClaimedHybridEnrollment {
     pub(crate) fn outcome_key(&self) -> &str {
         &self.outcome_key
     }
+    pub(super) fn initial_pending(&self) -> bool {
+        self.marker.initial_pending
+    }
 }
 
 // Match the server admission window; the server still checks freshness and replay.
@@ -64,6 +68,7 @@ fn verified_request(
     bytes: &[u8],
     pending: &PendingHybridEnrollment,
     expected_outcome: &str,
+    initial_pending: bool,
 ) -> Result<String, &'static str> {
     if bytes.is_empty() || bytes.len() > MAX_REQUEST {
         return Err(INVALID);
@@ -109,6 +114,11 @@ fn verified_request(
             .is_ok_and(|id| id.get_version_num() == 4 && id.to_string() == nonce)
     {
         return Err(INVALID);
+    }
+    if let Some(previous) = object.get("previous_generation") {
+        if initial_pending || previous.as_str() != Some(pending.trust.enrollment_generation.as_str()) {
+            return Err(INVALID);
+        }
     }
     let key = STANDARD.decode(&outcome).map_err(|_| INVALID)?;
     let key: [u8; 32] = key.try_into().map_err(|_| INVALID)?;
@@ -174,7 +184,7 @@ impl FleetMachinePolicy {
             .as_ref()
             .and_then(|trust| trust.outcome_key_b64.as_deref())
             .ok_or("hybrid_enrollment_not_authorized")?;
-        let outcome_key = verified_request(bytes, &pending, expected_outcome)?;
+        let outcome_key = verified_request(bytes, &pending, expected_outcome, record.hybrid_initial_pending)?;
         if std::time::Instant::now() >= pending.expires {
             return Err("hybrid_enrollment_expired");
         }
@@ -184,6 +194,7 @@ impl FleetMachinePolicy {
             session_id: pending.session_id,
             trust: pending.trust,
             connection_revision: pending.connection_revision,
+            initial_pending: record.hybrid_initial_pending,
             request_hash: Sha256::digest(bytes).into(),
             expires: pending.expires,
         };
@@ -223,6 +234,7 @@ pub(super) fn hybrid_claim_matches(state: &State, claim: &ClaimedHybridEnrollmen
         && saved.connection_revision == claim.marker.connection_revision
         && saved.trust == record.trust
         && saved.connection_revision == record.connection_revision
+        && saved.initial_pending == record.hybrid_initial_pending
         && !record.service_enabled
         && record.credential.is_none()
         && !record.hybrid_unconfirmed

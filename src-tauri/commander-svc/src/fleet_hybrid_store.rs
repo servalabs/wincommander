@@ -38,7 +38,7 @@ impl FleetMachinePolicy {
         let binding = CredentialBinding {
             org_id: &current.trust.org_id,
             device_id: &current.trust.device_id,
-            enrollment_generation: &current.trust.enrollment_generation,
+            enrollment_generation: reply.generation(),
             origin: claim.origin(),
         };
         let sealed = fleet_credential::seal(protector, &binding, reply.secret())?;
@@ -48,6 +48,12 @@ impl FleetMachinePolicy {
         }
         let mut next = guard.clone();
         let record = next.record.as_mut().ok_or("not_provisioned")?;
+        if record.hybrid_initial_pending {
+            record.trust.enrollment_generation = reply.generation().to_owned();
+            record.hybrid_initial_pending = false;
+        } else if record.trust.enrollment_generation != reply.generation() {
+            return Err("hybrid_enrollment_not_authorized");
+        }
         record.credential_revision = record
             .credential_revision
             .checked_add(1)

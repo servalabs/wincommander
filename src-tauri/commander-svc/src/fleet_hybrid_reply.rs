@@ -2,8 +2,9 @@
 //! Service-side verification of exact enrollment reply bytes. Verification
 //! alone does not grant transport, install credentials or publish a session.
 use super::{
-    hybrid_enrollment::{ClaimMarker, ClaimedHybridEnrollment},
-    FleetHybridTrust, FleetMachinePolicy,
+    effective_hybrid_trust,
+    hybrid_enrollment::{hybrid_claim_matches, ClaimMarker, ClaimedHybridEnrollment},
+    FleetHybridTrust, FleetMachinePolicy, FleetTrust,
 };
 use base64::{
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
@@ -42,6 +43,7 @@ pub(crate) struct VerifiedHybridReply {
     marker: ClaimMarker,
     keys: FleetHybridTrust,
     epoch: u64,
+    generation: String,
     secret: zeroize::Zeroizing<Vec<u8>>,
     body: zeroize::Zeroizing<Vec<u8>>,
 }
@@ -53,6 +55,9 @@ impl VerifiedHybridReply {
     pub(super) fn epoch(&self) -> u64 {
         self.epoch
     }
+    pub(super) fn generation(&self) -> &str {
+        &self.generation
+    }
     pub(super) fn secret(&self) -> &[u8] {
         &self.secret
     }
@@ -63,6 +68,13 @@ impl VerifiedHybridReply {
 }
 
 impl FleetMachinePolicy {
+    fn hybrid_trust_for_claim(&self, claim: &ClaimedHybridEnrollment) -> Result<(FleetTrust, FleetHybridTrust), &'static str> {
+        let state = self.state.lock().map_err(|_| INVALID)?;
+        if !hybrid_claim_matches(&state, claim) { return Err(INVALID); }
+        let record = state.record.as_ref().ok_or(INVALID)?;
+        if record.hybrid_unconfirmed { return Err(INVALID); }
+        Ok((record.trust.clone(), effective_hybrid_trust(record).ok_or(INVALID)?))
+    }
     /// Inputs are exact body bytes and individual header values after the HTTP
     /// layer has rejected missing, repeated and non-ASCII proof headers.
     pub(crate) fn verify_hybrid_enrollment_reply(
@@ -81,7 +93,7 @@ impl FleetMachinePolicy {
         {
             return Err(INVALID);
         }
-        let (binding, keys) = self.hybrid_trust_snapshot()?.ok_or(INVALID)?;
+        let (binding, keys) = self.hybrid_trust_for_claim(claim)?;
         if &binding != claim.binding()
             || keys.outcome_key_b64.as_deref() != Some(claim.outcome_key())
         {
@@ -134,9 +146,12 @@ impl FleetMachinePolicy {
             return Err(INVALID);
         }
         let identity: Identity = decode_windows_v2(body).map_err(|_| INVALID)?;
+        let valid_generation = uuid::Uuid::parse_str(&identity.shield_progress_generation)
+            .is_ok_and(|generation| !generation.is_nil() && generation.to_string() == identity.shield_progress_generation);
         if identity.org_id != binding.org_id
             || identity.device_id != binding.device_id
-            || identity.shield_progress_generation != binding.enrollment_generation
+            || !valid_generation
+            || (!claim.initial_pending() && identity.shield_progress_generation != binding.enrollment_generation)
             || identity.outcome_pubkey_b64 != claim.outcome_key()
             || identity.server_signing_key_b64 != binding.signer_key
         {
@@ -154,7 +169,7 @@ impl FleetMachinePolicy {
         // This is still a snapshot. Publication must be serialized with
         // cancellation; callers cannot use this return value as authority.
         if !self.hybrid_claim_is_current(claim)
-            || self.hybrid_trust_snapshot()?.as_ref() != Some(&(binding.clone(), keys.clone()))
+            || self.hybrid_trust_for_claim(claim).ok().as_ref() != Some(&(binding.clone(), keys.clone()))
         {
             return Err(INVALID);
         }
@@ -162,6 +177,7 @@ impl FleetMachinePolicy {
             marker: claim.marker().clone(),
             keys,
             epoch,
+            generation: identity.shield_progress_generation.clone(),
             secret,
             body: zeroize::Zeroizing::new(body.to_vec()),
         })

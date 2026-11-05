@@ -22,6 +22,8 @@ mod hybrid_enrollment;
 mod hybrid_reply;
 #[path = "fleet_hybrid_store.rs"]
 mod hybrid_store;
+#[path = "fleet_hybrid_bootstrap.rs"]
+mod hybrid_bootstrap;
 
 #[cfg(windows)]
 use crate::peer_auth_deployment_acl as protected_acl;
@@ -207,6 +209,7 @@ type ContactState = (FleetTrust, Option<ContactObservation>, Option<String>, Str
 
 fn default_service_enabled() -> bool { true }
 fn is_zero(value: &u64) -> bool { *value == 0 }
+fn is_false(value: &bool) -> bool { !*value }
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -252,6 +255,8 @@ struct Record {
     hybrid_epoch_floor: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     hybrid_credential: Option<StoredHybridCredential>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    hybrid_initial_pending: bool,
     #[serde(skip)]
     hybrid_unconfirmed: bool,
     policy: Option<PolicyEnvelope>,
@@ -293,6 +298,12 @@ fn effective_hybrid_trust(record: &Record) -> Option<FleetHybridTrust> {
 }
 
 fn validate_hybrid_state(record: &Record) -> Result<(), &'static str> {
+    if record.hybrid_initial_pending
+        && (record.hybrid_trust.as_ref().and_then(|trust| trust.outcome_key_b64.as_ref()).is_none() || record.hybrid_epoch_floor != 0
+            || record.hybrid_credential.is_some() || record.policy.is_some()
+            || record.contact.is_some() || record.service_enabled || record.credential.is_some()) {
+        return Err("invalid_hybrid_initial_state");
+    }
     if let Some(hybrid) = &record.hybrid_trust {
         validate_hybrid_trust(&record.trust, hybrid)?;
         if record.service_enabled || record.credential.is_some() { return Err("invalid_hybrid_state"); }
@@ -309,6 +320,12 @@ fn validate_hybrid_state(record: &Record) -> Result<(), &'static str> {
     } else if record.hybrid_epoch_floor != 0 || record.hybrid_credential.is_some() {
         return Err("invalid_hybrid_state");
     }
+    Ok(())
+}
+
+fn ensure_completed(record: Option<&Record>) -> Result<(), &'static str> {
+    if record.is_some_and(|record| record.hybrid_unconfirmed) { return Err("store_unavailable"); }
+    if record.is_some_and(|record| record.hybrid_initial_pending) { return Err("hybrid_enrollment_pending"); }
     Ok(())
 }
 
@@ -643,6 +660,7 @@ impl FleetMachinePolicy {
                 hybrid_trust: None,
                 hybrid_epoch_floor: 0,
                 hybrid_credential: None,
+                hybrid_initial_pending: false,
                 hybrid_unconfirmed: false,
                 policy: None,
                 audit,
@@ -725,6 +743,7 @@ impl FleetMachinePolicy {
     pub fn hybrid_trust_snapshot(&self) -> Result<Option<(FleetTrust, FleetHybridTrust)>, &'static str> {
         let guard = self.state.lock().map_err(|_| "store_unavailable")?;
         if guard.record.as_ref().is_some_and(|record| record.hybrid_unconfirmed) { return Err("store_unavailable"); }
+        ensure_completed(guard.record.as_ref())?;
         Ok(guard.record.as_ref().and_then(|record| effective_hybrid_trust(record)
             .map(|hybrid| (record.trust.clone(), hybrid))))
     }
@@ -851,6 +870,7 @@ impl FleetMachinePolicy {
                 hybrid_trust: None,
                 hybrid_epoch_floor: 0,
                 hybrid_credential: None,
+                hybrid_initial_pending: false,
                 hybrid_unconfirmed: false,
                 policy: None,
                 audit,
@@ -990,6 +1010,7 @@ impl FleetMachinePolicy {
                 hybrid_trust: current.hybrid_trust.clone(),
                 hybrid_epoch_floor: current.hybrid_epoch_floor,
                 hybrid_credential: current.hybrid_credential.clone(),
+                hybrid_initial_pending: current.hybrid_initial_pending,
                 hybrid_unconfirmed: current.hybrid_unconfirmed,
                 policy: Some(policy),
                 audit: current.audit.clone(),
@@ -1015,6 +1036,7 @@ impl FleetMachinePolicy {
 
     pub fn snapshot(&self) -> Result<Option<PolicyEnvelope>, &'static str> {
         let guard = self.state.lock().map_err(|_| "store_unavailable")?;
+        ensure_completed(guard.record.as_ref())?;
         Ok(guard
             .record
             .as_ref()
@@ -1027,11 +1049,13 @@ impl FleetMachinePolicy {
     /// first signed policy has not arrived. Never map store failure to false.
     pub fn read_current<T>(&self,read:impl FnOnce(bool,Option<&PolicyEnvelope>)->Result<T,&'static str>)->Result<T,&'static str> {
         let guard=self.state.lock().map_err(|_|"store_unavailable")?;
+        ensure_completed(guard.record.as_ref())?;
         read(guard.record.is_some(),guard.record.as_ref().and_then(|record|record.policy.as_ref()))
     }
 
     pub fn trust_and_policy(&self) -> Result<(bool, Option<PolicyEnvelope>), &'static str> {
         let guard = self.state.lock().map_err(|_| "store_unavailable")?;
+        ensure_completed(guard.record.as_ref())?;
         Ok(match &guard.record {
             None => (false, None),
             Some(record) => (true, record.policy.clone()),
@@ -1040,6 +1064,7 @@ impl FleetMachinePolicy {
 
     pub fn trust_snapshot(&self) -> Result<Option<(FleetTrust, Vec<TrustAudit>)>, &'static str> {
         let guard = self.state.lock().map_err(|_| "store_unavailable")?;
+        ensure_completed(guard.record.as_ref())?;
         Ok(guard
             .record
             .as_ref()
@@ -1048,6 +1073,7 @@ impl FleetMachinePolicy {
 
     pub fn trust_with_origins(&self) -> Result<Option<TrustWithTransport>, &'static str> {
         let guard = self.state.lock().map_err(|_| "store_unavailable")?;
+        ensure_completed(guard.record.as_ref())?;
         Ok(guard.record.as_ref().map(|record| (record.trust.clone(), record.audit.clone(), record.origins.clone(), record.transport_profile.clone(), record.service_enabled)))
     }
 
@@ -1072,6 +1098,7 @@ impl FleetMachinePolicy {
         now: impl FnOnce() -> std::time::Instant,
     ) -> Result<ContactChallenge, &'static str> {
         let mut guard = self.state.lock().map_err(|_| "store_unavailable")?;
+        ensure_completed(guard.record.as_ref())?;
         let trust = guard
             .record
             .as_ref()
@@ -1090,6 +1117,7 @@ impl FleetMachinePolicy {
         let Ok(guard) = self.state.lock() else {
             return false;
         };
+        if ensure_completed(guard.record.as_ref()).is_err() { return false; }
         guard.contact_challenge.as_ref().is_some_and(|pending| {
             pending.nonce == nonce
                 && pending.fresh(std::time::Instant::now())
@@ -1121,6 +1149,7 @@ impl FleetMachinePolicy {
         mut clock: impl FnMut() -> (std::time::Instant, Result<u64, &'static str>),
     ) -> Result<ContactObservation, &'static str> {
         let mut guard = self.state.lock().map_err(|_| "store_unavailable")?;
+        ensure_completed(guard.record.as_ref())?;
         if guard
             .contact_challenge
             .as_ref()
@@ -1166,6 +1195,7 @@ impl FleetMachinePolicy {
         &self,
     ) -> Result<Option<(String, ContactObservation)>, &'static str> {
         let guard = self.state.lock().map_err(|_| "store_unavailable")?;
+        ensure_completed(guard.record.as_ref())?;
         Ok(guard.record.as_ref().and_then(|record| {
             record
                 .contact
@@ -1288,6 +1318,7 @@ impl FleetMachinePolicy {
 
     fn clear_token(record: &Record) -> Result<String, &'static str> {
         use sha2::{Digest, Sha256};
+        ensure_completed(Some(record))?;
         let bytes = serde_json::to_vec(&["wincommander:fleet-service-clear:v1", &record.trust.org_id,
             &record.trust.device_id, &record.trust.enrollment_generation, &record.trust.signer_key,
             &record.credential_revision.to_string()]).map_err(|_| "invalid_store")?;
@@ -1296,6 +1327,7 @@ impl FleetMachinePolicy {
 
     fn connection_token_for(record: &Record) -> Result<String, &'static str> {
         use sha2::{Digest, Sha256};
+        ensure_completed(Some(record))?;
         let bytes = serde_json::to_vec(&["wincommander:fleet-service-connection:v1", &record.trust.org_id,
             &record.trust.device_id, &record.trust.enrollment_generation, &record.trust.signer_key,
             &record.connection_revision.to_string()]).map_err(|_| "invalid_store")?;
@@ -1337,6 +1369,7 @@ impl FleetMachinePolicy {
 
     pub(crate) fn contact_state(&self) -> Result<Option<ContactState>, &'static str> {
         let guard = self.state.lock().map_err(|_| "store_unavailable")?;
+        ensure_completed(guard.record.as_ref())?;
         guard.record.as_ref().map(|record| {
             let token = Some(Self::clear_token(record)?);
             Ok((record.trust.clone(), record.contact.clone(), token, Self::connection_token_for(record)?, record.credential_revision))
@@ -1593,6 +1626,135 @@ mod tests {
                 output.truncate(len); Ok(output) }).unwrap();
         let verified = store.verify_hybrid_enrollment_reply(&claim, 200, &body, &classical, &URL_SAFE_NO_PAD.encode(proof)).unwrap();
         (store, hybrid, offer, claim, verified)
+    }
+
+    #[test]
+    fn hybrid_bootstrap_write_failure_cannot_enable_an_unconfirmed_identity() {
+        use std::sync::atomic::Ordering;
+        for commit_first in [false, true] {
+            let fs = FailingFs::default();
+            let store = FleetMachinePolicy::open(Box::new(fs.clone()), PathBuf::from("test")).unwrap();
+            fs.commit_first.store(commit_first, Ordering::SeqCst);
+            fs.fail.store(true, Ordering::SeqCst);
+            let bootstrap = || store.provision_hybrid_bootstrap(trust().org_id, trust().device_id,
+                trust().signer_key, hybrid(), vec!["https://fleet.example".into()], None, "S-1-5-18");
+            assert!(bootstrap().is_err());
+            assert!(matches!(store.trust_snapshot(), Err("store_unavailable")));
+            assert_eq!(store.hybrid_trust_snapshot(), Err("store_unavailable"));
+            assert!(store.begin_contact().is_err());
+            let reopened = FleetMachinePolicy::open(Box::new(fs.clone()), PathBuf::from("test")).unwrap();
+            let state = reopened.state.lock().unwrap();
+            assert_eq!(state.record.is_some(), commit_first);
+            if let Some(record) = &state.record { assert!(record.hybrid_initial_pending && !record.service_enabled); }
+            drop(state);
+            fs.fail.store(false, Ordering::SeqCst);
+            let pending = bootstrap().unwrap();
+            assert_eq!(bootstrap().unwrap(), pending);
+            assert!(store.provision_hybrid_bootstrap(trust().org_id, trust().device_id,
+                trust().signer_key, hybrid(), vec!["https://other.example".into()], None, "S-1-5-18").is_err());
+            assert!(matches!(store.trust_snapshot(), Err("hybrid_enrollment_pending")));
+        }
+    }
+
+    #[test]
+    fn first_hybrid_enrollment_installs_server_generation_with_credential() {
+        first_hybrid_enrollment_with(&super::credential_integration_tests::TestProtector, None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn first_hybrid_enrollment_installs_server_generation_with_machine_dpapi() {
+        first_hybrid_enrollment_with(&crate::fleet_credential::MachineDpapi, None);
+    }
+
+    #[test]
+    fn first_hybrid_enrollment_ambiguous_write_never_publishes_an_unconfirmed_binding() {
+        for commit_first in [false, true] {
+            first_hybrid_enrollment_with(&super::credential_integration_tests::TestProtector, Some(commit_first));
+        }
+    }
+
+    fn first_hybrid_enrollment_with(protector: &dyn crate::fleet_credential::Protector, fail_after: Option<bool>) {
+        use aws_lc_rs::signature::{KeyPair, PqdsaKeyPair, ML_DSA_65_SIGNING};
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use wincmd_pq_experiment::{jws, Purpose, VerifyError};
+        let pq = PqdsaKeyPair::generate(&ML_DSA_65_SIGNING).unwrap();
+        let pq_public: [u8; 1952] = pq.public_key().as_ref().try_into().unwrap();
+        let fs = FailingFs::default();
+        let store = FleetMachinePolicy::open(Box::new(fs.clone()), PathBuf::from("test")).unwrap();
+        let mut keys = hybrid();
+        keys.ml_dsa_65_public_b64 = STANDARD.encode(pq_public);
+        let bootstrap = || store.provision_hybrid_bootstrap(trust().org_id, trust().device_id,
+            trust().signer_key, keys.clone(), vec!["https://fleet.example".into()], None, "S-1-5-18");
+        let pending = bootstrap().unwrap();
+        assert_eq!(bootstrap().unwrap(), pending);
+        assert!(matches!(store.trust_snapshot(), Err("hybrid_enrollment_pending")));
+        assert!(store.begin_contact().is_err());
+        let reopened = FleetMachinePolicy::open(Box::new(fs.clone()), PathBuf::from("test")).unwrap();
+        assert_eq!(reopened.hybrid_trust_snapshot(), Err("hybrid_enrollment_pending"));
+        let offer = store.begin_hybrid_enrollment(&pending, "https://fleet.example", "S-1-5-21-7", 7).unwrap();
+        let mut stale: serde_json::Value = serde_json::from_slice(&hybrid_request(&offer)).unwrap();
+        stale.as_object_mut().unwrap().remove("enrollment_signature_b64");
+        stale["previous_generation"] = pending.enrollment_generation.clone().into();
+        let mut stale_preimage = b"WinCommander Fleet enrollment proof v2\nPOST\n/v1/windows/enroll-v2\n".to_vec();
+        stale_preimage.extend(fleet_proto::canonical_json_bytes(&stale));
+        stale["enrollment_signature_b64"] = STANDARD.encode(SigningKey::from_bytes(&[7;32]).sign(&stale_preimage).to_bytes()).into();
+        assert!(store.claim_hybrid_enrollment(&offer.authorization_id, "S-1-5-21-7", 7, &serde_json::to_vec(&stale).unwrap()).is_err());
+        let offer = store.begin_hybrid_enrollment(&pending, "https://fleet.example", "S-1-5-21-7", 7).unwrap();
+        let claim = store.claim_hybrid_enrollment(&offer.authorization_id, "S-1-5-21-7", 7, &hybrid_request(&offer)).unwrap();
+        let generation = uuid::Uuid::new_v4().to_string();
+        assert_ne!(generation, pending.enrollment_generation);
+        let body = serde_json::to_vec(&serde_json::json!({"device_id":pending.device_id,
+            "org_id":pending.org_id, "shield_progress_generation":generation,
+            "outcome_pubkey_b64":claim.outcome_key(), "checkin_secret_b64":STANDARD.encode([6u8;32]),
+            "server_signing_key_b64":pending.signer_key, "capabilities":[]})).unwrap();
+        let ed = signing_key();
+        let ed_public = ed.verifying_key().to_bytes();
+        let signer = jws::Trust { purpose: Purpose::FleetEnrollment, minimum_epoch: 7,
+            ed_key_id:"fleet-ed", ed25519_public:&ed_public, pq_key_id:"fleet-pq", ml_dsa_65_public:&pq_public };
+        let preimage = fleet_proto::windows_v2::windows_hybrid_enrollment_preimage(claim.challenge(), claim.request(), 200, &body);
+        let classical = format!("v2.{}", STANDARD.encode(ed.sign(&preimage).to_bytes()));
+        let proof = jws::sign::assemble(&preimage, 9, &signer,
+            |message| Ok(ed.sign(message).to_bytes().to_vec()),
+            |message| { let mut output=vec![0;3309];
+                let len=pq.sign(message, &mut output).map_err(|_| VerifyError::InvalidSignature)?;
+                output.truncate(len); Ok(output) }).unwrap();
+        let verified = store.verify_hybrid_enrollment_reply(&claim, 200, &body, &classical, &URL_SAFE_NO_PAD.encode(proof)).unwrap();
+        if let Some(commit_first) = fail_after {
+            use std::sync::atomic::Ordering;
+            fs.commit_first.store(commit_first, Ordering::SeqCst);
+            fs.fail.store(true, Ordering::SeqCst);
+            assert!(store.stage_hybrid_credential(&claim, verified, protector).is_err());
+            assert!(!store.hybrid_claim_is_current(&claim));
+            assert_eq!(store.hybrid_trust_snapshot(), Err("store_unavailable"));
+            assert!(matches!(store.trust_snapshot(), Err("store_unavailable")));
+            assert!(matches!(store.trust_with_origins(), Err("store_unavailable")));
+            assert!(matches!(store.trust_and_policy(), Err("store_unavailable")));
+            assert!(matches!(store.contact_state(), Err("store_unavailable")));
+            assert!(matches!(store.credential_clear_token(), Err("store_unavailable")));
+            assert!(store.begin_contact().is_err());
+            let reopened = FleetMachinePolicy::open(Box::new(fs), PathBuf::from("test")).unwrap();
+            let guard = reopened.state.lock().unwrap();
+            let record = guard.record.as_ref().unwrap();
+            assert_eq!(record.hybrid_initial_pending, !commit_first);
+            assert_eq!(record.hybrid_credential.is_some(), commit_first);
+            assert_eq!(record.trust.enrollment_generation.as_str(), if commit_first { generation.as_str() } else { pending.enrollment_generation.as_str() });
+            return;
+        }
+        store.stage_hybrid_credential(&claim, verified, protector).unwrap();
+        let reopened = FleetMachinePolicy::open(Box::new(fs), PathBuf::from("test")).unwrap();
+        let guard = reopened.state.lock().unwrap();
+        let record = guard.record.as_ref().unwrap();
+        assert!(!record.hybrid_initial_pending);
+        assert_eq!(record.trust.enrollment_generation, generation);
+        assert_eq!(record.hybrid_epoch_floor, 9);
+        let credential = record.hybrid_credential.as_ref().unwrap();
+        let binding = crate::fleet_credential::CredentialBinding { org_id:&record.trust.org_id,
+            device_id:&record.trust.device_id, enrollment_generation:&record.trust.enrollment_generation,
+            origin:&credential.origin };
+        let secret = crate::fleet_credential::unseal(protector,
+            &binding, &STANDARD.decode(&credential.ciphertext).unwrap()).unwrap();
+        assert_eq!(secret.as_slice(), &[6u8;32]);
     }
 
     #[test]
@@ -1992,7 +2154,7 @@ mod tests {
             fs.fail.store(true, std::sync::atomic::Ordering::SeqCst);
             assert!(store.provision_hybrid_trust(trust(), hybrid(), "S-1-5-18").is_err());
             assert_eq!(store.hybrid_trust_snapshot(), Err("store_unavailable"));
-            assert!(!store.trust_with_origins().unwrap().unwrap().4);
+            assert!(matches!(store.trust_with_origins(), Err("store_unavailable")));
             assert!(store.provision_hybrid_trust(trust(), hybrid(), "S-1-5-18").is_err());
             fs.fail.store(false, std::sync::atomic::Ordering::SeqCst);
             let before_retry = FleetMachinePolicy::open(Box::new(fs.clone()), PathBuf::from("test")).unwrap();
