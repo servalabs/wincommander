@@ -68,6 +68,7 @@ pub struct ExperimentalRebuildReport { pub indexed: usize, pub omitted: usize, p
 /// Facade: owns the index and orchestrates crawl → extract → chunk → index.
 pub struct SearchEngine {
     path_policy: PathPolicy,
+    watcher_invalid: Arc<AtomicBool>,
     path_mapper: Option<PathMapper>,
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     experimental_fresh: bool,
@@ -338,6 +339,7 @@ impl SearchEngine {
         let status = Arc::new(Mutex::new(IndexStatus::default()));
         Ok(Self {
             path_policy,
+            watcher_invalid: Arc::new(AtomicBool::new(false)),
             path_mapper: None,
             #[cfg(all(windows, feature = "experimental-encrypted-search"))]
             experimental_fresh: false,
@@ -452,7 +454,7 @@ impl SearchEngine {
         // wakes the drain loop.  On error, proceed crawl-only (as before).
         let (tx, rx) = mpsc::channel::<FsEventAction>();
         let watching = if reconcile_first {
-            watch::watch_roots_strict(&roots, skip.clone(), exclusions.clone(), max_bytes, tx)
+            watch::watch_roots_strict(&roots, skip.clone(), exclusions.clone(), max_bytes, tx, Arc::clone(&self.watcher_invalid))
         } else {
             watch_roots(&roots, skip.clone(), exclusions.clone(), max_bytes, tx)
         };
@@ -465,9 +467,24 @@ impl SearchEngine {
             Err(e) => { status.lock().unwrap().last_error = Some(e.to_string()); }
         }
         if reconcile_first {
-            let reconciled = self.reconcile_sync(&AtomicBool::new(false), usize::MAX);
+            // Another window can temporarily own the writer. Wait a bounded
+            // period while the watcher queues events, then fail explicitly.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            let reconciled = loop {
+                if self.watcher_invalid.load(Ordering::Acquire) {
+                    break Err(SearchError::Config("search watcher requires reconciliation; retry".into()));
+                }
+                match self.reconcile_sync(&AtomicBool::new(false), usize::MAX) {
+                    Err(SearchError::Index(tantivy::TantivyError::LockFailure(
+                        tantivy::directory::error::LockError::LockBusy, _,
+                    ))) if std::time::Instant::now() < deadline => {
+                        std::thread::sleep(std::time::Duration::from_millis(200));
+                    }
+                    result => break result,
+                }
+            };
             let error = match reconciled {
-                Ok(report) if report.complete => None,
+                Ok(report) if report.complete && !self.watcher_invalid.load(Ordering::Acquire) => None,
                 Ok(_) => Some(SearchError::Config("encrypted cache reconciliation incomplete; retry".into())),
                 Err(error) => Some(error),
             };
@@ -641,7 +658,18 @@ impl SearchEngine {
 
     /// Snapshot of current indexer state.
     pub fn status(&self) -> IndexStatus {
-        self.status.lock().unwrap().clone()
+        let mut status = self.status.lock().unwrap().clone();
+        if self.watcher_invalid.load(Ordering::Acquire) {
+            status.last_error = Some("Search changes require reconciliation; reopen search".into());
+        }
+        status
+    }
+
+    fn ensure_watcher_valid(&self) -> Result<()> {
+        if self.watcher_invalid.load(Ordering::Acquire) {
+            return Err(SearchError::Config("Search changes require reconciliation; reopen search".into()));
+        }
+        Ok(())
     }
 
     /// Run a search, blending keyword and (optional) semantic results.
@@ -650,6 +678,7 @@ impl SearchEngine {
     /// those folders — `search_keyword` enforces it on the keyword side, and the
     /// semantic side is re-filtered here.
     pub fn search(&self, query: &ContentQuery) -> Result<Vec<ContentHit>> {
+        self.ensure_watcher_valid()?;
         let kw_hits = self.ci.search_keyword(query)?;
         if query.keyword_only || self.semantic.is_none() {
             return Ok(kw_hits);
@@ -679,6 +708,7 @@ impl SearchEngine {
         doc_id: crate::types::DocId,
         restricted: bool,
     ) -> Result<Vec<crate::types::Chunk>> {
+        self.ensure_watcher_valid()?;
         use tantivy::query::TermQuery;
         use tantivy::schema::IndexRecordOption;
 
@@ -950,6 +980,17 @@ mod tests {
         let reopened = SearchEngine::open_experimental_selected_with_policy(config, Arc::new(|_| true), &proof).unwrap();
         assert_eq!(reopened.search(&query).unwrap().len(), 1);
         assert!(generation.join("protected-search-key.v1").exists());
+    }
+    #[test]
+    fn invalid_watcher_blocks_stale_search_and_reports_reopen() {
+        let data = TempDir::new().unwrap(); let index = TempDir::new().unwrap();
+        let config = make_config(index.path().into(), vec![data.path().into()]);
+        let engine = SearchEngine::open(config).unwrap();
+        engine.watcher_invalid.store(true, Ordering::Release);
+        let query = ContentQuery { terms: "anything".into(), roots: vec![], limit: 10, offset: 0, keyword_only: true };
+        assert!(engine.search(&query).is_err());
+        assert!(engine.get_chunks(1).is_err());
+        assert!(engine.status().last_error.unwrap().contains("reopen"));
     }
     #[test]
     fn strict_reconciliation_start_fails_when_watcher_cannot_register() {

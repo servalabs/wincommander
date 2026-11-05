@@ -7,7 +7,7 @@
 use globset::GlobSet;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc, atomic::{AtomicBool, Ordering}};
 
 use crate::crawler::{doc_id_for, path_is_skipped};
 use crate::error::{Result, SearchError};
@@ -88,26 +88,49 @@ pub fn apply_fs_event(
     }
 }
 
+// Delete identities may change after a path disappears, and rename events may
+// contain two paths. Force a full rescan instead of silently guessing. Errors
+// or an explicit backend rescan flag also make the cache unsafe to serve.
+fn needs_reconciliation(event: &notify::Result<Event>, skip: &[PathBuf], exclusions: &GlobSet) -> bool {
+    let event = match event { Ok(event) => event, Err(_) => return true };
+    if event.need_rescan() { return true; }
+    let relevant = |path: &PathBuf| !path_is_skipped(path, skip) && !path_is_excluded(path, exclusions);
+    if matches!(event.kind, EventKind::Remove(_) | EventKind::Modify(notify::event::ModifyKind::Name(_))) {
+        return event.paths.is_empty() || event.paths.iter().any(relevant);
+    }
+    if matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_)) {
+        return event.paths.is_empty() || event.paths.iter().filter(|path| relevant(path))
+            .any(|path| path.is_dir() || std::fs::metadata(path).is_err());
+    }
+    false
+}
 /// Spawn a notify watcher over `roots` and forward classified actions to `tx`.
 pub fn watch_roots(
     roots: &[PathBuf], skip_paths: Vec<PathBuf>, exclusions: GlobSet,
     max_file_bytes: u64, tx: mpsc::Sender<FsEventAction>,
 ) -> Result<RecommendedWatcher> {
-    watch_roots_impl(roots, skip_paths, exclusions, max_file_bytes, tx, false)
+    watch_roots_impl(roots, skip_paths, exclusions, max_file_bytes, tx, None)
 }
 
 pub(crate) fn watch_roots_strict(
     roots: &[PathBuf], skip_paths: Vec<PathBuf>, exclusions: GlobSet,
-    max_file_bytes: u64, tx: mpsc::Sender<FsEventAction>,
+    max_file_bytes: u64, tx: mpsc::Sender<FsEventAction>, invalid: Arc<AtomicBool>,
 ) -> Result<RecommendedWatcher> {
-    watch_roots_impl(roots, skip_paths, exclusions, max_file_bytes, tx, true)
+    watch_roots_impl(roots, skip_paths, exclusions, max_file_bytes, tx, Some(invalid))
 }
 
 fn watch_roots_impl(
     roots: &[PathBuf], skip_paths: Vec<PathBuf>, exclusions: GlobSet,
-    max_file_bytes: u64, tx: mpsc::Sender<FsEventAction>, strict: bool,
+    max_file_bytes: u64, tx: mpsc::Sender<FsEventAction>, invalid: Option<Arc<AtomicBool>>,
 ) -> Result<RecommendedWatcher> {
+    let strict = invalid.is_some();
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
+        if let Some(flag) = &invalid {
+            if needs_reconciliation(&res, &skip_paths, &exclusions) {
+                flag.store(true, Ordering::Release);
+                return;
+            }
+        }
         if let Ok(event) = res {
             if let Some(action) = apply_fs_event(&event, &skip_paths, &exclusions, max_file_bytes) {
                 let _ = tx.send(action);
@@ -142,9 +165,21 @@ mod tests {
         let missing = root.path().join("missing");
         let exclusions = crate::crawler::build_globset(&[]).unwrap();
         let (tx, _rx) = std::sync::mpsc::channel();
-        assert!(watch_roots_strict(&[missing], vec![], exclusions, 1024, tx).is_err());
+        assert!(watch_roots_strict(&[missing], vec![], exclusions, 1024, tx, Arc::new(AtomicBool::new(false))).is_err());
     }
 
+    #[test]
+    fn strict_classification_flags_errors_deletes_and_two_path_renames() {
+        let glob = no_exclusions();
+        let bad: notify::Result<Event> = Err(notify::Error::generic("lost events"));
+        assert!(needs_reconciliation(&bad, &[], &glob));
+        let root = TempDir::new().unwrap();
+        let old = root.path().join("old"); let new = root.path().join("new");
+        let deletion = Ok(make_event(EventKind::Remove(RemoveKind::File), &old));
+        assert!(needs_reconciliation(&deletion, &[], &glob));
+        let rename = Ok(Event { kind: EventKind::Modify(ModifyKind::Name(notify::event::RenameMode::Both)), paths: vec![old, new], attrs: Default::default() });
+        assert!(needs_reconciliation(&rename, &[], &glob));
+    }
     fn make_event(kind: EventKind, path: &Path) -> Event {
         Event {
             kind,

@@ -36,6 +36,10 @@ pub(crate) fn revision_ns(path: &Path) -> std::io::Result<u64> {
         .min(u64::MAX as u128) as u64)
 }
 
+// An unobservable existing path is not evidence that it was deleted.
+fn confirmed_missing(path: &Path) -> bool {
+    matches!(std::fs::symlink_metadata(path), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+}
 struct StoredFile {
     id: DocId,
     path: PathBuf,
@@ -105,6 +109,10 @@ impl SearchEngine {
         let mut writer = self.ci.writer()?;
         let mut complete = true;
         let started = std::time::Instant::now();
+        #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+        let unbounded_initial_scan = self.experimental_id.is_some() && max_files == usize::MAX;
+        #[cfg(not(all(windows, feature = "experimental-encrypted-search")))]
+        let unbounded_initial_scan = false;
         'scan: while let Some(directory) = directories.pop() {
             if cancel.load(Ordering::Relaxed) {
                 complete = false;
@@ -120,7 +128,7 @@ impl SearchEngine {
             };
             for entry in entries {
                 if cancel.load(Ordering::Relaxed)
-                    || (report.updated > 0
+                    || (!unbounded_initial_scan && report.updated > 0
                         && started.elapsed() >= std::time::Duration::from_millis(500))
                 {
                     complete = false;
@@ -231,6 +239,13 @@ impl SearchEngine {
         if complete {
             for file in &existing {
                 if !seen.contains(&file.id) || !self.permits_path(&file.path) {
+                    // For encrypted-cache recovery, inability to observe or
+                    // authorize an existing path is not proof of deletion.
+                    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+                    if self.experimental_id.is_some() && !confirmed_missing(&file.path) {
+                        complete = false;
+                        continue;
+                    }
                     self.ci.delete(&mut writer, file.id);
                     report.removed += 1;
                 }
@@ -249,6 +264,15 @@ mod tests {
     use super::*;
     use crate::types::{ContentQuery, IndexConfig};
 
+    #[test]
+    fn missing_path_check_does_not_treat_existing_file_as_deleted() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("file.txt");
+        std::fs::write(&file, b"data").unwrap();
+        assert!(!confirmed_missing(&file));
+        std::fs::remove_file(&file).unwrap();
+        assert!(confirmed_missing(&file));
+    }
     #[test]
     fn file_edit_after_extraction_cannot_hide_behind_a_newer_revision_stamp() {
         let volume = tempfile::TempDir::new().unwrap();
