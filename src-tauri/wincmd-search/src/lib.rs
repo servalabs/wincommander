@@ -15,7 +15,7 @@ mod encrypted_cutover_prototype;
 mod encrypted_key_prototype;
 #[cfg(any(test, all(windows, feature = "experimental-encrypted-search")))]
 mod encrypted_scope;
-#[cfg(all(windows, feature = "experimental-encrypted-search"))]
+#[cfg(any(test, all(windows, feature = "experimental-encrypted-search")))]
 mod encrypted_legacy_quarantine;
 #[cfg(test)]
 mod encrypted_migration_prototype;
@@ -402,10 +402,21 @@ impl SearchEngine {
         self.ci.index.reader()?;
         let old = self.experimental_legacy_path.as_ref()
             .ok_or_else(|| SearchError::Config("legacy index path unavailable".into()))?;
-        let backup = crate::encrypted_legacy_quarantine::quarantine(old)?;
+        let id = self.experimental_id.ok_or_else(|| SearchError::Config("index identity unavailable".into()))?;
+        let backup = crate::encrypted_legacy_quarantine::quarantine(old, &id)?;
         // Prevent a later search root from ingesting the retained backup.
         self.config.skip_paths.push(backup.clone());
         Ok(backup)
+    }
+    /// Locate the generation-specific quarantine path for inspection after an
+    /// interrupted move. Existence alone is not proof of successful migration.
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    pub fn experimental_legacy_backup_path(&self) -> Result<std::path::PathBuf> {
+        let old = self.experimental_legacy_path.as_ref()
+            .ok_or_else(|| SearchError::Config("legacy index path unavailable".into()))?;
+        let parent = old.parent().ok_or_else(|| SearchError::Config("legacy index parent unavailable".into()))?;
+        let id = self.experimental_id.ok_or_else(|| SearchError::Config("index identity unavailable".into()))?;
+        Ok(parent.join(crate::encrypted_legacy_quarantine::backup_name(&id)?))
     }
     /// Caller must hold its cross-process volume guard until this engine is dropped.
     pub fn open_existing(config: IndexConfig) -> Result<Self> {
@@ -1051,7 +1062,9 @@ mod tests {
         assert_eq!(fs::read(old.join("meta.json")).unwrap(), b"legacy retained");
         engine.rebuild_experimental_candidate().unwrap();
         engine.select_experimental_candidate(&selector).unwrap();
+        let expected_backup = engine.experimental_legacy_backup_path().unwrap();
         let backup = engine.quarantine_experimental_legacy_cache().unwrap();
+        assert_eq!(backup, expected_backup);
         assert!(!old.exists());
         assert_eq!(fs::read(backup.join("meta.json")).unwrap(), b"legacy retained");
         let query = ContentQuery { terms: "encryptedbackuptoken".into(), roots: vec![], limit: 10, offset: 0, keyword_only: true };

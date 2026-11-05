@@ -10,7 +10,24 @@ use std::path::{Path, PathBuf};
 use crate::error::{Result, SearchError};
 use crate::types::{DocId, FileMeta};
 
+// Experimental legacy backups are sibling directories of a skipped app index.
+// Match the reserved name dynamically so a watcher started before quarantine
+// does not index the newly moved plaintext backup.
+#[cfg(any(test, all(windows, feature = "experimental-encrypted-search")))]
+fn is_reserved_backup(path: &Path, skip_paths: &[PathBuf]) -> bool {
+    path.ancestors().any(|part| {
+        let Some(name) = part.file_name() else { return false; };
+        if !name.to_string_lossy().to_ascii_lowercase().starts_with(".wincommander-legacy-index-backup-") { return false; }
+        let Some(parent) = part.parent() else { return false; };
+        skip_paths.iter().filter_map(|skip| skip.parent()).any(|candidate| {
+            crate::index::path_in_roots(&parent.to_string_lossy(), &[candidate.to_path_buf()])
+                && crate::index::path_in_roots(&candidate.to_string_lossy(), &[parent.to_path_buf()])
+        })
+    })
+}
 pub(crate) fn path_is_skipped(path: &Path, skip_paths: &[PathBuf]) -> bool {
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    if is_reserved_backup(path, skip_paths) { return true; }
     if skip_paths.is_empty() {
         return false;
     }
@@ -150,6 +167,14 @@ mod tests {
         assert!(!path_is_skipped(Path::new(r"C:\Users\A\WinCommander\fts-backup\doc.json"), &skips));
     }
 
+    #[test]
+    fn backup_sibling_is_excluded_even_before_it_exists() {
+        let root = TempDir::new().unwrap();
+        let old = root.path().join("fts");
+        let backup = root.path().join(".wincommander-legacy-index-backup-123").join("meta.json");
+        assert!(is_reserved_backup(&backup, &[old]));
+        assert!(!is_reserved_backup(&root.path().join("other").join(".wincommander-legacy-index-backup-123"), &[root.path().join("fts")]));
+    }
     fn empty_globset() -> GlobSet {
         build_globset(&[]).unwrap()
     }

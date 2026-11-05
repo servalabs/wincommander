@@ -2,12 +2,30 @@
 //! Experimental reversible quarantine, never secure erasure. Caller must hold
 //! the selected encrypted generation and stop all old binaries first. The lock
 //! below only excludes cooperating Tantivy writers; it is not a process fence.
-use std::{io, path::{Path, PathBuf}};
-
+use std::io;
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
-pub(crate) fn quarantine(old: &Path) -> io::Result<PathBuf> {
+use std::path::{Path, PathBuf};
+
+/// Deterministic within a generation, so recovery can locate a moved backup
+/// after an interrupted rename without a separately written sidecar record.
+pub(crate) fn backup_name(index_id: &[u8; 16]) -> io::Result<String> {
+    if *index_id == [0; 16] { return Err(io::Error::other("invalid index identity")); }
+    Ok(format!(".wincommander-legacy-index-backup-{}", hex::encode(index_id)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn backup_name_is_deterministic_and_scoped_to_generation() {
+        assert_eq!(backup_name(&[1; 16]).unwrap(), backup_name(&[1; 16]).unwrap());
+        assert_ne!(backup_name(&[1; 16]).unwrap(), backup_name(&[2; 16]).unwrap());
+        assert!(backup_name(&[0; 16]).is_err());
+    }
+}
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
+pub(crate) fn quarantine(old: &Path, index_id: &[u8; 16]) -> io::Result<PathBuf> {
     use crate::read_only::{AccessMode, CheckedDirectory};
-    use rand::{rngs::OsRng, RngCore};
     use std::os::windows::{ffi::OsStrExt, fs::{MetadataExt, OpenOptionsExt}, io::AsRawHandle};
     use windows_sys::Win32::Storage::FileSystem::{
         GetFileInformationByHandle, SetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
@@ -45,8 +63,7 @@ pub(crate) fn quarantine(old: &Path) -> io::Result<PathBuf> {
     if !metadata.is_dir() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 || identity(&handle)? != before {
         return Err(denied());
     }
-    let mut random = [0u8; 16]; OsRng.fill_bytes(&mut random);
-    let name = format!(".wincommander-legacy-index-backup-{}", hex::encode(random));
+    let name = backup_name(index_id)?;
     let wide: Vec<u16> = std::ffi::OsStr::new(&name).encode_wide().collect();
     let name_bytes = wide.len().checked_mul(2).ok_or_else(denied)?;
     let size = std::mem::offset_of!(FILE_RENAME_INFO, FileName)
