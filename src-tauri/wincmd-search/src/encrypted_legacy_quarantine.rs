@@ -18,6 +18,30 @@ mod tests {
     use super::*;
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     #[test]
+    fn replacement_at_unpin_seam_never_moves_substitute() {
+        let root = tempfile::tempdir().unwrap();
+        let old = root.path().join("old"); let moved = root.path().join("original");
+        std::fs::create_dir(&old).unwrap(); std::fs::write(old.join("original"), b"original").unwrap();
+        let intent = crate::encrypted_migration_transaction::Intent::capture([1; 16], [2; 16], &old).unwrap();
+        let fence = crate::encrypted_search_fence::SearchOperationFence::acquire_exclusive(root.path()).unwrap();
+        let swapped = std::cell::Cell::new(false);
+        let result = move_to_sibling_with_hook(&old, &backup_name(&[2; 16]).unwrap(), &fence, Some(intent.identity()), || {
+            if std::fs::rename(&old, &moved).is_ok() {
+                swapped.set(true);
+                std::fs::create_dir(&old).unwrap(); std::fs::write(old.join("substitute"), b"substitute").unwrap();
+            }
+        });
+        if swapped.get() {
+            assert!(result.is_err());
+            assert_eq!(std::fs::read(old.join("substitute")).unwrap(), b"substitute");
+            assert_eq!(std::fs::read(moved.join("original")).unwrap(), b"original");
+        } else {
+            let backup = result.unwrap();
+            assert_eq!(std::fs::read(backup.join("original")).unwrap(), b"original");
+        }
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    #[test]
     fn replaced_source_is_not_moved_for_recorded_identity() {
         let root = tempfile::tempdir().unwrap();
         let old = root.path().join("old"); let original = root.path().join("original");
@@ -81,6 +105,11 @@ pub(crate) fn restore_expected(old: &Path, index_id: &[u8; 16], fence: &crate::e
 }
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
 fn move_to_sibling(old: &Path, destination_name: &str, fence: &crate::encrypted_search_fence::SearchOperationFence, expected: Option<(u32, u32, u32)>) -> io::Result<PathBuf> {
+    move_to_sibling_with_hook(old, destination_name, fence, expected, || {})
+}
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
+fn move_to_sibling_with_hook(old: &Path, destination_name: &str, fence: &crate::encrypted_search_fence::SearchOperationFence,
+    expected: Option<(u32, u32, u32)>, after_unpin: impl FnOnce()) -> io::Result<PathBuf> {
     use crate::read_only::{AccessMode, CheckedDirectory};
     use std::os::windows::{ffi::OsStrExt, fs::{MetadataExt, OpenOptionsExt}, io::AsRawHandle};
     use windows_sys::Win32::Storage::FileSystem::{
