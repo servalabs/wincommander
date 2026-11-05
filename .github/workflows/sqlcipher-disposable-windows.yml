@@ -29,6 +29,7 @@ jobs:
         shell: pwsh
         run: |
           $tests = @(
+            'duplicate_finder::tests::concurrent_sqlcipher_first_use_stress',
             'duplicate_finder::tests::encrypted_scan_database_remains_private_after_bulk_commit',
             'duplicate_finder::tests::scan_scratch_does_not_expose_paths_on_disk',
             'routine_cleaner::mutations::tests::vacuum_preserves_existing_plaintext_database_with_wal_and_without'

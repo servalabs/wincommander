@@ -2,6 +2,39 @@ use super::*;
 
 static SERIAL: Mutex<()> = Mutex::new(());
 
+// Each child is a new process so SQLite has not already been initialized by
+// unrelated tests. A passing stress run cannot prove the reported race absent.
+#[test]
+fn concurrent_sqlcipher_first_use_stress() {
+    const CHILD: &str = "WC_SQLCIPHER_FIRST_USE_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        let dir = tempfile::tempdir().unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(16));
+        let workers: Vec<_> = (0..16).map(|number| {
+            let barrier = barrier.clone();
+            let path = dir.path().join(format!("first-use-{number}.sqlite"));
+            std::thread::spawn(move || -> Result<(), String> {
+                barrier.wait();
+                let conn = rusqlite::Connection::open(path).map_err(|e| e.to_string())?;
+                let key = format!("x'{}'", "18".repeat(32));
+                let rc = unsafe { rusqlite::ffi::sqlite3_key(conn.handle(), key.as_ptr().cast(), key.len() as i32) };
+                if rc != rusqlite::ffi::SQLITE_OK { return Err(format!("sqlite3_key returned {rc}")); }
+                conn.execute_batch("CREATE TABLE probe (id INTEGER); INSERT INTO probe VALUES (1);")
+                    .map_err(|e| e.to_string())?;
+                Ok(())
+            })
+        }).collect();
+        for worker in workers { worker.join().unwrap().unwrap(); }
+        return;
+    }
+    for iteration in 0..30 {
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["duplicate_finder::tests::concurrent_sqlcipher_first_use_stress", "--exact", "--nocapture"])
+            .env(CHILD, "1").output().unwrap();
+        assert!(result.status.success(), "first-use iteration {iteration} failed: {}", String::from_utf8_lossy(&result.stderr));
+    }
+}
+
 #[test]
 fn encrypted_scan_database_remains_private_after_bulk_commit() {
     let mut index = index::ScanIndex::new().unwrap();
