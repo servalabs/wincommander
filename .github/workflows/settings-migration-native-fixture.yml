@@ -1,0 +1,37 @@
+name: Settings migration native fixture
+on:
+  push:
+    branches: [codex/settings-migration-windows-ci-20261106]
+  pull_request:
+    branches: [main]
+    paths: ["tools/settings-migration-ci/**", ".github/workflows/settings-migration-native-fixture.yml"]
+permissions:
+  contents: read
+jobs:
+  windows-fixture:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Prepare isolated source fixture
+        shell: pwsh
+        run: |
+          $destination = 'tools/settings-migration-ci/src'
+          $source = 'src-tauri/commander-free/src'
+          Copy-Item "$source/datastore.rs", "$source/datastore_io.rs", "$source/settings*.rs" $destination
+      - name: Run real DPAPI migration and interruption tests
+        shell: pwsh
+        run: |
+          $env:RUSTFLAGS = '-D warnings'
+          $manifest = 'tools/settings-migration-ci/Cargo.toml'
+          $cases = @(
+            'first_migration_authenticates_preexisting_staged_candidate_before_anchor',
+            'first_existing_migration_checks_maintenance_and_preserves_f6_source',
+            'staged_initial_cutover_resumes_exact_candidate_and_preserves_source'
+          )
+          foreach ($case in $cases) {
+            $output = cargo test --locked --manifest-path $manifest --features experimental-settings-generation $case -- --ignored --test-threads=1 2>&1 | Out-String
+            Write-Host $output
+            if ($LASTEXITCODE -ne 0 -or $output -notmatch 'test result: ok\. 1 passed; 0 failed; 0 ignored') { throw "Fixture test failed or did not run: $case" }
+          }
