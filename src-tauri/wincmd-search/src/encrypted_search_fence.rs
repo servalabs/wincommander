@@ -68,6 +68,14 @@ impl SearchOperationFence {
 mod tests {
     use super::*;
     #[test]
+    fn fresh_parent_is_prepared_inside_verified_folder() {
+        let base = tempfile::tempdir().unwrap();
+        let parent = SearchOperationFence::prepare_from_known_folder(base.path(), "WinCommander").unwrap();
+        assert_eq!(parent, base.path().join("WinCommander").join("file-search"));
+        assert!(SearchOperationFence::acquire_shared(&parent).is_ok());
+        assert!(SearchOperationFence::prepare_from_known_folder(base.path(), "../outside").is_err());
+    }
+    #[test]
     fn shared_users_and_exclusive_maintenance_exclude_each_other() {
         let dir = tempfile::tempdir().unwrap();
         let first = SearchOperationFence::acquire_shared(dir.path()).unwrap();
