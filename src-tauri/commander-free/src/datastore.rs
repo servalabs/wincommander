@@ -52,6 +52,10 @@ use std::path::PathBuf;
 #[path = "settings_generation_authority.rs"]
 mod settings_generation_authority;
 
+#[cfg(windows)]
+#[path = "settings_generation_acl_windows.rs"]
+mod settings_generation_acl_windows;
+
 #[path = "settings_generation_ownership.rs"]
 mod settings_generation_ownership;
 
