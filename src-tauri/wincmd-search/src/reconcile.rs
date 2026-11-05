@@ -80,6 +80,12 @@ impl SearchEngine {
     /// unchanged entries and a single parser call may exceed that soft time budget.
     /// Deletions apply only after every root was fully scanned and remains accessible.
     pub fn reconcile_sync(&self, cancel: &AtomicBool, max_files: usize) -> Result<ReconcileReport> {
+        #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+        if self.experimental_fresh {
+            return Err(crate::error::SearchError::Config("strict candidate rebuild required".into()));
+        }
+        #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+        self.experimental_verified.store(false, Ordering::Release);
         let mut report = ReconcileReport::default();
         if max_files == 0 || cancel.load(Ordering::Relaxed) {
             report.indexed_docs = self.indexed_document_count()?;
