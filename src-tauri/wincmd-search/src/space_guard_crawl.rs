@@ -1,12 +1,34 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Experimental, opt-in crawl plumbing. Not wired into production startup.
-use std::sync::Mutex;
+use std::sync::{mpsc, Mutex};
 
 use crate::{crawler::{build_globset, collect_files}, error::{Result, SearchError}, indexing::index_file, space_guard::{SpaceGuard, SpaceState}, watch::FsEventAction, SearchEngine};
 
 const PAUSED: &str = "Search indexing paused: free disk space or check disk availability. A full rescan is required.";
 
 impl SearchEngine {
+    /// Run an initial crawl and drain the bounded watcher queue. The watcher
+    /// must be registered before calling this function. This is an unfinished
+    /// prototype: the caller must still run a complete restart reconciliation
+    /// and keep pumping events after this batch.
+    pub(crate) fn experimental_crawl_and_drain<F>(&self, guard: &Mutex<SpaceGuard>, rx: &mpsc::Receiver<FsEventAction>, mut available: F) -> Result<bool>
+    where F: FnMut() -> std::io::Result<u64> {
+        if !self.experimental_guarded_crawl(guard, &mut available)? {
+            return Ok(false);
+        }
+        loop {
+            match rx.try_recv() {
+                Ok(action) => if !self.experimental_guarded_update(guard, action, &mut available)? { return Ok(false); },
+                Err(mpsc::TryRecvError::Empty) => return Ok(true),
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    guard.lock().map_err(|_| SearchError::Config("search disk guard unavailable".into()))?.require_reconciliation();
+                    self.status.lock().unwrap().last_error = Some(PAUSED.into());
+                    return Ok(false);
+                }
+            }
+        }
+    }
+
     /// Process one already-classified watcher action under the same guard used
     /// by the crawl. A false result requires full reconciliation, not replay of
     /// the current action alone.
@@ -131,5 +153,22 @@ mod tests {
         assert_eq!(engine.indexed_document_count().unwrap(), 0);
         assert!(engine.status().last_error.unwrap().contains("paused"));
         assert!(guard.lock().unwrap().reconciliation_started().is_none());
+    }
+
+    #[test]
+    fn crawl_drains_watcher_events_and_disconnect_requires_reconciliation() {
+        let root = TempDir::new().unwrap();
+        let index = TempDir::new().unwrap();
+        let file = root.path().join("file.txt");
+        std::fs::write(&file, "ordinary content").unwrap();
+        let engine = SearchEngine::open(IndexConfig { roots: vec![root.path().to_path_buf()], exclusions: vec![], skip_paths: vec![], max_file_bytes: 10000, index_dir: index.path().to_path_buf() }).unwrap();
+        let guard = Mutex::new(SpaceGuard::default());
+        let (tx, rx) = mpsc::sync_channel(1);
+        tx.send(FsEventAction::Delete(crate::crawler::doc_id_for(&file))).unwrap();
+        assert!(engine.experimental_crawl_and_drain(&guard, &rx, || Ok(u64::MAX)).unwrap());
+        assert_eq!(engine.indexed_document_count().unwrap(), 0);
+        drop(tx);
+        assert!(!engine.experimental_crawl_and_drain(&guard, &rx, || Ok(u64::MAX)).unwrap());
+        assert!(guard.lock().unwrap().reconciliation_started().is_some());
     }
 }
