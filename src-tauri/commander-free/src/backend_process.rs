@@ -234,38 +234,68 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn shield_start_receipt_does_not_wait_for_detector_pipe_eof() {
+        use std::os::windows::io::{AsHandle, AsRawHandle, FromRawHandle, OwnedHandle};
+        use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
+        use windows_sys::Win32::System::Pipes::PeekNamedPipe;
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
+            PROCESS_TERMINATE,
+        };
+
         let child = fixture("$script = [Console]::In.ReadToEnd(); Invoke-Expression $script");
+        // Keep a second read handle so the test can prove that a writer is
+        // still holding the pipe open after the launcher receipt returns.
+        let pipe = child
+            .stdout
+            .as_ref()
+            .unwrap()
+            .as_handle()
+            .try_clone_to_owned()
+            .unwrap();
         let script = r#"
 $info = New-Object System.Diagnostics.ProcessStartInfo
 $info.FileName = 'powershell.exe'
-$info.Arguments = '-NoProfile -NonInteractive -Command "Start-Sleep -Seconds 8"'
+$info.Arguments = '-NoProfile -NonInteractive -Command "Start-Sleep -Seconds 90"'
 $info.UseShellExecute = $false
 $info.CreateNoWindow = $true
-$info.RedirectStandardInput = $true
-$info.RedirectStandardOutput = $true
-$info.RedirectStandardError = $true
 $detector = [System.Diagnostics.Process]::Start($info)
-$detector.add_OutputDataReceived({ param($sender, $eventArgs) })
-$detector.add_ErrorDataReceived({ param($sender, $eventArgs) })
-$detector.BeginOutputReadLine()
-$detector.BeginErrorReadLine()
-$detector.StandardInput.Close()
-[Console]::Out.Write('{"success":true}')
+[Console]::Out.Write('{"success":true,"pid":' + $detector.Id + '}')
 "#;
-        let started = std::time::Instant::now();
         let output = wait_for_script(
             child,
             script.into(),
             "Start-PrivacyShield",
-            Duration::from_secs(5),
+            Duration::from_secs(30),
         )
         .await
         .unwrap();
-        assert!(started.elapsed() < Duration::from_secs(5));
-        assert_eq!(
-            String::from_utf8(output.stdout).unwrap().trim(),
-            r#"{"success":true}"#
+        let receipt: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(receipt["success"], true);
+        let pid = receipt["pid"].as_u64().unwrap() as u32;
+        let raw = unsafe { OpenProcess(PROCESS_SYNCHRONIZE | PROCESS_TERMINATE, 0, pid) };
+        assert!(!raw.is_null(), "detector process must still exist");
+        let process = unsafe { OwnedHandle::from_raw_handle(raw) };
+        let alive = unsafe { WaitForSingleObject(process.as_raw_handle(), 0) } == WAIT_TIMEOUT;
+        let pipe_open = unsafe {
+            PeekNamedPipe(
+                pipe.as_raw_handle(),
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        } != 0;
+        // Stop the fixture even when an assertion below fails.
+        let terminated = unsafe { TerminateProcess(process.as_raw_handle(), 0) } != 0;
+        let stopped =
+            unsafe { WaitForSingleObject(process.as_raw_handle(), 5_000) } == WAIT_OBJECT_0;
+        assert!(
+            alive,
+            "receipt must return while the detector is still running"
         );
+        assert!(pipe_open, "detector must still hold the output pipe open");
+        assert!(terminated && stopped, "detector fixture must be cleaned up");
         assert!(output.status.success());
     }
 
