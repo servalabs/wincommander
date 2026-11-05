@@ -49,16 +49,19 @@ use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
 
+#[cfg(any(test, feature = "experimental-settings-generation"))]
 #[path = "settings_generation_authority.rs"]
 mod settings_generation_authority;
 
-#[cfg(windows)]
+#[cfg(all(windows, any(test, feature = "experimental-settings-generation")))]
 #[path = "settings_generation_acl_windows.rs"]
 mod settings_generation_acl_windows;
 
+#[cfg(any(test, feature = "experimental-settings-generation"))]
 #[path = "settings_generation_ownership.rs"]
 mod settings_generation_ownership;
 
+#[cfg(any(test, feature = "experimental-settings-generation"))]
 #[path = "settings_section_envelope.rs"]
 mod settings_section_envelope;
 
@@ -633,16 +636,9 @@ pub fn load(section: &str) -> Result<Value, String> {
     let Some(raw) = read_section_file(&path, section)? else {
         return Ok(Value::Object(Default::default()));
     };
-    let encoded = raw.trim();
-    let bytes = if encoded.starts_with(settings_section_envelope::PREFIX) {
-        let user_install = crate::paths::current_user_install_uses_local_datastore();
-        let scope = format!("{}:{section}", if user_install { "user-install" } else { "machine" });
-        settings_section_envelope::open(&scope, encoded, if user_install { user_dpapi_unprotect } else { dpapi_unprotect })?
-    } else {
-        let material = install_material()?;
-        let key = derive_section_key(&material, None)?;
-        decode_section(&key, encoded, &format!("machine:{section}"))?
-    };
+    let material = install_material()?;
+    let key = derive_section_key(&material, None)?;
+    let bytes = decode_section(&key, raw.trim(), &format!("machine:{section}"))?;
     serde_json::from_slice(&bytes).map_err(|e| format!("Failed to parse section '{section}': {e}"))
 }
 
@@ -658,7 +654,7 @@ fn read_section_file(path: &std::path::Path, section: &str) -> Result<Option<Str
 // not be written unless the material used for it has been protected and can
 // still be reopened; otherwise a copied disk exposes both ciphertext and key.
 pub(crate) struct SettingsWriteMaterial {
-    _material: zeroize::Zeroizing<[u8; 32]>,
+    material: zeroize::Zeroizing<[u8; 32]>,
     _material_guard: Option<std::fs::File>,
 }
 
@@ -666,7 +662,7 @@ pub(crate) fn settings_write_material() -> Result<SettingsWriteMaterial, String>
     let material = install_material()?;
     #[cfg(not(windows))]
     return Ok(SettingsWriteMaterial {
-        _material: zeroize::Zeroizing::new(material),
+        material: zeroize::Zeroizing::new(material),
         _material_guard: None,
     });
 
@@ -686,7 +682,7 @@ pub(crate) fn settings_write_material() -> Result<SettingsWriteMaterial, String>
             }
         })?;
         Ok(SettingsWriteMaterial {
-            _material: zeroize::Zeroizing::new(material),
+            material: zeroize::Zeroizing::new(material),
             _material_guard: Some(file),
         })
     }
@@ -757,18 +753,10 @@ pub(crate) fn save_with_material(
     material: &SettingsWriteMaterial,
 ) -> Result<(), String> {
     let path = section_path(section)?;
-    // Keep the existing material guard alive through publication for old
-    // writers; the new section has its own independently protected random key.
-    let _material_guard = material;
+    let key = derive_section_key(&material.material, None)?;
     let bytes = serde_json::to_vec(data)
         .map_err(|e| format!("Failed to serialise section '{section}': {e}"))?;
-    let user_install = crate::paths::current_user_install_uses_local_datastore();
-    let scope = format!("{}:{section}", if user_install { "user-install" } else { "machine" });
-    let encoded = if user_install {
-        settings_section_envelope::seal(&scope, &bytes, user_dpapi_protect, user_dpapi_unprotect)?
-    } else {
-        settings_section_envelope::seal(&scope, &bytes, dpapi_protect, dpapi_unprotect)?
-    };
+    let encoded = encode_section(&key, &bytes, &format!("machine:{section}"))?;
     atomic_write_bytes(&path, encoded.as_bytes())
         .map_err(|e| format!("Failed to write section '{section}': {e}"))
 }
@@ -1516,6 +1504,7 @@ mod tests {
     }
 }
 
+#[cfg(any(test, feature = "experimental-settings-generation"))]
 #[allow(dead_code)] // Cutover stays disabled pending ownership and recovery validation.
 #[path = "settings_rotation_trial.rs"]
 mod settings_rotation_trial;
