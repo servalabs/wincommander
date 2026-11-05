@@ -42,7 +42,7 @@ zip   = "9.3"
 lopdf = "0.46"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_Foundation", "Win32_Security_Cryptography"], optional = true }
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_Foundation", "Win32_Security_Cryptography", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Services", "Win32_System_Threading"], optional = true }
 
 [target.'cfg(windows)'.dev-dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_Foundation", "Win32_Security_Cryptography"] }
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_Foundation", "Win32_Security_Cryptography", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Services", "Win32_System_Threading"] }

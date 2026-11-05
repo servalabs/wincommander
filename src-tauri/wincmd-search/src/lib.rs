@@ -6,6 +6,8 @@
 //! Unit C: text extractors (plain, office, pdf) and chunker.
 //! Unit D: tantivy index, hit-merge helper, and SearchEngine facade.
 
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
+mod encrypted_search_maintenance;
 pub mod backend;
 #[cfg(any(test, all(windows, feature = "experimental-encrypted-search")))]
 mod encrypted_index_prototype;

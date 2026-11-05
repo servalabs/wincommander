@@ -56,6 +56,11 @@ fn move_to_sibling(old: &Path, destination_name: &str) -> io::Result<PathBuf> {
     let parent = old.parent().ok_or_else(denied)?;
     let parent_pins = CheckedDirectory::pin_root_path(parent)?;
     let _parent_handle = parent_pins.last().ok_or_else(denied)?;
+    // Serialize cooperating maintenance operations using a lock outside the moved directory.
+    let parent_dir = CheckedDirectory::open(parent, AccessMode::Writable).map_err(|e| io::Error::other(e.to_string()))?;
+    let maintenance_lock = tantivy::directory::Lock { filepath: ".encrypted-search-maintenance.lock".into(), is_blocking: false };
+    let _maintenance = parent_dir.acquire_lock_pinned(&maintenance_lock).map_err(|e| io::Error::other(e.to_string()))?;
+    crate::encrypted_search_maintenance::verify_known_writers_stopped().map_err(io::Error::other)?;
     let old_pins = CheckedDirectory::pin_root_path(old)?;
     let old_handle = old_pins.last().ok_or_else(denied)?;
     let identity = |file: &std::fs::File| -> io::Result<(u32, u32, u32)> {
@@ -68,7 +73,7 @@ fn move_to_sibling(old: &Path, destination_name: &str) -> io::Result<PathBuf> {
     };
     let before = identity(old_handle)?;
     let legacy = CheckedDirectory::open(old, AccessMode::Writable).map_err(|e| io::Error::other(e.to_string()))?;
-    let _writer = legacy.acquire_lock_pinned(&tantivy::directory::INDEX_WRITER_LOCK)
+    let writer = legacy.acquire_lock_pinned(&tantivy::directory::INDEX_WRITER_LOCK)
         .map_err(|e| io::Error::other(e.to_string()))?;
     // Allow our delete-capable handle to open, then verify it is exactly the
     // pinned object. Parent pins remain held across this narrow transition.
@@ -82,6 +87,10 @@ fn move_to_sibling(old: &Path, destination_name: &str) -> io::Result<PathBuf> {
     if !metadata.is_dir() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 || identity(&handle)? != before {
         return Err(denied());
     }
+    // The inner lock blocks Windows from moving the directory. Cooperating
+    // maintenance stays fenced externally while we recheck known writers.
+    crate::encrypted_search_maintenance::verify_known_writers_stopped().map_err(io::Error::other)?;
+    drop(writer);
     let name = destination_name;
     let destination_path = parent.join(name);
     let wide: Vec<u16> = destination_path.as_os_str().encode_wide().collect();
