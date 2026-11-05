@@ -48,6 +48,15 @@ fn read(path: &str, limit: u64) -> Result<Zeroizing<Vec<u8>>, &'static str> {
     Ok(result)
 }
 
+fn read_key(path: &str) -> Result<Zeroizing<Vec<u8>>, &'static str> {
+    if path != "-" { return read(path, 16 * 1024); }
+    let mut result = Zeroizing::new(Vec::new());
+    std::io::stdin().lock().take(16 * 1024 + 1).read_to_end(&mut result)
+        .map_err(|_| "key input unavailable")?;
+    if result.len() > 16 * 1024 { return Err("key input too large"); }
+    Ok(result)
+}
+
 fn check_message(bytes: &[u8], algorithm: &str) -> Result<(Header, Vec<u8>), &'static str> {
     let text = std::str::from_utf8(bytes).map_err(|_| "invalid message")?;
     let (header, payload) = text.split_once('.').ok_or("invalid message")?;
@@ -84,7 +93,7 @@ fn decode_key<const N: usize>(value: &str) -> Result<[u8; N], &'static str> {
 fn run(args: &[String]) -> Result<(), &'static str> {
     if args.len() != 10 {
         return Err(
-            "usage: <ed25519|mldsa65> <private-key> <message> <artifact> <trust> <version> <stable|beta|pro> <epoch> <signature>",
+            "usage: <ed25519|mldsa65> <private-key|-> <message> <artifact> <trust> <version> <stable|beta|pro> <epoch> <signature>",
         );
     }
     let algorithm = match args[1].as_str() {
@@ -131,7 +140,7 @@ fn run(args: &[String]) -> Result<(), &'static str> {
     {
         return Err("prepared message does not match approved trust");
     }
-    let key = read(&args[2], 16 * 1024)?;
+    let key = read_key(&args[2])?;
     let signature = if algorithm == "Ed25519" {
         let seed: &[u8; 32] = key
             .as_slice()

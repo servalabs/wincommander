@@ -8,7 +8,7 @@ use aws_lc_rs::signature::{KeyPair, PqdsaKeyPair, ML_DSA_65_SIGNING};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use ed25519_dalek::SigningKey;
 use sha2::{Digest, Sha256};
-use std::{path::Path, process::Command};
+use std::{io::Write, path::Path, process::{Command, Stdio}};
 
 fn invoke(program: &str, args: &[&Path], trailing: &[&str]) -> bool {
     Command::new(program)
@@ -60,6 +60,14 @@ fn free_prepared_messages_interoperate_with_offline_signer() {
     };
     let prep = env!("CARGO_BIN_EXE_wincmd-pq-free-release-prepare");
     let signer = env!("CARGO_BIN_EXE_wincmd-pq-offline-sign");
+    let sign_from_stdin = |algorithm: &str, message: &str, output: &str, key: &[u8]| {
+        let mut child = Command::new(signer).args([algorithm, "-", &p(message), &p("installer"), &p("trust"),
+            "99.0.0", "stable", "7", &p(output)]).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        let _ = stdin.write_all(key);
+        drop(stdin);
+        child.wait().unwrap().success()
+    };
     assert!(run(
         prep,
         &[
@@ -86,34 +94,10 @@ fn free_prepared_messages_interoperate_with_offline_signer() {
             &p("pq.msg")
         ]
     ));
-    assert!(run(
-        signer,
-        &[
-            "ed25519",
-            &p("ed.key"),
-            &p("ed.msg"),
-            &p("installer"),
-            &p("trust"),
-            "99.0.0",
-            "stable",
-            "7",
-            &p("ed.sig")
-        ]
-    ));
-    assert!(run(
-        signer,
-        &[
-            "mldsa65",
-            &p("pq.key"),
-            &p("pq.msg"),
-            &p("installer"),
-            &p("trust"),
-            "99.0.0",
-            "stable",
-            "7",
-            &p("pq.sig")
-        ]
-    ));
+    assert!(!sign_from_stdin("ed25519", "ed.msg", "invalid.sig", &[0; 16 * 1024 + 1]));
+    assert!(!Path::new(&p("invalid.sig")).exists());
+    assert!(sign_from_stdin("ed25519", "ed.msg", "ed.sig", &ed.to_bytes()));
+    assert!(sign_from_stdin("mldsa65", "pq.msg", "pq.sig", pq.to_pkcs8v1().unwrap().as_ref()));
     assert!(run(
         prep,
         &[

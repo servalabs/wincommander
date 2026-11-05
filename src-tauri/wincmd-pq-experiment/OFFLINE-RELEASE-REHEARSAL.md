@@ -63,6 +63,8 @@ wincmd-pq-offline-sign mldsa65 pq-private-pkcs8.der pq.msg pro.exe trusted-keys.
 ```
 
 The Ed25519 input is a raw 32-byte seed; the ML-DSA-65 input is PKCS#8 DER.
+Use `-` as the private-key path to read bounded key bytes from standard input,
+so an encrypted-key wrapper can avoid creating a plaintext private-key file.
 The tool refuses existing output files, validates the artifact and complete
 release metadata, matches the private key against independently supplied
 trust, and reconstructs the exact message. For Free, use the installer,
