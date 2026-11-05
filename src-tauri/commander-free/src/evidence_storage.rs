@@ -13,6 +13,7 @@ use super::{EvidenceEntry, MAX_ENTRIES};
 const PREFIX: &str = "enc:v2:";
 const SCOPE: &str = "machine:evidence-ledger";
 const MAX_IMPORTED_PROFILES: usize = 256;
+const MAX_MACHINE_SOURCE_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Serialize, Deserialize)]
 struct KeyState {
@@ -25,6 +26,8 @@ pub(super) struct Ledger {
     pub entries: Vec<EvidenceEntry>,
     imported_profiles: Vec<PathBuf>,
     pub skip_future_imports: bool,
+    #[serde(default)]
+    machine_source_digest: Option<String>,
 }
 impl Drop for KeyState {
     fn drop(&mut self) {
@@ -191,6 +194,7 @@ pub(super) fn read(
                 entries,
                 imported_profiles: Vec::new(),
                 skip_future_imports: false,
+                machine_source_digest: None,
             };
             let bytes = serde_json::to_vec(&value).map_err(|_| "Cannot encode evidence")?;
             let sealed = crate::datastore::encode_section(&state.material, &bytes, SCOPE)?;
@@ -255,18 +259,7 @@ pub(super) fn read(
         ledger.entries = prior;
         ledger.imported_profiles.push(identity);
         if let Err(error) = write(path, key_path, &ledger, persist) {
-            let recovered = (|| -> Result<Ledger, String> {
-                let encoded =
-                    fs::read_to_string(path).map_err(|_| "Cannot reread evidence ledger")?;
-                let state = key(key_path, None, persist)?;
-                if state.pending_digest.is_some() {
-                    return Err("Evidence commit is incomplete".into());
-                }
-                let bytes =
-                    crate::datastore::decode_section(&state.material, encoded.trim(), SCOPE)
-                        .map_err(|_| "Cannot authenticate evidence ledger")?;
-                serde_json::from_slice(&bytes).map_err(|_| "Evidence ledger is malformed".into())
-            })();
+            let recovered = reload_verified(path, key_path, persist);
             if let Ok(actual) = recovered {
                 #[cfg(not(test))]
                 crate::log::log_message(
@@ -279,6 +272,117 @@ pub(super) fn read(
         }
     }
     Ok(ledger)
+}
+
+fn reload_verified(
+    path: &Path,
+    key_path: &Path,
+    persist: &impl Fn(&Path, &[u8]) -> Result<(), String>,
+) -> Result<Ledger, String> {
+    let encoded = fs::read_to_string(path).map_err(|_| "Cannot reread evidence ledger")?;
+    let state = key(key_path, None, persist)?;
+    if state.pending_digest.is_some() {
+        return Err("Evidence commit is incomplete".into());
+    }
+    let bytes = crate::datastore::decode_section(&state.material, encoded.trim(), SCOPE)
+        .map_err(|_| "Cannot authenticate evidence ledger")?;
+    serde_json::from_slice(&bytes).map_err(|_| "Evidence ledger is malformed".into())
+}
+
+fn machine_snapshot(path: &Path) -> Result<Option<String>, String> {
+    use std::io::Read;
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(format!(
+                "Cannot read old machine evidence; original preserved: {error}"
+            ))
+        }
+    };
+    let mut bytes = Vec::new();
+    file.take(MAX_MACHINE_SOURCE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "Cannot read old machine evidence; original preserved")?;
+    if bytes.len() as u64 > MAX_MACHINE_SOURCE_BYTES {
+        return Err("Old machine evidence is too large; original preserved".into());
+    }
+    String::from_utf8(bytes)
+        .map(Some)
+        .map_err(|_| "Old machine evidence is malformed; original preserved".into())
+}
+
+/// The old filename remains available to old binaries, but can no longer
+/// overwrite the protected destination. Changed or ambiguous sources stay pending.
+pub(super) fn read_with_machine_source(
+    path: &Path,
+    machine_source: &Path,
+    legacy: &impl Fn() -> Result<Option<PathBuf>, String>,
+    key_path: &Path,
+    persist: &impl Fn(&Path, &[u8]) -> Result<(), String>,
+) -> Result<Ledger, String> {
+    if matches!(fs::symlink_metadata(path), Err(ref e) if e.kind() == std::io::ErrorKind::NotFound)
+        && machine_snapshot(machine_source)?
+            .as_ref()
+            .is_some_and(|raw| raw.starts_with(PREFIX))
+    {
+        return Err("Old protected evidence requires manual recovery; original preserved".into());
+    }
+    let mut ledger = read(path, &|| Ok(None), key_path, persist)?;
+    if !ledger.skip_future_imports {
+        let source = machine_snapshot(machine_source)?;
+        if let Some(raw) = source {
+            let fingerprint = digest(&raw);
+            if ledger.machine_source_digest.as_deref() != Some(fingerprint.as_str()) {
+                let candidate = (|| -> Result<Vec<EvidenceEntry>, String> {
+                    if ledger.machine_source_digest.is_some() {
+                        return Err("Machine source changed".into());
+                    }
+                    let prior = parse_legacy(&raw)?;
+                    let mut existing = std::collections::HashSet::<Vec<u8>>::new();
+                    for entry in &ledger.entries {
+                        existing.insert(
+                            serde_json::to_vec(entry).map_err(|_| "Cannot compare evidence")?,
+                        );
+                    }
+                    for entry in &prior {
+                        if existing.contains(
+                            &serde_json::to_vec(entry).map_err(|_| "Cannot compare evidence")?,
+                        ) {
+                            return Err("Ambiguous evidence records require review".into());
+                        }
+                    }
+                    if machine_snapshot(machine_source)?.as_deref() != Some(raw.as_str()) {
+                        return Err("Machine source changed during import".into());
+                    }
+                    Ok(prior)
+                })();
+                {
+                    let mut prior = candidate.map_err(|error| {
+                        format!("Old evidence import pending; original preserved: {error}")
+                    })?;
+                    prior.append(&mut ledger.entries);
+                    prior.sort_by(|a, b| a.time.cmp(&b.time));
+                    if prior.len() > MAX_ENTRIES {
+                        prior.drain(..prior.len() - MAX_ENTRIES);
+                    }
+                    ledger.entries = prior;
+                    ledger.machine_source_digest = Some(fingerprint);
+                    write(path, key_path, &ledger, persist).map_err(|error| {
+                        format!(
+                            "Old evidence import could not be saved; original preserved: {error}"
+                        )
+                    })?;
+                    if machine_snapshot(machine_source)?.as_deref() != Some(raw.as_str()) {
+                        return Err("Old evidence changed during import; stop older clients and retry recovery".into());
+                    }
+                }
+            }
+        } else if ledger.machine_source_digest.is_some() {
+            return Err("Old machine evidence is missing; original state requires recovery".into());
+        }
+    }
+    read(path, legacy, key_path, persist)
 }
 
 #[cfg(all(test, windows))]
@@ -378,6 +482,7 @@ mod tests {
                 entries: vec![entry()],
                 imported_profiles: Vec::new(),
                 skip_future_imports: false,
+                machine_source_digest: None,
             },
             &crate::datastore_io::atomic_write,
         )
@@ -437,6 +542,7 @@ mod tests {
             entries: vec![entry()],
             imported_profiles: Vec::new(),
             skip_future_imports: false,
+            machine_source_digest: None,
         })
         .unwrap();
         let sealed = crate::datastore::encode_section(&state.material, &bytes, SCOPE).unwrap();
@@ -471,6 +577,7 @@ mod tests {
                 entries: vec![entry()],
                 imported_profiles: Vec::new(),
                 skip_future_imports: false,
+                machine_source_digest: None,
             },
             &crate::datastore_io::atomic_write,
         )
@@ -497,6 +604,7 @@ mod tests {
                 entries: vec![entry()],
                 imported_profiles: Vec::new(),
                 skip_future_imports: false,
+                machine_source_digest: None,
             },
             &crate::datastore_io::atomic_write,
         )
@@ -532,6 +640,7 @@ mod tests {
                 entries: vec![entry()],
                 imported_profiles: Vec::new(),
                 skip_future_imports: false,
+                machine_source_digest: None,
             },
             &crate::datastore_io::atomic_write,
         )
@@ -566,6 +675,7 @@ mod tests {
                 entries: vec![current],
                 imported_profiles: Vec::new(),
                 skip_future_imports: false,
+                machine_source_digest: None,
             },
             &crate::datastore_io::atomic_write,
         )
@@ -626,6 +736,7 @@ mod tests {
                 entries: vec![entry()],
                 imported_profiles: Vec::new(),
                 skip_future_imports: false,
+                machine_source_digest: None,
             },
             &|target, bytes| {
                 published.lock().unwrap().push(target.to_path_buf());
@@ -814,6 +925,193 @@ mod tests {
             1
         );
         assert_eq!(fs::read(legacy).unwrap(), b"malformed old data");
+    }
+
+    #[test]
+    fn old_machine_writer_cannot_overwrite_new_protected_ledger() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("protected");
+        let old = dir.path().join("old-machine");
+        let key = dir.path().join("key");
+        let original = format!("{}\n", serde_json::to_string(&entry()).unwrap());
+        fs::write(&old, &original).unwrap();
+        let imported = read_with_machine_source(
+            &path,
+            &old,
+            &|| Ok(None),
+            &key,
+            &crate::datastore_io::atomic_write,
+        )
+        .unwrap();
+        assert_eq!(imported.entries.len(), 1);
+        let protected = fs::read(&path).unwrap();
+        let mut later = entry();
+        later.summary = "later old-client write".into();
+        fs::write(
+            &old,
+            format!("{}{}\n", original, serde_json::to_string(&later).unwrap()),
+        )
+        .unwrap();
+        let error = read_with_machine_source(
+            &path,
+            &old,
+            &|| Ok(None),
+            &key,
+            &crate::datastore_io::atomic_write,
+        )
+        .err()
+        .unwrap();
+        assert!(error.contains("import pending"));
+        assert_eq!(fs::read(&path).unwrap(), protected);
+        assert!(fs::read_to_string(old)
+            .unwrap()
+            .contains("later old-client write"));
+    }
+
+    #[test]
+    fn source_changed_during_publish_stays_pending_and_original_is_preserved() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("protected");
+        let old = dir.path().join("old-machine");
+        let key = dir.path().join("key");
+        let original = format!("{}\n", serde_json::to_string(&entry()).unwrap());
+        let mut later = entry();
+        later.summary = "new old-client event".into();
+        let changed = format!("{}{}\n", original, serde_json::to_string(&later).unwrap());
+        fs::write(&old, &original).unwrap();
+        let first = read_with_machine_source(&path, &old, &|| Ok(None), &key, &|target, bytes| {
+            if target == path {
+                fs::write(&old, &changed).unwrap();
+            }
+            crate::datastore_io::atomic_write(target, bytes)
+        })
+        .err()
+        .unwrap();
+        assert!(first.contains("changed during import"));
+        assert_eq!(fs::read_to_string(&old).unwrap(), changed);
+        let later = read_with_machine_source(
+            &path,
+            &old,
+            &|| Ok(None),
+            &key,
+            &crate::datastore_io::atomic_write,
+        )
+        .err()
+        .unwrap();
+        assert!(later.contains("import pending"));
+        let later = read(
+            &path,
+            &|| Ok(None),
+            &key,
+            &crate::datastore_io::atomic_write,
+        )
+        .unwrap();
+        assert_eq!(later.entries.len(), 1);
+        assert_eq!(
+            later.machine_source_digest.as_deref(),
+            Some(digest(&original).as_str())
+        );
+        assert_eq!(fs::read_to_string(old).unwrap(), changed);
+    }
+
+    #[test]
+    fn optional_old_machine_import_failure_is_visible_and_preserves_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("protected");
+        let old = dir.path().join("old-machine");
+        let key = dir.path().join("key");
+        let mut current = entry();
+        current.summary = "current".into();
+        write(
+            &path,
+            &key,
+            &Ledger {
+                entries: vec![current],
+                ..Ledger::default()
+            },
+            &crate::datastore_io::atomic_write,
+        )
+        .unwrap();
+        let before = fs::read(&path).unwrap();
+        fs::write(
+            &old,
+            format!("{}\n", serde_json::to_string(&entry()).unwrap()),
+        )
+        .unwrap();
+        let result = read_with_machine_source(&path, &old, &|| Ok(None), &key, &|target, bytes| {
+            if target == path {
+                Err("denied".into())
+            } else {
+                crate::datastore_io::atomic_write(target, bytes)
+            }
+        })
+        .err()
+        .unwrap();
+        assert!(result.contains("could not be saved"));
+        assert_eq!(
+            read(
+                &path,
+                &|| Ok(None),
+                &key,
+                &crate::datastore_io::atomic_write
+            )
+            .unwrap()
+            .entries[0]
+                .summary,
+            "current"
+        );
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert!(fs::read_to_string(&old)
+            .unwrap()
+            .contains("private summary"));
+    }
+
+    #[test]
+    fn old_encrypted_prototype_source_returns_recoverable_error_without_replacement() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("protected");
+        let old = dir.path().join("old-machine");
+        let key = dir.path().join("key");
+        fs::write(&old, "enc:v2:old-prototype").unwrap();
+        let error = read_with_machine_source(
+            &path,
+            &old,
+            &|| Ok(None),
+            &key,
+            &crate::datastore_io::atomic_write,
+        )
+        .err()
+        .unwrap();
+        assert!(error.contains("manual recovery"));
+        assert_eq!(fs::read_to_string(old).unwrap(), "enc:v2:old-prototype");
+        assert!(!path.exists() && !key.exists());
+    }
+
+    #[test]
+    fn oversized_old_machine_source_fails_without_changing_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("protected");
+        let old = dir.path().join("old-machine");
+        let key = dir.path().join("key");
+        fs::File::create(&old)
+            .unwrap()
+            .set_len(MAX_MACHINE_SOURCE_BYTES + 1)
+            .unwrap();
+        let error = read_with_machine_source(
+            &path,
+            &old,
+            &|| Ok(None),
+            &key,
+            &crate::datastore_io::atomic_write,
+        )
+        .err()
+        .unwrap();
+        assert!(error.contains("too large"));
+        assert_eq!(
+            fs::metadata(old).unwrap().len(),
+            MAX_MACHINE_SOURCE_BYTES + 1
+        );
+        assert!(!path.exists() && !key.exists());
     }
 
     #[test]

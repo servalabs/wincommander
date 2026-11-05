@@ -43,7 +43,8 @@ fn acquire_evidence_lock() -> Result<mutex::Guard, String> {
 /// Hard cap on retained entries — the ledger is a rolling recent-activity
 /// feed, not the permanent court record (that's the paid vault).
 const MAX_ENTRIES: usize = 1000;
-const LEDGER_FILENAME: &str = "evidence-ledger.jsonl";
+const LEDGER_FILENAME: &str = "evidence-ledger.v2";
+const LEGACY_MACHINE_LEDGER_FILENAME: &str = "evidence-ledger.jsonl";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -75,7 +76,13 @@ fn key_path() -> Result<PathBuf, String> {
 }
 
 fn read_ledger(path: &std::path::Path, key: &std::path::Path) -> Result<storage::Ledger, String> {
-    storage::read(path, &legacy_ledger_path, key, &crate::paths::atomic_write_machine_state)
+    storage::read_with_machine_source(
+        path,
+        &crate::paths::machine_state_file(LEGACY_MACHINE_LEDGER_FILENAME)?,
+        &legacy_ledger_path,
+        key,
+        &crate::paths::atomic_write_machine_state,
+    )
 }
 
 /// Append one entry to the device ledger, trimming to MAX_ENTRIES. Security
