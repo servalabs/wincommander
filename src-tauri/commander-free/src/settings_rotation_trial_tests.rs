@@ -397,295 +397,143 @@ fn selected_generation_update_preserves_other_sections_and_fails_closed() {
     assert_eq!(std::fs::read(&path).unwrap(), b"corrupt");
 }
 
-#[test]
-#[cfg_attr(windows, ignore = "requires elevated machine-lock ACL provisioning; run explicitly in Windows acceptance")]
-fn locked_selected_generation_serializes_owners_and_never_falls_back() {
-    let root = tempfile::tempdir().unwrap();
-    provision_test_lock(root.path());
-    assert!(LockedSelectedGeneration::try_open(root.path()).is_err());
-    let old = [42; 32];
-    let input = sections(&old);
-    let candidate = prepare(&old, &input).unwrap();
-    let path = root.path().join(".settings-generation.v1");
-    select_initial_generation(&path, &candidate, &old, &input, &crate::datastore_io::publish_new).unwrap();
-    let authority = root.path().join(".settings-generation.authority.v1");
-    let pending = crate::datastore::settings_generation_authority::pending(None, &candidate, &dpapi_protect, &dpapi_unprotect).unwrap();
-    crate::datastore_io::publish_new(&authority, &pending).unwrap();
-    assert!(LockedSelectedGeneration::try_open(root.path()).is_err());
-    // Fixture stands in for the Windows guarded snapshot verification.
-    let generation = LockedSelectedGeneration::acquire(root.path()).unwrap();
-    generation.read_reconciled(true).unwrap();
-    assert!(LockedSelectedGeneration::try_open(root.path()).is_err());
-    generation.write_section("settings", json!({"new_value": true})).unwrap();
-    assert_eq!(generation.read_all().unwrap()["settings"]["new_value"], true);
-    assert_eq!(generation.read_all().unwrap()["payments"]["token"], "second secret");
-    drop(generation);
-    assert!(LockedSelectedGeneration::try_open(root.path()).is_ok());
-    std::fs::write(path, b"broken").unwrap();
-    assert!(LockedSelectedGeneration::try_open(root.path()).is_err());
+use crate::datastore::settings_generation_cutover::{self as cutover, Anchor, AnchorState, ProtectedFileAnchor, SelectedFile};
+
+fn fixture_anchor(root: &std::path::Path, scope: StoreScope) -> ProtectedFileAnchor {
+    let anchor = ProtectedFileAnchor::new(root, scope);
+    anchor.provision_legacy().unwrap();
+    anchor
+}
+fn fixture_select(root: &std::path::Path, scope: StoreScope, candidate: &[u8], old: &[u8; 32], input: &[(String, String)]) {
+    let owner = LockedSelectedGeneration::acquire_for(root, scope).unwrap();
+    let anchor = ProtectedFileAnchor::new(root, scope);
+    cutover::select_initial(&owner._ownership, &anchor, &SelectedFile::new(root), candidate,
+        &|bytes| verify_source_for(scope, bytes, old, input)).unwrap();
 }
 
 #[test]
 #[cfg_attr(windows, ignore = "requires elevated machine-lock ACL provisioning; run explicitly in Windows acceptance")]
-fn selected_store_recovers_real_pending_files_at_each_publish_boundary() {
+fn anchored_recovery_fails_closed_and_reopens_committed_generations() {
     let root = tempfile::tempdir().unwrap();
     provision_test_lock(root.path());
-    let old = [42; 32];
-    let input = sections(&old);
+    let old = [42; 32]; let input = sections(&old);
     let original = prepare(&old, &input).unwrap();
-    let selected_path = root.path().join(".settings-generation.v1");
-    let authority_path = root.path().join(".settings-generation.authority.v1");
-    let pending_initial = crate::datastore::settings_generation_authority::pending(None, &original, &dpapi_protect, &dpapi_unprotect).unwrap();
-    crate::datastore_io::atomic_write(&authority_path, &pending_initial).unwrap();
+    assert!(inspect_startup_once(root.path(), StoreScope::Machine).is_err());
+    let anchor = fixture_anchor(root.path(), StoreScope::Machine);
+    assert_eq!(inspect_startup_once(root.path(), StoreScope::Machine).unwrap(), StartupView::Legacy);
+    anchor.write(&AnchorState::Preparing { next: cutover::digest(&original) }).unwrap();
+    assert_eq!(inspect_startup_once(root.path(), StoreScope::Machine).unwrap(), StartupView::RecoveryRequired);
+    std::fs::write(root.path().join(".settings-generation.v1"), &original).unwrap();
     assert!(LockedSelectedGeneration::try_open(root.path()).is_err());
-    crate::datastore_io::atomic_write(&selected_path, &original).unwrap();
-    assert!(LockedSelectedGeneration::try_open(root.path()).is_err());
-    let owner = LockedSelectedGeneration::acquire(root.path()).unwrap();
-    owner.read_reconciled(true).unwrap(); // fixture stands in for snapshot verification
-    assert_eq!(owner.read_all().unwrap()["payments"]["token"], "second secret");
-    drop(owner);
+    fixture_select(root.path(), StoreScope::Machine, &original, &old, &input);
     let next = updated_generation(&original, "settings", json!({"updated": true})).unwrap();
-    let pending = crate::datastore::settings_generation_authority::pending(Some(&original), &next, &dpapi_protect, &dpapi_unprotect).unwrap();
-    crate::datastore_io::atomic_write(&authority_path, &pending).unwrap();
+    let pending = AnchorState::Updating { prior: cutover::digest(&original), next: cutover::digest(&next) };
+    anchor.write(&pending).unwrap();
+    assert_eq!(inspect_startup_once(root.path(), StoreScope::Machine).unwrap(), StartupView::RecoveryRequired);
     assert!(LockedSelectedGeneration::try_open(root.path()).unwrap().read_all().unwrap()["settings"].get("private_value").is_some());
-    crate::datastore_io::atomic_write(&authority_path, &pending).unwrap();
-    crate::datastore_io::atomic_write(&selected_path, &next).unwrap();
+    anchor.write(&pending).unwrap();
+    crate::datastore_io::atomic_write(&root.path().join(".settings-generation.v1"), &next).unwrap();
     assert_eq!(LockedSelectedGeneration::try_open(root.path()).unwrap().read_all().unwrap()["settings"]["updated"], true);
-}
-
-#[test]
-fn initial_generation_accepts_mixed_legacy_and_individually_wrapped_sections() {
-    let old = [42; 32];
-    let mut input = sections(&old);
-    let wrapped = crate::datastore::settings_section_envelope::seal(
-        "machine:f6-keystore", br#"{"signing_seed_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#, dpapi_protect, dpapi_unprotect,
-    ).unwrap();
-    input.push(("f6-keystore".into(), wrapped));
-    let candidate = prepare(&old, &input).unwrap();
-    verify_source(&candidate, &old, &input).unwrap();
-    assert_eq!(open(&candidate).unwrap()["f6-keystore"]["signing_seed_hex"], "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    std::fs::remove_file(root.path().join(".settings-cutover-anchor.v1")).unwrap();
+    assert!(inspect_startup_once(root.path(), StoreScope::Machine).is_err());
 }
 
 #[test]
 #[cfg_attr(windows, ignore = "requires elevated machine-lock ACL provisioning; run explicitly in Windows acceptance")]
-fn current_user_generation_preserves_mixed_sections_and_rejects_machine_scope() {
-    let old = [42; 32];
-    let mut input = sections(&old);
-    let wrapped = crate::datastore::settings_section_envelope::seal(
-        "user-install:f6-keystore", br#"{"signing_seed_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#, user_dpapi_protect, user_dpapi_unprotect,
-    ).unwrap();
+fn current_user_generation_preserves_mixed_f6_and_rejects_machine_scope() {
+    let root = tempfile::tempdir().unwrap(); provision_user_test_lock(root.path());
+    let old = [42; 32]; let mut input = sections(&old);
+    let wrapped = crate::datastore::settings_section_envelope::seal("user-install:f6-keystore",
+        br#"{"signing_seed_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#, user_dpapi_protect, user_dpapi_unprotect).unwrap();
     input.push(("f6-keystore".into(), wrapped));
     let candidate = prepare_for(StoreScope::CurrentUser, &old, &input).unwrap();
-    verify_source_for(StoreScope::CurrentUser, &candidate, &old, &input).unwrap();
     assert!(verify_source_for(StoreScope::Machine, &candidate, &old, &input).is_err());
-    assert_eq!(open(&candidate).unwrap()["f6-keystore"]["signing_seed_hex"], "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-    let root = tempfile::tempdir().unwrap();
-    provision_user_test_lock(root.path());
-    let selected = root.path().join(".settings-generation.v1");
-    let authority = root.path().join(".settings-generation.authority.v1");
-    std::fs::write(&selected, &candidate).unwrap();
-    let pending = crate::datastore::settings_generation_authority::pending(None, &candidate, &user_dpapi_protect, &user_dpapi_unprotect).unwrap();
-    std::fs::write(&authority, pending).unwrap();
+    fixture_anchor(root.path(), StoreScope::CurrentUser);
+    fixture_select(root.path(), StoreScope::CurrentUser, &candidate, &old, &input);
     assert!(LockedSelectedGeneration::try_open_for(root.path(), StoreScope::Machine).is_err());
-    let user = LockedSelectedGeneration::acquire_for(root.path(), StoreScope::CurrentUser).unwrap();
-    user.read_reconciled(true).unwrap(); // fixture stands in for guarded source verification
-    user.write_section("settings", json!({"user": true})).unwrap();
-    drop(user);
-    assert_eq!(LockedSelectedGeneration::try_open_for(root.path(), StoreScope::CurrentUser).unwrap().read_all().unwrap()["settings"]["user"], true);
-    assert!(LockedSelectedGeneration::try_open_for(root.path(), StoreScope::Machine).is_err());
+    let user = LockedSelectedGeneration::try_open_for(root.path(), StoreScope::CurrentUser).unwrap();
+    assert_eq!(user.read_all().unwrap()["f6-keystore"]["signing_seed_hex"], "a".repeat(64));
+    user.write_section("SETTINGS", json!({"user": true})).unwrap(); drop(user);
+    let values = read_selected_once(root.path(), StoreScope::CurrentUser).unwrap();
+    assert_eq!(values["settings"]["user"], true);
+    assert!(!values.contains_key("SETTINGS"));
 }
 
 #[test]
 #[cfg_attr(windows, ignore = "requires elevated machine-lock ACL provisioning; run explicitly in Windows acceptance")]
-fn shared_readers_never_repair_pending_authority_and_exclude_writers() {
-    let root = tempfile::tempdir().unwrap();
-    provision_test_lock(root.path());
-    let old = [42; 32];
-    let input = sections(&old);
-    let candidate = prepare(&old, &input).unwrap();
-    let selected_path = root.path().join(".settings-generation.v1");
-    let authority_path = root.path().join(".settings-generation.authority.v1");
-    std::fs::write(&selected_path, &candidate).unwrap();
-    let pending = crate::datastore::settings_generation_authority::pending(None, &candidate, &dpapi_protect, &dpapi_unprotect).unwrap();
-    std::fs::write(&authority_path, &pending).unwrap();
-    assert!(ReadOnlySelectedGeneration::try_open(root.path(), StoreScope::Machine).is_err());
-    assert_eq!(std::fs::read(&authority_path).unwrap(), pending);
-    let repair = LockedSelectedGeneration::acquire(root.path()).unwrap();
-    repair.read_reconciled(true).unwrap(); // fixture stands in for guarded source verification
-    drop(repair);
-    let first = ReadOnlySelectedGeneration::try_open(root.path(), StoreScope::Machine).unwrap();
-    let second = ReadOnlySelectedGeneration::try_open(root.path(), StoreScope::Machine).unwrap();
-    assert_eq!(first.read_all().unwrap()["payments"]["token"], "second secret");
-    assert!(LockedSelectedGeneration::try_open(root.path()).is_err());
-    drop(first); drop(second);
-    assert_eq!(read_selected_once(root.path(), StoreScope::Machine).unwrap()["payments"]["token"], "second secret");
-    // The public read seam has released its shared lock before returning.
-    assert!(LockedSelectedGeneration::try_open(root.path()).is_ok());
-}
-
-#[test]
-#[cfg_attr(windows, ignore = "requires elevated machine-lock ACL provisioning; run explicitly in Windows acceptance")]
-fn startup_inspection_distinguishes_legacy_pending_selected_and_corrupt() {
-    let root = tempfile::tempdir().unwrap();
-    assert!(inspect_startup_once(root.path(), StoreScope::Machine).is_err());
-    provision_test_lock(root.path());
-    assert_eq!(inspect_startup_once(root.path(), StoreScope::Machine).unwrap(), StartupView::Legacy);
-    let old = [42; 32];
-    let mut input = sections(&old);
-    let key = derive_section_key(&old, None).unwrap();
-    input.push(("f6-keystore".into(), encode_section(&key, br#"{"signing_seed_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#, "machine:f6-keystore").unwrap()));
-    let candidate = prepare(&old, &input).unwrap();
-    let selected = root.path().join(".settings-generation.v1");
-    let authority = root.path().join(".settings-generation.authority.v1");
-    let pending = crate::datastore::settings_generation_authority::pending(None, &candidate, &dpapi_protect, &dpapi_unprotect).unwrap();
-    std::fs::write(&authority, &pending).unwrap();
-    assert_eq!(inspect_startup_once(root.path(), StoreScope::Machine).unwrap(), StartupView::RecoveryRequired);
-    std::fs::write(&selected, &candidate).unwrap();
-    assert_eq!(inspect_startup_once(root.path(), StoreScope::Machine).unwrap(), StartupView::RecoveryRequired);
-    assert_eq!(std::fs::read(&authority).unwrap(), pending);
-    let owner = LockedSelectedGeneration::acquire(root.path()).unwrap();
-    owner.read_reconciled(true).unwrap(); // fixture stands in for source verification
-    drop(owner);
-    let StartupView::Selected(values) = inspect_startup_once(root.path(), StoreScope::Machine).unwrap() else { panic!("expected selected generation"); };
-    assert_eq!(values["f6-keystore"]["signing_seed_hex"], "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-    std::fs::write(&selected, b"corrupt").unwrap();
-    assert!(inspect_startup_once(root.path(), StoreScope::Machine).is_err());
-}
-
-#[test]
-#[cfg_attr(windows, ignore = "requires elevated machine-lock ACL provisioning; run explicitly in Windows acceptance")]
-fn guarded_runtime_routes_legacy_selected_and_pending_without_losing_signing_key() {
+fn guarded_runtime_never_falls_back_from_pending_and_preserves_f6() {
     use std::cell::Cell;
-    let root = tempfile::tempdir().unwrap();
-    provision_test_lock(root.path());
-    let legacy_calls = Cell::new(0);
-    let legacy_read = || { legacy_calls.set(legacy_calls.get() + 1); Ok(json!({"legacy": true})) };
-    assert_eq!(read_with_legacy(root.path(), StoreScope::Machine, "settings", legacy_read).unwrap()["legacy"], true);
-    write_with_legacy(root.path(), StoreScope::Machine, "settings", &json!({}), || { legacy_calls.set(legacy_calls.get() + 1); Ok(()) }).unwrap();
-    assert_eq!(legacy_calls.get(), 2);
-    let old = [42; 32];
-    let mut input = sections(&old);
-    let key = derive_section_key(&old, None).unwrap();
+    let root = tempfile::tempdir().unwrap(); provision_test_lock(root.path());
+    let anchor = fixture_anchor(root.path(), StoreScope::Machine);
+    let calls = Cell::new(0);
+    assert_eq!(read_with_legacy(root.path(), StoreScope::Machine, "settings", || { calls.set(calls.get()+1); Ok(json!({"legacy":true})) }).unwrap()["legacy"], true);
+    let old = [42; 32]; let mut input = sections(&old); let key = derive_section_key(&old, None).unwrap();
     input.push(("f6-keystore".into(), encode_section(&key, br#"{"signing_seed_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#, "machine:f6-keystore").unwrap()));
     let candidate = prepare(&old, &input).unwrap();
-    let selected = root.path().join(".settings-generation.v1");
-    let authority = root.path().join(".settings-generation.authority.v1");
-    let pending = crate::datastore::settings_generation_authority::pending(None, &candidate, &dpapi_protect, &dpapi_unprotect).unwrap();
-    std::fs::write(&authority, &pending).unwrap();
-    std::fs::write(&selected, &candidate).unwrap();
-    assert!(read_with_legacy(root.path(), StoreScope::Machine, "settings", || { panic!("must not fall back") }).is_err());
-    assert!(write_with_legacy(root.path(), StoreScope::Machine, "settings", &json!({}), || { panic!("must not fall back") }).is_err());
-    let owner = LockedSelectedGeneration::acquire(root.path()).unwrap();
-    owner.read_reconciled(true).unwrap(); // fixture stands in for source verification
-    drop(owner);
-    let signed = read_with_legacy(root.path(), StoreScope::Machine, "f6-keystore", || { panic!("must not fall back") }).unwrap();
-    assert_eq!(signed["signing_seed_hex"], "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-    write_with_legacy(root.path(), StoreScope::Machine, "settings", &json!({"updated": true}), || { panic!("must not fall back") }).unwrap();
-    assert_eq!(read_with_legacy(root.path(), StoreScope::Machine, "f6-keystore", || { panic!("must not fall back") }).unwrap(), signed);
-}
-
-#[test]
-#[cfg_attr(windows, ignore = "requires elevated machine-lock ACL provisioning; run explicitly in Windows acceptance")]
-fn selected_runtime_creates_only_authenticated_never_initialized_f6() {
-    let root = tempfile::tempdir().unwrap();
-    provision_test_lock(root.path());
-    let old = [42; 32];
-    let input = sections(&old); // no F6 key in this candidate
-    let candidate = prepare(&old, &input).unwrap();
-    let pending = crate::datastore::settings_generation_authority::pending(None, &candidate, &dpapi_protect, &dpapi_unprotect).unwrap();
-    std::fs::write(root.path().join(".settings-generation.authority.v1"), pending).unwrap();
-    std::fs::write(root.path().join(".settings-generation.v1"), candidate).unwrap();
-    let owner = LockedSelectedGeneration::acquire(root.path()).unwrap();
-    owner.read_reconciled(true).unwrap(); // fixture stands in for guarded source verification
-    drop(owner);
-    assert_eq!(read_with_legacy(root.path(), StoreScope::Machine, "f6-keystore", || panic!("must not fall back")).unwrap(), json!({}));
-    assert!(write_with_legacy(root.path(), StoreScope::Machine, "f6-keystore", &json!({}), || panic!("must not fall back")).is_err());
-    assert!(write_with_legacy(root.path(), StoreScope::Machine, "f6-keystore", &json!({"signing_seed_hex":"bad"}), || panic!("must not fall back")).is_err());
-    let valid = json!({"signing_seed_hex": "a".repeat(64)});
-    write_with_legacy(root.path(), StoreScope::Machine, "f6-keystore", &valid, || panic!("must not fall back")).unwrap();
-    assert_eq!(read_with_legacy(root.path(), StoreScope::Machine, "F6-KEYSTORE", || panic!("must not fall back")).unwrap(), valid);
+    anchor.write(&AnchorState::Preparing { next: cutover::digest(&candidate) }).unwrap();
+    assert!(read_with_legacy(root.path(), StoreScope::Machine, "settings", || panic!("must not fall back")).is_err());
+    assert!(write_with_legacy(root.path(), StoreScope::Machine, "settings", &json!({}), || panic!("must not fall back")).is_err());
+    fixture_select(root.path(), StoreScope::Machine, &candidate, &old, &input);
+    let f6 = read_with_legacy(root.path(), StoreScope::Machine, "F6-KEYSTORE", || panic!("must not fall back")).unwrap();
+    write_with_legacy(root.path(), StoreScope::Machine, "settings", &json!({"updated":true}), || panic!("must not fall back")).unwrap();
+    assert_eq!(read_with_legacy(root.path(), StoreScope::Machine, "f6-keystore", || panic!("must not fall back")).unwrap(), f6);
+    assert_eq!(calls.get(), 1);
 }
 
 #[test]
 fn invalid_preexisting_or_initialized_f6_fails_closed() {
-    let old = [42; 32];
-    let old_key = derive_section_key(&old, None).unwrap();
+    let old = [42; 32]; let old_key = derive_section_key(&old, None).unwrap();
     for value in [json!({}), json!({"signing_seed_hex":"bad"}), json!({"signing_seed_hex": 4})] {
         let mut input = sections(&old);
         input.push(("f6-keystore".into(), encode_section(&old_key, &serde_json::to_vec(&value).unwrap(), "machine:f6-keystore").unwrap()));
         assert!(prepare(&old, &input).is_err());
     }
-    let input = sections(&old);
-    let candidate = prepare(&old, &input).unwrap();
-    let mut state = open_generation(&candidate).unwrap();
-    state.f6_initialized = true;
+    let input = sections(&old); let candidate = prepare(&old, &input).unwrap();
+    let mut state = open_generation(&candidate).unwrap(); state.f6_initialized = true;
     assert!(open_generation(&seal_generation(&state).unwrap()).is_err());
 }
 
 #[test]
 #[cfg_attr(windows, ignore = "requires elevated machine-lock ACL provisioning; run explicitly in Windows acceptance")]
-fn concurrent_first_f6_creation_returns_one_committed_winner() {
+fn f6_shared_read_rechecks_and_concurrent_creators_return_one_winner() {
     use std::sync::{Arc, Barrier, atomic::{AtomicUsize, Ordering}};
-    let root = tempfile::tempdir().unwrap();
-    provision_test_lock(root.path());
-    let old = [42; 32];
-    let input = sections(&old);
-    let candidate = prepare(&old, &input).unwrap();
-    let pending = crate::datastore::settings_generation_authority::pending(None, &candidate, &dpapi_protect, &dpapi_unprotect).unwrap();
-    std::fs::write(root.path().join(".settings-generation.authority.v1"), pending).unwrap();
-    std::fs::write(root.path().join(".settings-generation.v1"), candidate).unwrap();
-    let owner = LockedSelectedGeneration::acquire(root.path()).unwrap();
-    owner.read_reconciled(true).unwrap(); // fixture stands in for guarded source verification
-    drop(owner);
-    let barrier = Arc::new(Barrier::new(2));
-    let created = Arc::new(AtomicUsize::new(0));
+    let root = tempfile::tempdir().unwrap(); provision_test_lock(root.path());
+    let old = [42; 32]; let input = sections(&old); let candidate = prepare(&old, &input).unwrap();
+    fixture_anchor(root.path(), StoreScope::Machine); fixture_select(root.path(), StoreScope::Machine, &candidate, &old, &input);
+    let barrier = Arc::new(Barrier::new(2)); let created = Arc::new(AtomicUsize::new(0));
     let workers: Vec<_> = (1..=2).map(|index| {
-        let path = root.path().to_path_buf();
-        let barrier = barrier.clone();
-        let created = created.clone();
+        let path = root.path().to_path_buf(); let barrier = barrier.clone(); let created = created.clone();
         std::thread::spawn(move || {
             barrier.wait();
-            let owner = (0..15).find_map(|_| match LockedSelectedGeneration::acquire(&path) {
-                Ok(owner) => Some(owner),
-                Err(_) => None,
-            }).expect("could not acquire generation ownership");
-            owner.get_or_create_f6(|| {
-                created.fetch_add(1, Ordering::SeqCst);
-                Ok(json!({"signing_seed_hex": format!("{index:02x}").repeat(32)}))
+            read_f6_or_create(&path, StoreScope::Machine, || panic!("no legacy fallback"), || {
+                let owner = (0..15).find_map(|_| LockedSelectedGeneration::acquire(&path).ok()).ok_or("could not acquire ownership")?;
+                owner.get_or_create_f6(|| { created.fetch_add(1, Ordering::SeqCst); Ok(json!({"signing_seed_hex":format!("{index:02x}").repeat(32)})) })
             }).unwrap()
         })
     }).collect();
     let values: Vec<_> = workers.into_iter().map(|w| w.join().unwrap()).collect();
-    assert_eq!(values[0], values[1]);
-    assert_eq!(created.load(Ordering::SeqCst), 1);
+    assert_eq!(values[0], values[1]); assert_eq!(created.load(Ordering::SeqCst), 1);
+    assert_eq!(read_f6_or_create(root.path(), StoreScope::Machine, || panic!("no legacy fallback"), || panic!("existing key needs no writer")).unwrap(), values[0]);
     let owner = LockedSelectedGeneration::try_open(root.path()).unwrap();
-    assert_eq!(owner.read_all().unwrap()["f6-keystore"], values[0]);
     assert!(owner.write_section("f6-keystore", json!({"signing_seed_hex":"ff".repeat(32)})).is_err());
-    assert_eq!(owner.read_all().unwrap()["f6-keystore"], values[0]);
 }
 
 #[test]
 #[cfg_attr(windows, ignore = "requires elevated machine-lock ACL provisioning; run explicitly in Windows acceptance")]
-fn f6_shared_read_avoids_write_and_missing_rechecks_winner_under_exclusive_lock() {
-    let root = tempfile::tempdir().unwrap();
-    provision_test_lock(root.path());
-    let old = [42; 32];
-    let input = sections(&old);
-    let candidate = prepare(&old, &input).unwrap();
-    let pending = crate::datastore::settings_generation_authority::pending(None, &candidate, &dpapi_protect, &dpapi_unprotect).unwrap();
-    std::fs::write(root.path().join(".settings-generation.authority.v1"), pending).unwrap();
-    std::fs::write(root.path().join(".settings-generation.v1"), candidate).unwrap();
+fn staged_initial_cutover_resumes_exact_candidate_and_preserves_source() {
+    let root = tempfile::tempdir().unwrap(); provision_test_lock(root.path());
+    let old = [42; 32]; let input = sections(&old);
+    let anchor = fixture_anchor(root.path(), StoreScope::Machine);
     let owner = LockedSelectedGeneration::acquire(root.path()).unwrap();
-    owner.read_reconciled(true).unwrap(); // fixture stands in for guarded snapshot verification
-    drop(owner);
-    let winner = json!({"signing_seed_hex": "b".repeat(64)});
-    // Simulate another process committing after the shared absence check.
-    let first = read_f6_or_create(root.path(), StoreScope::Machine, || panic!("no legacy fallback"), || {
-        let owner = LockedSelectedGeneration::acquire(root.path())?;
-        owner.write_section("f6-keystore", winner.clone())?;
-        owner.get_or_create_f6(|| panic!("must re-read committed winner"))
-    }).unwrap();
-    assert_eq!(first, winner);
-    let existing = read_f6_or_create(root.path(), StoreScope::Machine, || panic!("no legacy fallback"), || panic!("read must not need exclusive access")).unwrap();
-    assert_eq!(existing, winner);
+    let candidate = prepare(&old, &input).unwrap();
+    let stage = root.path().join(".settings-cutover-candidate.v1");
+    std::fs::write(&stage, &candidate).unwrap();
+    anchor.write(&AnchorState::Preparing { next: cutover::digest(&candidate) }).unwrap();
+    let wrong = [&input[..1], &[("extra".into(), "changed".into())]].concat();
+    assert!(stage_and_select(&owner._ownership, &anchor, root.path(), || panic!("must use staged bytes"), &|bytes| verify_source_for(StoreScope::Machine, bytes, &old, &wrong)).is_err());
+    assert_eq!(std::fs::read(&stage).unwrap(), candidate);
+    assert!(!root.path().join(".settings-generation.v1").exists());
+    stage_and_select(&owner._ownership, &anchor, root.path(), || panic!("must use staged bytes"), &|bytes| verify_source_for(StoreScope::Machine, bytes, &old, &input)).unwrap();
+    assert_eq!(std::fs::read(&stage).unwrap(), candidate);
+    assert_eq!(owner.read_all().unwrap()["payments"]["token"], "second secret");
 }

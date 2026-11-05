@@ -5,6 +5,7 @@ use super::{
     decode_section, derive_section_key, dpapi_protect, dpapi_unprotect, encode_section,
     validate_section_name, user_dpapi_protect, user_dpapi_unprotect,
 };
+use super::settings_generation_cutover::{self as cutover, Anchor, AnchorState, ProtectedFileAnchor, SelectedFile};
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
@@ -29,10 +30,10 @@ struct Bundle {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) enum StoreScope { Machine, CurrentUser }
 impl StoreScope {
-    fn protect(self, bytes: &[u8]) -> Result<Vec<u8>, String> {
+    pub(super) fn protect(self, bytes: &[u8]) -> Result<Vec<u8>, String> {
         match self { Self::Machine => dpapi_protect(bytes), Self::CurrentUser => user_dpapi_protect(bytes).map_err(|_| Self::user_unavailable()) }
     }
-    fn unprotect(self, bytes: &[u8]) -> Result<Vec<u8>, String> {
+    pub(super) fn unprotect(self, bytes: &[u8]) -> Result<Vec<u8>, String> {
         match self { Self::Machine => dpapi_unprotect(bytes), Self::CurrentUser => user_dpapi_unprotect(bytes).map_err(|_| Self::user_unavailable()) }
     }
     fn user_unavailable() -> String {
@@ -408,7 +409,7 @@ pub(super) struct LockedSelectedGeneration {
 
 // No missing/error conflation. Windows holds a no-follow, no-write/delete
 // handle for each read; the owner also holds directory pins for its lifetime.
-fn read_generation_file(path: &Path, limit: usize) -> Result<Option<Vec<u8>>, String> {
+pub(super) fn read_generation_file(path: &Path, limit: usize) -> Result<Option<Vec<u8>>, String> {
     use std::io::Read;
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
@@ -451,83 +452,57 @@ impl LockedSelectedGeneration {
             StoreScope::CurrentUser => super::settings_generation_ownership::SettingsGenerationLock::try_acquire_user(root, false),
         }.map_err(|error| format!("settings generation ownership unavailable: {error}"))?;
         Ok(Self { _ownership: ownership, #[cfg(windows)] _root_pins: root_pins,
-            path: root.join(".settings-generation.v1"), authority: root.join(".settings-generation.authority.v1"), scope })
+            path: root.join(".settings-generation.v1"), authority: root.join(".settings-cutover-anchor.v1"), scope })
     }
 
     pub(super) fn try_open(root: &Path) -> Result<Self, String> { Self::try_open_for(root, StoreScope::Machine) }
     pub(super) fn try_open_for(root: &Path, scope: StoreScope) -> Result<Self, String> {
         let selected = Self::acquire_for(root, scope)?;
-        selected.read_reconciled(false)?;
+        selected.read_reconciled()?;
         Ok(selected)
     }
 
-    /// First selection from a guarded complete legacy snapshot. Legacy files
-    /// are untouched. Interrupted initialization remains visibly pending.
-    /// Root ACL authorization and old-writer exclusion remain prerequisites.
+    /// Explicit initial selection. Legacy files stay in place and the source
+    /// snapshot must be fresh and held until independent anchor publication.
     #[cfg(windows)]
     fn initialize(snapshot: &mut source_snapshot::Snapshot, candidate: &[u8]) -> Result<Self, String> {
         let root = snapshot.root()?;
         let selected = Self::acquire_for(&root, snapshot.scope())?;
-        snapshot.verify_generation(candidate)?;
-        if read_generation_file(&selected.authority, 65_536)?.is_some()
-            || read_generation_file(&selected.path, MAX_TOTAL * 2 + 65_536)?.is_some() {
-            return Err("settings generation or authority already exists".into());
-        }
-        let pending = super::settings_generation_authority::pending(None, candidate, &|bytes| selected.scope.protect(bytes), &|bytes| selected.scope.unprotect(bytes))?;
-        if !crate::datastore_io::publish_new(&selected.authority, &pending)?
-            || read_generation_file(&selected.authority, 65_536)?.as_deref() != Some(pending.as_slice()) {
-            return Err("initial settings authority publication failed".into());
-        }
-        snapshot.verify_generation(candidate)?;
-        if !crate::datastore_io::publish_new(&selected.path, candidate)?
-            || read_generation_file(&selected.path, MAX_TOTAL * 2 + 65_536)?.as_deref() != Some(candidate) {
-            return Err("initial settings generation publication failed".into());
-        }
-        snapshot.verify_generation(candidate)?;
-        selected.read_reconciled(true)?;
+        let anchor = ProtectedFileAnchor::new(&root, selected.scope);
+        let file = SelectedFile::new(&root);
+        let guarded = std::cell::RefCell::new(snapshot);
+        cutover::select_initial(&selected._ownership, &anchor, &file, candidate, &|bytes| guarded.borrow_mut().verify_generation(bytes))?;
         Ok(selected)
     }
 
-    /// Recover initial selection only after checking the current guarded source.
+    /// Interrupted first selection requires a fresh guarded source and the
+    /// exact selected candidate; it never falls back to the legacy path.
     #[cfg(windows)]
     fn recover_initial(snapshot: &mut source_snapshot::Snapshot) -> Result<Self, String> {
-        let selected = Self::acquire_for(&snapshot.root()?, snapshot.scope())?;
-        let candidate = read_generation_file(&selected.path, MAX_TOTAL * 2 + 65_536)?
-            .ok_or("initial selected generation unavailable")?;
-        snapshot.verify_generation(&candidate)?;
-        selected.read_reconciled(true)?;
-        Ok(selected)
+        let root = snapshot.root()?;
+        let candidate = read_generation_file(&root.join(".settings-generation.v1"), MAX_TOTAL * 2 + 65_536)?
+            .ok_or("initial selected generation unavailable; retry with original candidate")?;
+        Self::initialize(snapshot, &candidate)
     }
 
-    fn publish_authority(&self, bytes: &[u8]) -> Result<Vec<u8>, String> {
-        crate::datastore_io::atomic_write(&self.authority, bytes)?;
-        read_generation_file(&self.authority, 65_536)?.ok_or("settings authority missing after publication".into())
-    }
-
-    fn read_reconciled(&self, initial_snapshot_verified: bool) -> Result<Vec<u8>, String> {
-        let selected = read_generation_file(&self.path, MAX_TOTAL * 2 + 65_536)?;
-        // Never finalize authority for a corrupt or unauthenticated generation.
-        if let Some(bytes) = selected.as_ref() {
-            if open_generation(bytes).map_err(|error| self.scope.access_error(error))?.scope != self.scope { return Err("settings generation scope mismatch".into()); }
+    fn read_reconciled(&self) -> Result<Vec<u8>, String> {
+        let root = self.path.parent().ok_or("settings root unavailable")?;
+        let anchor = ProtectedFileAnchor::new(root, self.scope);
+        let file = SelectedFile::new(root);
+        let verify = |bytes: &[u8]| verify_scoped_generation(self.scope, bytes);
+        if matches!(anchor.read()?, Some(AnchorState::Updating { .. })) {
+            cutover::recover_update(&self._ownership, &anchor, &file, &verify)?;
         }
-        let authority = read_generation_file(&self.authority, 65_536)?;
-        let state = super::settings_generation_authority::recover(
-            authority.as_deref(), selected.as_deref(), initial_snapshot_verified, &|bytes| self.scope.protect(bytes), &|bytes| self.scope.unprotect(bytes),
-            &|bytes| self.publish_authority(bytes),
-        )?;
-        if state != super::settings_generation_authority::Recovery::Selected {
-            return Err("settings generation has not completed selection".into());
-        }
-        selected.ok_or("selected settings generation unavailable".into())
+        cutover::read_active(&self._ownership, &anchor, &file, &verify)
     }
 
     pub(super) fn read_all(&self) -> Result<BTreeMap<String, Value>, String> {
-        open(&self.read_reconciled(false)?)
+        open(&self.read_reconciled()?)
     }
 
     /// The exclusive owner covers the read, generation, write and readback.
     fn get_or_create_f6(&self, create: impl FnOnce() -> Result<Value, String>) -> Result<Value, String> {
-        let current = open_generation(&self.read_reconciled(false)?)?;
+        let current = open_generation(&self.read_reconciled()?)?;
         if let Some(name) = matching_section(&current.sections, "f6-keystore") {
             let value = current.sections[name].clone();
             if !valid_f6(&value) { return Err("device signing key is invalid; existing data preserved".into()); }
@@ -537,21 +512,19 @@ impl LockedSelectedGeneration {
         let created = create()?;
         if !valid_f6(&created) { return Err("new device signing key is invalid".into()); }
         self.write_section("f6-keystore", created.clone())?;
-        let committed = open_generation(&self.read_reconciled(false)?)?;
+        let committed = open_generation(&self.read_reconciled()?)?;
         let name = matching_section(&committed.sections, "f6-keystore").ok_or("committed device signing key missing")?;
         if committed.sections[name] != created { return Err("committed device signing key did not verify".into()); }
         Ok(created)
     }
 
     pub(super) fn write_section(&self, section: &str, value: Value) -> Result<(), String> {
-        let current = self.read_reconciled(false)?;
+        let current = self.read_reconciled()?;
         let candidate = updated_generation(&current, section, value)?;
-        let pending = super::settings_generation_authority::pending(Some(&current), &candidate, &|bytes| self.scope.protect(bytes), &|bytes| self.scope.unprotect(bytes))?;
-        if self.publish_authority(&pending)? != pending { return Err("pending settings authority readback mismatch".into()); }
-        crate::datastore_io::atomic_write(&self.path, &candidate)?;
-        let reread = self.read_reconciled(false)?;
-        if reread != candidate { return Err("settings generation publication readback mismatch".into()); }
-        Ok(())
+        let root = self.path.parent().ok_or("settings root unavailable")?;
+        let anchor = ProtectedFileAnchor::new(root, self.scope);
+        let file = SelectedFile::new(root);
+        cutover::update(&self._ownership, &anchor, &file, &candidate, &|bytes| verify_scoped_generation(self.scope, bytes))
     }
 }
 
@@ -575,7 +548,7 @@ impl ReadOnlySelectedGeneration {
             StoreScope::CurrentUser => super::settings_generation_ownership::SettingsGenerationLock::try_acquire_user(root, true),
         }.map_err(|error| format!("settings generation shared ownership unavailable: {error}"))?;
         Ok(Self { _ownership: ownership, #[cfg(windows)] _root_pins: root_pins,
-            path: root.join(".settings-generation.v1"), authority: root.join(".settings-generation.authority.v1"), scope })
+            path: root.join(".settings-generation.v1"), authority: root.join(".settings-cutover-anchor.v1"), scope })
     }
     fn try_open(root: &Path, scope: StoreScope) -> Result<Self, String> {
         let reader = Self::acquire(root, scope)?;
@@ -583,7 +556,7 @@ impl ReadOnlySelectedGeneration {
         Ok(reader)
     }
     fn inspect_startup(&self) -> Result<StartupView, String> {
-        inspect_generation_files(&self.path, &self.authority, self.scope)
+        inspect_generation_files(&self._ownership, &self.path, &self.authority, self.scope)
     }
     fn read_all(&self) -> Result<BTreeMap<String, Value>, String> {
         match self.inspect_startup()? {
@@ -594,15 +567,27 @@ impl ReadOnlySelectedGeneration {
     }
 }
 
-fn inspect_generation_files(path: &Path, authority_path: &Path, scope: StoreScope) -> Result<StartupView, String> {
-    let selected = read_generation_file(path, MAX_TOTAL * 2 + 65_536)?;
-    let authority = read_generation_file(authority_path, 65_536)?;
-    let generation = selected.as_deref().map(open_generation).transpose().map_err(|error| scope.access_error(error))?;
-    if generation.as_ref().is_some_and(|g| g.scope != scope) { return Err("settings generation scope mismatch".into()); }
-    match super::settings_generation_authority::inspect(authority.as_deref(), selected.as_deref(), &|bytes| scope.unprotect(bytes))? {
-        super::settings_generation_authority::Inspection::Stable => Ok(StartupView::Selected(generation.ok_or("selected settings generation unavailable")?.sections)),
-        super::settings_generation_authority::Inspection::Legacy => Ok(StartupView::Legacy),
-        super::settings_generation_authority::Inspection::RepairRequired | super::settings_generation_authority::Inspection::InitialVerificationRequired => Ok(StartupView::RecoveryRequired),
+fn verify_scoped_generation(scope: StoreScope, bytes: &[u8]) -> Result<(), String> {
+    if open_generation(bytes).map_err(|error| scope.access_error(error))?.scope != scope {
+        return Err("settings generation scope mismatch".into());
+    }
+    Ok(())
+}
+fn inspect_generation_files(guard: &super::settings_generation_ownership::SettingsGenerationLock, path: &Path, authority_path: &Path, scope: StoreScope) -> Result<StartupView, String> {
+    let root = authority_path.parent().ok_or("settings root unavailable")?;
+    let anchor = ProtectedFileAnchor::new(root, scope);
+    let file = SelectedFile::new(root);
+    match anchor.read()? {
+        Some(AnchorState::Legacy) => {
+            if read_generation_file(path, MAX_TOTAL * 2 + 65_536)?.is_some() { return Err("unexpected selected settings before cutover".into()); }
+            Ok(StartupView::Legacy)
+        },
+        Some(AnchorState::Active { .. }) => {
+            let bytes = cutover::read_active(guard, &anchor, &file, &|value| verify_scoped_generation(scope, value))?;
+            Ok(StartupView::Selected(open_generation(&bytes).map_err(|error| scope.access_error(error))?.sections))
+        },
+        Some(AnchorState::Preparing { .. } | AnchorState::Updating { .. }) => Ok(StartupView::RecoveryRequired),
+        None => Err("settings cutover anchor is missing; existing data preserved".into()),
     }
 }
 
@@ -644,7 +629,7 @@ pub(super) fn read_f6_or_create(
 /// Keep exclusive ownership through either a legacy save or a selected write.
 pub(super) fn write_with_legacy(root: &Path, scope: StoreScope, section: &str, value: &Value, legacy: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
     let owner = LockedSelectedGeneration::acquire_for(root, scope)?;
-    match inspect_generation_files(&owner.path, &owner.authority, scope)? {
+    match inspect_generation_files(&owner._ownership, &owner.path, &owner.authority, scope)? {
         StartupView::Legacy => legacy(),
         StartupView::Selected(_) => owner.write_section(section, value.clone()),
         StartupView::RecoveryRequired => Err("settings generation requires authorized recovery".into()),
@@ -675,7 +660,7 @@ impl RuntimeWriteGuard {
 pub(super) fn begin_experimental_write() -> Result<RuntimeWriteGuard, String> {
     let (root, pins, scope) = experimental_runtime_root()?;
     let owner = LockedSelectedGeneration::acquire_for(&root, scope)?;
-    let selected = match inspect_generation_files(&owner.path, &owner.authority, owner.scope)? {
+    let selected = match inspect_generation_files(&owner._ownership, &owner.path, &owner.authority, owner.scope)? {
         StartupView::Legacy => false,
         StartupView::Selected(_) => true,
         StartupView::RecoveryRequired => return Err("settings generation requires authorized recovery".into()),
@@ -714,6 +699,66 @@ pub(super) fn inspect_startup_once(root: &Path, scope: StoreScope) -> Result<Sta
 /// callers, avoiding long-lived reader locks that would block policy writers.
 pub(super) fn read_selected_once(root: &Path, scope: StoreScope) -> Result<BTreeMap<String, Value>, String> {
     ReadOnlySelectedGeneration::acquire(root, scope)?.read_all()
+}
+
+/// Prepare a reusable encrypted candidate before recording the cutover.
+/// Existing stage bytes are never overwritten; source verification detects a
+/// stale or incomplete stage. The caller holds exclusive ownership and pins.
+fn stage_and_select<A: Anchor>(
+    guard: &super::settings_generation_ownership::SettingsGenerationLock,
+    anchor: &A,
+    root: &Path,
+    prepare: impl FnOnce() -> Result<Vec<u8>, String>,
+    verify: &impl Fn(&[u8]) -> Result<(), String>,
+) -> Result<(), String> {
+    guard.require_exclusive().map_err(|e| e.to_string())?;
+    let stage_path = root.join(".settings-cutover-candidate.v1");
+    let state = anchor.read()?.ok_or("settings cutover anchor is missing")?;
+    let candidate = match state {
+        AnchorState::Legacy => match read_generation_file(&stage_path, MAX_TOTAL * 2 + 65_536)? {
+            Some(existing) => existing,
+            None => {
+                let candidate = prepare()?;
+                verify(&candidate)?;
+                if !crate::datastore_io::publish_new(&stage_path, &candidate)? {
+                    return Err("settings cutover candidate already exists; retry recovery".into());
+                }
+                let observed = read_generation_file(&stage_path, MAX_TOTAL * 2 + 65_536)?
+                    .ok_or("settings cutover candidate is missing")?;
+                if observed != candidate { return Err("settings cutover candidate did not verify".into()); }
+                observed
+            }
+        },
+        AnchorState::Preparing { .. } => read_generation_file(&stage_path, MAX_TOTAL * 2 + 65_536)?
+            .ok_or("prepared settings candidate is missing; restore it before recovery")?,
+        _ => return Err("settings cutover is not awaiting initial selection".into()),
+    };
+    verify(&candidate)?;
+    cutover::select_initial(guard, anchor, &SelectedFile::new(root), &candidate, verify)
+}
+
+/// Explicit lab-only migration entry point. No application or installer route
+/// invokes this function. Root ACL, old-writer exclusion and independent anchor
+/// authorization remain mandatory external prerequisites.
+#[cfg(windows)]
+pub(super) fn migrate_explicitly() -> Result<(), String> {
+    let (root, _pins, scope) = experimental_runtime_root()?;
+    let owner = LockedSelectedGeneration::acquire_for(&root, scope)?;
+    let anchor = ProtectedFileAnchor::new(&root, scope);
+    match anchor.read()? {
+        Some(AnchorState::Active { .. }) => { owner.read_reconciled()?; return Ok(()); },
+        Some(AnchorState::Legacy | AnchorState::Preparing { .. }) => {},
+        Some(AnchorState::Updating { .. }) => return Err("settings update requires authorized recovery before migration".into()),
+        None => return Err("settings cutover anchor is missing; existing data preserved".into()),
+    }
+    let snapshot = match scope {
+        StoreScope::Machine => source_snapshot::Snapshot::capture_machine()?,
+        StoreScope::CurrentUser => source_snapshot::Snapshot::capture_user()?,
+    };
+    let held = std::cell::RefCell::new(snapshot);
+    stage_and_select(&owner._ownership, &anchor, &root,
+        || held.borrow_mut().prepare(),
+        &|bytes| held.borrow_mut().verify_generation(bytes))
 }
 
 /// Trial reader/writer for an already selected generation. The caller must

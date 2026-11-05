@@ -5,12 +5,15 @@
 #![allow(dead_code)]
 use std::{fs::{File, OpenOptions}, io, path::Path};
 
-pub(super) struct SettingsGenerationLock { _file: File }
+pub(super) struct SettingsGenerationLock { _file: File, exclusive: bool }
 
 impl SettingsGenerationLock {
     // Generic caller-authorized seam remains test-only/unrouted. Machine-store
     // callers must use the verified variants below; user-scope ACLs require a
     // distinct policy before production use.
+    pub(super) fn require_exclusive(&self) -> io::Result<()> {
+        if self.exclusive { Ok(()) } else { Err(io::Error::other("exclusive settings ownership is required")) }
+    }
     pub(super) fn try_acquire(root: &Path) -> io::Result<Self> { Self::try_acquire_mode(root, false, None, std::time::Duration::from_secs(2)) }
     pub(super) fn try_acquire_shared(root: &Path) -> io::Result<Self> { Self::try_acquire_mode(root, true, None, std::time::Duration::from_secs(2)) }
     pub(super) fn try_acquire_machine(root: &Path, shared: bool) -> io::Result<Self> { Self::try_acquire_mode(root, shared, Some(false), std::time::Duration::from_secs(2)) }
@@ -68,7 +71,7 @@ impl SettingsGenerationLock {
                 Err(std::fs::TryLockError::Error(e)) => return Err(e),
             }
         }
-        Ok(Self { _file: file })
+        Ok(Self { _file: file, exclusive: !shared })
     }
 }
 

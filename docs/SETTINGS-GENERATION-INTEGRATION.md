@@ -47,11 +47,13 @@ standard-user versus privileged-process cross-account tests. An ignored test
 is not acceptance evidence.
 
 The gated `inspect_startup_once` seam now makes a read-only decision under a
-short-lived shared lock: no generation and no authority is `Legacy`, a verified
-stable pair is `Selected`, and a pending pair is `RecoveryRequired`. Missing
-provisioned lock, invalid files or scope mismatch are errors. The explicit Windows lab opt-in uses this decision in datastore reads and
-writes, not a separately wired application startup step. Before routing, a trusted external marker must also
-distinguish a first legacy start from deletion or rollback of both files.
+short-lived shared lock: an explicitly provisioned legacy anchor and no selected
+generation is `Legacy`, a verified active pair is `Selected`, and a pending
+pair is `RecoveryRequired`. A missing anchor or lock, invalid files or scope
+mismatch are errors. The explicit Windows lab opt-in uses this decision in
+datastore reads and writes, not a separately wired startup step. The current
+file-backed DPAPI-protected anchor is a draft, not an independent anti-rollback
+anchor; restoring an older matching anchor and generation remains undetectable.
 
 For a current-user installation, the gated route requires a pinned LocalAppData
 root and a pre-provisioned lock whose ACL matches the current Windows account.
@@ -62,3 +64,12 @@ accepted until tested. Experimental F6 state distinguishes a verified source
 with no signing key from an existing key; an existing empty or malformed seed
 fails closed. Restoring both old generation and authority remains an unsolved
 rollback case without a trusted anchor.
+
+The gated experiment now uses one protected cutover record for both the runtime
+route and explicit migration draft. An explicit migration can stage and verify
+an encrypted candidate, record the pending transition, and select it without
+removing legacy files. Interrupted initial selection requires the exact staged
+candidate and a fresh source check. No installer or startup command invokes the
+migration. The current record is file-backed under the same data root and is
+not an independent anti-rollback anchor; it cannot detect restoration of an old
+matching record and generation. It must not be represented as rollback proof.

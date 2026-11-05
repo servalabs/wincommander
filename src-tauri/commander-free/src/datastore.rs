@@ -50,8 +50,8 @@ use std::fs;
 use std::path::PathBuf;
 
 #[cfg(any(test, feature = "experimental-settings-generation"))]
-#[path = "settings_generation_authority.rs"]
-mod settings_generation_authority;
+#[path = "settings_generation_cutover.rs"]
+mod settings_generation_cutover;
 
 #[cfg(all(windows, any(test, feature = "experimental-settings-generation")))]
 #[path = "settings_generation_acl_windows.rs"]
