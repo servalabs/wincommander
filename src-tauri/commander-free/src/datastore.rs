@@ -628,6 +628,21 @@ fn atomic_write_bytes(path: &std::path::Path, data: &[u8]) -> Result<(), String>
 /// file does not yet exist (first run). Returns an error on I/O or decode failure.
 pub fn load(section: &str) -> Result<Value, String> {
     validate_section_name(section)?;
+    #[cfg(all(windows, feature = "experimental-settings-generation"))]
+    if experimental_generation_routing_enabled() {
+        let (root, _pins) = settings_rotation_trial::experimental_machine_root()?;
+        return settings_rotation_trial::read_with_legacy(&root, settings_rotation_trial::StoreScope::Machine, section, || load_legacy(section));
+    }
+    load_legacy(section)
+}
+
+#[cfg(all(windows, feature = "experimental-settings-generation"))]
+fn experimental_generation_routing_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("WINCOMMANDER_EXPERIMENTAL_SETTINGS_GENERATION").is_some_and(|value| value == "1"))
+}
+
+fn load_legacy(section: &str) -> Result<Value, String> {
     // Reading a first-run store must not require creating an administrator-owned
     // subdirectory. Only NotFound means defaults; denied/corrupt policy stays an error.
     let path = crate::paths::datastore_data_dir()?
@@ -752,6 +767,15 @@ pub(crate) fn save_with_material(
     data: &Value,
     material: &SettingsWriteMaterial,
 ) -> Result<(), String> {
+    #[cfg(all(windows, feature = "experimental-settings-generation"))]
+    if experimental_generation_routing_enabled() {
+        let (root, _pins) = settings_rotation_trial::experimental_machine_root()?;
+        return settings_rotation_trial::write_with_legacy(&root, settings_rotation_trial::StoreScope::Machine, section, data, || save_legacy_with_material(section, data, material));
+    }
+    save_legacy_with_material(section, data, material)
+}
+
+fn save_legacy_with_material(section: &str, data: &Value, material: &SettingsWriteMaterial) -> Result<(), String> {
     let path = section_path(section)?;
     let key = derive_section_key(&material.material, None)?;
     let bytes = serde_json::to_vec(data)

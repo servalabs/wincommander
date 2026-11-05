@@ -54,7 +54,7 @@ pub(super) fn pin_directories(path: &Path) -> Result<Vec<File>, String> {
 // Both directory trees stay pinned by the returned handles. This detects a
 // disagreement between the known-folder root and the legacy live resolver;
 // it does not authorize ACLs or prevent an old process using another path.
-fn pin_matching_roots(trusted: &Path, scope: StoreScope) -> Result<Vec<File>, String> {
+pub(super) fn pin_matching_roots(trusted: &Path, scope: StoreScope) -> Result<Vec<File>, String> {
     use windows_sys::Win32::Storage::FileSystem::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION};
     let live_base = match scope {
         StoreScope::Machine => std::env::var("ProgramData").or_else(|_| std::env::var("ALLUSERSPROFILE")),
@@ -128,7 +128,7 @@ fn enumerate(store: &Path) -> Result<Vec<(String, PathBuf)>, String> {
 
 // Resolve the machine root independently of process environment variables. This
 // does not establish directory ACL ownership or authorize activation.
-fn known_root(scope: StoreScope) -> Result<PathBuf, String> {
+pub(super) fn known_root(scope: StoreScope) -> Result<PathBuf, String> {
     use std::os::windows::ffi::OsStringExt;
     use windows_sys::Win32::{System::Com::CoTaskMemFree, UI::Shell::{FOLDERID_LocalAppData, FOLDERID_ProgramData, SHGetKnownFolderPath}};
     let app = Path::new(crate::paths::APP_DIR_NAME);

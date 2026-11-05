@@ -16,6 +16,8 @@ use windows_sys::Win32::{
 
 // Explicit non-inheriting protected DACL: SYSTEM/Admin full, Users read.
 const LOCK_SDDL: &str = "O:BAG:SYD:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;BU)";
+// Installer grants Users ReadAndExecute (FILE_GENERIC_READ | FILE_GENERIC_EXECUTE).
+const MACHINE_ROOT_SDDL: &str = "O:BAG:SYD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;BU)";
 const GENERIC_READ: u32 = 0x8000_0000;
 const GENERIC_WRITE: u32 = 0x4000_0000;
 const READ_CONTROL: u32 = 0x0002_0000;
@@ -45,7 +47,7 @@ unsafe fn checked_allowed_ace<'a>(ptr: *const core::ffi::c_void) -> Option<&'a A
     let header = &*ptr.cast::<ACE_HEADER>();
     let offset = std::mem::offset_of!(ACCESS_ALLOWED_ACE, SidStart);
     let size = header.AceSize as usize;
-    if header.AceType != 0 || header.AceFlags != 0 || size < offset + 8 { return None; }
+    if header.AceType != 0 || size < offset + 8 { return None; }
     let sid = ptr.cast::<u8>().add(offset);
     let revision = *sid;
     let subauthorities = *sid.add(1) as usize;
@@ -67,7 +69,7 @@ unsafe fn acl_matches(actual: *mut ACL, expected: *mut ACL) -> io::Result<bool> 
             let mut q = std::ptr::null_mut();
             if GetAce(expected, j as u32, &mut q) == 0 || q.is_null() { return Err(io::Error::last_os_error()); }
             let Some(e) = checked_allowed_ace(q) else { return Ok(false); };
-            if !seen[j as usize] && a.Mask == e.Mask && EqualSid(std::ptr::addr_of!(a.SidStart).cast_mut().cast(), std::ptr::addr_of!(e.SidStart).cast_mut().cast()) != 0 {
+            if !seen[j as usize] && a.Header.AceFlags == e.Header.AceFlags && a.Mask == e.Mask && EqualSid(std::ptr::addr_of!(a.SidStart).cast_mut().cast(), std::ptr::addr_of!(e.SidStart).cast_mut().cast()) != 0 {
                 seen[j as usize] = true; matched = true; break;
             }
         }
@@ -76,13 +78,14 @@ unsafe fn acl_matches(actual: *mut ACL, expected: *mut ACL) -> io::Result<bool> 
     Ok(true)
 }
 
-fn verify(file: &File, expected: &Descriptor) -> io::Result<()> {
+fn verify(file: &File, expected: &Descriptor, expect_directory: bool) -> io::Result<()> {
     let mut info = BY_HANDLE_FILE_INFORMATION::default();
     // SAFETY: all handles and output structures remain live through calls.
     unsafe {
         if GetFileInformationByHandle(file.as_raw_handle(), &mut info) == 0 { return Err(io::Error::last_os_error()); }
-        if info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 || info.nNumberOfLinks != 1
-            || info.dwFileAttributes & 0x10 != 0 { return Err(io::Error::other("invalid settings lock file")); }
+        let is_directory = info.dwFileAttributes & 0x10 != 0;
+        if info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 || is_directory != expect_directory
+            || (!expect_directory && info.nNumberOfLinks != 1) { return Err(io::Error::other("invalid settings security object")); }
         let mut owner = std::ptr::null_mut();
         let mut acl: *mut ACL = std::ptr::null_mut();
         let mut raw_descriptor = std::ptr::null_mut();
@@ -109,7 +112,13 @@ fn verify(file: &File, expected: &Descriptor) -> io::Result<()> {
 /// Verify the exact still-open, no-delete-sharing handle that will be locked.
 /// The caller must also pin and authorize the parent directory and its ACL.
 pub(super) fn verify_machine_handle(file: &File) -> io::Result<()> {
-    verify(file, &Descriptor::expected()?)
+    verify(file, &Descriptor::expected()?, false)
+}
+
+/// Verify the pinned machine data root against the installer ACL policy.
+/// Its ancestors and delete-child rights still require independent review.
+pub(super) fn verify_machine_root_handle(file: &File) -> io::Result<()> {
+    verify(file, &Descriptor::from_sddl(MACHINE_ROOT_SDDL)?, true)
 }
 
 /// Create once or verify an existing lock; never replace or repair an unknown
@@ -134,7 +143,7 @@ pub(super) fn provision_or_verify(root: &Path) -> io::Result<()> {
     }
     // SAFETY: CreateFileW returned a unique owned file handle.
     let file = unsafe { File::from_raw_handle(handle) };
-    verify(&file, &descriptor)
+    verify(&file, &descriptor, false)
 }
 
 #[cfg(test)]

@@ -1,9 +1,12 @@
 # Settings generation integration checkpoint
 
-The migration implementation is experimental. `experimental-settings-generation`
-only compiles the isolated seams; it does not provision a file, select a
-generation, change live datastore reads or writes, or turn on migration. The
-normal datastore retains the current main-branch format and guarded-key writes.
+The migration implementation is experimental. Normal builds retain the current
+main-branch format and guarded-key writes. A Windows build with the non-default
+`experimental-settings-generation` feature AND process environment variable
+`WINCOMMANDER_EXPERIMENTAL_SETTINGS_GENERATION=1` routes machine-section reads
+and writes through the experimental lock and authority guard. It does not
+provision the lock or initialize a generation. Current-user installs reject
+this opt-in. Do not ship or enable it before the checks below.
 
 The machine installer has a possible privileged provisioning point in
 `NSIS_HOOK_POSTINSTALL`, after `WC_REPAIR_SHARED_MACHINE_DATA_ACL_OR_ABORT`.
@@ -44,6 +47,6 @@ is not acceptance evidence.
 The gated `inspect_startup_once` seam now makes a read-only decision under a
 short-lived shared lock: no generation and no authority is `Legacy`, a verified
 stable pair is `Selected`, and a pending pair is `RecoveryRequired`. Missing
-provisioned lock, invalid files or scope mismatch are errors. It does not run
-from the application yet. Before routing, a trusted external marker must also
+provisioned lock, invalid files or scope mismatch are errors. The explicit Windows lab opt-in uses this decision in datastore reads and
+writes, not a separately wired application startup step. Before routing, a trusted external marker must also
 distinguish a first legacy start from deletion or rollback of both files.

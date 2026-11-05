@@ -439,7 +439,7 @@ impl LockedSelectedGeneration {
     /// are untouched. Interrupted initialization remains visibly pending.
     /// Root ACL authorization and old-writer exclusion remain prerequisites.
     #[cfg(windows)]
-    pub(super) fn initialize(snapshot: &mut source_snapshot::Snapshot, candidate: &[u8]) -> Result<Self, String> {
+    fn initialize(snapshot: &mut source_snapshot::Snapshot, candidate: &[u8]) -> Result<Self, String> {
         let root = snapshot.root()?;
         let selected = Self::acquire_for(&root, snapshot.scope())?;
         snapshot.verify_generation(candidate)?;
@@ -464,7 +464,7 @@ impl LockedSelectedGeneration {
 
     /// Recover initial selection only after checking the current guarded source.
     #[cfg(windows)]
-    pub(super) fn recover_initial(snapshot: &mut source_snapshot::Snapshot) -> Result<Self, String> {
+    fn recover_initial(snapshot: &mut source_snapshot::Snapshot) -> Result<Self, String> {
         let selected = Self::acquire_for(&snapshot.root()?, snapshot.scope())?;
         let candidate = read_generation_file(&selected.path, MAX_TOTAL * 2 + 65_536)?
             .ok_or("initial selected generation unavailable")?;
@@ -513,7 +513,7 @@ impl LockedSelectedGeneration {
 
 /// Read-only seam for a pre-provisioned shared lock. No automatic repair is
 /// permitted under a shared lock. Root/file ACLs and old-version fencing are
-/// prerequisites; no application route enables this seam yet.
+/// prerequisites. Only the explicitly opted-in Windows lab route uses it.
 struct ReadOnlySelectedGeneration {
     _ownership: super::settings_generation_ownership::SettingsGenerationLock,
     #[cfg(windows)]
@@ -539,15 +539,7 @@ impl ReadOnlySelectedGeneration {
         Ok(reader)
     }
     fn inspect_startup(&self) -> Result<StartupView, String> {
-        let selected = read_generation_file(&self.path, MAX_TOTAL * 2 + 65_536)?;
-        let authority = read_generation_file(&self.authority, 65_536)?;
-        let generation = selected.as_deref().map(open_generation).transpose()?;
-        if generation.as_ref().is_some_and(|g| g.scope != self.scope) { return Err("settings generation scope mismatch".into()); }
-        match super::settings_generation_authority::inspect(authority.as_deref(), selected.as_deref(), &|bytes| self.scope.unprotect(bytes))? {
-            super::settings_generation_authority::Inspection::Stable => Ok(StartupView::Selected(generation.ok_or("selected settings generation unavailable")?.sections)),
-            super::settings_generation_authority::Inspection::Legacy => Ok(StartupView::Legacy),
-            super::settings_generation_authority::Inspection::RepairRequired | super::settings_generation_authority::Inspection::InitialVerificationRequired => Ok(StartupView::RecoveryRequired),
-        }
+        inspect_generation_files(&self.path, &self.authority, self.scope)
     }
     fn read_all(&self) -> Result<BTreeMap<String, Value>, String> {
         match self.inspect_startup()? {
@@ -558,8 +550,62 @@ impl ReadOnlySelectedGeneration {
     }
 }
 
+fn inspect_generation_files(path: &Path, authority_path: &Path, scope: StoreScope) -> Result<StartupView, String> {
+    let selected = read_generation_file(path, MAX_TOTAL * 2 + 65_536)?;
+    let authority = read_generation_file(authority_path, 65_536)?;
+    let generation = selected.as_deref().map(open_generation).transpose()?;
+    if generation.as_ref().is_some_and(|g| g.scope != scope) { return Err("settings generation scope mismatch".into()); }
+    match super::settings_generation_authority::inspect(authority.as_deref(), selected.as_deref(), &|bytes| scope.unprotect(bytes))? {
+        super::settings_generation_authority::Inspection::Stable => Ok(StartupView::Selected(generation.ok_or("selected settings generation unavailable")?.sections)),
+        super::settings_generation_authority::Inspection::Legacy => Ok(StartupView::Legacy),
+        super::settings_generation_authority::Inspection::RepairRequired | super::settings_generation_authority::Inspection::InitialVerificationRequired => Ok(StartupView::RecoveryRequired),
+    }
+}
+
+/// Keep shared ownership through a legacy read or selected-generation read.
+pub(super) fn read_with_legacy(root: &Path, scope: StoreScope, section: &str, legacy: impl FnOnce() -> Result<Value, String>) -> Result<Value, String> {
+    let owner = ReadOnlySelectedGeneration::acquire(root, scope)?;
+    match owner.inspect_startup()? {
+        StartupView::Legacy => legacy(),
+        StartupView::Selected(mut sections) => match sections.remove(section) {
+            Some(value) => Ok(value),
+            None if section == "f6-keystore" => Err("device signing key is missing from the selected settings generation".into()),
+            None => Ok(Value::Object(Default::default())),
+        },
+        StartupView::RecoveryRequired => Err("settings generation requires authorized recovery".into()),
+    }
+}
+
+/// Keep exclusive ownership through either a legacy save or a selected write.
+pub(super) fn write_with_legacy(root: &Path, scope: StoreScope, section: &str, value: &Value, legacy: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
+    let owner = LockedSelectedGeneration::acquire_for(root, scope)?;
+    match inspect_generation_files(&owner.path, &owner.authority, scope)? {
+        StartupView::Legacy => legacy(),
+        StartupView::Selected(sections) => {
+            if section == "f6-keystore" && !sections.contains_key(section) { return Err("device signing key is missing from the selected settings generation".into()); }
+            owner.write_section(section, value.clone())
+        },
+        StartupView::RecoveryRequired => Err("settings generation requires authorized recovery".into()),
+    }
+}
+
+/// Resolve and pin the machine root for the explicit lab route. Current-user
+/// and standard-user access are not yet production validated.
+#[cfg(windows)]
+pub(super) fn experimental_machine_root() -> Result<(PathBuf, Vec<std::fs::File>), String> {
+    if crate::paths::current_user_install_uses_local_datastore() {
+        return Err("experimental generation routing is unavailable for current-user installs".into());
+    }
+    let root = source_snapshot::known_root(StoreScope::Machine)?;
+    let pins = source_snapshot::pin_matching_roots(&root, StoreScope::Machine)?;
+    let root_handle = pins.last().ok_or("settings root unavailable")?;
+    super::settings_generation_acl_windows::verify_machine_root_handle(root_handle)
+        .map_err(|_| "settings root permissions are not authorized")?;
+    Ok((root, pins))
+}
+
 /// Read-only startup decision; callers must not fall back to legacy when this
-/// reports recovery or an error. This seam is not wired to normal startup.
+/// reports recovery or an error. The Windows lab route uses the same decision.
 #[derive(Debug, PartialEq)]
 pub(super) enum StartupView {
     Legacy,
