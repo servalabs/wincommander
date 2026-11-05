@@ -3140,6 +3140,12 @@ fn write_settings_under_lease(
     if machine_changed && !machine_writer {
         return Err("Administrator privileges are required to change machine settings.".into());
     }
+    // Check and hold the machine key before persisting the personal partition.
+    let material = if machine_changed {
+        Some(crate::datastore::settings_write_material()?)
+    } else {
+        None
+    };
     legacy_migration::before_persistence(&machine, &user)?;
     let service_backed = personal_settings::save(&user)?;
 
@@ -3150,8 +3156,12 @@ fn write_settings_under_lease(
     let res = if !machine_changed {
         Ok(())
     } else {
-        crate::datastore::save("settings", &machine)
-            .map_err(|error| format!("Failed to persist machine-scoped settings: {error}"))
+        crate::datastore::save_with_material(
+            "settings",
+            &machine,
+            material.as_ref().ok_or("Settings key unavailable")?,
+        )
+        .map_err(|error| format!("Failed to persist machine-scoped settings: {error}"))
     };
     if let Err(ref e) = res {
         crate::log_message(

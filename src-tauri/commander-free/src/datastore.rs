@@ -150,6 +150,7 @@ fn dpapi_unprotect(blob: &[u8]) -> Result<Vec<u8>, String> {
     use windows_sys::Win32::Security::Cryptography::{
         CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
     };
+    use zeroize::Zeroize;
     unsafe {
         let in_blob = CRYPT_INTEGER_BLOB {
             cbData: blob.len() as u32,
@@ -171,8 +172,23 @@ fn dpapi_unprotect(blob: &[u8]) -> Result<Vec<u8>, String> {
         if ok == 0 {
             return Err("CryptUnprotectData failed".to_string());
         }
-        let out = std::slice::from_raw_parts(out_blob.pbData, out_blob.cbData as usize).to_vec();
-        LocalFree(out_blob.pbData as _);
+        let len = out_blob.cbData as usize;
+        if len != 0 && out_blob.pbData.is_null() {
+            return Err("CryptUnprotectData returned invalid output".to_string());
+        }
+        let out = if len == 0 {
+            Vec::new()
+        } else {
+            std::slice::from_raw_parts(out_blob.pbData, len).to_vec()
+        };
+        if !out_blob.pbData.is_null() {
+            // DPAPI owns this allocation until LocalFree; wipe its plaintext
+            // separately from the returned copy.
+            if len != 0 {
+                std::slice::from_raw_parts_mut(out_blob.pbData, len).zeroize();
+            }
+            LocalFree(out_blob.pbData as _);
+        }
         Ok(out)
     }
 }
@@ -221,6 +237,7 @@ fn user_dpapi_unprotect(blob: &[u8]) -> Result<Vec<u8>, String> {
     use windows_sys::Win32::Security::Cryptography::{
         CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
     };
+    use zeroize::Zeroize;
     unsafe {
         let in_blob = CRYPT_INTEGER_BLOB {
             cbData: blob.len() as u32,
@@ -243,8 +260,21 @@ fn user_dpapi_unprotect(blob: &[u8]) -> Result<Vec<u8>, String> {
         {
             return Err("current-user material unprotection failed".to_string());
         }
-        let out = std::slice::from_raw_parts(out_blob.pbData, out_blob.cbData as usize).to_vec();
-        LocalFree(out_blob.pbData as _);
+        let len = out_blob.cbData as usize;
+        if len != 0 && out_blob.pbData.is_null() {
+            return Err("current-user material unprotection returned invalid output".to_string());
+        }
+        let out = if len == 0 {
+            Vec::new()
+        } else {
+            std::slice::from_raw_parts(out_blob.pbData, len).to_vec()
+        };
+        if !out_blob.pbData.is_null() {
+            if len != 0 {
+                std::slice::from_raw_parts_mut(out_blob.pbData, len).zeroize();
+            }
+            LocalFree(out_blob.pbData as _);
+        }
         Ok(out)
     }
 }
@@ -604,11 +634,110 @@ fn read_section_file(path: &std::path::Path, section: &str) -> Result<Option<Str
     }
 }
 
+// Reads may still recover a legacy plaintext material file. New ciphertext must
+// not be written unless the material used for it has been protected and can
+// still be reopened; otherwise a copied disk exposes both ciphertext and key.
+pub(crate) struct SettingsWriteMaterial {
+    material: zeroize::Zeroizing<[u8; 32]>,
+    _material_guard: Option<std::fs::File>,
+}
+
+pub(crate) fn settings_write_material() -> Result<SettingsWriteMaterial, String> {
+    let material = install_material()?;
+    #[cfg(not(windows))]
+    return Ok(SettingsWriteMaterial {
+        material: zeroize::Zeroizing::new(material),
+        _material_guard: None,
+    });
+
+    #[cfg(windows)]
+    {
+        let user_install = crate::paths::current_user_install_uses_local_datastore();
+        let path = if user_install {
+            crate::paths::user_data_dir()?.join(USER_MATERIAL_FILENAME)
+        } else {
+            crate::paths::datastore_data_dir()?.join(MATERIAL_FILENAME)
+        };
+        let file = open_verified_write_material(&path, &material, |bytes| {
+            if user_install {
+                unprotect_user_store_material(bytes, true)
+            } else {
+                dpapi_unprotect(bytes)
+            }
+        })?;
+        Ok(SettingsWriteMaterial {
+            material: zeroize::Zeroizing::new(material),
+            _material_guard: Some(file),
+        })
+    }
+}
+
+#[cfg(windows)]
+fn open_verified_write_material(
+    path: &std::path::Path,
+    material: &[u8; 32],
+    unprotect: impl FnOnce(&[u8]) -> Result<Vec<u8>, String>,
+) -> Result<std::fs::File, String> {
+    use std::io::Read;
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+    // Hold a read-only handle that denies writes and replacement until the
+    // encrypted section is committed. Refuse a reparse-point key file.
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(1)
+        .custom_flags(0x0020_0000)
+        .open(path)
+        .map_err(|_| "Settings key unavailable; existing data preserved.")?;
+    let metadata = file
+        .metadata()
+        .map_err(|_| "Settings key unavailable; existing data preserved.")?;
+    if !metadata.is_file() || metadata.file_attributes() & 0x400 != 0 || metadata.len() > 65536 {
+        return Err("Settings key unavailable; existing data preserved.".into());
+    }
+    let mut raw = Vec::new();
+    (&mut file)
+        .take(65537)
+        .read_to_end(&mut raw)
+        .map_err(|_| "Settings key unavailable; existing data preserved.")?;
+    if raw.len() > 65536 {
+        return Err("Settings key unavailable; existing data preserved.".into());
+    }
+    verify_write_material(material, Some(&raw), unprotect)?;
+    Ok(file)
+}
+
+#[cfg(any(windows, test))]
+fn verify_write_material(
+    expected: &[u8; 32],
+    raw: Option<&[u8]>,
+    unprotect: impl FnOnce(&[u8]) -> Result<Vec<u8>, String>,
+) -> Result<(), String> {
+    let error = "Settings key is not protected or has changed; existing data preserved.";
+    let raw = raw.ok_or(error)?;
+    if raw.len() == 32 {
+        return Err(error.into());
+    }
+    let actual = zeroize::Zeroizing::new(unprotect(raw).map_err(|_| error)?);
+    if actual.as_slice() != expected {
+        return Err(error.into());
+    }
+    Ok(())
+}
+
 /// Write a settings section to disk (replaces the full section).
 pub fn save(section: &str, data: &Value) -> Result<(), String> {
+    validate_section_name(section)?;
+    let material = settings_write_material()?;
+    save_with_material(section, data, &material)
+}
+
+pub(crate) fn save_with_material(
+    section: &str,
+    data: &Value,
+    material: &SettingsWriteMaterial,
+) -> Result<(), String> {
     let path = section_path(section)?;
-    let material = install_material()?;
-    let key = derive_section_key(&material, None)?;
+    let key = derive_section_key(&material.material, None)?;
     let bytes = serde_json::to_vec(data)
         .map_err(|e| format!("Failed to serialise section '{section}': {e}"))?;
     let encoded = encode_section(&key, &bytes, &format!("machine:{section}"))?;
@@ -925,6 +1054,36 @@ pub fn log_decrypt_line(line: &str) -> Option<(String, String)> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    #[test]
+    fn settings_writes_require_the_current_protected_material() {
+        let material = [42u8; 32];
+        let protected = super::dpapi_protect(&material).unwrap();
+        super::verify_write_material(&material, Some(&protected), super::dpapi_unprotect).unwrap();
+        assert!(super::verify_write_material(&material, None, super::dpapi_unprotect).is_err());
+        assert!(super::verify_write_material(&material, Some(&material), |_| {
+            panic!("legacy plaintext must not be accepted for writes")
+        }).is_err());
+        assert!(super::verify_write_material(&[43u8; 32], Some(&protected), super::dpapi_unprotect).is_err());
+        assert!(super::verify_write_material(&material, Some(&[1u8; 64]), super::dpapi_unprotect).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn settings_write_guard_holds_protected_material_against_replacement() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("key");
+        let material = [23u8; 32];
+        let protected = super::dpapi_protect(&material).unwrap();
+        std::fs::write(&path, &protected).unwrap();
+        let guard = super::open_verified_write_material(&path, &material, super::dpapi_unprotect).unwrap();
+        assert!(std::fs::write(&path, b"changed").is_err());
+        assert!(std::fs::remove_file(&path).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), protected);
+        drop(guard);
+        std::fs::write(&path, b"changed").unwrap();
+    }
+
     #[test]
     fn log_writes_reject_plaintext_unavailable_or_changed_material() {
         let material = [4u8; 32];
