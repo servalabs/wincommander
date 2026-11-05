@@ -113,3 +113,15 @@ jobs:
       - name: Exercise service state transitions without changing real services
         shell: pwsh
         run: ./tools/test-settings-stage-service.ps1
+      - name: Check real SCM missing-service behavior
+        shell: pwsh
+        run: |
+          if (Get-Service -Name WinCommanderSvc -ErrorAction SilentlyContinue) { throw 'Fixture refuses to touch an existing service.' }
+          $script = 'src-tauri/commander-free/nsis/settings-stage-service.ps1'
+          & pwsh -NoProfile -NonInteractive -File $script -Action Status
+          if ($LASTEXITCODE -ne 0) { throw 'Missing-service status was not recognized.' }
+          & pwsh -NoProfile -NonInteractive -File $script -Action Stop
+          if ($LASTEXITCODE -ne 0) { throw 'Missing-service stop was not recognized.' }
+          & pwsh -NoProfile -NonInteractive -File $script -Action Restore
+          if ($LASTEXITCODE -ne 255) { throw 'Missing-service restoration was not rejected.' }
+          $global:LASTEXITCODE = 0
