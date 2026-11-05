@@ -7479,6 +7479,7 @@ dependencies = [
 name = "wincmd-search"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
  "calamine",
  "globset",
  "hex",
@@ -7486,6 +7487,7 @@ dependencies = [
  "notify",
  "once_cell",
  "quick-xml",
+ "rand 0.8.8",
  "serde",
  "serde_json",
  "sha2 0.11.1",

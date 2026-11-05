@@ -7,6 +7,8 @@
 //! Unit D: tantivy index, hit-merge helper, and SearchEngine facade.
 
 pub mod backend;
+#[cfg(test)]
+mod encrypted_index_prototype;
 pub mod chunk;
 pub mod crawler;
 #[cfg(windows)]
