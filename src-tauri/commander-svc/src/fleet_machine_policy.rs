@@ -1458,6 +1458,22 @@ mod tests {
     }
 
     #[test]
+    fn hybrid_claim_is_revoked_by_clear_and_replacement() {
+        let (_, store) = hybrid_ready();
+        let offer = store.begin_hybrid_enrollment(&trust(), "https://fleet.example", "S-1-5-21-7", 7).unwrap();
+        let claim = store.claim_hybrid_enrollment(&offer.authorization_id, "S-1-5-21-7", 7, &hybrid_request(&offer)).unwrap();
+        let (_, _, token, connection, _) = store.contact_state().unwrap().unwrap();
+        assert!(store.clear_credential(&token.unwrap(), &connection).unwrap());
+        assert!(!store.hybrid_claim_is_current(&claim));
+
+        let offer = store.begin_hybrid_enrollment(&trust(), "https://fleet.example", "S-1-5-21-7", 7).unwrap();
+        let claim = store.claim_hybrid_enrollment(&offer.authorization_id, "S-1-5-21-7", 7, &hybrid_request(&offer)).unwrap();
+        assert!(store.hybrid_claim_is_current(&claim));
+        store.begin_hybrid_enrollment(&trust(), "https://fleet.example", "S-1-5-21-7", 7).unwrap();
+        assert!(!store.hybrid_claim_is_current(&claim));
+    }
+
+    #[test]
     fn hybrid_claim_rejects_malformed_or_tampered_requests_and_burns_the_grant() {
         let (_, store) = hybrid_ready();
         for mode in 0..10 {
