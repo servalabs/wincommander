@@ -410,7 +410,7 @@ mod tests {
         let key_path = dir.path().join("key");
         let original = format!("{}\n", serde_json::to_string(&entry()).unwrap());
         fs::write(&path, &original).unwrap();
-        let deferred = read(
+        assert!(read(
             &path,
             &|| Ok(Some(legacy.clone())),
             &key_path,
@@ -422,8 +422,7 @@ mod tests {
                 }
             },
         )
-        .unwrap();
-        assert_eq!(deferred.entries.len(), 1);
+        .is_err());
         fs::write(&path, "{}\n").unwrap();
         assert!(read(
             &path,
@@ -577,7 +576,7 @@ mod tests {
             format!("{}\n", serde_json::to_string(&entry()).unwrap()),
         )
         .unwrap();
-        assert!(read(
+        let deferred = read(
             &path,
             &|| Ok(Some(legacy.clone())),
             &key_path,
@@ -587,9 +586,10 @@ mod tests {
                 } else {
                     crate::datastore_io::atomic_write(target, bytes)
                 }
-            }
+            },
         )
-        .is_err());
+        .unwrap();
+        assert_eq!(deferred.entries.len(), 1);
         assert_eq!(fs::read(&path).unwrap(), before);
         let loaded = read(
             &path,
