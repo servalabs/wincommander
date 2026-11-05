@@ -485,6 +485,46 @@ fn released_snapshot_with_anchor(
     Ok((bytes, generation))
 }
 
+/// Reopen a prepared snapshot without consulting the cache file. The callback
+/// must still authenticate the matching credential and durable acknowledgement;
+/// this function alone does not authorize any cleanup.
+pub(super) fn with_prepared_release_recovery<T>(
+    public_key: &str, trust: &wincmd_pq_experiment::jws::Trust<'_>,
+    operation: impl FnOnce(&super::release_gate::PreparedRelease, &DeviceLicenceSnapshot, Vec<u8>) -> Result<T, &'static str>,
+) -> Result<Option<T>, &'static str> {
+    let gate = super::release_gate::machine();
+    let anchor = anchor::Anchor::machine_named(r"SOFTWARE\ServaLabs\WinCommander\HybridLicence");
+    with_prepared_release_recovery_at(public_key, trust, &gate, &anchor, operation)
+}
+
+fn with_prepared_release_recovery_at<T>(
+    public_key: &str, trust: &wincmd_pq_experiment::jws::Trust<'_>, gate: &anchor::Anchor, anchor: &anchor::Anchor,
+    operation: impl FnOnce(&super::release_gate::PreparedRelease, &DeviceLicenceSnapshot, Vec<u8>) -> Result<T, &'static str>,
+) -> Result<Option<T>, &'static str> {
+    let old_trust = history::configured(trust)?;
+    let _lock = WRITE_LOCK.lock().map_err(|_| "license cache lock is unavailable")?;
+    let _process_lock = crate::licence_security_lock()?;
+    let Some(journal) = super::release_gate::prepared_at(gate)? else { return Ok(None); };
+    let cached: ExistingCache = serde_json::from_slice(&journal.cache).map_err(|_| "license cache is invalid")?;
+    let time = cached.last_verified_at.ok_or("license cache verification time is missing")?;
+    let request = StoreLicenseCacheRequest { payload: cached.token.payload, signature: cached.token.signature,
+        hybrid: Some(cached.token.hybrid.ok_or("hybrid license is required")?),
+        seats_used: cached.seats_used, seat_limit: cached.seat_limit };
+    let claims: RefreshClaims = serde_json::from_str(&request.payload).map_err(|_| "license cache is invalid")?;
+    if claims.license_id != journal.licence_id || claims.device_hash != journal.device_hash
+        || claims.activation_generation != Some(journal.generation) {
+        return Err("license release does not match security history");
+    }
+    let wire = build_refresh_wire(&request, public_key, trust, &claims.license_id, &claims.device_hash)?;
+    let retained = anchor.read().map_err(|_| "license security record is unavailable")?
+        .ok_or("license security record is unavailable")?;
+    ledger::verify_released_current(&retained, &request, time, &journal.cache, public_key, trust, old_trust.as_ref())?;
+    let snapshot = DeviceLicenceSnapshot { payload: request.payload, signature: request.signature,
+        hybrid: request.hybrid.ok_or("hybrid license is required")?, last_verified_at: time,
+        licence_id: claims.license_id, device_hash: claims.device_hash };
+    operation(&journal, &snapshot, wire).map(Some)
+}
+
 #[cfg(test)]
 fn check_previous(
     bytes: &[u8],

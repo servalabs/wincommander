@@ -259,7 +259,30 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
     assert!(load_snapshot_with_anchor_mode(&retired_path, &public, &current, &reopened_anchor, true).is_ok());
     mark_acknowledged_release_with_anchor(&retired_path, &generation_two, 99, &public, &current, &reopened_anchor).unwrap();
     assert!(mark_acknowledged_release_with_anchor(&retired_path, &generation_one_later, 99, &public, &current, &reopened_anchor).is_err());
+    let recovery_gate_path = format!(r"SOFTWARE\WinCommanderReleaseRecoveryTest-{}", uuid::Uuid::new_v4());
+    let recovery_gate = anchor::Anchor::test_user(recovery_gate_path.clone());
+    let context = [8; 32];
+    super::super::release_gate::begin_at(&recovery_gate, &context).unwrap();
+    super::super::release_gate::bind_request_at(&recovery_gate, &context, b"release").unwrap();
+    super::super::release_gate::prepare_finalization_at(&recovery_gate, &context, b"release", "lic-a", "device", &[3; 32], 2, &cache(&generation_two)).unwrap();
+    let journal_bytes = recovery_gate.read().unwrap().unwrap();
     fs::remove_file(&retired_path).unwrap();
+    let read_again = || with_prepared_release_recovery_at(&public, &current, &anchor::Anchor::test_user(recovery_gate_path.clone()),
+        &anchor::Anchor::test_user(retired_anchor_path.clone()), |journal, snapshot, wire| {
+            assert_eq!(journal.context, context);
+            assert_eq!(journal.credential_id, [3; 32]);
+            assert_eq!(snapshot.licence_id, "lic-a");
+            assert!(!wire.is_empty());
+            Ok(())
+        });
+    assert!(matches!(read_again(), Ok(Some(()))));
+    let mut modified: serde_json::Value = serde_json::from_slice(&journal_bytes).unwrap();
+    modified["finalization"]["generation"] = 3.into();
+    recovery_gate.write(&serde_json::to_vec(&modified).unwrap()).unwrap();
+    assert!(read_again().is_err());
+    recovery_gate.write(&journal_bytes).unwrap();
+    assert!(matches!(read_again(), Ok(Some(()))));
+    anchor::remove_test_key(&recovery_gate_path).unwrap();
     anchor::remove_test_key(&retired_anchor_path).unwrap();
     let renewal_path = renewal_dir.join("license_cache.json");
     let renewal_anchor_path = format!(

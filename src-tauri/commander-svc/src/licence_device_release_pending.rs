@@ -155,6 +155,38 @@ fn prepare_finalization_locked(
         binding.device_hash, &credential.id, generation, &cache)
 }
 
+/// Recheck the prepared journal, retired licence, exact credential, request and
+/// durable acknowledgement without using the original cache file. This is a
+/// read-only preflight; deletion and marker cleanup remain unimplemented.
+pub(crate) fn verify_prepared_recovery(
+    trust: &wincmd_pq_experiment::jws::Trust<'_>, now: u64,
+) -> Result<bool, &'static str> {
+    let _guard = LOCK.lock().map_err(|_| INVALID)?;
+    let verified = crate::license_cache::with_prepared_release_recovery(|journal, _snapshot, body| {
+        let binding = Binding { licence_id: &journal.licence_id, device_hash: &journal.device_hash,
+            issuer_origin: wire::LICENCE_ORIGIN };
+        let credential_anchor = selected_machine_anchor_locked(&binding, trust, now)?;
+        let bytes = credential_anchor.read().map_err(|_| INVALID)?.ok_or(INVALID)?;
+        let credential = decode_confirmed(&MachineDpapi, &binding, trust, &bytes, now)?;
+        verify_prepared_ack(&release_anchor(&binding)?, &crate::license_cache::release_gate::machine(),
+            &MachineDpapi, &binding, &credential, &body, journal)
+    })?;
+    Ok(verified.is_some())
+}
+
+fn verify_prepared_ack(
+    store: &anchor::Anchor, gate: &anchor::Anchor, protector: &dyn Protector, binding: &Binding<'_>,
+    credential: &ConfirmedCredential, body: &[u8], journal: &crate::license_cache::release_gate::PreparedRelease,
+) -> Result<(), &'static str> {
+    if credential.id != journal.credential_id || binding.licence_id != journal.licence_id
+        || binding.device_hash != journal.device_hash || release_entropy(binding, credential, body)? != journal.context {
+        return Err(INVALID);
+    }
+    let saved = load_locked(store, protector, binding, credential, body)?.ok_or(INVALID)?;
+    if !saved.acknowledged { return Err(INVALID); }
+    crate::license_cache::release_gate::check_request_at(gate, &journal.context, Some(&saved.request))
+}
+
 /// Save and read back before any network send. Existing state cannot be replaced.
 pub(crate) fn stage(
     binding: &Binding<'_>, trust: &wincmd_pq_experiment::jws::Trust<'_>, licence: &RefreshLicence<'_>, now: u64, request: &[u8],
@@ -322,7 +354,19 @@ mod tests {
         assert!(acknowledge_locked(&store, &MachineDpapi, &binding, &credential, body, &alternate, &ack_confirmation).is_err());
         assert!(acknowledge_locked(&store, &MachineDpapi, &binding, &credential, body, &request, &release_confirmation).is_err());
         assert!(!load_locked(&store, &MachineDpapi, &binding, &credential, body).unwrap().unwrap().acknowledged);
+        crate::license_cache::release_gate::prepare_finalization_at(&gate, &context, &request,
+            binding.licence_id, binding.device_hash, &credential.id, 2, b"signed cache").unwrap();
+        let before_ack = crate::license_cache::release_gate::prepared_at(&gate).unwrap().unwrap();
+        assert!(verify_prepared_ack(&store, &gate, &MachineDpapi, &binding, &credential, body, &before_ack).is_err());
         acknowledge_locked(&store, &MachineDpapi, &binding, &credential, body, &request, &ack_confirmation).unwrap();
+        crate::license_cache::release_gate::prepare_finalization_at(&gate, &context, &request,
+            binding.licence_id, binding.device_hash, &credential.id, 2, b"signed cache").unwrap();
+        let prepared = crate::license_cache::release_gate::prepared_at(&anchor::Anchor::test_user(gate_path.clone())).unwrap().unwrap();
+        assert!(verify_prepared_ack(&store, &gate, &MachineDpapi, &binding, &credential, body, &prepared).is_ok());
+        assert!(verify_prepared_ack(&store, &gate, &MachineDpapi, &binding, &credential, b"changed", &prepared).is_err());
+        assert!(verify_prepared_ack(&store, &gate, &MachineDpapi, &binding, &other, body, &prepared).is_err());
+        let wrong_binding = Binding { licence_id: "other", ..binding };
+        assert!(verify_prepared_ack(&store, &gate, &MachineDpapi, &wrong_binding, &credential, body, &prepared).is_err());
         let acknowledged = load_locked(&anchor::Anchor::test_user(path.clone()), &MachineDpapi, &binding, &credential, body).unwrap().unwrap();
         assert!(acknowledged.confirmed && acknowledged.acknowledged);
         assert_eq!(acknowledged.request.as_slice(), request);

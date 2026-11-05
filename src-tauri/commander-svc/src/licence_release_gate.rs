@@ -34,6 +34,15 @@ struct Finalization {
     cache_digest: String,
 }
 
+pub(crate) struct PreparedRelease {
+    pub context: [u8; 32],
+    pub licence_id: String,
+    pub device_hash: String,
+    pub credential_id: [u8; 32],
+    pub generation: u64,
+    pub cache: Vec<u8>,
+}
+
 fn canonical_fixed(value: &str, length: usize) -> bool {
     URL_SAFE_NO_PAD.decode(value).ok().filter(|bytes| bytes.len() == length && URL_SAFE_NO_PAD.encode(bytes) == value).is_some()
 }
@@ -92,6 +101,24 @@ fn persist(store: &Anchor, marker: &Marker, context: &[u8; 32]) -> Result<(), &'
         return Err(INVALID);
     }
     Ok(())
+}
+
+/// Read an already prepared record. This does not authenticate its licence,
+/// credential or acknowledgement and never authorizes a deletion by itself.
+pub(crate) fn prepared_at(store: &Anchor) -> Result<Option<PreparedRelease>, &'static str> {
+    if !store.exists().map_err(|_| INVALID)? { return Ok(None); }
+    let bytes = store.read().map_err(|_| INVALID)?.ok_or(INVALID)?;
+    let preliminary: Marker = serde_json::from_slice(&bytes).map_err(|_| INVALID)?;
+    let context: [u8; 32] = URL_SAFE_NO_PAD.decode(&preliminary.context).map_err(|_| INVALID)?
+        .try_into().map_err(|_| INVALID)?;
+    if URL_SAFE_NO_PAD.encode(context) != preliminary.context { return Err(INVALID); }
+    let marker = read(store, &context)?;
+    let Some(value) = marker.finalization else { return Ok(None); };
+    let credential_id = URL_SAFE_NO_PAD.decode(&value.credential_id).map_err(|_| INVALID)?
+        .try_into().map_err(|_| INVALID)?;
+    let cache = URL_SAFE_NO_PAD.decode(&value.cache).map_err(|_| INVALID)?;
+    Ok(Some(PreparedRelease { context, licence_id: value.licence_id, device_hash: value.device_hash,
+        credential_id, generation: value.generation, cache }))
 }
 
 /// Caller holds both the cache and cross-process licence locks.
@@ -222,6 +249,9 @@ mod tests {
         assert!(prepare(b"cache", 0).is_err());
         prepare(b"cache", 2).unwrap();
         prepare(b"cache", 2).unwrap();
+        let journal = prepared_at(&Anchor::test_user(path.clone())).unwrap().unwrap();
+        assert_eq!((journal.context, journal.credential_id, journal.generation), (context, [3; 32], 2));
+        assert_eq!((journal.licence_id.as_str(), journal.device_hash.as_str(), journal.cache.as_slice()), ("licence", "device", b"cache".as_slice()));
         assert!(prepare(b"different", 2).is_err());
         assert!(prepare(b"cache", 3).is_err());
         assert!(ensure_idle_at(&Anchor::test_user(path.clone())).is_err());

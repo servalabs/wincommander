@@ -412,6 +412,16 @@ pub(crate) fn released_snapshot_locked(payload: &str, signature: &str, hybrid: &
     rollback::released_snapshot_locked(&machine_license_cache_path()?, &request, last_verified_at, public, &trust.policy())
 }
 
+/// Reverify a journal's retired cache without requiring the original file.
+#[cfg(feature = "experimental-pq-licence")]
+pub(crate) fn with_prepared_release_recovery<T>(
+    operation: impl FnOnce(&release_gate::PreparedRelease, &DeviceLicenceSnapshot, Vec<u8>) -> Result<T, &'static str>,
+) -> Result<Option<T>, &'static str> {
+    let public = service_public_key().ok_or("license verification is unavailable")?;
+    let trust = hybrid_trust::configured()?;
+    rollback::with_prepared_release_recovery(public, &trust.policy(), operation)
+}
+
 #[cfg(feature = "experimental-pq-licence")]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
