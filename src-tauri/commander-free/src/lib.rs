@@ -3195,6 +3195,7 @@ pub fn run() {
             print_log::get_print_audit_log,
             evidence::evidence_record,
             evidence::evidence_read,
+            evidence::evidence_status,
             evidence::evidence_clear,
             evidence_vault::export_evidence_vault,
             evidence_vault::verify_evidence_vault,

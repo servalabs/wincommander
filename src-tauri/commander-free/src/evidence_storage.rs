@@ -33,7 +33,9 @@ pub(super) struct Ledger {
     #[serde(default)]
     machine_source_records: Option<Vec<[u8; 32]>>,
     #[serde(default)]
-    history_gap_unverified: bool,
+    pub(super) history_gap_unverified: bool,
+    #[serde(skip)]
+    pub(super) profile_import_pending: bool,
 }
 impl Drop for KeyState {
     fn drop(&mut self) {
@@ -239,6 +241,7 @@ pub(super) fn read(
                 machine_source_length: None,
                 machine_source_records: None,
                 history_gap_unverified: false,
+                profile_import_pending: false,
             };
             let bytes = serde_json::to_vec(&value).map_err(|_| "Cannot encode evidence")?;
             let sealed = crate::datastore::encode_section(&state.material, &bytes, SCOPE)?;
@@ -254,6 +257,7 @@ pub(super) fn read(
     if ledger.skip_future_imports {
         return Ok(ledger);
     }
+    let mut old_profile_present = false;
     let candidate = (|| -> Result<Option<(PathBuf, Vec<EvidenceEntry>)>, String> {
         let Some(old) = legacy()? else {
             return Ok(None);
@@ -263,6 +267,7 @@ pub(super) fn read(
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(_) => return Err("Cannot identify old evidence ledger".into()),
         };
+        old_profile_present = true;
         if ledger.imported_profiles.contains(&identity) {
             return Ok(None);
         }
@@ -283,6 +288,7 @@ pub(super) fn read(
         }
         Ok(Some((identity, prior)))
     })();
+    ledger.profile_import_pending |= old_profile_present;
     let candidate = match candidate {
         Ok(value) => value,
         Err(_) => {
@@ -291,6 +297,7 @@ pub(super) fn read(
                 "warn",
                 "Legacy evidence import is pending; original preserved",
             );
+            ledger.profile_import_pending = true;
             None
         }
     };
@@ -304,12 +311,13 @@ pub(super) fn read(
         ledger.imported_profiles.push(identity);
         if let Err(error) = write(path, key_path, &ledger, persist) {
             let recovered = reload_verified(path, key_path, persist);
-            if let Ok(actual) = recovered {
+            if let Ok(mut actual) = recovered {
                 #[cfg(not(test))]
                 crate::log::log_message(
                     "warn",
                     "Legacy evidence import could not be published; retry pending",
                 );
+                actual.profile_import_pending = true;
                 return Ok(actual);
             }
             return Err(error);
@@ -354,6 +362,36 @@ fn machine_snapshot(path: &Path) -> Result<Option<String>, String> {
     String::from_utf8(bytes)
         .map(Some)
         .map_err(|_| "Old machine evidence is malformed; original preserved".into())
+}
+
+/// Inspect protected status without importing or changing either source.
+pub(super) fn read_only_status(
+    path: &Path,
+    machine_source: &Path,
+    legacy: &impl Fn() -> Result<Option<PathBuf>, String>,
+    key_path: &Path,
+    persist: &impl Fn(&Path, &[u8]) -> Result<(), String>,
+) -> Result<bool, String> {
+    let ledger = match fs::symlink_metadata(path) {
+        Ok(_) => reload_verified(path, key_path, persist)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            empty_or_missing(key_path, persist)?
+        }
+        Err(error) => return Err(format!("Cannot inspect evidence ledger: {error}")),
+    };
+    let mut needs_review = ledger.history_gap_unverified;
+    if let Some(raw) = machine_snapshot(machine_source)? {
+        needs_review |= ledger.skip_future_imports
+            || ledger.machine_source_digest.as_deref() != Some(digest(&raw).as_str());
+    }
+    if let Some(profile) = legacy()? {
+        match fs::symlink_metadata(profile) {
+            Ok(_) => needs_review = true,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("Cannot inspect old evidence profile: {error}")),
+        }
+    }
+    Ok(needs_review)
 }
 
 /// The old filename remains available to old binaries, but can no longer
@@ -574,6 +612,7 @@ mod tests {
                 machine_source_length: None,
                 machine_source_records: None,
                 history_gap_unverified: false,
+                profile_import_pending: false,
             },
             &crate::datastore_io::atomic_write,
         )
@@ -637,6 +676,7 @@ mod tests {
             machine_source_length: None,
             machine_source_records: None,
             history_gap_unverified: false,
+            profile_import_pending: false,
         })
         .unwrap();
         let sealed = crate::datastore::encode_section(&state.material, &bytes, SCOPE).unwrap();
@@ -675,6 +715,7 @@ mod tests {
                 machine_source_length: None,
                 machine_source_records: None,
                 history_gap_unverified: false,
+                profile_import_pending: false,
             },
             &crate::datastore_io::atomic_write,
         )
@@ -705,6 +746,7 @@ mod tests {
                 machine_source_length: None,
                 machine_source_records: None,
                 history_gap_unverified: false,
+                profile_import_pending: false,
             },
             &crate::datastore_io::atomic_write,
         )
@@ -744,6 +786,7 @@ mod tests {
                 machine_source_length: None,
                 machine_source_records: None,
                 history_gap_unverified: false,
+                profile_import_pending: false,
             },
             &crate::datastore_io::atomic_write,
         )
@@ -782,6 +825,7 @@ mod tests {
                 machine_source_length: None,
                 machine_source_records: None,
                 history_gap_unverified: false,
+                profile_import_pending: false,
             },
             &crate::datastore_io::atomic_write,
         )
@@ -846,6 +890,7 @@ mod tests {
                 machine_source_length: None,
                 machine_source_records: None,
                 history_gap_unverified: false,
+                profile_import_pending: false,
             },
             &|target, bytes| {
                 published.lock().unwrap().push(target.to_path_buf());
@@ -949,7 +994,45 @@ mod tests {
         .unwrap();
         assert_eq!(ledger.entries.len(), 1);
         assert!(ledger.imported_profiles.is_empty());
+        assert!(ledger.profile_import_pending);
         assert_eq!(fs::read(&legacy).unwrap(), b"malformed old data");
+    }
+
+    #[test]
+    fn status_reports_retained_profile_and_never_writes_or_imports_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("protected");
+        let old_machine = dir.path().join("machine");
+        let profile = dir.path().join("profile");
+        let key = dir.path().join("key");
+        write(
+            &path,
+            &key,
+            &Ledger {
+                entries: vec![entry()],
+                ..Ledger::default()
+            },
+            &crate::datastore_io::atomic_write,
+        )
+        .unwrap();
+        let original = fs::read(&path).unwrap();
+        assert!(
+            !read_only_status(&path, &old_machine, &|| Ok(None), &key, &|_, _| Err(
+                "status must not write".into()
+            ))
+            .unwrap()
+        );
+        fs::write(&profile, b"malformed old profile").unwrap();
+        assert!(read_only_status(
+            &path,
+            &old_machine,
+            &|| Ok(Some(profile.clone())),
+            &key,
+            &|_, _| Err("status must not write".into())
+        )
+        .unwrap());
+        assert_eq!(fs::read(&path).unwrap(), original);
+        assert_eq!(fs::read(profile).unwrap(), b"malformed old profile");
     }
 
     #[test]
@@ -1273,6 +1356,12 @@ mod tests {
             1
         );
         assert!(ledger.history_gap_unverified);
+        assert!(
+            read_only_status(&path, &old, &|| Ok(None), &key, &|_, _| Err(
+                "status must not write".into()
+            ))
+            .unwrap()
+        );
         assert_eq!(fs::read_to_string(old).unwrap(), rolled);
     }
 

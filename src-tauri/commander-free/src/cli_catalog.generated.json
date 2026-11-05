@@ -8612,6 +8612,16 @@
       ]
     },
     {
+      "id": "tauri:evidence_status",
+      "name": "evidence_status",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/lib/evidence.ts"
+      ]
+    },
+    {
       "id": "tauri:exit_app",
       "name": "exit_app",
       "transport": "tauri",

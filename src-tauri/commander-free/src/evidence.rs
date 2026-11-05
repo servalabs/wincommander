@@ -26,18 +26,20 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-#[path = "evidence_storage.rs"]
-mod storage;
 #[path = "fleet_lifecycle_mutex.rs"]
 #[allow(dead_code)]
 mod mutex;
+#[path = "evidence_storage.rs"]
+mod storage;
 
 fn acquire_evidence_lock() -> Result<mutex::Guard, String> {
     #[cfg(windows)]
     let result = mutex::acquire_named(r"Global\WinCommander_evidence-ledger_lock", 5_000);
     #[cfg(not(windows))]
     let result = mutex::acquire();
-    result.map_err(|_| "Evidence coordination is unavailable; close older WinCommander sessions and retry".into())
+    result.map_err(|_| {
+        "Evidence coordination is unavailable; close older WinCommander sessions and retry".into()
+    })
 }
 
 /// Hard cap on retained entries — the ledger is a rolling recent-activity
@@ -111,7 +113,12 @@ pub fn evidence_record(
         let excess = ledger.entries.len() - MAX_ENTRIES;
         ledger.entries.drain(0..excess);
     }
-    storage::write(&path, &key, &ledger, &crate::paths::atomic_write_machine_state)?;
+    storage::write(
+        &path,
+        &key,
+        &ledger,
+        &crate::paths::atomic_write_machine_state,
+    )?;
     Ok(())
 }
 
@@ -132,7 +139,51 @@ pub fn evidence_read(limit: Option<u32>) -> Result<Vec<EvidenceEntry>, String> {
 /// retained record instead of the UI's default recent-window — a court/
 /// continuity artifact must not silently omit older events.
 pub fn evidence_read_all() -> Result<Vec<EvidenceEntry>, String> {
-    evidence_read(Some(MAX_ENTRIES as u32))
+    let _lock = acquire_evidence_lock()?;
+    let path = ledger_path()?;
+    let key = key_path()?;
+    let mut ledger = read_ledger(&path, &key)?;
+    let pending = storage::read_only_status(
+        &path,
+        &crate::paths::machine_state_file(LEGACY_MACHINE_LEDGER_FILENAME)?,
+        &legacy_ledger_path,
+        &key,
+        &crate::paths::atomic_write_machine_state,
+    )?;
+    ensure_export_continuity(
+        ledger.history_gap_unverified || ledger.profile_import_pending || pending,
+    )?;
+    ledger.entries.reverse();
+    Ok(ledger.entries)
+}
+
+fn ensure_export_continuity(unverified: bool) -> Result<(), String> {
+    if unverified {
+        Err("Activity history may be incomplete or older records may need review. Review them before exporting evidence.".into())
+    } else {
+        Ok(())
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvidenceStatus {
+    continuity_unverified: bool,
+}
+
+#[tauri::command]
+pub fn evidence_status() -> Result<EvidenceStatus, String> {
+    let _lock = acquire_evidence_lock()?;
+    let continuity_unverified = storage::read_only_status(
+        &ledger_path()?,
+        &crate::paths::machine_state_file(LEGACY_MACHINE_LEDGER_FILENAME)?,
+        &legacy_ledger_path,
+        &key_path()?,
+        &crate::paths::atomic_write_machine_state,
+    )?;
+    Ok(EvidenceStatus {
+        continuity_unverified,
+    })
 }
 
 /// Clear the ledger (user-initiated). Truncates the file in place.
@@ -144,7 +195,12 @@ pub fn evidence_clear() -> Result<(), String> {
     let mut ledger = read_ledger(&path, &key)?;
     ledger.entries.clear();
     ledger.skip_future_imports = true;
-    storage::write(&path, &key, &ledger, &crate::paths::atomic_write_machine_state)?;
+    storage::write(
+        &path,
+        &key,
+        &ledger,
+        &crate::paths::atomic_write_machine_state,
+    )?;
     Ok(())
 }
 
@@ -166,5 +222,11 @@ mod tests {
         assert!(!json.contains("detail")); // skip_serializing_if
         let back: EvidenceEntry = serde_json::from_str(&json).unwrap();
         assert_eq!(back.summary, "Decoy file opened");
+    }
+
+    #[test]
+    fn unverified_history_cannot_be_exported_as_complete_evidence() {
+        assert!(ensure_export_continuity(true).is_err());
+        assert!(ensure_export_continuity(false).is_ok());
     }
 }
