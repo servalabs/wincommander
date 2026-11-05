@@ -47,6 +47,7 @@ fn acquire_evidence_lock() -> Result<mutex::Guard, String> {
 const MAX_ENTRIES: usize = 1000;
 const LEDGER_FILENAME: &str = "evidence-ledger.v2";
 const LEGACY_MACHINE_LEDGER_FILENAME: &str = "evidence-ledger.jsonl";
+const FAILURE_MARKER_FILENAME: &str = "evidence-recording-incomplete.flag";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -104,6 +105,24 @@ pub fn evidence_record(
         summary,
         detail,
     };
+    let result = record_entry(entry);
+    if result.is_err() && mark_record_failure().is_err() {
+        crate::log::log_message(
+            "warn",
+            "Evidence recording and its failure marker could not be saved",
+        );
+    }
+    result
+}
+
+fn mark_record_failure() -> Result<(), String> {
+    crate::paths::atomic_write_machine_state(
+        &crate::paths::machine_state_file(FAILURE_MARKER_FILENAME)?,
+        b"evidence-recording-incomplete-v1\n",
+    )
+}
+
+fn record_entry(entry: EvidenceEntry) -> Result<(), String> {
     let _lock = acquire_evidence_lock()?;
     let path = ledger_path()?;
     let key = key_path()?;
@@ -148,6 +167,7 @@ pub fn evidence_read_all() -> Result<Vec<EvidenceEntry>, String> {
         &crate::paths::machine_state_file(LEGACY_MACHINE_LEDGER_FILENAME)?,
         &legacy_ledger_path,
         &key,
+        &crate::paths::machine_state_file(FAILURE_MARKER_FILENAME)?,
         &crate::paths::atomic_write_machine_state,
     )?;
     ensure_export_continuity(
@@ -179,6 +199,7 @@ pub fn evidence_status() -> Result<EvidenceStatus, String> {
         &crate::paths::machine_state_file(LEGACY_MACHINE_LEDGER_FILENAME)?,
         &legacy_ledger_path,
         &key_path()?,
+        &crate::paths::machine_state_file(FAILURE_MARKER_FILENAME)?,
         &crate::paths::atomic_write_machine_state,
     )?;
     Ok(EvidenceStatus {

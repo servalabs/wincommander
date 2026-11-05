@@ -370,6 +370,7 @@ pub(super) fn read_only_status(
     machine_source: &Path,
     legacy: &impl Fn() -> Result<Option<PathBuf>, String>,
     key_path: &Path,
+    failure_marker: &Path,
     persist: &impl Fn(&Path, &[u8]) -> Result<(), String>,
 ) -> Result<bool, String> {
     let ledger = match fs::symlink_metadata(path) {
@@ -380,6 +381,11 @@ pub(super) fn read_only_status(
         Err(error) => return Err(format!("Cannot inspect evidence ledger: {error}")),
     };
     let mut needs_review = ledger.history_gap_unverified;
+    match fs::symlink_metadata(failure_marker) {
+        Ok(_) => needs_review = true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("Cannot inspect evidence recording status: {error}")),
+    }
     if let Some(raw) = machine_snapshot(machine_source)? {
         needs_review |= ledger.skip_future_imports
             || ledger.machine_source_digest.as_deref() != Some(digest(&raw).as_str());
@@ -1016,18 +1022,31 @@ mod tests {
         )
         .unwrap();
         let original = fs::read(&path).unwrap();
+        assert!(!read_only_status(
+            &path,
+            &old_machine,
+            &|| Ok(None),
+            &key,
+            &dir.path().join("failure"),
+            &|_, _| Err("status must not write".into())
+        )
+        .unwrap());
+        let marker = dir.path().join("failure");
+        fs::write(&marker, b"recording-incomplete").unwrap();
         assert!(
-            !read_only_status(&path, &old_machine, &|| Ok(None), &key, &|_, _| Err(
-                "status must not write".into()
-            ))
+            read_only_status(&path, &old_machine, &|| Ok(None), &key, &marker, &|_, _| {
+                Err("status must not write".into())
+            })
             .unwrap()
         );
+        fs::remove_file(&marker).unwrap();
         fs::write(&profile, b"malformed old profile").unwrap();
         assert!(read_only_status(
             &path,
             &old_machine,
             &|| Ok(Some(profile.clone())),
             &key,
+            &dir.path().join("failure"),
             &|_, _| Err("status must not write".into())
         )
         .unwrap());
@@ -1356,12 +1375,15 @@ mod tests {
             1
         );
         assert!(ledger.history_gap_unverified);
-        assert!(
-            read_only_status(&path, &old, &|| Ok(None), &key, &|_, _| Err(
-                "status must not write".into()
-            ))
-            .unwrap()
-        );
+        assert!(read_only_status(
+            &path,
+            &old,
+            &|| Ok(None),
+            &key,
+            &dir.path().join("failure"),
+            &|_, _| Err("status must not write".into())
+        )
+        .unwrap());
         assert_eq!(fs::read_to_string(old).unwrap(), rolled);
     }
 
