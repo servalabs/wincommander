@@ -207,7 +207,7 @@ pub(crate) fn record_origin(root: &std::path::Path, id: &[u8; 16], fresh: bool) 
 }
 
 #[cfg(windows)]
-pub(crate) fn inspect_origin(root: &std::path::Path, id: &[u8; 16]) -> io::Result<Option<bool>> {
+pub(crate) fn read_origin(root: &std::path::Path) -> io::Result<Option<([u8; 16], bool)>> {
     use crate::read_only::{AccessMode, CheckedDirectory};
     use tantivy::directory::error::OpenReadError;
     let _pins = CheckedDirectory::pin_root_path(root)?;
@@ -218,6 +218,17 @@ pub(crate) fn inspect_origin(root: &std::path::Path, id: &[u8; 16]) -> io::Resul
         Err(e) => return Err(io::Error::other(e.to_string())),
     };
     let plain = UserProtector.open(&bytes)?;
-    if plain.len() != 25 || &plain[..8] != b"WCORIG01" || &plain[8..24] != id { return Err(invalid()); }
-    match plain[24] { 0 => Ok(Some(false)), 1 => Ok(Some(true)), _ => Err(invalid()) }
+    if plain.len() != 25 || &plain[..8] != b"WCORIG01" { return Err(invalid()); }
+    let id: [u8; 16] = plain[8..24].try_into().map_err(|_| invalid())?;
+    if id == [0; 16] { return Err(invalid()); }
+    let fresh = match plain[24] { 0 => false, 1 => true, _ => return Err(invalid()) };
+    Ok(Some((id, fresh)))
+}
+
+#[cfg(windows)]
+pub(crate) fn inspect_origin(root: &std::path::Path, id: &[u8; 16]) -> io::Result<Option<bool>> {    match read_origin(root)? {
+        None => Ok(None),
+        Some((actual, fresh)) if &actual == id => Ok(Some(fresh)),
+        Some(_) => Err(invalid()),
+    }
 }
