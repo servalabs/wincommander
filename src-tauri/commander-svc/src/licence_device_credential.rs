@@ -399,6 +399,7 @@ pub(crate) async fn release_from_machine_cache() -> Result<(), &'static str> {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
         .map_err(|_| INVALID)?.as_secs();
     if release_pending::remove_prepared_cache(&receipt_policy, now)? { return Ok(()); }
+    if release_pending::verify_completed_recovery(&receipt_policy, now)? { return Ok(()); }
     let cache = crate::license_cache::load_release_licence_snapshot()?;
     let binding = Binding { licence_id: &cache.licence_id, device_hash: &cache.device_hash,
         issuer_origin: wire::LICENCE_ORIGIN };

@@ -319,6 +319,15 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
     reopened_anchor.write(&completed_bytes).unwrap();
     let next_activation = ledger::advance(Some(&completed_bytes), None, &generation_three_same_second,
         &cache(&generation_three_same_second), &public, &current, None).unwrap();
+    let may_replace = |record: &[u8], credential: &[u8; 32]| ledger::can_replace_completed_release(&next_activation,
+        &generation_three_same_second, 99, &cache(&generation_three_same_second), credential, record, &public, &current, None);
+    assert_eq!(may_replace(b"sealed acknowledgement", &[3; 32]), Ok(true));
+    assert_eq!(may_replace(b"different acknowledgement", &[3; 32]), Ok(false));
+    assert_eq!(may_replace(b"sealed acknowledgement", &[4; 32]), Ok(false));
+    assert!(ledger::can_replace_completed_release(&completed_bytes, &generation_two, 99, &cache(&generation_two),
+        &[3; 32], b"sealed acknowledgement", &public, &current, None).is_err());
+    assert!(ledger::can_replace_completed_release(&next_activation, &generation_three_same_second, 100,
+        &cache(&generation_three_same_second), &[3; 32], b"sealed acknowledgement", &public, &current, None).is_err());
     let next_release = ledger::mark_released(&next_activation, &generation_three_same_second, 99,
         &cache(&generation_three_same_second), &public, &current, None).unwrap();
     let next_record: serde_json::Value = serde_json::from_slice(&next_release).unwrap();
@@ -334,6 +343,24 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
     assert!(read_again().is_err());
     recovery_gate.write(&journal_bytes).unwrap();
     assert!(matches!(read_again(), Ok(Some(()))));
+    let prepared = super::super::release_gate::prepared_at(&recovery_gate).unwrap().unwrap();
+    super::super::release_gate::finish_at(&recovery_gate, &prepared, b"release").unwrap();
+    let completed_recovery = |request: &[u8], acknowledgement: &[u8]| with_release_recovery_at(&public, &current,
+        &anchor::Anchor::test_user(recovery_gate_path.clone()), &anchor::Anchor::test_user(retired_anchor_path.clone()),
+        Some(&retired_path), |journal, snapshot, _| {
+            super::super::release_gate::check_request_proof_at(&recovery_gate, &journal.context, request)?;
+            let candidate = StoreLicenseCacheRequest { payload: snapshot.payload.clone(), signature: snapshot.signature.clone(),
+                hybrid: Some(snapshot.hybrid.clone()), seats_used: None, seat_limit: None };
+            let retained = reopened_anchor.read().map_err(|_| "unavailable")?.ok_or("unavailable")?;
+            ledger::verify_release_completed(&retained, &candidate, snapshot.last_verified_at, journal,
+                request, acknowledgement, &public, &current, None)
+        });
+    assert!(matches!(completed_recovery(b"release", b"sealed acknowledgement"), Ok(Some(()))));
+    assert!(completed_recovery(b"other", b"sealed acknowledgement").is_err());
+    assert!(completed_recovery(b"release", b"other").is_err());
+    fs::write(&retired_path, cache(&generation_three_same_second)).unwrap();
+    assert!(matches!(completed_recovery(b"release", b"sealed acknowledgement"), Ok(None)));
+    fs::remove_file(&retired_path).unwrap();
     anchor::remove_test_key(&recovery_gate_path).unwrap();
     anchor::remove_test_key(&retired_anchor_path).unwrap();
     let renewal_path = renewal_dir.join("license_cache.json");

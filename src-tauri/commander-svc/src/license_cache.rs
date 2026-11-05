@@ -422,6 +422,23 @@ pub(crate) fn with_prepared_release_recovery<T>(
     rollback::with_prepared_release_recovery(public, &trust.policy(), operation)
 }
 
+#[cfg(feature = "experimental-pq-licence")]
+pub(crate) fn with_completed_release_recovery<T>(
+    operation: impl FnOnce(&release_gate::PreparedRelease, &DeviceLicenceSnapshot, Vec<u8>) -> Result<T, &'static str>,
+) -> Result<Option<T>, &'static str> {
+    let public = service_public_key().ok_or("license verification is unavailable")?;
+    let trust = hybrid_trust::configured()?;
+    rollback::with_completed_release_recovery(&machine_license_cache_path()?, public, &trust.policy(), operation)
+}
+
+#[cfg(feature = "experimental-pq-licence")]
+pub(crate) fn verify_release_completed_locked(journal: &release_gate::PreparedRelease, snapshot: &DeviceLicenceSnapshot,
+    request: &[u8], acknowledgement: &[u8]) -> Result<(), &'static str> {
+    let public = service_public_key().ok_or("license verification is unavailable")?;
+    let trust = hybrid_trust::configured()?;
+    rollback::verify_release_completed_locked(journal, snapshot, request, acknowledgement, public, &trust.policy())
+}
+
 /// Only call from verified release recovery while all licence locks are held.
 #[cfg(feature = "experimental-pq-licence")]
 pub(crate) fn remove_prepared_cache_locked(journal: &release_gate::PreparedRelease) -> Result<(), &'static str> {
@@ -434,6 +451,18 @@ pub(crate) fn mark_release_completed_locked(journal: &release_gate::PreparedRele
     let public = service_public_key().ok_or("license verification is unavailable")?;
     let trust = hybrid_trust::configured()?;
     rollback::mark_release_completed_locked(journal, snapshot, request, acknowledgement, public, &trust.policy())
+}
+
+#[cfg(feature = "experimental-pq-licence")]
+pub(crate) fn can_replace_completed_release_locked(
+    payload: &str, signature: &str, hybrid: &str, last_verified_at: u64, credential_id: &[u8; 32], previous_record: &[u8],
+) -> Result<bool, &'static str> {
+    let request = StoreLicenseCacheRequest { payload: payload.into(), signature: signature.into(),
+        hybrid: Some(hybrid.into()), seats_used: None, seat_limit: None };
+    let public = service_public_key().ok_or("license verification is unavailable")?;
+    let trust = hybrid_trust::configured()?;
+    rollback::can_replace_completed_release_locked(&machine_license_cache_path()?, &request, last_verified_at,
+        credential_id, previous_record, public, &trust.policy())
 }
 
 #[cfg(feature = "experimental-pq-licence")]

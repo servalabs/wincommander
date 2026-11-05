@@ -70,8 +70,17 @@ fn save_locked(
     store: &anchor::Anchor, protector: &dyn Protector, binding: &Binding<'_>, credential: &ConfirmedCredential,
     body: &[u8], request: &[u8],
 ) -> Result<Zeroizing<Vec<u8>>, &'static str> {
+    save_locked_replacing(store, protector, binding, credential, body, request, None)
+}
+
+fn save_locked_replacing(
+    store: &anchor::Anchor, protector: &dyn Protector, binding: &Binding<'_>, credential: &ConfirmedCredential,
+    body: &[u8], request: &[u8], previous: Option<&[u8]>,
+) -> Result<Zeroizing<Vec<u8>>, &'static str> {
     wire::verify_stored_release_request(credential, body, request)?;
-    if let Some(existing) = load_locked(store, protector, binding, credential, body)? {
+    if let Some(expected) = previous {
+        if store.read().map_err(|_| INVALID)?.as_deref() != Some(expected) { return Err(INVALID); }
+    } else if let Some(existing) = load_locked(store, protector, binding, credential, body)? {
         return if existing.request.as_slice() == request { Ok(existing.request) } else { Err(INVALID) };
     }
     let sealed = protector.protect(request, &release_entropy(binding, credential, body)?).map_err(|_| INVALID)?;
@@ -82,6 +91,31 @@ fn save_locked(
     let reopened = load_locked(store, protector, binding, credential, body)?.ok_or(INVALID)?;
     if reopened.confirmed || reopened.request.as_slice() != request { return Err(INVALID); }
     Ok(reopened.request)
+}
+
+/// A failed decryption is not enough to replace a record: protected history
+/// must identify these exact bytes as a completed older activation.
+fn completed_previous_record(
+    store: &anchor::Anchor, protector: &dyn Protector, binding: &Binding<'_>, credential: &ConfirmedCredential,
+    body: &[u8], licence: &RefreshLicence<'_>,
+) -> Result<Option<Vec<u8>>, &'static str> {
+    completed_previous_record_with(store, protector, binding, credential, body, |bytes| {
+        crate::license_cache::can_replace_completed_release_locked(licence.payload, licence.signature, licence.hybrid,
+            licence.last_verified_at, &credential.id, bytes)
+    })
+}
+
+fn completed_previous_record_with(
+    store: &anchor::Anchor, protector: &dyn Protector, binding: &Binding<'_>, credential: &ConfirmedCredential,
+    body: &[u8], authorize: impl FnOnce(&[u8]) -> Result<bool, &'static str>,
+) -> Result<Option<Vec<u8>>, &'static str> {
+    let Some(bytes) = store.read().map_err(|_| INVALID)? else { return Ok(None); };
+    match load_locked(store, protector, binding, credential, body) {
+        Ok(Some(_)) => return Ok(None),
+        Ok(None) => return Err(INVALID),
+        Err(_) => {}
+    }
+    if authorize(&bytes)? { Ok(Some(bytes)) } else { Err(INVALID) }
 }
 
 fn confirm_locked(
@@ -174,7 +208,31 @@ pub(crate) fn remove_prepared_cache(
         let after = release_store.read().map_err(|_| INVALID)?.ok_or(INVALID)?;
         if before != after { return Err(INVALID); }
         crate::license_cache::remove_prepared_cache_locked(journal)?;
-        crate::license_cache::mark_release_completed_locked(journal, snapshot, &saved.request, &after)
+        crate::license_cache::mark_release_completed_locked(journal, snapshot, &saved.request, &after)?;
+        crate::license_cache::release_gate::finish_at(&crate::license_cache::release_gate::machine(), journal, &saved.request)
+    })?;
+    Ok(verified.is_some())
+}
+
+/// Resolve an uncertain completion response only from an exact completed
+/// journal, released floor and retained acknowledged credential, with no cache.
+pub(crate) fn verify_completed_recovery(
+    trust: &wincmd_pq_experiment::jws::Trust<'_>, now: u64,
+) -> Result<bool, &'static str> {
+    let _guard = LOCK.lock().map_err(|_| INVALID)?;
+    let verified = crate::license_cache::with_completed_release_recovery(|journal, snapshot, body| {
+        let binding = Binding { licence_id: &journal.licence_id, device_hash: &journal.device_hash,
+            issuer_origin: wire::LICENCE_ORIGIN };
+        let credential_anchor = selected_machine_anchor_locked(&binding, trust, now)?;
+        let bytes = credential_anchor.read().map_err(|_| INVALID)?.ok_or(INVALID)?;
+        let credential = decode_confirmed(&MachineDpapi, &binding, trust, &bytes, now)?;
+        let release_store = release_anchor(&binding)?;
+        let before = release_store.read().map_err(|_| INVALID)?.ok_or(INVALID)?;
+        let saved = verify_prepared_ack(&release_store, &crate::license_cache::release_gate::machine(),
+            &MachineDpapi, &binding, &credential, &body, journal)?;
+        let after = release_store.read().map_err(|_| INVALID)?.ok_or(INVALID)?;
+        if before != after { return Err(INVALID); }
+        crate::license_cache::verify_release_completed_locked(journal, snapshot, &saved.request, &after)
     })?;
     Ok(verified.is_some())
 }
@@ -189,7 +247,7 @@ fn verify_prepared_ack(
     }
     let saved = load_locked(store, protector, binding, credential, body)?.ok_or(INVALID)?;
     if !saved.acknowledged { return Err(INVALID); }
-    crate::license_cache::release_gate::check_request_at(gate, &journal.context, Some(&saved.request))?;
+    crate::license_cache::release_gate::check_request_proof_at(gate, &journal.context, &saved.request)?;
     Ok(saved)
 }
 
@@ -197,18 +255,26 @@ fn verify_prepared_ack(
 pub(crate) fn stage(
     binding: &Binding<'_>, trust: &wincmd_pq_experiment::jws::Trust<'_>, licence: &RefreshLicence<'_>, now: u64, request: &[u8],
 ) -> Result<Zeroizing<Vec<u8>>, &'static str> {
-    with_current(binding, trust, licence, now, |store, credential, body|
-        stage_guarded(store, &crate::license_cache::release_gate::machine(), &MachineDpapi,
-            binding, credential, body, request))
+    with_current(binding, trust, licence, now, |store, credential, body| {
+        let previous = completed_previous_record(store, &MachineDpapi, binding, credential, body, licence)?;
+        stage_guarded_replacing(store, &crate::license_cache::release_gate::machine(), &MachineDpapi,
+            binding, credential, body, request, previous.as_deref())
+    })
 }
 
 fn stage_guarded(store: &anchor::Anchor, gate: &anchor::Anchor, protector: &dyn Protector,
     binding: &Binding<'_>, credential: &ConfirmedCredential, body: &[u8], request: &[u8],
 ) -> Result<Zeroizing<Vec<u8>>, &'static str> {
+    stage_guarded_replacing(store, gate, protector, binding, credential, body, request, None)
+}
+
+fn stage_guarded_replacing(store: &anchor::Anchor, gate: &anchor::Anchor, protector: &dyn Protector,
+    binding: &Binding<'_>, credential: &ConfirmedCredential, body: &[u8], request: &[u8], previous: Option<&[u8]>,
+) -> Result<Zeroizing<Vec<u8>>, &'static str> {
     wire::verify_stored_release_request(credential, body, request)?;
     let context = release_entropy(binding, credential, body)?;
     crate::license_cache::release_gate::begin_at(gate, &context)?;
-    let saved = save_locked(store, protector, binding, credential, body, request)?;
+    let saved = save_locked_replacing(store, protector, binding, credential, body, request, previous)?;
     crate::license_cache::release_gate::bind_request_at(gate, &context, &saved)?;
     Ok(saved)
 }
@@ -218,6 +284,11 @@ pub(crate) fn load(
     binding: &Binding<'_>, trust: &wincmd_pq_experiment::jws::Trust<'_>, licence: &RefreshLicence<'_>, now: u64,
 ) -> Result<Option<SavedRelease>, &'static str> {
     with_current(binding, trust, licence, now, |store, credential, body| {
+        if completed_previous_record(store, &MachineDpapi, binding, credential, body, licence)?.is_some() {
+            let context = release_entropy(binding, credential, body)?;
+            crate::license_cache::release_gate::check_request_at(&crate::license_cache::release_gate::machine(), &context, None)?;
+            return Ok(None);
+        }
         let saved = load_guarded(store, &crate::license_cache::release_gate::machine(), &MachineDpapi,
             binding, credential, body)?;
         if let Some(item) = saved.as_ref().filter(|item| item.acknowledged) {
@@ -289,6 +360,39 @@ fn prepare_ack_locked(store: &anchor::Anchor, protector: &dyn Protector, binding
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replacement_preserves_old_record_until_exact_new_request_is_staged() {
+        let path = format!(r"SOFTWARE\WinCommanderReleaseRotateTest-{}", uuid::Uuid::new_v4());
+        let gate_path = format!(r"SOFTWARE\WinCommanderReleaseRotateGateTest-{}", uuid::Uuid::new_v4());
+        let store = anchor::Anchor::test_user(path.clone());
+        let gate = anchor::Anchor::test_user(gate_path.clone());
+        let binding = Binding { licence_id: "licence", device_hash: "device", issuer_origin: "https://license.example" };
+        let credential = ConfirmedCredential { id: [5; 32], secret: Zeroizing::new([6; 32]) };
+        let old = b"old completed protected record";
+        store.write(old).unwrap();
+        let body = b"new activation body";
+        assert!(completed_previous_record_with(&store, &MachineDpapi, &binding, &credential, body, |_| Ok(false)).is_err());
+        assert!(completed_previous_record_with(&store, &MachineDpapi, &binding, &credential, body, |_| Err("history unavailable")).is_err());
+        assert_eq!(completed_previous_record_with(&store, &MachineDpapi, &binding, &credential, body,
+            |bytes| Ok(bytes == old)).unwrap().unwrap(), old);
+        let digest: [u8; 32] = Sha256::digest(body).into();
+        let challenge = serde_json::to_vec(&serde_json::json!({ "ok": true, "credentialId": URL_SAFE_NO_PAD.encode(credential.id),
+            "nonce": URL_SAFE_NO_PAD.encode([7; 32]), "requestDigest": URL_SAFE_NO_PAD.encode(digest), "expiresAt": 1060 })).unwrap();
+        let request = wire::release_request(&credential, body.to_vec(), &challenge, 1000).unwrap();
+        assert!(stage_guarded_replacing(&store, &gate, &MachineDpapi, &binding, &credential, body, &request, Some(b"different")).is_err());
+        assert_eq!(store.read().unwrap().unwrap(), old);
+        let reopened = anchor::Anchor::test_user(path.clone());
+        assert_eq!(stage_guarded_replacing(&reopened, &anchor::Anchor::test_user(gate_path.clone()), &MachineDpapi,
+            &binding, &credential, body, &request, Some(old)).unwrap().as_slice(), request);
+        assert_ne!(store.read().unwrap().unwrap(), old);
+        assert!(completed_previous_record_with(&store, &MachineDpapi, &binding, &credential, body,
+            |_| panic!("a current record must not request replacement authorization")).unwrap().is_none());
+        assert_eq!(stage_guarded(&store, &gate, &MachineDpapi, &binding, &credential, body, &request).unwrap().as_slice(), request);
+        assert!(stage_guarded_replacing(&store, &gate, &MachineDpapi, &binding, &credential, body, &request, Some(old)).is_err());
+        anchor::remove_test_key(&path).unwrap();
+        anchor::remove_test_key(&gate_path).unwrap();
+    }
 
     #[test]
     fn release_retry_is_sealed_bound_and_never_replaced() {

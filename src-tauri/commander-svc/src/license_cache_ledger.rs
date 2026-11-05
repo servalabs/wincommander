@@ -393,3 +393,45 @@ pub(super) fn mark_release_completed(
     if output.len() > CACHE_LIMIT as usize { return Err("license security history is full; recovery is required"); }
     Ok(output)
 }
+
+/// Permit replacing only the exact previously completed encrypted retry record,
+/// and only after a strictly newer signed activation is current on this device.
+pub(super) fn can_replace_completed_release(
+    retained: &[u8], candidate: &StoreLicenseCacheRequest, expected_time: u64, bytes: &[u8],
+    credential_id: &[u8; 32], previous_record: &[u8], public_key: &str,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>, old_trust: Option<&history::HistoricalTrust>,
+) -> Result<bool, &'static str> {
+    if previous_record.is_empty() || previous_record.len() > CACHE_LIMIT as usize { return Ok(false); }
+    verify_current(retained, candidate, expected_time, bytes, public_key, trust, old_trust)?;
+    let claims: RefreshClaims = serde_json::from_str(&candidate.payload).map_err(|_| "license cache is invalid")?;
+    let generation = checked_activation_generation(claims.activation_generation)?
+        .ok_or("license activation generation is invalid")?;
+    let ledger = parse_ledger(retained)?;
+    let Some(entry) = ledger.released.iter().find(|entry| entry.license_id == claims.license_id
+        && entry.device_hash == claims.device_hash) else { return Ok(false); };
+    let Some(completion) = &entry.completion else { return Ok(false); };
+    Ok(generation > entry.generation && completion.credential_id == general_purpose::URL_SAFE_NO_PAD.encode(credential_id)
+        && completion.acknowledgement_digest == digest(previous_record))
+}
+
+/// Recheck an existing completion; never create one during retry recovery.
+pub(super) fn verify_release_completed(
+    retained: &[u8], candidate: &StoreLicenseCacheRequest, expected_time: u64, journal: &super::release_gate::PreparedRelease,
+    request: &[u8], acknowledgement: &[u8], public_key: &str,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>, old_trust: Option<&history::HistoricalTrust>,
+) -> Result<(), &'static str> {
+    verify_released_current(retained, candidate, expected_time, &journal.cache, public_key, trust, old_trust)?;
+    if request.is_empty() || acknowledgement.is_empty() { return Err("license security record is invalid"); }
+    let claims: SignedClaims = serde_json::from_str(&candidate.payload).map_err(|_| "license cache is invalid")?;
+    if claims.license_id.as_deref() != Some(journal.licence_id.as_str()) || claims.device_hash != journal.device_hash
+        || claims.activation_generation != Some(journal.generation) { return Err("license release does not match security history"); }
+    let ledger = parse_ledger(retained)?;
+    let entry = ledger.released.iter().find(|entry| entry.license_id == journal.licence_id
+        && entry.device_hash == journal.device_hash && entry.generation == journal.generation)
+        .ok_or("license release has no matching security record")?;
+    let expected = ReleaseCompletion { context: general_purpose::URL_SAFE_NO_PAD.encode(journal.context),
+        credential_id: general_purpose::URL_SAFE_NO_PAD.encode(journal.credential_id), request_digest: digest(request),
+        cache_digest: digest(&journal.cache), acknowledgement_digest: digest(acknowledgement) };
+    if entry.completion.as_ref() != Some(&expected) { return Err("license release conflicts with security history"); }
+    Ok(())
+}

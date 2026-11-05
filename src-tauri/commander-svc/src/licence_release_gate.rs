@@ -19,6 +19,8 @@ struct Marker {
     request: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     finalization: Option<Finalization>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    completed: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq)]
@@ -34,6 +36,7 @@ struct Finalization {
     cache_digest: String,
 }
 
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct PreparedRelease {
     pub context: [u8; 32],
     pub licence_id: String,
@@ -75,9 +78,11 @@ fn digest(value: &[u8]) -> String {
 fn read(store: &Anchor, context: &[u8; 32]) -> Result<Marker, &'static str> {
     let bytes = store.read().map_err(|_| INVALID)?.ok_or(INVALID)?;
     let marker: Marker = serde_json::from_slice(&bytes).map_err(|_| INVALID)?;
-    if !matches!(marker.version, 1 | 2)
+    if !matches!(marker.version, 1 | 2 | 3)
         || (marker.version == 1 && marker.finalization.is_some())
-        || (marker.version == 2 && marker.finalization.is_none())
+        || (marker.version >= 2 && marker.finalization.is_none())
+        || (marker.version < 3 && marker.completed.is_some())
+        || (marker.version == 3 && marker.completed != Some(true))
         || marker.context != URL_SAFE_NO_PAD.encode(context)
         || marker.request.as_ref().is_some_and(|value| {
             URL_SAFE_NO_PAD
@@ -106,6 +111,15 @@ fn persist(store: &Anchor, marker: &Marker, context: &[u8; 32]) -> Result<(), &'
 /// Read an already prepared record. This does not authenticate its licence,
 /// credential or acknowledgement and never authorizes a deletion by itself.
 pub(crate) fn prepared_at(store: &Anchor) -> Result<Option<PreparedRelease>, &'static str> {
+    journal_at(store, 2)
+}
+
+/// Read a completed journal for exact idempotent recovery, not as cleanup authority.
+pub(crate) fn completed_at(store: &Anchor) -> Result<Option<PreparedRelease>, &'static str> {
+    journal_at(store, 3)
+}
+
+fn journal_at(store: &Anchor, version: u8) -> Result<Option<PreparedRelease>, &'static str> {
     if !store.exists().map_err(|_| INVALID)? { return Ok(None); }
     let bytes = store.read().map_err(|_| INVALID)?.ok_or(INVALID)?;
     let preliminary: Marker = serde_json::from_slice(&bytes).map_err(|_| INVALID)?;
@@ -113,6 +127,7 @@ pub(crate) fn prepared_at(store: &Anchor) -> Result<Option<PreparedRelease>, &'s
         .try_into().map_err(|_| INVALID)?;
     if URL_SAFE_NO_PAD.encode(context) != preliminary.context { return Err(INVALID); }
     let marker = read(store, &context)?;
+    if marker.version != version { return Ok(None); }
     let Some(value) = marker.finalization else { return Ok(None); };
     let credential_id = URL_SAFE_NO_PAD.decode(&value.credential_id).map_err(|_| INVALID)?
         .try_into().map_err(|_| INVALID)?;
@@ -126,15 +141,20 @@ pub(crate) fn ensure_idle() -> Result<(), &'static str> {
     ensure_idle_at(&machine())
 }
 pub(crate) fn ensure_idle_at(store: &Anchor) -> Result<(), &'static str> {
-    if store.exists().map_err(|_| INVALID)? {
-        return Err(INVALID);
-    }
-    Ok(())
+    if idle_at(store)? { Ok(()) } else { Err(INVALID) }
+}
+
+fn idle_at(store: &Anchor) -> Result<bool, &'static str> {
+    if !store.exists().map_err(|_| INVALID)? { return Ok(true); }
+    let bytes = store.read().map_err(|_| INVALID)?.ok_or(INVALID)?;
+    let marker: Marker = serde_json::from_slice(&bytes).map_err(|_| INVALID)?;
+    let context: [u8; 32] = URL_SAFE_NO_PAD.decode(&marker.context).map_err(|_| INVALID)?.try_into().map_err(|_| INVALID)?;
+    Ok(read(store, &context)?.version == 3)
 }
 
 /// A failed write remains fenced, including an empty key created before failure.
 pub(crate) fn begin_at(store: &Anchor, context: &[u8; 32]) -> Result<(), &'static str> {
-    if store.exists().map_err(|_| INVALID)? {
+    if !idle_at(store)? {
         read(store, context)?;
         return Ok(());
     }
@@ -145,9 +165,23 @@ pub(crate) fn begin_at(store: &Anchor, context: &[u8; 32]) -> Result<(), &'stati
             context: URL_SAFE_NO_PAD.encode(context),
             request: None,
             finalization: None,
+            completed: None,
         },
         context,
     )
+}
+
+/// Only called under all licence locks after the exact acknowledgement, cache
+/// deletion and protected completion floor have been reverified and persisted.
+pub(crate) fn finish_at(store: &Anchor, expected: &PreparedRelease, request: &[u8]) -> Result<(), &'static str> {
+    let actual = prepared_at(store)?.or(completed_at(store)?).ok_or(INVALID)?;
+    if &actual != expected { return Err(INVALID); }
+    check_request_proof_at(store, &expected.context, request)?;
+    let mut marker = read(store, &expected.context)?;
+    if marker.version == 3 { return Ok(()); }
+    marker.version = 3;
+    marker.completed = Some(true);
+    persist(store, &marker, &expected.context)
 }
 
 /// The caller has verified the acknowledged request, released ledger floor and
@@ -182,7 +216,7 @@ pub(crate) fn check_request_at(
     context: &[u8; 32],
     request: Option<&[u8]>,
 ) -> Result<(), &'static str> {
-    if !store.exists().map_err(|_| INVALID)? {
+    if idle_at(store)? {
         return if request.is_none() {
             Ok(())
         } else {
@@ -195,6 +229,14 @@ pub(crate) fn check_request_at(
         (Some(saved), Some(request)) if saved == digest(request) => Ok(()),
         _ => Err(INVALID),
     }
+}
+
+/// Compare a request against an exact prepared or completed journal.
+pub(crate) fn check_request_proof_at(store: &Anchor, context: &[u8; 32], request: &[u8]) -> Result<(), &'static str> {
+    let marker = read(store, context)?;
+    if matches!(marker.version, 2 | 3) && !request.is_empty() && marker.request.as_deref() == Some(digest(request).as_str()) {
+        Ok(())
+    } else { Err(INVALID) }
 }
 
 pub(crate) fn bind_request_at(
@@ -265,7 +307,32 @@ mod tests {
         missing.as_object_mut().unwrap().remove("finalization");
         reopened.write(&serde_json::to_vec(&missing).unwrap()).unwrap();
         assert!(prepare(b"cache", 2).is_err());
+        let mut fake_completion: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        fake_completion["version"] = 3.into();
+        reopened.write(&serde_json::to_vec(&fake_completion).unwrap()).unwrap();
+        assert!(ensure_idle_at(&reopened).is_err());
         reopened.write(&bytes).unwrap();
+        let complete = prepared_at(&reopened).unwrap().unwrap();
+        let mut wrong = complete.clone();
+        wrong.generation += 1;
+        assert!(finish_at(&reopened, &wrong, b"request").is_err());
+        assert!(finish_at(&reopened, &complete, b"wrong").is_err());
+        assert!(ensure_idle_at(&reopened).is_err());
+        finish_at(&reopened, &complete, b"request").unwrap();
+        assert!(ensure_idle_at(&Anchor::test_user(path.clone())).is_ok());
+        assert!(prepared_at(&reopened).unwrap().is_none());
+        assert!(completed_at(&reopened).unwrap().is_some());
+        finish_at(&reopened, &complete, b"request").unwrap();
+        let completed_bytes = reopened.read().unwrap().unwrap();
+        let mut missing_completion: serde_json::Value = serde_json::from_slice(&completed_bytes).unwrap();
+        missing_completion.as_object_mut().unwrap().remove("completed");
+        reopened.write(&serde_json::to_vec(&missing_completion).unwrap()).unwrap();
+        assert!(ensure_idle_at(&reopened).is_err());
+        reopened.write(&completed_bytes).unwrap();
+        let newer_context = [9; 32];
+        begin_at(&reopened, &newer_context).unwrap();
+        assert!(finish_at(&reopened, &complete, b"request").is_err());
+        assert!(ensure_idle_at(&reopened).is_err());
         reopened
             .write(
                 format!(

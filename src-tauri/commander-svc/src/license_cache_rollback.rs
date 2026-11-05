@@ -501,10 +501,36 @@ fn with_prepared_release_recovery_at<T>(
     public_key: &str, trust: &wincmd_pq_experiment::jws::Trust<'_>, gate: &anchor::Anchor, anchor: &anchor::Anchor,
     operation: impl FnOnce(&super::release_gate::PreparedRelease, &DeviceLicenceSnapshot, Vec<u8>) -> Result<T, &'static str>,
 ) -> Result<Option<T>, &'static str> {
+    with_release_recovery_at(public_key, trust, gate, anchor, None, operation)
+}
+
+pub(super) fn with_completed_release_recovery<T>(
+    path: &Path, public_key: &str, trust: &wincmd_pq_experiment::jws::Trust<'_>,
+    operation: impl FnOnce(&super::release_gate::PreparedRelease, &DeviceLicenceSnapshot, Vec<u8>) -> Result<T, &'static str>,
+) -> Result<Option<T>, &'static str> {
+    let gate = super::release_gate::machine();
+    let anchor = anchor::Anchor::machine_named(r"SOFTWARE\ServaLabs\WinCommander\HybridLicence");
+    with_release_recovery_at(public_key, trust, &gate, &anchor, Some(path), operation)
+}
+
+fn with_release_recovery_at<T>(
+    public_key: &str, trust: &wincmd_pq_experiment::jws::Trust<'_>, gate: &anchor::Anchor, anchor: &anchor::Anchor,
+    completed_cache_path: Option<&Path>,
+    operation: impl FnOnce(&super::release_gate::PreparedRelease, &DeviceLicenceSnapshot, Vec<u8>) -> Result<T, &'static str>,
+) -> Result<Option<T>, &'static str> {
     let old_trust = history::configured(trust)?;
     let _lock = WRITE_LOCK.lock().map_err(|_| "license cache lock is unavailable")?;
     let _process_lock = crate::licence_security_lock()?;
-    let Some(journal) = super::release_gate::prepared_at(gate)? else { return Ok(None); };
+    if let Some(path) = completed_cache_path {
+        match fs::symlink_metadata(path) {
+            Ok(_) => return Ok(None),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+            Err(_) => return Err("license cache is unavailable"),
+        }
+    }
+    let journal = if completed_cache_path.is_some() { super::release_gate::completed_at(gate)? }
+        else { super::release_gate::prepared_at(gate)? };
+    let Some(journal) = journal else { return Ok(None); };
     let cached: ExistingCache = serde_json::from_slice(&journal.cache).map_err(|_| "license cache is invalid")?;
     let time = cached.last_verified_at.ok_or("license cache verification time is missing")?;
     let request = StoreLicenseCacheRequest { payload: cached.token.payload, signature: cached.token.signature,
@@ -525,6 +551,19 @@ fn with_prepared_release_recovery_at<T>(
     operation(&journal, &snapshot, wire).map(Some)
 }
 
+pub(super) fn verify_release_completed_locked(
+    journal: &super::release_gate::PreparedRelease, snapshot: &DeviceLicenceSnapshot,
+    request: &[u8], acknowledgement: &[u8], public_key: &str, trust: &wincmd_pq_experiment::jws::Trust<'_>,
+) -> Result<(), &'static str> {
+    let old_trust = history::configured(trust)?;
+    let anchor = anchor::Anchor::machine_named(r"SOFTWARE\ServaLabs\WinCommander\HybridLicence");
+    let retained = anchor.read().map_err(|_| "license security record is unavailable")?.ok_or("license security record is unavailable")?;
+    let candidate = StoreLicenseCacheRequest { payload: snapshot.payload.clone(), signature: snapshot.signature.clone(),
+        hybrid: Some(snapshot.hybrid.clone()), seats_used: None, seat_limit: None };
+    ledger::verify_release_completed(&retained, &candidate, snapshot.last_verified_at, journal,
+        request, acknowledgement, public_key, trust, old_trust.as_ref())
+}
+
 /// Called inside the release recovery locks after the acknowledged cache is
 /// absent. The protected completion floor is written and read back before any
 /// later operation may consider clearing the release gate.
@@ -534,6 +573,20 @@ pub(super) fn mark_release_completed_locked(
 ) -> Result<(), &'static str> {
     let anchor = anchor::Anchor::machine_named(r"SOFTWARE\ServaLabs\WinCommander\HybridLicence");
     mark_release_completed_with_anchor(journal, snapshot, request, acknowledgement, public_key, trust, &anchor)
+}
+
+/// Called while licence locks are held; never accepts an unsigned or retired cache.
+pub(super) fn can_replace_completed_release_locked(
+    path: &Path, candidate: &StoreLicenseCacheRequest, expected_time: u64, credential_id: &[u8; 32],
+    previous_record: &[u8], public_key: &str, trust: &wincmd_pq_experiment::jws::Trust<'_>,
+) -> Result<bool, &'static str> {
+    let old_trust = history::configured(trust)?;
+    let bytes = read_cache(path)?.ok_or("license cache is unavailable")?;
+    let anchor = anchor::Anchor::machine_named(r"SOFTWARE\ServaLabs\WinCommander\HybridLicence");
+    let retained = anchor.read().map_err(|_| "license security record is unavailable")?
+        .ok_or("license security record is unavailable")?;
+    ledger::can_replace_completed_release(&retained, candidate, expected_time, &bytes, credential_id,
+        previous_record, public_key, trust, old_trust.as_ref())
 }
 
 fn mark_release_completed_with_anchor(

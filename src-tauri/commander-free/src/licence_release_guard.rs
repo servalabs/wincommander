@@ -45,6 +45,8 @@ mod tests {
         store.write(b"pending").unwrap();
         assert!(acquire_at(&store, &name).is_err());
         assert!(acquire_at(&anchor::Anchor::test_user(path.clone()), &name).is_err());
+        store.write(br#"{"version":3}"#).unwrap();
+        assert!(acquire_at(&anchor::Anchor::test_user(path.clone()), &name).is_err());
         anchor::remove_test_key(&path).unwrap();
         drop(acquire_at(&store, &name).unwrap());
     }
