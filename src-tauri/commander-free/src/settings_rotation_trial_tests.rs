@@ -307,3 +307,67 @@ fn restart_recovery_authenticates_stage_and_leaves_partial_or_stale_files_untouc
     assert!(recover_stage(&path, &old, &input).is_err());
     assert_eq!(std::fs::read(&path).unwrap(), partial);
 }
+
+#[test]
+fn selected_generation_preserves_f6_and_legacy_and_recovers_after_restart() {
+    let root = tempfile::tempdir().unwrap();
+    let old = [42; 32];
+    let mut input = sections(&old);
+    let old_key = derive_section_key(&old, None).unwrap();
+    let f6 = serde_json::to_vec(&json!({"signing_seed_hex": "a1b2c3"})).unwrap();
+    input.push(("f6-keystore".into(), encode_section(&old_key, &f6, "machine:f6-keystore").unwrap()));
+    let legacy = root.path().join("f6-keystore.dat");
+    std::fs::write(&legacy, &input[2].1).unwrap();
+    let path = root.path().join("selected-generation");
+    let candidate = prepare(&old, &input).unwrap();
+    select_initial_generation(&path, &candidate, &old, &input, &crate::datastore_io::publish_new).unwrap();
+    let restarted = std::fs::read(&path).unwrap();
+    assert_eq!(open(&restarted).unwrap()["f6-keystore"]["signing_seed_hex"], "a1b2c3");
+    assert_eq!(std::fs::read_to_string(&legacy).unwrap(), input[2].1);
+    let another_candidate = prepare(&old, &input).unwrap();
+    select_initial_generation(&path, &another_candidate, &old, &input, &crate::datastore_io::publish_new).unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), restarted);
+}
+
+#[test]
+fn selected_generation_rejects_corruption_stale_sources_and_ambiguous_publish() {
+    let root = tempfile::tempdir().unwrap();
+    let old = [42; 32];
+    let input = sections(&old);
+    let candidate = prepare(&old, &input).unwrap();
+    let path = root.path().join("selected-generation");
+    assert!(select_initial_generation(&path, &candidate, &old, &input, &|_, _| Err("write failed".into())).is_err());
+    assert!(!path.exists());
+    select_initial_generation(&path, &candidate, &old, &input, &|path, bytes| {
+        std::fs::write(path, bytes).map_err(|e| e.to_string())?;
+        Err("ambiguous after commit".into())
+    }).unwrap();
+    let mut changed = input.clone();
+    changed[0].1.push('X');
+    assert!(select_initial_generation(&path, &candidate, &old, &changed, &crate::datastore_io::publish_new).is_err());
+    std::fs::write(&path, b"partial generation").unwrap();
+    assert!(select_initial_generation(&path, &candidate, &old, &input, &crate::datastore_io::publish_new).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), b"partial generation");
+}
+
+#[test]
+fn selected_generation_update_preserves_other_sections_and_fails_closed() {
+    let root = tempfile::tempdir().unwrap();
+    let old = [42; 32];
+    let input = sections(&old);
+    let path = root.path().join("selected-generation");
+    let initial = prepare(&old, &input).unwrap();
+    select_initial_generation(&path, &initial, &old, &input, &crate::datastore_io::publish_new).unwrap();
+    assert!(update_selected_generation(&path, "settings", json!({"changed": true}), &|_, _| Err("injected failure".into())).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), initial);
+    update_selected_generation(&path, "settings", json!({"changed": true}), &crate::datastore_io::atomic_write).unwrap();
+    let updated = std::fs::read(&path).unwrap();
+    let contents = open(&updated).unwrap();
+    assert_eq!(contents["settings"]["changed"], true);
+    assert_eq!(contents["payments"]["token"], "second secret");
+    assert!(update_selected_generation(&path, "not-in-snapshot", json!({}), &crate::datastore_io::atomic_write).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), updated);
+    std::fs::write(&path, b"corrupt").unwrap();
+    assert!(update_selected_generation(&path, "settings", json!({}), &crate::datastore_io::atomic_write).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), b"corrupt");
+}

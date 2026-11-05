@@ -81,8 +81,13 @@ fn prepare(old_material: &[u8; 32], sections: &[(String, String)]) -> Result<Vec
         source_sections,
         source_key_digest: source_digest(old_material),
     };
+    seal_generation(&generation)
+}
+
+// Reseal the complete in-memory generation as one authenticated unit.
+fn seal_generation(generation: &Generation) -> Result<Vec<u8>, String> {
     let plain = Zeroizing::new(
-        serde_json::to_vec(&generation).map_err(|_| "cannot encode settings snapshot")?,
+        serde_json::to_vec(generation).map_err(|_| "cannot encode settings snapshot")?,
     );
     if plain.len() > MAX_TOTAL {
         return Err("settings snapshot too large".into());
@@ -325,6 +330,60 @@ fn publish(
 ) -> Result<(), String> {
     verify_source(candidate, old_material, sections)?;
     persist(path, candidate)
+}
+
+/// Trial reader/writer for an already selected generation. The caller must
+/// serialize all readers and writers and keep trusted selection state; neither
+/// condition is supplied by this experiment. Never falls back to the legacy
+/// store if the selected generation is unreadable or corrupt.
+fn update_selected_generation(
+    path: &Path,
+    section: &str,
+    value: Value,
+    persist: &impl Fn(&Path, &[u8]) -> Result<(), String>,
+) -> Result<(), String> {
+    use std::io::Read;
+    let file = std::fs::File::open(path).map_err(|_| "selected settings generation unavailable")?;
+    let mut input = Vec::new();
+    file.take((MAX_TOTAL * 2 + 65537) as u64).read_to_end(&mut input)
+        .map_err(|_| "cannot read selected settings generation")?;
+    let mut generation = open_generation(&input)?;
+    let entry = generation.sections.get_mut(section).ok_or("section was not in the guarded snapshot")?;
+    *entry = value;
+    let candidate = seal_generation(&generation)?;
+    // Reject a self-inconsistent output before any persistent modification.
+    let reopened = open_generation(&candidate)?;
+    if reopened.sections != generation.sections { return Err("settings generation readback mismatch".into()); }
+    persist(path, &candidate)
+}
+
+/// Test-only single-file generation selection. The caller must hold a complete,
+/// authorized source snapshot and exclusive migration ownership through this
+/// call. Existing legacy files are never renamed or deleted. No production
+/// reader or writer selects this file yet.
+fn select_initial_generation(
+    path: &Path,
+    candidate: &[u8],
+    old_material: &[u8; 32],
+    sections: &[(String, String)],
+    create: &impl Fn(&Path, &[u8]) -> Result<bool, String>,
+) -> Result<(), String> {
+    use std::io::Read;
+    verify_source(candidate, old_material, sections)?;
+    let publication = create(path, candidate);
+    let file = std::fs::File::open(path).map_err(|_| "selected settings generation unavailable; legacy preserved")?;
+    let mut observed = Vec::new();
+    file.take((MAX_TOTAL * 2 + 65537) as u64).read_to_end(&mut observed)
+        .map_err(|_| "cannot read selected settings generation; legacy preserved")?;
+    if observed.len() > MAX_TOTAL * 2 + 65536 { return Err("selected settings generation too large; legacy preserved".into()); }
+    // If our publish succeeded, or its result is ambiguous, only our exact
+    // bytes can establish that it committed. An existing other winner must
+    // independently authenticate against the exact guarded original values.
+    if !matches!(publication, Ok(false)) && observed != candidate {
+        return Err("settings generation publication ambiguous; legacy preserved".into());
+    }
+    verify_source(&observed, old_material, sections)?;
+    Ok(())
 }
 
 #[cfg(all(test, windows))]
