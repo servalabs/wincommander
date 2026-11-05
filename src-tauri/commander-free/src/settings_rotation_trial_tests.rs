@@ -496,5 +496,7 @@ fn shared_readers_never_repair_pending_authority_and_exclude_writers() {
     assert_eq!(first.read_all().unwrap()["payments"]["token"], "second secret");
     assert!(LockedSelectedGeneration::try_open(root.path()).is_err());
     drop(first); drop(second);
+    assert_eq!(read_selected_once(root.path(), StoreScope::Machine).unwrap()["payments"]["token"], "second secret");
+    // The public read seam has released its shared lock before returning.
     assert!(LockedSelectedGeneration::try_open(root.path()).is_ok());
 }

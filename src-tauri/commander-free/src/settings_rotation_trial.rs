@@ -421,7 +421,7 @@ impl LockedSelectedGeneration {
         #[cfg(windows)]
         let root_pins = source_snapshot::pin_directories(root)?;
         let ownership = super::settings_generation_ownership::SettingsGenerationLock::try_acquire(root)
-            .map_err(|_| "settings generation ownership unavailable")?;
+            .map_err(|error| format!("settings generation ownership unavailable: {error}"))?;
         Ok(Self { _ownership: ownership, #[cfg(windows)] _root_pins: root_pins,
             path: root.join(".settings-generation.v1"), authority: root.join(".settings-generation.authority.v1"), scope })
     }
@@ -512,7 +512,7 @@ impl LockedSelectedGeneration {
 /// Read-only seam for a pre-provisioned shared lock. No automatic repair is
 /// permitted under a shared lock. Root/file ACLs and old-version fencing are
 /// prerequisites; no application route enables this seam yet.
-pub(super) struct ReadOnlySelectedGeneration {
+struct ReadOnlySelectedGeneration {
     _ownership: super::settings_generation_ownership::SettingsGenerationLock,
     #[cfg(windows)]
     _root_pins: Vec<std::fs::File>,
@@ -521,17 +521,20 @@ pub(super) struct ReadOnlySelectedGeneration {
     scope: StoreScope,
 }
 impl ReadOnlySelectedGeneration {
-    pub(super) fn try_open(root: &Path, scope: StoreScope) -> Result<Self, String> {
+    fn acquire(root: &Path, scope: StoreScope) -> Result<Self, String> {
         #[cfg(windows)]
         let root_pins = source_snapshot::pin_directories(root)?;
         let ownership = super::settings_generation_ownership::SettingsGenerationLock::try_acquire_shared(root)
-            .map_err(|_| "settings generation shared ownership unavailable")?;
-        let reader = Self { _ownership: ownership, #[cfg(windows)] _root_pins: root_pins,
-            path: root.join(".settings-generation.v1"), authority: root.join(".settings-generation.authority.v1"), scope };
+            .map_err(|error| format!("settings generation shared ownership unavailable: {error}"))?;
+        Ok(Self { _ownership: ownership, #[cfg(windows)] _root_pins: root_pins,
+            path: root.join(".settings-generation.v1"), authority: root.join(".settings-generation.authority.v1"), scope })
+    }
+    fn try_open(root: &Path, scope: StoreScope) -> Result<Self, String> {
+        let reader = Self::acquire(root, scope)?;
         reader.read_all()?;
         Ok(reader)
     }
-    pub(super) fn read_all(&self) -> Result<BTreeMap<String, Value>, String> {
+    fn read_all(&self) -> Result<BTreeMap<String, Value>, String> {
         let selected = read_generation_file(&self.path, MAX_TOTAL * 2 + 65_536)?;
         let authority = read_generation_file(&self.authority, 65_536)?;
         let generation = selected.as_deref().map(open_generation).transpose()?;
@@ -542,6 +545,12 @@ impl ReadOnlySelectedGeneration {
             super::settings_generation_authority::Inspection::RepairRequired | super::settings_generation_authority::Inspection::InitialVerificationRequired => Err("settings generation requires authorized recovery".into()),
         }
     }
+}
+
+/// Open and release shared ownership for this read only. It cannot be cached by
+/// callers, avoiding long-lived reader locks that would block policy writers.
+pub(super) fn read_selected_once(root: &Path, scope: StoreScope) -> Result<BTreeMap<String, Value>, String> {
+    ReadOnlySelectedGeneration::acquire(root, scope)?.read_all()
 }
 
 /// Trial reader/writer for an already selected generation. The caller must
