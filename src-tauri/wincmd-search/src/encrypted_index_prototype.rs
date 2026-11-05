@@ -240,8 +240,8 @@ fn native_disk_roundtrip_does_not_write_indexed_text_as_plaintext() {
     );
 }
 
-// Deliberately test-only: this adapter buffers entire files and is unsuitable for
-// production-size indexes. It exercises Tantivy's real Directory contract.
+// Deliberately test-only: key management, migration and atomic manifest limits
+// are not ready for production. It exercises Tantivy's real Directory contract.
 mod tantivy_trial {
     use super::*;
     use std::{
@@ -272,8 +272,35 @@ mod tantivy_trial {
     fn name(path: &Path) -> io::Result<&str> {
         path.to_str().ok_or_else(invalid)
     }
+    struct HandleReader {
+        inner: Arc<dyn FileHandle>,
+        offset: usize,
+    }
+    impl Read for HandleReader {
+        fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
+            let count = dst.len().min(self.inner.len().saturating_sub(self.offset));
+            if count == 0 {
+                return Ok(0);
+            }
+            let bytes = self.inner.read_bytes(self.offset..self.offset + count)?;
+            dst[..count].copy_from_slice(bytes.as_ref());
+            self.offset += count;
+            Ok(count)
+        }
+    }
+    impl Seek for HandleReader {
+        fn seek(&mut self, from: SeekFrom) -> io::Result<u64> {
+            let offset = match from {
+                SeekFrom::Start(n) => i128::from(n),
+                SeekFrom::Current(n) => self.offset as i128 + i128::from(n),
+                SeekFrom::End(n) => self.inner.len() as i128 + i128::from(n),
+            };
+            self.offset = usize::try_from(offset).map_err(|_| invalid())?;
+            Ok(self.offset as u64)
+        }
+    }
     struct TrialHandle {
-        file: Mutex<ProtectedFile<io::Cursor<Vec<u8>>>>,
+        file: Mutex<ProtectedFile<HandleReader>>,
         len: usize,
     }
     impl fmt::Debug for TrialHandle {
@@ -295,34 +322,136 @@ mod tantivy_trial {
     }
     struct TrialWriter {
         sink: Option<WritePtr>,
-        key: [u8; 32],
+        cipher: Aes256Gcm,
         path: String,
+        id: [u8; 16],
+        chunks: u64,
+        total: u64,
         plain: Vec<u8>,
+        failed: bool,
+    }
+    impl TrialWriter {
+        fn new(mut sink: WritePtr, key: &[u8; 32], path: String) -> io::Result<Self> {
+            let mut id = [0; 16];
+            OsRng.fill_bytes(&mut id);
+            sink.write_all(MAGIC)?;
+            sink.write_all(&id)?;
+            Ok(Self {
+                sink: Some(sink),
+                cipher: Aes256Gcm::new(key.into()),
+                path,
+                id,
+                chunks: 0,
+                total: 0,
+                plain: Vec::with_capacity(CHUNK),
+                failed: false,
+            })
+        }
+        fn write_chunk(&mut self) -> io::Result<()> {
+            if self.plain.is_empty() {
+                return Ok(());
+            }
+            let mut n = [0; 12];
+            OsRng.fill_bytes(&mut n);
+            let encrypted = self
+                .cipher
+                .encrypt(
+                    nonce(&n)?,
+                    Payload {
+                        msg: &self.plain,
+                        aad: &aad(&self.path, &self.id, b"chunk", self.chunks),
+                    },
+                )
+                .map_err(|_| invalid())?;
+            let sink = self.sink.as_mut().ok_or_else(invalid)?;
+            sink.write_all(&n)?;
+            sink.write_all(&encrypted)?;
+            self.chunks = self.chunks.checked_add(1).ok_or_else(invalid)?;
+            self.plain.fill(0);
+            self.plain.clear();
+            Ok(())
+        }
+    }
+    impl Drop for TrialWriter {
+        fn drop(&mut self) {
+            self.plain.fill(0);
+        }
     }
     impl Write for TrialWriter {
         fn write(&mut self, data: &[u8]) -> io::Result<usize> {
-            self.plain.extend_from_slice(data);
+            if self.failed {
+                return Err(invalid());
+            }
+            self.total = match self.total.checked_add(data.len() as u64) {
+                Some(total) => total,
+                None => {
+                    self.failed = true;
+                    return Err(invalid());
+                }
+            };
+            for part in data.chunks(CHUNK) {
+                let mut left = part;
+                while !left.is_empty() {
+                    let n = (CHUNK - self.plain.len()).min(left.len());
+                    self.plain.extend_from_slice(&left[..n]);
+                    left = &left[n..];
+                    if self.plain.len() == CHUNK {
+                        if let Err(error) = self.write_chunk() {
+                            self.failed = true;
+                            return Err(error);
+                        }
+                    }
+                }
+            }
             Ok(data.len())
         }
         fn flush(&mut self) -> io::Result<()> {
-            Ok(())
+            if self.failed {
+                return Err(invalid());
+            }
+            let result = self.sink.as_mut().ok_or_else(invalid)?.flush();
+            if result.is_err() {
+                self.failed = true;
+            }
+            result
         }
     }
     impl TerminatingWrite for TrialWriter {
         fn terminate_ref(&mut self, _: AntiCallToken) -> io::Result<()> {
+            if self.failed {
+                return Err(invalid());
+            }
+            if let Err(error) = self.write_chunk() {
+                self.failed = true;
+                return Err(error);
+            }
+            let mut n = [0; 12];
+            OsRng.fill_bytes(&mut n);
+            let tag = self
+                .cipher
+                .encrypt(
+                    nonce(&n)?,
+                    Payload {
+                        msg: &[],
+                        aad: &aad(&self.path, &self.id, b"footer", self.total),
+                    },
+                )
+                .map_err(|_| invalid())?;
             let mut sink = self.sink.take().ok_or_else(invalid)?;
-            encrypt(&mut sink, &self.key, &self.path, &self.plain)?;
+            sink.write_all(&self.total.to_le_bytes())?;
+            sink.write_all(&n)?;
+            sink.write_all(&tag)?;
             sink.terminate()
         }
     }
     impl Directory for TrialDirectory {
         fn get_file_handle(&self, path: &Path) -> Result<Arc<dyn FileHandle>, OpenReadError> {
             let source = self.inner.get_file_handle(path)?;
-            let bytes = source
-                .read_bytes(0..source.len())
-                .map_err(|e| OpenReadError::wrap_io_error(e, path.into()))?;
             let file = ProtectedFile::open(
-                io::Cursor::new(bytes.as_ref().to_vec()),
+                HandleReader {
+                    inner: source,
+                    offset: 0,
+                },
                 &self.key,
                 name(path).map_err(|e| OpenReadError::wrap_io_error(e, path.into()))?,
             )
@@ -344,12 +473,9 @@ mod tantivy_trial {
                 .map_err(|e| OpenWriteError::wrap_io_error(e, path.into()))?
                 .to_owned();
             let sink = self.inner.open_write(path)?;
-            Ok(BufWriter::new(Box::new(TrialWriter {
-                sink: Some(sink),
-                key: self.key,
-                path: path_name,
-                plain: Vec::new(),
-            })))
+            let writer = TrialWriter::new(sink, &self.key, path_name)
+                .map_err(|e| OpenWriteError::wrap_io_error(e, path.into()))?;
+            Ok(BufWriter::new(Box::new(writer)))
         }
         fn atomic_read(&self, path: &Path) -> Result<Vec<u8>, OpenReadError> {
             let bytes = self.inner.atomic_read(path)?;
@@ -417,5 +543,99 @@ mod tantivy_trial {
             .unwrap();
         let reader = reopened.reader().unwrap();
         assert_eq!(reader.searcher().search(&query, &Count).unwrap(), 1);
+    }
+
+    #[test]
+    fn streaming_writer_and_file_handle_use_bounded_chunks() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        #[derive(Debug)]
+        struct MeasuredHandle {
+            inner: Arc<dyn FileHandle>,
+            largest: Arc<AtomicUsize>,
+        }
+        impl HasLen for MeasuredHandle {
+            fn len(&self) -> usize {
+                self.inner.len()
+            }
+        }
+        impl FileHandle for MeasuredHandle {
+            fn read_bytes(&self, range: Range<usize>) -> io::Result<OwnedBytes> {
+                self.largest.fetch_max(range.len(), Ordering::Relaxed);
+                self.inner.read_bytes(range)
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let inner = MmapDirectory::open(dir.path()).unwrap();
+        let path = Path::new("stream.idx");
+        let key = [11; 32];
+        let mut writer =
+            TrialWriter::new(inner.open_write(path).unwrap(), &key, "stream.idx".into()).unwrap();
+        let bytes = vec![42; CHUNK * 8 + 333];
+        for part in bytes.chunks(971) {
+            writer.write_all(part).unwrap();
+            assert!(writer.plain.len() < CHUNK);
+        }
+        writer.terminate().unwrap();
+        let largest = Arc::new(AtomicUsize::new(0));
+        let inner_file = inner.get_file_handle(path).unwrap();
+        let measured = Arc::new(MeasuredHandle {
+            inner: inner_file,
+            largest: largest.clone(),
+        });
+        let mut file = ProtectedFile::open(
+            HandleReader {
+                inner: measured,
+                offset: 0,
+            },
+            &key,
+            "stream.idx",
+        )
+        .unwrap();
+        assert_eq!(
+            file.read(CHUNK - 7..CHUNK + 7).unwrap(),
+            bytes[CHUNK - 7..CHUNK + 7]
+        );
+        assert_eq!(file.read(0..bytes.len()).unwrap(), bytes);
+        assert!(largest.load(Ordering::Relaxed) <= CHUNK + OVERHEAD);
+    }
+
+    #[test]
+    fn failed_stream_cannot_be_finalized_or_read_as_a_complete_file() {
+        struct FailAfter {
+            bytes: Arc<Mutex<Vec<u8>>>,
+            limit: usize,
+        }
+        impl Write for FailAfter {
+            fn write(&mut self, input: &[u8]) -> io::Result<usize> {
+                let mut bytes = self.bytes.lock().unwrap();
+                let available = self.limit.saturating_sub(bytes.len());
+                if available == 0 {
+                    return Err(io::Error::other("injected write failure"));
+                }
+                let n = available.min(input.len());
+                bytes.extend_from_slice(&input[..n]);
+                Ok(n)
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        impl TerminatingWrite for FailAfter {
+            fn terminate_ref(&mut self, _: AntiCallToken) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let sink: WritePtr = BufWriter::new(Box::new(FailAfter {
+            bytes: output.clone(),
+            limit: 100,
+        }));
+        let key = [17; 32];
+        let mut writer = TrialWriter::new(sink, &key, "failed.idx".into()).unwrap();
+        assert!(writer.write_all(&vec![4; CHUNK]).is_err());
+        assert!(writer.write_all(b"retry").is_err());
+        assert!(writer.terminate().is_err());
+        let stored = output.lock().unwrap().clone();
+        assert!(ProtectedFile::open(io::Cursor::new(stored), &key, "failed.idx").is_err());
     }
 }
