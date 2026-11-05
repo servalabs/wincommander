@@ -15,12 +15,13 @@ pub(crate) struct Intent {
     pub volume: u32,
     pub file_high: u32,
     pub file_low: u32,
+    pub replacement_pending: bool,
 }
 impl Intent {
     pub(crate) fn capture(transaction: [u8; 16], generation: [u8; 16], old: &Path) -> io::Result<Self> {
         if transaction == [0; 16] || generation == [0; 16] { return Err(invalid()); }
         let (volume, file_high, file_low) = identity(old)?;
-        Ok(Self { magic: MAGIC.into(), transaction, generation, volume, file_high, file_low })
+        Ok(Self { magic: MAGIC.into(), transaction, generation, volume, file_high, file_low, replacement_pending: false })
     }
     pub(crate) fn matches_path(&self, path: &Path) -> io::Result<bool> {
         Ok(identity(path)? == (self.volume, self.file_high, self.file_low))
@@ -67,6 +68,18 @@ impl Store {
         if self.load()?.as_ref() != Some(intent) { return Err(invalid()); }
         Ok(())
     }
+    pub(crate) fn mark_replacement(&self, transaction: &[u8; 16]) -> io::Result<()> {
+        let mut current = self.load()?.ok_or_else(invalid)?;
+        if &current.transaction != transaction { return Err(invalid()); }
+        if current.replacement_pending { return Ok(()); }
+        current.replacement_pending = true;
+        let plain = serde_json::to_vec(&current).map_err(|_| invalid())?;
+        let protected = UserDpapi.protect(&plain)?;
+        if protected.len() > 8192 { return Err(invalid()); }
+        self.dir.atomic_write_pinned(Path::new(NAME), &protected)?;
+        if self.load()?.as_ref() != Some(&current) { return Err(invalid()); }
+        Ok(())
+    }
     pub(crate) fn clear_matching(&self, transaction: &[u8; 16]) -> io::Result<()> {
         let current = self.load()?.ok_or_else(invalid)?;
         if &current.transaction != transaction { return Err(invalid()); }
@@ -88,6 +101,9 @@ mod tests {
         assert_eq!(store.load().unwrap(), Some(intent.clone()));
         assert!(intent.matches_path(&old).unwrap()); assert!(!intent.matches_path(&other).unwrap());
         assert!(store.clear_matching(&[3; 16]).is_err());
+        assert!(store.mark_replacement(&[3; 16]).is_err());
+        store.mark_replacement(&[1; 16]).unwrap();
+        assert!(store.load().unwrap().unwrap().replacement_pending);
         let ciphertext = std::fs::read(selection.join(NAME)).unwrap();
         assert!(!ciphertext.windows(MAGIC.len()).any(|v| v == MAGIC.as_bytes()));
         store.clear_matching(&[1; 16]).unwrap();
