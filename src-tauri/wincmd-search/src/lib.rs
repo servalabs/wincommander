@@ -46,6 +46,21 @@ use watch::{watch_roots, FsEventAction};
 /// Application policy, checked immediately before extraction and persistence.
 pub type PathPolicy = Arc<dyn Fn(&std::path::Path) -> bool + Send + Sync>;
 
+fn path_allowed_for_ingestion(path: &std::path::Path, skips: &[std::path::PathBuf], resolved: std::io::Result<std::path::PathBuf>) -> bool {
+    let acceptable = match &resolved {
+        Ok(_) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => false,
+        Err(_) => match std::fs::symlink_metadata(path) {
+            Ok(_) => restricted::safe_path(path),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                path.parent().is_some_and(restricted::safe_path)
+            }
+            Err(_) => false,
+        },
+    };
+    acceptable && !crawler::path_or_resolved_is_skipped(path, resolved.as_deref().ok(), skips)
+}
+
 /// Relocate stored paths only after the caller verifies the index's volume identity.
 pub type PathMapper = Arc<dyn Fn(&std::path::Path) -> Option<std::path::PathBuf> + Send + Sync>;
 
@@ -163,13 +178,7 @@ impl SearchEngine {
         let skips = config.skip_paths.clone();
         let original_policy = path_policy;
         let path_policy: PathPolicy = Arc::new(move |path| {
-            // Missing entries must reach index_file so it can delete stale hits.
-            // A broken link is not missing: symlink_metadata still sees the link.
-            let resolvable_or_missing = path.canonicalize().is_ok()
-                || matches!(std::fs::symlink_metadata(path), Err(e) if e.kind() == std::io::ErrorKind::NotFound);
-            resolvable_or_missing
-                && !crawler::path_is_skipped(path, &skips)
-                && original_policy(path)
+            path_allowed_for_ingestion(path, &skips, path.canonicalize()) && original_policy(path)
         });
         let status = Arc::new(Mutex::new(IndexStatus::default()));
         Ok(Self {
@@ -567,6 +576,29 @@ mod tests {
             max_file_bytes: 10_000_000,
             index_dir,
         }
+    }
+
+    #[test]
+    fn canonicalization_failure_allows_ordinary_paths_but_not_permission_errors() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("ordinary.txt");
+        fs::write(&file, "ordinary").unwrap();
+        let unsupported = || std::io::Error::other("canonicalization unavailable");
+        assert!(path_allowed_for_ingestion(&file, &[], Err(unsupported())));
+        assert!(path_allowed_for_ingestion(dir.path(), &[], Err(unsupported())));
+        assert!(!path_allowed_for_ingestion(&file, &[], Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))));
+        assert!(!path_allowed_for_ingestion(&file, &[dir.path().to_path_buf()], Err(unsupported())));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn canonicalization_fallback_does_not_follow_links() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("ordinary.txt");
+        fs::write(&file, "ordinary").unwrap();
+        let link = dir.path().join("link.txt");
+        std::os::unix::fs::symlink(&file, &link).unwrap();
+        assert!(!path_allowed_for_ingestion(&link, &[], Err(std::io::Error::other("unavailable"))));
     }
 
     #[test]

@@ -11,19 +11,23 @@ use crate::error::{Result, SearchError};
 use crate::types::{DocId, FileMeta};
 
 pub(crate) fn path_is_skipped(path: &Path, skip_paths: &[PathBuf]) -> bool {
+    let physical = path.canonicalize().ok();
+    path_or_resolved_is_skipped(path, physical.as_deref(), skip_paths)
+}
+
+pub(crate) fn path_or_resolved_is_skipped(path: &Path, physical: Option<&Path>, skip_paths: &[PathBuf]) -> bool {
     if skip_paths.is_empty() {
         return false;
     }
-    let physical = path.canonicalize().ok();
     #[cfg(windows)]
     {
         crate::index::path_in_roots(&path.to_string_lossy(), skip_paths)
-            || physical.as_ref().is_some_and(|p| crate::index::path_in_roots(&p.to_string_lossy(), skip_paths))
+            || physical.is_some_and(|p| crate::index::path_in_roots(&p.to_string_lossy(), skip_paths))
     }
     #[cfg(not(windows))]
     {
         skip_paths.iter().any(|skip| path.starts_with(skip))
-            || physical.as_ref().is_some_and(|p| skip_paths.iter().any(|skip| p.starts_with(skip)))
+            || physical.is_some_and(|p| skip_paths.iter().any(|skip| p.starts_with(skip)))
     }
 }
 
