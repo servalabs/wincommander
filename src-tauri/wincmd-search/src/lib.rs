@@ -431,6 +431,32 @@ impl SearchEngine {
         self.config.skip_paths.push(backup.clone());
         Ok(backup)
     }
+    /// Offline phase: authenticate the selected encrypted generation before
+    /// moving the legacy cache under the helper's own exclusive fence.
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    pub fn quarantine_selected_with_fence(old: &std::path::Path, selection_dir: &std::path::Path,
+        fence: &crate::encrypted_search_fence::SearchOperationFence) -> Result<std::path::PathBuf> {
+        use tantivy::directory::Directory;
+        use crate::encrypted_generation_prototype::{inspect, PinnedSelectionStore, UserProtector};
+        use crate::encrypted_index_prototype::tantivy_trial::TrialDirectory;
+        use crate::read_only::{AccessMode, CheckedDirectory};
+        let parent = old.parent().ok_or_else(|| SearchError::Config("invalid legacy index path".into()))?;
+        if !old.is_absolute() || selection_dir.parent() != Some(parent) {
+            return Err(SearchError::Config("invalid selection parent".into()));
+        }
+        fence.require_exclusive_for(parent)?;
+        let _pins = CheckedDirectory::pin_root_path(parent)?;
+        let mut selection = PinnedSelectionStore::open(selection_dir)?;
+        let selected = inspect(&mut selection, &UserProtector)?
+            .ok_or_else(|| SearchError::Config("encrypted selection missing".into()))?;
+        let generation = parent.join(format!(".wincommander-encrypted-{}", hex::encode(selected.index_id)));
+        let directory = TrialDirectory::open_protected(&generation, AccessMode::GuardedReader, &selected.index_id, true)?;
+        let manifest = directory.atomic_read(std::path::Path::new("meta.json"))
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        let _: serde_json::Value = serde_json::from_slice(&manifest)
+            .map_err(|_| SearchError::Config("encrypted index manifest invalid".into()))?;
+        Ok(crate::encrypted_legacy_quarantine::quarantine_with_fence(old, &selected.index_id, fence)?)
+    }
     /// Read-only post-handoff check. The installer must hold its exclusive
     /// operation fence for the entire call; this helper never owns that lock.
     /// It verifies the DPAPI selector and authenticates the encrypted manifest,
@@ -1137,7 +1163,7 @@ mod tests {
         assert_eq!(fs::read(old.join("meta.json")).unwrap(), b"legacy retained");
         drop(wrong);
         let exclusive = crate::encrypted_search_fence::SearchOperationFence::acquire_exclusive(root.path()).unwrap();
-        let backup = engine.quarantine_experimental_with_fence(&exclusive).unwrap();
+        let backup = SearchEngine::quarantine_selected_with_fence(&old, &selector, &exclusive).unwrap();
         drop(exclusive);
         assert_eq!(backup, expected_backup);
         assert!(!old.exists());
