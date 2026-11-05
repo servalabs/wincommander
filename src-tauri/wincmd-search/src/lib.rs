@@ -288,6 +288,45 @@ impl SearchEngine {
         engine.start_indexing_internal(true)?;
         Ok(engine)
     }
+    /// Experimental application entry point. A missing selector starts a new
+    /// encrypted cache; a present but invalid selector is always an error.
+    /// Caller must serialize initialization and authorize the per-user parent.
+    /// The old index and interrupted candidates are retained.
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    pub fn open_or_rebuild_experimental_with_policy(mut config: IndexConfig, path_policy: PathPolicy) -> Result<Self> {
+        use rand::{rngs::OsRng, RngCore};
+        use crate::encrypted_generation_prototype::{inspect, PinnedSelectionStore, UserProtector};
+        let parent = config.index_dir.parent()
+            .ok_or_else(|| SearchError::Config("invalid index parent".into()))?;
+        let _pins = crate::read_only::CheckedDirectory::pin_root_path(parent)?;
+        let selection = parent.join(".wincommander-encrypted-selection");
+        match std::fs::create_dir(&selection) {
+            Ok(()) => {},
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {},
+            Err(error) => return Err(error.into()),
+        }
+        config.skip_paths.push(selection.clone());
+        let mut store = PinnedSelectionStore::open(&selection)?;
+        let exists = inspect(&mut store, &UserProtector)?.is_some();
+        drop(store);
+        if exists {
+            return Self::open_experimental_selected_with_policy(config, path_policy, &selection);
+        }
+        let mut identity = [0u8; 16];
+        OsRng.fill_bytes(&mut identity);
+        if identity == [0; 16] { return Err(SearchError::Config("cannot create encrypted index identity".into())); }
+        let mut engine = Self::open_experimental_encrypted_with_policy(config, path_policy, identity, false)?;
+        let report = engine.rebuild_experimental_candidate()?;
+        if report.omitted > 0 || report.skipped_links > 0 {
+            engine.status.lock().unwrap().last_error = Some(format!(
+                "Encrypted search rebuild skipped {} unreadable files and {} links; some results may be missing",
+                report.omitted, report.skipped_links,
+            ));
+        }
+        engine.select_experimental_candidate(&selection)?;
+        engine.start_indexing_internal(true)?;
+        Ok(engine)
+    }
     /// Caller must hold its cross-process volume guard until this engine is dropped.
     pub fn open_existing(config: IndexConfig) -> Result<Self> {
         Self::open_existing_with_policy(config, Arc::new(|_| true))
@@ -898,6 +937,22 @@ mod tests {
         assert!(SearchEngine::open_experimental_encrypted_with_policy(config, Arc::new(|_| true), identity, false).is_err());
         assert_eq!(fs::read(candidate.join("meta.json")).unwrap(), before);
         assert_eq!(fs::read(old.join("meta.json")).unwrap(), b"legacy intact");
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    #[test]
+    fn application_entry_rebuilds_then_refuses_corrupt_selector() {
+        let root = TempDir::new().unwrap();
+        let old = root.path().join("legacy"); let data = root.path().join("data");
+        fs::create_dir(&data).unwrap(); fs::write(data.join("file.txt"), b"runtimecachetoken").unwrap();
+        let config = make_config(old, vec![data]);
+        let engine = SearchEngine::open_or_rebuild_experimental_with_policy(config.clone(), Arc::new(|_| true)).unwrap();
+        let query = ContentQuery { terms: "runtimecachetoken".into(), roots: vec![], limit: 10, offset: 0, keyword_only: true };
+        assert_eq!(engine.search(&query).unwrap().len(), 1);
+        drop(engine);
+        let selector = root.path().join(".wincommander-encrypted-selection").join("candidate-proof.v1");
+        fs::write(&selector, b"corrupted selector").unwrap();
+        assert!(SearchEngine::open_or_rebuild_experimental_with_policy(config, Arc::new(|_| true)).is_err());
+        assert_eq!(fs::read(selector).unwrap(), b"corrupted selector");
     }
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     #[test]

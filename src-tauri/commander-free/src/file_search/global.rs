@@ -26,6 +26,10 @@ pub(super) fn with_engine<T>(
             return operation(&current.engine);
         }
     }
+    // Match other replacement paths: take the process mutex before the
+    // in-process engine lock to avoid lock-order inversion.
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    let _replacement = super::locks::IndexReplacementLock::acquire()?;
     let mut write = cell().write().map_err(|_| "Search state is unavailable.")?;
     if let Some(old) = write.take() {
         old.engine.stop();
@@ -35,14 +39,19 @@ pub(super) fn with_engine<T>(
     validate_directory(&config.index_dir)?;
     crate::paths::harden_dir_acl(&config.index_dir);
     let blocked = protected.to_vec();
-    let engine = SearchEngine::open_with_policy(
-        config.clone(),
-        Arc::new(move |path| privacy::ordinary_allowed(path, &blocked)),
-    )
-    .map_err(|e| e.to_string())?;
-    // A schema migration may remove the manifest. Restore freshly read policy,
-    // never this request's older snapshot after a concurrent folder removal.
+    let policy: wincmd_search::PathPolicy = Arc::new(move |path| privacy::ordinary_allowed(path, &blocked));
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    let engine = {
+        // This feature remains disabled until native/recovery/Pro validation.
+        SearchEngine::open_or_rebuild_experimental_with_policy(config.clone(), policy)
+            .map_err(|e| e.to_string())?
+    };
+    #[cfg(not(all(windows, feature = "experimental-encrypted-search")))]
+    let engine = SearchEngine::open_with_policy(config.clone(), policy)
+        .map_err(|e| e.to_string())?;
+    // Restore freshly read policy after any ordinary schema migration.
     super::prepare(false)?;
+    #[cfg(not(all(windows, feature = "experimental-encrypted-search")))]
     engine.start_indexing().map_err(|e| e.to_string())?;
     *write = Some(GlobalIndex { signature, engine });
     operation(&write.as_ref().ok_or("Search state is unavailable.")?.engine)
@@ -106,6 +115,10 @@ mod tests {
 }
 
 pub(super) fn remove(directory: &std::path::Path) -> Result<(), String> {
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    { let _ = directory; return Err("Encrypted search reset is not available yet.".into()); }
+    #[cfg(not(all(windows, feature = "experimental-encrypted-search")))]
+    {
     let mut guard = cell().write().map_err(|_| "Search state is unavailable.")?;
     if let Some(old) = guard.take() {
         old.engine.stop();
@@ -116,4 +129,5 @@ pub(super) fn remove(directory: &std::path::Path) -> Result<(), String> {
             .map_err(|_| "Old index could not be removed; rebuild stopped.")?;
     }
     Ok(())
+    }
 }
