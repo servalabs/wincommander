@@ -76,4 +76,15 @@ mod tests {
         assert_eq!(open("settings", &std::fs::read_to_string(&path).unwrap(), identity).unwrap(), decoded);
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn native_dpapi_machine_and_user_envelopes_roundtrip() {
+        use super::super::{dpapi_protect, dpapi_unprotect, user_dpapi_protect, user_dpapi_unprotect};
+        let machine = seal("machine:settings", b"machine value", dpapi_protect, dpapi_unprotect).unwrap();
+        assert_eq!(open("machine:settings", &machine, dpapi_unprotect).unwrap(), b"machine value");
+        let user = seal("user-install:settings", b"user value", user_dpapi_protect, user_dpapi_unprotect).unwrap();
+        assert_eq!(open("user-install:settings", &user, user_dpapi_unprotect).unwrap(), b"user value");
+        assert!(open("machine:settings", &user, user_dpapi_unprotect).is_err());
+    }
+
 }
