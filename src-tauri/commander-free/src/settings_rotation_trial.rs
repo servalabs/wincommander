@@ -728,7 +728,14 @@ fn experimental_runtime_root_for(scope: StoreScope) -> Result<(PathBuf, Vec<std:
 /// the exclusive byte-range lock itself before doing any protected work.
 #[cfg(windows)]
 pub(super) fn prepare_installer_search_fence(pid: u32) -> Result<(), String> {
-    let (root, root_pins, _) = experimental_runtime_root_for(StoreScope::CurrentUser)?;
+    let root = source_snapshot::known_root(StoreScope::CurrentUser)?;
+    let mut root_pins = source_snapshot::pin_matching_parents(&root, StoreScope::CurrentUser)?;
+    match std::fs::create_dir(&root) {
+        Ok(()) => {},
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {},
+        Err(_) => return Err("Cannot prepare user search root.".into()),
+    }
+    root_pins.extend(source_snapshot::pin_matching_roots(&root, StoreScope::CurrentUser)?);
     duplicate_search_fence_handles(&root.join("file-search"), pid, root_pins)
 }
 

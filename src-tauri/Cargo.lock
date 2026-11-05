@@ -42,6 +42,7 @@ dependencies = [
  "ctr",
  "ctutils",
  "ghash",
+ "zeroize",
 ]
 
 [[package]]
@@ -2304,6 +2305,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2eecf2d5dc9b66b732b97707a0210906b1d30523eb773193ab777c0c84b3e8d5"
 dependencies = [
  "polyval",
+ "zeroize",
 ]
 
 [[package]]
@@ -4494,6 +4496,7 @@ dependencies = [
  "cpubits",
  "cpufeatures 0.3.1",
  "universal-hash",
+ "zeroize",
 ]
 
 [[package]]
@@ -6021,9 +6024,9 @@ dependencies = [
 
 [[package]]
 name = "tao"
-version = "0.37.1"
+version = "0.37.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f37f381f4e048e6cdf038b5705f8cf14ad108279d46eb968140a7b291aba9400"
+checksum = "d5777b06fe6435126ae8d816eba269e050e1e10d302cf5461e9c49eccabc3548"
 dependencies = [
  "bitflags 2.13.1",
  "block2",
@@ -7479,19 +7482,24 @@ dependencies = [
 name = "wincmd-search"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
  "calamine",
  "globset",
  "hex",
+ "hmac",
  "lopdf",
  "notify",
  "once_cell",
  "quick-xml",
+ "rand 0.8.8",
  "serde",
  "serde_json",
  "sha2 0.11.1",
  "tantivy",
  "tempfile",
  "thiserror 2.0.21",
+ "windows-sys 0.61.2",
+ "zeroize",
  "zip",
 ]
 
