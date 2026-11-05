@@ -186,6 +186,55 @@ fn activation_and_release_cannot_both_start() {
 }
 
 #[test]
+fn competing_settlements_do_not_overlap_and_failure_releases_lock() {
+    use std::sync::{Arc, Barrier, atomic::{AtomicUsize, Ordering}};
+    let active = Arc::new(AtomicUsize::new(0));
+    let barrier = Arc::new(Barrier::new(2));
+    let threads: Vec<_> = (0..2).map(|_| {
+        let active = Arc::clone(&active);
+        let barrier = Arc::clone(&barrier);
+        std::thread::spawn(move || {
+            barrier.wait();
+            with_settlement_lock(|| {
+                assert_eq!(active.fetch_add(1, Ordering::SeqCst), 0);
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                assert_eq!(active.fetch_sub(1, Ordering::SeqCst), 1);
+                Err::<(), _>(INVALID)
+            }).unwrap_err();
+        })
+    }).collect();
+    for thread in threads { thread.join().unwrap(); }
+    assert_eq!(active.load(Ordering::SeqCst), 0);
+    assert!(with_settlement_lock(|| Ok(())).is_ok());
+}
+
+#[test]
+fn settlement_lock_is_shared_across_processes() {
+    const READY: &str = "WINCMD_TEST_SETTLEMENT_READY";
+    if let Ok(path) = std::env::var(READY) {
+        std::fs::write(path, b"ready").unwrap();
+        with_settlement_lock(|| Ok(())).unwrap();
+        return;
+    }
+    let path = std::env::temp_dir().join(format!("wincommander-settlement-{}", uuid::Uuid::new_v4()));
+    let mut child = with_settlement_lock(|| {
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "licence_activation_intent::tests::settlement_lock_is_shared_across_processes"])
+            .env(READY, &path).spawn().unwrap();
+        let start = std::time::Instant::now();
+        while !path.exists() && start.elapsed() < std::time::Duration::from_secs(10) {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(path.exists(), "child did not start");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(child.try_wait().unwrap().is_none(), "child bypassed the settlement lock");
+        Ok(child)
+    }).unwrap();
+    assert!(child.wait().unwrap().success());
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn pending_intent_reopens_in_another_process() {
     const STORE: &str = "WINCMD_TEST_ACTIVATION_INTENT_PATH";
     const GATE: &str = "WINCMD_TEST_ACTIVATION_GATE_PATH";

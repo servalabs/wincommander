@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Durable, machine-protected intent before any paid activation request.
-//! No caller or network path is connected until identity and settlement are qualified.
+//! The service resumes this intent after interruption until settlement succeeds.
 use crate::fleet_credential::{MachineDpapi, Protector};
 use crate::license_cache::{licence_device_anchor::Anchor, release_gate};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -297,8 +297,15 @@ pub(crate) async fn send_pending(pending: &PendingActivation) -> Result<Verified
 /// The service owns identity, intent, transport, protected cache and enrolment.
 /// No failure clears intent; only a verified signed settlement completes it.
 pub(crate) async fn activate_from_key(key: &str) -> Result<(), &'static str> {
-    let identity = tokio::task::spawn_blocking(crate::licence_machine_identity::read_machine_identity)
-        .await.map_err(|_| INVALID)??;
+    let key = Zeroizing::new(key.to_owned());
+    let runtime = tokio::runtime::Handle::current();
+    tokio::task::spawn_blocking(move || with_settlement_lock(|| {
+        runtime.block_on(activate_locked(&key))
+    })).await.map_err(|_| INVALID)?
+}
+
+async fn activate_locked(key: &str) -> Result<(), &'static str> {
+    let identity = crate::licence_machine_identity::read_machine_identity()?;
     let pending = match begin_or_resume(key, &identity.device_hash, identity.portable) {
         Ok(pending) => pending,
         Err(ALREADY_COMPLETED) => {
@@ -306,19 +313,63 @@ pub(crate) async fn activate_from_key(key: &str) -> Result<(), &'static str> {
             if crate::licence_device_credential::verify_completed_activation(&evidence).is_ok() {
                 return Ok(());
             }
-            let pending = crate::licence_device_release_pending::restart_after_completed_release(&evidence)?;
-            let verified = send_pending(&pending).await?;
-            crate::license_cache::store_activation(&pending, &verified)?;
-            crate::licence_device_credential::enrol_from_machine_cache(pending.licence_key()).await?;
-            return crate::licence_device_credential::acknowledge_activation(&pending, &verified).await;
+            let pending = crate::licence_device_credential::restart_after_completed_release(&evidence)?;
+            return settle_pending_locked(&pending).await;
 
         }
         Err(error) => return Err(error),
     };
-    let verified = send_pending(&pending).await?;
+    settle_pending_locked(&pending).await
+}
+
+// This mutex covers decisions, intent creation, and the entire settlement.
+// It is held on a blocking thread; Windows releases it if the process dies.
+fn with_settlement_lock<T>(work: impl FnOnce() -> Result<T, &'static str>) -> Result<T, &'static str> {
+    let _guard = crate::licence_coordination::acquire_named(
+        r"Global\WinCommander.Licence.ActivationSettlement.v1", 30_000).map_err(|_| INVALID)?;
+    work()
+}
+
+/// Release participates in the same lock as activation, including its
+/// completed-intent decision, so neither can cross the other's settlement.
+pub(crate) async fn release_serialized() -> Result<(), &'static str> {
+    let runtime = tokio::runtime::Handle::current();
+    tokio::task::spawn_blocking(move || with_settlement_lock(|| {
+        runtime.block_on(crate::licence_device_credential::release_from_machine_cache())
+    })).await.map_err(|_| INVALID)?
+}
+
+async fn settle_pending_locked(pending: &PendingActivation) -> Result<(), &'static str> {
+    if ensure_current(pending).is_err() {
+        let evidence = completed_for_key(pending.licence_key(), pending.device_hash(), pending.portable())?
+            .ok_or(INVALID)?;
+        if evidence.pending.operation_id() != pending.operation_id() { return Err(INVALID); }
+        return crate::licence_device_credential::verify_completed_activation(&evidence);
+    }
+    let verified = send_pending(pending).await?;
     crate::license_cache::store_activation(&pending, &verified)?;
     crate::licence_device_credential::enrol_from_machine_cache(pending.licence_key()).await?;
     crate::licence_device_credential::acknowledge_activation(&pending, &verified).await
+}
+
+/// Restart recovery never creates an intent and never clears a failed one.
+/// It uses the same settlement path as an interactive activation.
+pub(crate) async fn recover_once() -> Result<bool, &'static str> {
+    let runtime = tokio::runtime::Handle::current();
+    tokio::task::spawn_blocking(move || with_settlement_lock(|| runtime.block_on(async {
+        let Some(pending) = recover_pending()? else { return Ok(false); };
+        settle_pending_locked(&pending).await?;
+        Ok(true)
+    }))).await.map_err(|_| INVALID)?
+}
+
+pub(crate) async fn recovery_loop() {
+    loop {
+        if recover_once().await.is_err() {
+            eprintln!("[wincommander-svc] licence activation recovery will retry");
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+    }
 }
 
 fn begin_at(store: &Anchor, gate: &Anchor, protector: &dyn Protector,

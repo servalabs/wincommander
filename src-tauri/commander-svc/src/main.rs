@@ -92,7 +92,6 @@ mod fleet_runtime_env;
 #[allow(dead_code)] // Not connected to enrolment or production licence decisions.
 mod licence_device_credential;
 #[cfg(all(windows, feature = "experimental-pq-licence"))]
-#[allow(dead_code)] // Activation transport and IPC are not yet connected.
 mod licence_activation_intent;
 #[cfg(all(windows, feature = "experimental-pq-licence"))]
 #[allow(dead_code)] // Service-owned activation is still disconnected.
@@ -409,6 +408,8 @@ async fn run(mut stop_rx: Option<tokio::sync::watch::Receiver<bool>>) {
     tokio::spawn(reconciler::run());
     tokio::spawn(command_worker::run());
     tokio::spawn(fleet_transport::run());
+    #[cfg(feature = "experimental-pq-licence")]
+    tokio::spawn(licence_activation_intent::recovery_loop());
     // Pro can extract the engine after this service has already started.
     // Poll only the fixed payload: the helper is private, accepts no renderer
     // arguments, and fails closed until its signer/ownership/ACL checks pass.

@@ -16,6 +16,12 @@ mod wire;
 #[path = "licence_device_release_pending.rs"]
 mod release_pending;
 
+pub(crate) fn restart_after_completed_release(
+    evidence: &crate::licence_activation_intent::CompletedEvidence,
+) -> Result<crate::licence_activation_intent::PendingActivation, &'static str> {
+    release_pending::restart_after_completed_release(evidence)
+}
+
 #[cfg(test)]
 pub(crate) use release_pending::{test_make_acknowledged_record, test_rotate_completed_record};
 

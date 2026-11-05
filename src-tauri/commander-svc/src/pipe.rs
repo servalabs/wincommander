@@ -960,7 +960,7 @@ async fn handle_hybrid_license_release(
 ) -> Result<serde_json::Value, VerbError> {
     handle_hybrid_license_release_with(args, trust_origin, caller_privileged, || async {
         #[cfg(feature = "experimental-pq-licence")]
-        { crate::licence_device_credential::release_from_machine_cache().await }
+        { crate::licence_activation_intent::release_serialized().await }
         #[cfg(not(feature = "experimental-pq-licence"))]
         { Err("license release is unavailable") }
     }).await

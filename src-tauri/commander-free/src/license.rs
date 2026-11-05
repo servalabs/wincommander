@@ -2080,9 +2080,11 @@ pub async fn deactivate_license_internal() -> Result<(), String> {
 pub async fn release_license_seat_if_present() -> Result<bool, String> {
     #[cfg(all(windows, feature = "experimental-pq-licence"))]
     {
-        require_license_removal_administrator()?;
-        release_hybrid_from_service().await?;
-        return Ok(true);
+        // Releasing the seat alone is insufficient: another process could
+        // reactivate after the service replies but before uninstall finishes.
+        // Keep uninstall closed until the service and server both own a
+        // durable retirement fence that survives that entire handoff.
+        return Err("Uninstall is temporarily unavailable while licence security is being upgraded.".into());
     }
     #[cfg(not(all(windows, feature = "experimental-pq-licence")))]
     {
