@@ -134,7 +134,7 @@ fn with_current<T>(
     if binding.issuer_origin != wire::LICENCE_ORIGIN { return Err(INVALID); }
     // Same lock order as credential confirmation: credential, cache, process.
     let _guard = LOCK.lock().map_err(|_| INVALID)?;
-    crate::license_cache::with_verified_refresh_wire(licence.payload, licence.signature, licence.hybrid,
+    crate::license_cache::with_verified_release_wire(licence.payload, licence.signature, licence.hybrid,
         licence.last_verified_at, binding.licence_id, binding.device_hash, |body| {
             let source = selected_machine_anchor_locked(binding, trust, now)?;
             let bytes = source.read().map_err(|_| INVALID)?.ok_or(INVALID)?;
@@ -167,9 +167,14 @@ fn stage_guarded(store: &anchor::Anchor, gate: &anchor::Anchor, protector: &dyn 
 pub(crate) fn load(
     binding: &Binding<'_>, trust: &wincmd_pq_experiment::jws::Trust<'_>, licence: &RefreshLicence<'_>, now: u64,
 ) -> Result<Option<SavedRelease>, &'static str> {
-    with_current(binding, trust, licence, now, |store, credential, body|
-        load_guarded(store, &crate::license_cache::release_gate::machine(), &MachineDpapi,
-            binding, credential, body))
+    with_current(binding, trust, licence, now, |store, credential, body| {
+        let saved = load_guarded(store, &crate::license_cache::release_gate::machine(), &MachineDpapi,
+            binding, credential, body)?;
+        if saved.as_ref().is_some_and(|item| item.acknowledged) {
+            crate::license_cache::mark_acknowledged_release_locked(licence.payload, licence.signature, licence.hybrid, licence.last_verified_at)?;
+        }
+        Ok(saved)
+    })
 }
 
 fn load_guarded(store: &anchor::Anchor, gate: &anchor::Anchor, protector: &dyn Protector,
@@ -219,7 +224,8 @@ pub(crate) fn record_acknowledgement(
     with_current(binding, trust, licence, now, |store, credential, body| {
         let context = release_entropy(binding, credential, body)?;
         crate::license_cache::release_gate::check_request(&context, Some(request))?;
-        acknowledge_locked(store, &MachineDpapi, binding, credential, body, request, confirmation)
+        acknowledge_locked(store, &MachineDpapi, binding, credential, body, request, confirmation)?;
+        crate::license_cache::mark_acknowledged_release_locked(licence.payload, licence.signature, licence.hybrid, licence.last_verified_at)
     })
 }
 

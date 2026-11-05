@@ -393,7 +393,7 @@ pub(crate) async fn request_release(
 /// Success means the server acknowledgement was saved; the local licence remains.
 /// Authentication and crash-safe local finalization are still required before IPC use.
 pub(crate) async fn release_from_machine_cache() -> Result<(), &'static str> {
-    let cache = crate::license_cache::load_device_licence_snapshot()?;
+    let cache = crate::license_cache::load_release_licence_snapshot()?;
     let trust = crate::license_cache::configured_device_receipt_trust()?;
     let mut receipt_policy = trust.policy();
     receipt_policy.purpose = wincmd_pq_experiment::Purpose::LicenceEnrolment;

@@ -302,6 +302,13 @@ pub(crate) fn load_device_licence_snapshot() -> Result<DeviceLicenceSnapshot, &'
     rollback::load_snapshot(&machine_license_cache_path()?, public, &trust.policy())
 }
 
+#[cfg(feature = "experimental-pq-licence")]
+pub(crate) fn load_release_licence_snapshot() -> Result<DeviceLicenceSnapshot, &'static str> {
+    let public = service_public_key().ok_or("license verification is unavailable")?;
+    let trust = hybrid_trust::configured()?;
+    rollback::load_release_snapshot(&machine_license_cache_path()?, public, &trust.policy())
+}
+
 /// Receipt keys are supplied by the service build, never by a desktop caller.
 #[cfg(feature = "experimental-pq-licence")]
 pub(crate) fn configured_device_receipt_trust() -> Result<hybrid_trust::Trust, &'static str> {
@@ -367,6 +374,32 @@ pub(crate) fn with_verified_refresh_wire<T>(
     let wire = build_refresh_wire(&request, public, &trust.policy(), licence_id, device_hash)?;
     rollback::with_verified_current(&machine_license_cache_path()?, &request, last_verified_at, public,
         &trust.policy(), || operation(wire))
+}
+
+/// Release recovery may reopen the exact retired token while its gate remains set.
+#[cfg(feature = "experimental-pq-licence")]
+pub(crate) fn with_verified_release_wire<T>(
+    payload: &str, signature: &str, hybrid: &str, last_verified_at: u64,
+    licence_id: &str, device_hash: &str, operation: impl FnOnce(Vec<u8>) -> Result<T, &'static str>,
+) -> Result<T, &'static str> {
+    let request = StoreLicenseCacheRequest { payload: payload.into(), signature: signature.into(),
+        hybrid: Some(hybrid.into()), seats_used: None, seat_limit: None };
+    let public = service_public_key().ok_or("license verification is unavailable")?;
+    let trust = hybrid_trust::configured()?;
+    let wire = build_refresh_wire(&request, public, &trust.policy(), licence_id, device_hash)?;
+    rollback::with_verified_release_current(&machine_license_cache_path()?, &request, last_verified_at, public,
+        &trust.policy(), || operation(wire))
+}
+
+/// Called only inside the release-specific verified-cache and process locks.
+#[cfg(feature = "experimental-pq-licence")]
+pub(crate) fn mark_acknowledged_release_locked(payload: &str, signature: &str, hybrid: &str, last_verified_at: u64)
+    -> Result<(), &'static str> {
+    let request = StoreLicenseCacheRequest { payload: payload.into(), signature: signature.into(),
+        hybrid: Some(hybrid.into()), seats_used: None, seat_limit: None };
+    let public = service_public_key().ok_or("license verification is unavailable")?;
+    let trust = hybrid_trust::configured()?;
+    rollback::mark_acknowledged_release_locked(&machine_license_cache_path()?, &request, last_verified_at, public, &trust.policy())
 }
 
 #[cfg(feature = "experimental-pq-licence")]

@@ -132,6 +132,30 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
     assert!(ledger::advance(Some(&generation_record), None, &generation_one_later, &cache(&generation_one_later), &public, &current, None).is_err());
     assert!(ledger::advance(Some(&generation_record), None, &generation_missing_later, &cache(&generation_missing_later), &public, &current, None).is_err());
     assert!(ledger::advance(Some(&generation_record), None, &generation_three_same_second, &cache(&generation_three_same_second), &public, &current, None).is_ok());
+    let released = ledger::mark_released(&generation_record, &generation_two, 99, &cache(&generation_two), &public, &current, None).unwrap();
+    let released_legacy = ledger::mark_released(&cache(&generation_two), &generation_two, 99, &cache(&generation_two), &public, &current, None).unwrap();
+    assert_eq!(ledger::mark_released(&released_legacy, &generation_two, 99, &cache(&generation_two), &public, &current, None).unwrap(), released_legacy);
+    assert!(ledger::advance(Some(&released_legacy), None, &generation_two, &cache(&generation_two), &public, &current, None).is_err());
+    assert_eq!(ledger::mark_released(&released, &generation_two, 99, &cache(&generation_two), &public, &current, None).unwrap(), released);
+    assert!(ledger::mark_released(&released, &generation_two, 100, &cache(&generation_two), &public, &current, None).is_err());
+    assert!(ledger::verify_current(&released, &generation_two, 99, &cache(&generation_two), &public, &current, None).is_err());
+    assert!(ledger::advance(Some(&released), None, &generation_two, &cache(&generation_two), &public, &current, None).is_err());
+    assert!(ledger::advance(Some(&released), None, &generation_one_later, &cache(&generation_one_later), &public, &current, None).is_err());
+    let reactivated = ledger::advance(Some(&released), None, &generation_three_same_second, &cache(&generation_three_same_second), &public, &current, None).unwrap();
+    assert!(ledger::verify_current(&reactivated, &generation_three_same_second, 99, &cache(&generation_three_same_second), &public, &current, None).is_ok());
+    assert!(ledger::advance(Some(&reactivated), None, &generation_two, &cache(&generation_two), &public, &current, None).is_err());
+    let other = make("lic-b", 103, 10000, 8, &new_ed, &new_pq, "new-ed", "new-pq");
+    let switched = ledger::advance(Some(&released), None, &other, &cache(&other), &public, &current, None).unwrap();
+    assert!(ledger::advance(Some(&switched), None, &generation_two, &cache(&generation_two), &public, &current, None).is_err());
+    assert!(ledger::advance(Some(&switched), None, &generation_three_same_second, &cache(&generation_three_same_second), &public, &current, None).is_ok());
+    let mut corrupt: serde_json::Value = serde_json::from_slice(&released).unwrap();
+    corrupt["released"][0]["generation"] = 0.into();
+    assert!(ledger::advance(Some(&serde_json::to_vec(&corrupt).unwrap()), None, &other, &cache(&other), &public, &current, None).is_err());
+    let mut missing: serde_json::Value = serde_json::from_slice(&released).unwrap();
+    missing.as_object_mut().unwrap().remove("released");
+    assert!(ledger::advance(Some(&serde_json::to_vec(&missing).unwrap()), None, &other, &cache(&other), &public, &current, None).is_err());
+    missing["released"] = serde_json::json!([]);
+    assert!(ledger::advance(Some(&serde_json::to_vec(&missing).unwrap()), None, &other, &cache(&other), &public, &current, None).is_err());
     let old_bytes = cache(&previous);
     let rotated_other = make("lic-b", 101, 10000, 8, &new_ed, &new_pq, "new-ed", "new-pq");
     let rotated_bytes = cache(&rotated_other);
@@ -212,6 +236,27 @@ fn planned_rotation_preserves_history_without_accepting_old_issuance() {
         NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
     ));
     fs::create_dir(&renewal_dir).unwrap();
+    let retired_path = renewal_dir.join("retired-cache.json");
+    let retired_anchor_path = format!(r"SOFTWARE\WinCommanderRetiredGenerationTest-{}", uuid::Uuid::new_v4());
+    let retired_anchor = anchor::Anchor::test_user(retired_anchor_path.clone());
+    fs::write(&retired_path, cache(&generation_two)).unwrap();
+    retired_anchor.write(&generation_record).unwrap();
+    assert!(mark_acknowledged_release_with_anchor(&retired_path, &generation_two, 100, &public, &current, &retired_anchor).is_err());
+    assert_eq!(retired_anchor.read().unwrap().unwrap(), generation_record);
+    retired_anchor.write(b"damaged").unwrap();
+    assert!(mark_acknowledged_release_with_anchor(&retired_path, &generation_two, 99, &public, &current, &retired_anchor).is_err());
+    assert_eq!(fs::read(&retired_path).unwrap(), cache(&generation_two));
+    retired_anchor.write(&generation_record).unwrap();
+    mark_acknowledged_release_with_anchor(&retired_path, &generation_two, 99, &public, &current, &retired_anchor).unwrap();
+    let reopened_anchor = anchor::Anchor::test_user(retired_anchor_path.clone());
+    assert!(verify_with_anchor(&retired_path, &generation_two, 99, &public, &current, &reopened_anchor).is_err());
+    assert!(with_verified_anchor_mode(&retired_path, &generation_two, 99, &public, &current, &reopened_anchor, true, || Ok(())).is_ok());
+    assert!(load_snapshot_with_anchor_mode(&retired_path, &public, &current, &reopened_anchor, false).is_err());
+    assert!(load_snapshot_with_anchor_mode(&retired_path, &public, &current, &reopened_anchor, true).is_ok());
+    mark_acknowledged_release_with_anchor(&retired_path, &generation_two, 99, &public, &current, &reopened_anchor).unwrap();
+    assert!(mark_acknowledged_release_with_anchor(&retired_path, &generation_one_later, 99, &public, &current, &reopened_anchor).is_err());
+    fs::remove_file(&retired_path).unwrap();
+    anchor::remove_test_key(&retired_anchor_path).unwrap();
     let renewal_path = renewal_dir.join("license_cache.json");
     let renewal_anchor_path = format!(
         r"SOFTWARE\WinCommanderRenewalCas-{}-{}",

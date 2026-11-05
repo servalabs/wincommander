@@ -9,6 +9,32 @@ const MAX_RECORDS: usize = 4;
 struct Ledger {
     version: u8,
     records: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    released: Vec<ReleasedGeneration>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReleasedGeneration {
+    license_id: String,
+    device_hash: String,
+    generation: u64,
+}
+
+fn validate_ledger(ledger: &Ledger) -> Result<(), &'static str> {
+    if !matches!(ledger.version, 1 | 2) || (ledger.version == 1 && !ledger.released.is_empty())
+        || (ledger.version == 2 && ledger.released.is_empty())
+        || ledger.records.len() > MAX_RECORDS || ledger.released.len() > MAX_RECORDS {
+        return Err("license security record is invalid");
+    }
+    for (i, entry) in ledger.released.iter().enumerate() {
+        if entry.license_id.is_empty() || entry.license_id.len() > 512 || entry.device_hash.is_empty()
+            || entry.device_hash.len() > 512 || entry.generation == 0 || entry.generation > 9_007_199_254_740_991
+            || ledger.released[..i].iter().any(|previous| previous.license_id == entry.license_id && previous.device_hash == entry.device_hash) {
+            return Err("license security record is invalid");
+        }
+    }
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -23,27 +49,27 @@ struct LegacyCache {
     _seat_limit: Option<u32>,
 }
 
+fn parse_ledger(raw: &[u8]) -> Result<Ledger, &'static str> {
+    let ledger = match serde_json::from_slice::<Ledger>(raw) {
+        Ok(ledger) => ledger,
+        Err(_) => {
+            let legacy: LegacyCache = serde_json::from_slice(raw).map_err(|_| "license security record is invalid")?;
+            if legacy.token.hybrid.is_none() { return Err("license security record is invalid"); }
+            Ledger { version: 1, released: Vec::new(), records: vec![std::str::from_utf8(raw)
+                .map_err(|_| "license security record is invalid")?.to_owned()] }
+        }
+    };
+    validate_ledger(&ledger)?;
+    if ledger.records.is_empty() { return Err("license security record is invalid"); }
+    Ok(ledger)
+}
+
 /// Locate the same device's protected candidate; callers must verify it before use.
 pub(super) fn pending_renewal(
     retained: &[u8],
     expected: &StoreLicenseCacheRequest,
 ) -> Result<Option<(StoreLicenseCacheRequest, u64)>, &'static str> {
-    let ledger: Ledger = match serde_json::from_slice(retained) {
-        Ok(ledger) => ledger,
-        Err(_) => {
-            let _: LegacyCache = serde_json::from_slice(retained)
-                .map_err(|_| "license security record is invalid")?;
-            Ledger {
-                version: 1,
-                records: vec![std::str::from_utf8(retained)
-                    .map_err(|_| "license security record is invalid")?
-                    .to_owned()],
-            }
-        }
-    };
-    if ledger.version != 1 || ledger.records.is_empty() || ledger.records.len() > MAX_RECORDS {
-        return Err("license security record is invalid");
-    }
+    let ledger = parse_ledger(retained)?;
     let old: RefreshClaims =
         serde_json::from_str(&expected.payload).map_err(|_| "license cache is invalid")?;
     let mut found = None;
@@ -95,8 +121,23 @@ pub(super) fn verify_current(
     trust: &wincmd_pq_experiment::jws::Trust<'_>,
     old_trust: Option<&history::HistoricalTrust>,
 ) -> Result<(), &'static str> {
+    verify_current_inner(retained, candidate, expected_time, bytes, public_key, trust, old_trust, false)
+}
+
+/// Only release recovery may inspect the exact token whose floor is retired.
+pub(super) fn verify_current_for_release(
+    retained: &[u8], candidate: &StoreLicenseCacheRequest, expected_time: u64, bytes: &[u8], public_key: &str,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>, old_trust: Option<&history::HistoricalTrust>,
+) -> Result<(), &'static str> {
+    verify_current_inner(retained, candidate, expected_time, bytes, public_key, trust, old_trust, true)
+}
+
+fn verify_current_inner(
+    retained: &[u8], candidate: &StoreLicenseCacheRequest, expected_time: u64, bytes: &[u8], public_key: &str,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>, old_trust: Option<&history::HistoricalTrust>, allow_released: bool,
+) -> Result<(), &'static str> {
     // This validates every retained proof, the candidate and rollback ordering.
-    advance(
+    advance_inner(
         Some(retained),
         None,
         candidate,
@@ -104,6 +145,7 @@ pub(super) fn verify_current(
         public_key,
         trust,
         old_trust,
+        allow_released,
     )?;
     let current: ExistingCache =
         serde_json::from_slice(bytes).map_err(|_| "license security record is invalid")?;
@@ -113,16 +155,7 @@ pub(super) fn verify_current(
     if verified_at != expected_time {
         return Err("license cache changed during verification");
     }
-    let records = match serde_json::from_slice::<Ledger>(retained) {
-        Ok(ledger) => ledger.records,
-        Err(_) => {
-            let _: LegacyCache = serde_json::from_slice(retained)
-                .map_err(|_| "license security record is invalid")?;
-            vec![std::str::from_utf8(retained)
-                .map_err(|_| "license security record is invalid")?
-                .to_owned()]
-        }
-    };
+    let records = parse_ledger(retained)?.records;
     for record in records {
         let old: ExistingCache =
             serde_json::from_str(&record).map_err(|_| "license security record is invalid")?;
@@ -146,6 +179,13 @@ pub(super) fn advance(
     trust: &wincmd_pq_experiment::jws::Trust<'_>,
     old_trust: Option<&history::HistoricalTrust>,
 ) -> Result<Vec<u8>, &'static str> {
+    advance_inner(retained, existing, candidate, bytes, public_key, trust, old_trust, false)
+}
+
+fn advance_inner(
+    retained: Option<&[u8]>, existing: Option<&[u8]>, candidate: &StoreLicenseCacheRequest, bytes: &[u8], public_key: &str,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>, old_trust: Option<&history::HistoricalTrust>, allow_released: bool,
+) -> Result<Vec<u8>, &'static str> {
     validate_dual_request(candidate, public_key, trust)?;
     let current: ExistingCache =
         serde_json::from_slice(bytes).map_err(|_| "license security record is invalid")?;
@@ -160,33 +200,24 @@ pub(super) fn advance(
         None => Ledger {
             version: 1,
             records: Vec::new(),
+            released: Vec::new(),
         },
-        Some(raw) => match serde_json::from_slice::<Ledger>(raw) {
-            Ok(ledger) => ledger,
-            // The first experimental version stored one complete cache directly.
-            Err(_) => {
-                let legacy: LegacyCache = serde_json::from_slice(raw)
-                    .map_err(|_| "license security record is invalid")?;
-                if legacy.token.hybrid.is_none() {
-                    return Err("license security record is invalid");
-                }
-                Ledger {
-                    version: 1,
-                    records: vec![std::str::from_utf8(raw)
-                        .map_err(|_| "license security record is invalid")?
-                        .to_owned()],
-                }
-            }
-        },
+        Some(raw) => parse_ledger(raw)?,
     };
-    if ledger.version != 1
-        || ledger.records.len() > MAX_RECORDS
-        || (retained.is_some() && ledger.records.is_empty())
-    {
+    validate_ledger(&ledger)?;
+    if retained.is_some() && ledger.records.is_empty() {
         return Err("license security record is invalid");
     }
     let new: SignedClaims =
         serde_json::from_str(&candidate.payload).map_err(|_| "license cache is invalid")?;
+    if let Some(released) = ledger.released.iter().find(|entry| new.license_id.as_deref() == Some(entry.license_id.as_str())
+        && new.device_hash == entry.device_hash) {
+        let generation = checked_activation_generation(new.activation_generation)?
+            .ok_or("license cache would restore a released activation")?;
+        if generation < released.generation || (generation == released.generation && !allow_released) {
+            return Err("license cache would restore a released activation");
+        }
+    }
     let cached = if let Some(bytes) = existing {
         check_previous_with_history(bytes, candidate, public_key, trust, old_trust)?;
         let cache: ExistingCache =
@@ -250,5 +281,33 @@ pub(super) fn advance(
     if output.len() > CACHE_LIMIT as usize {
         return Err("license security history is full; recovery is required");
     }
+    Ok(output)
+}
+
+/// Record the exact authenticated current generation as released. The caller
+/// must separately prove a durable acknowledgement and hold the licence locks.
+/// This never clears the release gate or removes the local cache.
+pub(super) fn mark_released(
+    retained: &[u8], candidate: &StoreLicenseCacheRequest, expected_time: u64, bytes: &[u8], public_key: &str,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>, old_trust: Option<&history::HistoricalTrust>,
+) -> Result<Vec<u8>, &'static str> {
+    verify_current_inner(retained, candidate, expected_time, bytes, public_key, trust, old_trust, true)?;
+    let mut ledger = parse_ledger(retained)?;
+    let claims: SignedClaims = serde_json::from_str(&candidate.payload).map_err(|_| "license cache is invalid")?;
+    let id = claims.license_id.filter(|value| !value.is_empty() && value.len() <= 512)
+        .ok_or("license security record is invalid")?;
+    if claims.device_hash.is_empty() || claims.device_hash.len() > 512 { return Err("license security record is invalid"); }
+    let generation = checked_activation_generation(claims.activation_generation)?
+        .ok_or("license activation generation is invalid")?;
+    if let Some(entry) = ledger.released.iter_mut().find(|entry| entry.license_id == id && entry.device_hash == claims.device_hash) {
+        if generation < entry.generation { return Err("license cache would restore a released activation"); }
+        entry.generation = generation;
+    } else {
+        if ledger.released.len() >= MAX_RECORDS { return Err("license security history is full; recovery is required"); }
+        ledger.released.push(ReleasedGeneration { license_id: id, device_hash: claims.device_hash, generation });
+    }
+    ledger.version = 2;
+    let output = serde_json::to_vec(&ledger).map_err(|_| "license security record is invalid")?;
+    if output.len() > CACHE_LIMIT as usize { return Err("license security history is full; recovery is required"); }
     Ok(output)
 }

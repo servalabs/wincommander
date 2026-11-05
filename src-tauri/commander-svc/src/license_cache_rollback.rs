@@ -312,6 +312,19 @@ fn load_snapshot_with_anchor(
     trust: &wincmd_pq_experiment::jws::Trust<'_>,
     anchor: &anchor::Anchor,
 ) -> Result<DeviceLicenceSnapshot, &'static str> {
+    load_snapshot_with_anchor_mode(path, public_key, trust, anchor, false)
+}
+
+pub(super) fn load_release_snapshot(
+    path: &Path, public_key: &str, trust: &wincmd_pq_experiment::jws::Trust<'_>,
+) -> Result<DeviceLicenceSnapshot, &'static str> {
+    let anchor = anchor::Anchor::machine_named(r"SOFTWARE\ServaLabs\WinCommander\HybridLicence");
+    load_snapshot_with_anchor_mode(path, public_key, trust, &anchor, true)
+}
+
+fn load_snapshot_with_anchor_mode(
+    path: &Path, public_key: &str, trust: &wincmd_pq_experiment::jws::Trust<'_>, anchor: &anchor::Anchor, release: bool,
+) -> Result<DeviceLicenceSnapshot, &'static str> {
     let old_trust = history::configured(trust)?;
     let _lock = WRITE_LOCK.lock().map_err(|_| "license cache lock is unavailable")?;
     let _process_lock = crate::licence_security_lock()?;
@@ -333,8 +346,11 @@ fn load_snapshot_with_anchor(
     build_refresh_wire(&request, public_key, trust, &claims.license_id, &claims.device_hash)?;
     let retained = anchor.read().map_err(|_| "license security record is unavailable")?
         .ok_or("license security record is unavailable")?;
-    ledger::verify_current(&retained, &request, last_verified_at, &bytes,
-        public_key, trust, old_trust.as_ref())?;
+    if release {
+        ledger::verify_current_for_release(&retained, &request, last_verified_at, &bytes, public_key, trust, old_trust.as_ref())?;
+    } else {
+        ledger::verify_current(&retained, &request, last_verified_at, &bytes, public_key, trust, old_trust.as_ref())?;
+    }
     Ok(DeviceLicenceSnapshot {
         payload: request.payload, signature: request.signature,
         hybrid: request.hybrid.ok_or("hybrid license is required")?, last_verified_at,
@@ -385,6 +401,14 @@ fn with_verified_anchor<T>(
     anchor: &anchor::Anchor,
     operation: impl FnOnce() -> Result<T, &'static str>,
 ) -> Result<T, &'static str> {
+    with_verified_anchor_mode(path, candidate, expected_time, public_key, trust, anchor, false, operation)
+}
+
+fn with_verified_anchor_mode<T>(
+    path: &Path, candidate: &StoreLicenseCacheRequest, expected_time: u64, public_key: &str,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>, anchor: &anchor::Anchor, release: bool,
+    operation: impl FnOnce() -> Result<T, &'static str>,
+) -> Result<T, &'static str> {
     let old_trust = history::configured(trust)?;
     let _lock = WRITE_LOCK
         .lock()
@@ -395,16 +419,45 @@ fn with_verified_anchor<T>(
         .read()
         .map_err(|_| "license security record is unavailable")?
         .ok_or("license security record is unavailable")?;
-    ledger::verify_current(
-        &retained,
-        candidate,
-        expected_time,
-        &bytes,
-        public_key,
-        trust,
-        old_trust.as_ref(),
-    )?;
+    if release {
+        ledger::verify_current_for_release(&retained, candidate, expected_time, &bytes, public_key, trust, old_trust.as_ref())?;
+    } else {
+        ledger::verify_current(&retained, candidate, expected_time, &bytes, public_key, trust, old_trust.as_ref())?;
+    }
     operation()
+}
+
+pub(super) fn with_verified_release_current<T>(
+    path: &Path, candidate: &StoreLicenseCacheRequest, expected_time: u64, public_key: &str,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>, operation: impl FnOnce() -> Result<T, &'static str>,
+) -> Result<T, &'static str> {
+    let anchor = anchor::Anchor::machine_named(r"SOFTWARE\ServaLabs\WinCommander\HybridLicence");
+    with_verified_anchor_mode(path, candidate, expected_time, public_key, trust, &anchor, true, operation)
+}
+
+/// The caller holds the cache and process locks and has reopened an acknowledged release.
+pub(super) fn mark_acknowledged_release_locked(
+    path: &Path, candidate: &StoreLicenseCacheRequest, expected_time: u64, public_key: &str,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>,
+) -> Result<(), &'static str> {
+    let anchor = anchor::Anchor::machine_named(r"SOFTWARE\ServaLabs\WinCommander\HybridLicence");
+    mark_acknowledged_release_with_anchor(path, candidate, expected_time, public_key, trust, &anchor)
+}
+
+fn mark_acknowledged_release_with_anchor(
+    path: &Path, candidate: &StoreLicenseCacheRequest, expected_time: u64, public_key: &str,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>, anchor: &anchor::Anchor,
+) -> Result<(), &'static str> {
+    let old_trust = history::configured(trust)?;
+    let bytes = read_cache(path)?.ok_or("license cache is unavailable")?;
+    let retained = anchor.read().map_err(|_| "license security record is unavailable")?
+        .ok_or("license security record is unavailable")?;
+    let next = ledger::mark_released(&retained, candidate, expected_time, &bytes, public_key, trust, old_trust.as_ref())?;
+    anchor.write(&next).map_err(|_| "license security record is unavailable")?;
+    if anchor.read().map_err(|_| "license security record is unavailable")?.as_deref() != Some(next.as_slice()) {
+        return Err("license security record is unavailable");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
