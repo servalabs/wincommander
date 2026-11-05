@@ -64,7 +64,7 @@ pub type PathMapper = Arc<dyn Fn(&std::path::Path) -> Option<std::path::PathBuf>
 /// Outcome of an experimental eventually consistent cache rebuild.
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ExperimentalRebuildReport { pub indexed: usize, pub omitted: usize }
+pub struct ExperimentalRebuildReport { pub indexed: usize, pub omitted: usize, pub skipped_links: usize }
 /// Facade: owns the index and orchestrates crawl → extract → chunk → index.
 pub struct SearchEngine {
     path_policy: PathPolicy,
@@ -162,20 +162,24 @@ impl SearchEngine {
         if generation.to_string_lossy().eq_ignore_ascii_case(&old.to_string_lossy()) {
             return Err(SearchError::Config("encrypted generation must differ from old index".into()));
         }
-        // Pin the parent before any creation. On a fresh install establish an
-        // empty legacy lock directory; never remove or replace an old index.
+        // Pin parent before any creation. Only an unselected rebuild needs
+        // the legacy writer lock; selected readers use the encrypted index.
         let _parent_pins = crate::read_only::CheckedDirectory::pin_root_path(parent)?;
-        match std::fs::create_dir(&old) {
-            Ok(()) => {},
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {},
-            Err(e) => return Err(e.into()),
-        }
-        // Cooperating legacy Tantivy writers use this lock. Schema cleanup or
-        // direct writes can bypass it; deployment must stop those old processes.
-        let legacy_pins = crate::read_only::CheckedDirectory::pin_root_path(&old)?;
-        let legacy = crate::read_only::CheckedDirectory::open(&old, crate::read_only::AccessMode::Writable)?;
-        let legacy_lease = legacy.acquire_lock_pinned(&tantivy::directory::INDEX_WRITER_LOCK)
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        let (legacy_pins, legacy_lease) = if existing {
+            (None, None)
+        } else {
+            match std::fs::create_dir(&old) {
+                Ok(()) => {},
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {},
+                Err(e) => return Err(e.into()),
+            }
+            // Legacy direct writes/schema wipes are not fenced by this lock.
+            let pins = crate::read_only::CheckedDirectory::pin_root_path(&old)?;
+            let legacy = crate::read_only::CheckedDirectory::open(&old, crate::read_only::AccessMode::Writable)?;
+            let lease = legacy.acquire_lock_pinned(&tantivy::directory::INDEX_WRITER_LOCK)
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
+            (Some(pins), Some(lease))
+        };
         // Generation creation is exclusive; interrupted candidates remain.
         if !existing {
             std::fs::create_dir(&generation)?;
@@ -186,8 +190,8 @@ impl SearchEngine {
         config.index_dir = generation;
         let ci = Arc::new(ContentIndex::open_experimental_encrypted(&config.index_dir, index_id, existing)?);
         let mut engine = Self::from_index(config, ci, path_policy)?;
-        engine.experimental_legacy_lease = Some(legacy_lease);
-        engine.experimental_legacy_pins = Some(legacy_pins);
+        engine.experimental_legacy_lease = legacy_lease;
+        engine.experimental_legacy_pins = legacy_pins;
         engine.experimental_fresh = !existing;
         engine.experimental_id = Some(index_id);
         Ok(engine)
@@ -204,7 +208,7 @@ impl SearchEngine {
         // A failed or interrupted pass is never retried in-place.
         self.experimental_fresh = false;
         let exclusions = build_globset(&self.config.exclusions)?;
-        let files = crate::encrypted_strict_crawl::collect(
+        let (files, skipped_links) = crate::encrypted_strict_crawl::collect(
             &self.config.roots, &exclusions, &self.config.skip_paths, self.config.max_file_bytes,
         )?;
         let mut seen = std::collections::HashSet::new();
@@ -234,7 +238,7 @@ impl SearchEngine {
             return Err(SearchError::Config("encrypted candidate document count mismatch".into()));
         }
         self.experimental_verified.store(true, Ordering::Release);
-        Ok(ExperimentalRebuildReport { indexed, omitted })
+        Ok(ExperimentalRebuildReport { indexed, omitted, skipped_links })
     }
     /// Atomically attempts to select a completed encrypted cache. Missing or
     /// invalid selection on restart must be an error, never plaintext fallback.
@@ -259,6 +263,10 @@ impl SearchEngine {
         crate::encrypted_generation_prototype::publish(&mut selection, &UserProtector, id, || Ok(digest))?;
         self.config.skip_paths.push(selection_dir.to_path_buf());
         self.experimental_selection = Some(selection);
+        // The marker is committed; other selected processes no longer need
+        // the exclusive legacy writer lease. Old binaries must be stopped.
+        self.experimental_legacy_lease = None;
+        self.experimental_legacy_pins = None;
         Ok(())
     }
 
@@ -273,6 +281,14 @@ impl SearchEngine {
         let mut engine = Self::open_experimental_encrypted_with_policy(config, path_policy, selected.index_id, true)?;
         engine.config.skip_paths.push(selection_dir.to_path_buf());
         engine.experimental_selection = Some(selection);
+        // Catch offline deletions/changes before exposing the cache, then run
+        // the ordinary watcher. An incomplete reconciliation is an error, not
+        // authorization to fall back to the old plaintext index.
+        let report = engine.reconcile_sync(&AtomicBool::new(false), usize::MAX)?;
+        if !report.complete {
+            return Err(SearchError::Config("encrypted cache reconciliation incomplete; retry".into()));
+        }
+        engine.start_indexing()?;
         Ok(engine)
     }
     /// Caller must hold its cross-process volume guard until this engine is dropped.
@@ -793,15 +809,22 @@ mod tests {
         let data = root.path().join("data"); let proof = root.path().join("proof");
         fs::create_dir(&data).unwrap(); fs::create_dir(&proof).unwrap();
         fs::write(data.join("fresh.txt"), b"freshcachetoken").unwrap();
-        let config = make_config(old.clone(), vec![data]);
+        let config = make_config(old.clone(), vec![data.clone()]);
         assert!(SearchEngine::open_experimental_selected_with_policy(config.clone(), Arc::new(|_| true), &proof).is_err());
         let mut engine = SearchEngine::open_experimental_encrypted_with_policy(config.clone(), Arc::new(|_| true), [82; 16], false).unwrap();
         assert_eq!(engine.rebuild_experimental_candidate().unwrap().indexed, 1);
         engine.select_experimental_candidate(&proof).unwrap();
+        // A selected engine no longer monopolizes the legacy writer lease.
+        let other = SearchEngine::open_experimental_selected_with_policy(config.clone(), Arc::new(|_| true), &proof).unwrap();
+        drop(other);
         drop(engine);
+        fs::remove_file(data.join("fresh.txt")).unwrap();
+        fs::write(data.join("replacement.txt"), b"replacementcachetoken").unwrap();
         let reopened = SearchEngine::open_experimental_selected_with_policy(config, Arc::new(|_| true), &proof).unwrap();
         let query = ContentQuery { terms: "freshcachetoken".into(), roots: vec![], limit: 10, offset: 0, keyword_only: true };
-        assert_eq!(reopened.search(&query).unwrap().len(), 1);
+        assert!(reopened.search(&query).unwrap().is_empty());
+        let new_query = ContentQuery { terms: "replacementcachetoken".into(), ..query };
+        assert_eq!(reopened.search(&new_query).unwrap().len(), 1);
         assert!(old.is_dir());
     }
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
