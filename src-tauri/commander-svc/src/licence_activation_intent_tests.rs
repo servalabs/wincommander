@@ -33,6 +33,7 @@ fn reactivation_witness_matches_cross_runtime_vector_and_binds_operation() {
     assert_eq!(witness.proof, "kao9Ske4UPTEMa76Bh79GhyzOwAkPg7Rwv1QmIG9EDE");
     pending.reactivation = Some(witness);
     let request = pending.request_body().unwrap();
+    assert_eq!(request.as_slice(), include_str!("fixtures/rust-reactivation-request.json").trim_end().as_bytes());
     let json: serde_json::Value = serde_json::from_slice(&request).unwrap();
     assert_eq!(json["reactivationProof"], "kao9Ske4UPTEMa76Bh79GhyzOwAkPg7Rwv1QmIG9EDE");
     assert_eq!(serde_json::from_str::<serde_json::Value>(json["reactivationPayload"].as_str().unwrap()).unwrap()["generation"], 7);
