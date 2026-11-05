@@ -28,8 +28,8 @@ pub(crate) fn acquire() -> Result<SearchOperationFence, String> {
             configured.to_string_lossy().trim_end_matches(['\\', '/'])) {
         return Err("Windows profile location does not match the search configuration.".into());
     }
-    let user_root = crate::paths::user_data_dir()?;
-    let parent = SearchOperationFence::prepare_parent(&user_root)
+    let app_name = option_env!("WINCMD_APP_DIR").unwrap_or("WinCommander");
+    let parent = SearchOperationFence::prepare_from_known_folder(&known, app_name)
         .map_err(|_| "Cannot prepare the protected search migration lock.")?;
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {

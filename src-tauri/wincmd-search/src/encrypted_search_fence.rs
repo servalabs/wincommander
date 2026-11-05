@@ -10,6 +10,20 @@ use windows_sys::Win32::Storage::FileSystem::{BY_HANDLE_FILE_INFORMATION,
 pub struct SearchOperationFence { _pins: Vec<File>, _file: File, parent: std::path::PathBuf, exclusive: bool }
 
 impl SearchOperationFence {
+    /// Prepare user root and search parent below the caller's verified known folder.
+    pub fn prepare_from_known_folder(base: &Path, app_name: &str) -> io::Result<std::path::PathBuf> {
+        let mut parts = Path::new(app_name).components();
+        if !matches!(parts.next(), Some(std::path::Component::Normal(_))) || parts.next().is_some() {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid application directory"));
+        }
+        let _pins = crate::read_only::CheckedDirectory::pin_root_path(base)?;
+        let root = base.join(app_name);
+        match std::fs::create_dir(&root) {
+            Ok(()) => {}, Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {},
+            Err(e) => return Err(e),
+        }
+        Self::prepare_parent(&root)
+    }
     /// Prepare the search parent below an independently verified user root.
     pub fn prepare_parent(user_root: &Path) -> io::Result<std::path::PathBuf> {
         let _pins = crate::read_only::CheckedDirectory::pin_root_path(user_root)?;
