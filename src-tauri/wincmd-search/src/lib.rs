@@ -810,6 +810,21 @@ mod tests {
     }
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     #[test]
+    fn changed_source_after_rebuild_cannot_receive_proof() {
+        let root = TempDir::new().unwrap();
+        let old = root.path().join("legacy"); let data = root.path().join("data");
+        let proof = root.path().join("proof");
+        fs::create_dir(&old).unwrap(); fs::create_dir(&data).unwrap(); fs::create_dir(&proof).unwrap();
+        fs::write(data.join("a.txt"), b"original").unwrap();
+        let config = make_config(old, vec![data.clone()]);
+        let mut engine = SearchEngine::open_experimental_encrypted_with_policy(config, Arc::new(|_| true), [79; 16], false).unwrap();
+        engine.rebuild_experimental_candidate().unwrap();
+        fs::write(data.join("a.txt"), b"changed!").unwrap();
+        assert!(engine.record_experimental_candidate(&proof, || Ok(())).is_err());
+        assert!(!proof.join("candidate-proof.v1").exists());
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    #[test]
     fn reconciliation_invalidates_candidate_proof() {
         let root = TempDir::new().unwrap();
         let old = root.path().join("legacy"); let data = root.path().join("data");
