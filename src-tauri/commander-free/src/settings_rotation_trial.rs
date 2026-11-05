@@ -132,3 +132,7 @@ fn publish(
 #[cfg(all(test, windows))]
 #[path = "settings_rotation_trial_tests.rs"]
 mod tests;
+
+#[cfg(windows)]
+#[path = "settings_rotation_snapshot.rs"]
+mod source_snapshot;
