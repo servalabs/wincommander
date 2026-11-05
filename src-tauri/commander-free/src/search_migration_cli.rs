@@ -40,6 +40,10 @@ fn classify(parent: &Path, old: &Path, selection: &Path) -> Result<State, String
     }
 }
 
+fn verify_preserved_or_fresh(old: &Path, selection: &Path) -> Result<(), String> {
+    if SearchEngine::verify_quarantined_selection(old, selection).is_ok() { return Ok(()); }
+    SearchEngine::verify_fresh_scope_selection(old, selection).map_err(|e| e.to_string())
+}
 fn reject_pending(selection: &Path) -> Result<(), String> {
     if present(selection).map_err(|_| "Cannot inspect encrypted search selection.")?
         && SearchEngine::inspect_search_migration(selection).map_err(|e| e.to_string())?.is_some() {
@@ -51,7 +55,7 @@ fn reject_pending(selection: &Path) -> Result<(), String> {
 /// The verify phase is read-only and the installer must hold its exclusive lock.
 pub fn run(phase: &str) -> Result<String, String> {
     let parent = if matches!(phase, "stage" | "quarantine") {
-        crate::file_search::runtime_fence::prepare_installer_parent()?
+        crate::file_search::runtime_fence::prepare_verified_parent()?
     } else {
         crate::file_search::runtime_fence::verified_parent()?
     };
@@ -81,8 +85,8 @@ pub fn run(phase: &str) -> Result<String, String> {
                     Ok("staged reconciliation=pending old-cache=retained".into())
                 },
                 State::Quarantined => {
-                    SearchEngine::verify_quarantined_selection(&old, &selection).map_err(|e| e.to_string())?;
-                    Ok("already-quarantined".into())
+                    verify_preserved_or_fresh(&old, &selection)?;
+                    Ok("selected".into())
                 },
             }
         }
@@ -92,8 +96,8 @@ pub fn run(phase: &str) -> Result<String, String> {
             State::Fresh => Ok("fresh".into()),
             State::NeedsQuarantine => SearchEngine::verify_selected_generation(&old, &selection)
                 .map(|_| "staged old-cache=retained".into()).map_err(|e| e.to_string()),
-            State::Quarantined => SearchEngine::verify_quarantined_selection(&old, &selection)
-                .map(|_| "already-quarantined".into()).map_err(|e| e.to_string()),
+            State::Quarantined => verify_preserved_or_fresh(&old, &selection)
+                .map(|_| "selected".into()),
             State::NeedsRebuild => Err("The encrypted search generation is not ready.".into()),
             }
         },
@@ -167,7 +171,7 @@ mod tests {
 /// after that boundary an interrupted installer must roll forward.
 pub fn run_transaction(phase: &str, token_hex: &str) -> Result<String, String> {
     let parent = if phase == "prepare" {
-        crate::file_search::runtime_fence::prepare_installer_parent()?
+        crate::file_search::runtime_fence::prepare_verified_parent()?
     } else {
         crate::file_search::runtime_fence::verified_parent()?
     };

@@ -167,6 +167,15 @@ mod tests {
     }
     #[cfg(windows)]
     #[test]
+    fn dpapi_origin_is_bound_to_generation_and_cannot_be_reclassified() {
+        let root = tempfile::tempdir().unwrap();
+        record_origin(root.path(), &[7; 16], false, &[3; 32], root.path()).unwrap();
+        assert_eq!(inspect_origin(root.path(), &[7; 16]).unwrap(), Some(false));
+        assert!(inspect_origin(root.path(), &[8; 16]).is_err());
+        assert!(record_origin(root.path(), &[7; 16], true, &[3; 32], root.path()).is_err());
+    }
+    #[cfg(windows)]
+    #[test]
     fn dpapi_selection_reopens_without_replacing_and_keeps_file_pinned() {
         let root = tempfile::tempdir().unwrap();
         let mut store = PinnedSelectionStore::open(root.path()).unwrap();
@@ -177,5 +186,60 @@ mod tests {
         let mut reopened = PinnedSelectionStore::open(root.path()).unwrap();
         assert_eq!(inspect(&mut reopened, &UserProtector).unwrap(), Some(Selection { index_id: [1; 16], creation_digest: [2; 32] }));
         assert!(publish(&mut reopened, &UserProtector, [3; 16], || Ok([4; 32])).is_err());
+    }
+}
+
+/// DPAPI-authenticated origin binds generation, approved creation manifest,
+/// and the original index directory identity. Missing never proves fresh.
+#[cfg(windows)]
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Origin {
+    pub id: [u8; 16], pub fresh: bool, pub digest: [u8; 32], pub source: (u32, u32, u32),
+}
+#[cfg(windows)]
+pub(crate) fn record_origin(root: &std::path::Path, id: &[u8; 16], fresh: bool,
+    digest: &[u8; 32], source: &std::path::Path) -> io::Result<()> {
+    use crate::read_only::{AccessMode, CheckedDirectory};
+    let _pins = CheckedDirectory::pin_root_path(root)?;
+    let identity = crate::encrypted_migration_transaction::Intent::capture([1; 16], *id, source)?.identity();
+    let origin = Origin { id: *id, fresh, digest: *digest, source: identity };
+    if let Some(existing) = read_origin(root)? {
+        return if existing == origin { Ok(()) } else { Err(invalid()) };
+    }
+    let dir = CheckedDirectory::open(root, AccessMode::Writable).map_err(|e| io::Error::other(e.to_string()))?;
+    let mut plain = b"WCORIG02".to_vec(); plain.extend_from_slice(id); plain.push(u8::from(fresh));
+    plain.extend_from_slice(digest);
+    for part in [identity.0, identity.1, identity.2] { plain.extend_from_slice(&part.to_le_bytes()); }
+    let protected = UserProtector.seal(&plain)?;
+    dir.atomic_create_pinned(std::path::Path::new("origin-proof.v1"), &protected)?;
+    if read_origin(root)?.as_ref() != Some(&origin) { return Err(invalid()); }
+    Ok(())
+}
+#[cfg(windows)]
+pub(crate) fn read_origin(root: &std::path::Path) -> io::Result<Option<Origin>> {
+    use crate::read_only::{AccessMode, CheckedDirectory};
+    use tantivy::directory::error::OpenReadError;
+    let _pins = CheckedDirectory::pin_root_path(root)?;
+    let dir = CheckedDirectory::open(root, AccessMode::GuardedReader).map_err(|e| io::Error::other(e.to_string()))?;
+    let bytes = match dir.atomic_read_bounded(std::path::Path::new("origin-proof.v1"), MAX_PROTECTED) {
+        Ok(v) => v,
+        Err(OpenReadError::FileDoesNotExist(_)) => return Ok(None),
+        Err(e) => return Err(io::Error::other(e.to_string())),
+    };
+    let plain = UserProtector.open(&bytes)?;
+    if plain.len() != 69 || &plain[..8] != b"WCORIG02" { return Err(invalid()); }
+    let id: [u8; 16] = plain[8..24].try_into().map_err(|_| invalid())?;
+    if id == [0; 16] { return Err(invalid()); }
+    let fresh = match plain[24] { 0 => false, 1 => true, _ => return Err(invalid()) };
+    let digest = plain[25..57].try_into().map_err(|_| invalid())?;
+    let part = |start| -> io::Result<u32> { Ok(u32::from_le_bytes(plain[start..start + 4].try_into().map_err(|_| invalid())?)) };
+    Ok(Some(Origin { id, fresh, digest, source: (part(57)?, part(61)?, part(65)?) }))
+}
+#[cfg(windows)]
+pub(crate) fn inspect_origin(root: &std::path::Path, id: &[u8; 16]) -> io::Result<Option<bool>> {
+    match read_origin(root)? {
+        None => Ok(None),
+        Some(origin) if &origin.id == id => Ok(Some(origin.fresh)),
+        Some(_) => Err(invalid()),
     }
 }

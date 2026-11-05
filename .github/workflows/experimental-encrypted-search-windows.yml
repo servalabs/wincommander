@@ -3,6 +3,9 @@ on:
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened]
+concurrency:
+  group: experimental-search-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
@@ -34,6 +37,11 @@ jobs:
             'offline_rebuild_selects_encrypted_generation_and_preserves_old_cache',
             'offline_empty_cache_reconciles_with_live_roots_after_restart',
             'staged_index_opens_after_restart_without_moving_old_cache',
+            'fresh_install_scope_only_remains_verifiable_on_next_update',
+            'missing_selector_with_prior_backup_cannot_be_marked_fresh',
+            'interrupted_origin_without_selector_fails_closed_and_preserves_proof',
+            'interrupted_origin_recovers_valid_authenticated_candidate',
+            'interrupted_origin_rejects_changed_source_or_manifest',
             'search_migration_intent_recovers_and_respects_replacement_boundary',
             'application_entry_rebuilds_then_refuses_corrupt_selector',
             'fresh_install_can_build_select_and_reopen_without_legacy_index',

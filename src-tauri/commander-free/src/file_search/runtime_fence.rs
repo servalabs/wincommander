@@ -41,9 +41,8 @@ pub(crate) fn verified_parent() -> Result<PathBuf, String> {
     Ok(known.join(app_name).join("file-search"))
 }
 
-/// Prepare the offline maintenance parent under the verified current-user
-/// profile before opening its lock; holds no lock and never selects an index.
-pub(crate) fn prepare_installer_parent() -> Result<PathBuf, String> {
+/// Prepare the maintenance parent under the verified current-user profile.
+pub(crate) fn prepare_verified_parent() -> Result<PathBuf, String> {
     let known = known_base()?;
     let app_name = option_env!("WINCMD_APP_DIR").unwrap_or("WinCommander");
     SearchOperationFence::prepare_from_known_folder(&known, app_name)
