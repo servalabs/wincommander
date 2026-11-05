@@ -420,8 +420,10 @@ impl LockedSelectedGeneration {
     fn acquire_for(root: &Path, scope: StoreScope) -> Result<Self, String> {
         #[cfg(windows)]
         let root_pins = source_snapshot::pin_directories(root)?;
-        let ownership = super::settings_generation_ownership::SettingsGenerationLock::try_acquire(root)
-            .map_err(|error| format!("settings generation ownership unavailable: {error}"))?;
+        let ownership = match scope {
+            StoreScope::Machine => super::settings_generation_ownership::SettingsGenerationLock::try_acquire_machine(root, false),
+            StoreScope::CurrentUser => super::settings_generation_ownership::SettingsGenerationLock::try_acquire(root),
+        }.map_err(|error| format!("settings generation ownership unavailable: {error}"))?;
         Ok(Self { _ownership: ownership, #[cfg(windows)] _root_pins: root_pins,
             path: root.join(".settings-generation.v1"), authority: root.join(".settings-generation.authority.v1"), scope })
     }
@@ -524,8 +526,10 @@ impl ReadOnlySelectedGeneration {
     fn acquire(root: &Path, scope: StoreScope) -> Result<Self, String> {
         #[cfg(windows)]
         let root_pins = source_snapshot::pin_directories(root)?;
-        let ownership = super::settings_generation_ownership::SettingsGenerationLock::try_acquire_shared(root)
-            .map_err(|error| format!("settings generation shared ownership unavailable: {error}"))?;
+        let ownership = match scope {
+            StoreScope::Machine => super::settings_generation_ownership::SettingsGenerationLock::try_acquire_machine(root, true),
+            StoreScope::CurrentUser => super::settings_generation_ownership::SettingsGenerationLock::try_acquire_shared(root),
+        }.map_err(|error| format!("settings generation shared ownership unavailable: {error}"))?;
         Ok(Self { _ownership: ownership, #[cfg(windows)] _root_pins: root_pins,
             path: root.join(".settings-generation.v1"), authority: root.join(".settings-generation.authority.v1"), scope })
     }

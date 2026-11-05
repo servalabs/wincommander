@@ -106,6 +106,12 @@ fn verify(file: &File, expected: &Descriptor) -> io::Result<()> {
     Ok(())
 }
 
+/// Verify the exact still-open, no-delete-sharing handle that will be locked.
+/// The caller must also pin and authorize the parent directory and its ACL.
+pub(super) fn verify_machine_handle(file: &File) -> io::Result<()> {
+    verify(file, &Descriptor::expected()?)
+}
+
 /// Create once or verify an existing lock; never replace or repair an unknown
 /// descriptor. Call only from an elevated, gated provisioning flow after the
 /// caller has authorized and pinned the product root and its ancestors.
