@@ -52,9 +52,10 @@ fn path_allowed_for_ingestion(path: &std::path::Path, skips: &[std::path::PathBu
         Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => false,
         Err(_) => match std::fs::symlink_metadata(path) {
             Ok(_) => restricted::safe_path(path),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                path.parent().is_some_and(restricted::safe_path)
-            }
+            // The parent may have been removed along with the file. Let the
+            // stale-hit cleanup proceed; broken links still have metadata and
+            // are rejected above. Extraction rechecks policy after reading.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
             Err(_) => false,
         },
     };
@@ -588,6 +589,9 @@ mod tests {
         assert!(path_allowed_for_ingestion(dir.path(), &[], Err(unsupported())));
         assert!(!path_allowed_for_ingestion(&file, &[], Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))));
         assert!(!path_allowed_for_ingestion(&file, &[dir.path().to_path_buf()], Err(unsupported())));
+        let missing = dir.path().join("removed").join("gone.txt");
+        assert!(path_allowed_for_ingestion(&missing, &[], Err(std::io::Error::from(std::io::ErrorKind::NotFound))));
+        assert!(!path_allowed_for_ingestion(&missing, &[dir.path().to_path_buf()], Err(std::io::Error::from(std::io::ErrorKind::NotFound))));
     }
 
     #[cfg(unix)]
