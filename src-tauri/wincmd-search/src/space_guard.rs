@@ -36,7 +36,7 @@ impl SpaceGuard {
         self.observe(fs4::available_space(index_dir))
     }
 
-    fn observe(&mut self, available: std::io::Result<u64>) -> SpaceState {
+    pub(crate) fn observe(&mut self, available: std::io::Result<u64>) -> SpaceState {
         let next = match available {
             Err(_) => SpaceState::PausedUnknown,
             Ok(bytes) if bytes < PAUSE_BELOW => SpaceState::PausedLowSpace,
@@ -55,6 +55,14 @@ impl SpaceGuard {
     /// Overflow deliberately makes the coordinator require an explicit restart.
     pub(crate) fn note_change(&mut self) {
         self.generation = self.generation.and_then(|generation| generation.checked_add(1));
+    }
+
+    /// An overflow or watcher failure invalidates the incremental stream.
+    pub(crate) fn require_reconciliation(&mut self) {
+        self.note_change();
+        if self.state == SpaceState::Ready {
+            self.state = SpaceState::ReconcileRequired;
+        }
     }
 
     pub(crate) fn reconciliation_started(&self) -> Option<u64> {

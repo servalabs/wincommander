@@ -6,6 +6,9 @@ rust-version = "1.93.1"
 license = "AGPL-3.0-or-later"
 description = "Full-text file-content search for WinCommander (Free tier)"
 
+[features]
+experimental-space-guard = []
+
 [dependencies]
 tantivy       = "0.27"
 lopdf         = "0.46"   # >=0.42 fixes RUSTSEC-2026-0187 (stack overflow on nested PDFs)

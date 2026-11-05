@@ -21,6 +21,8 @@ mod read_only;
 pub mod reconcile;
 mod restricted;
 mod space_guard;
+#[cfg(feature = "experimental-space-guard")]
+mod space_guard_crawl;
 pub mod semantic_model;
 pub mod tokenize;
 pub mod types;
