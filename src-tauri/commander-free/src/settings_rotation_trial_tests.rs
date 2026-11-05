@@ -549,3 +549,34 @@ fn opted_in_runtime_never_provisions_a_missing_anchor_or_uses_legacy() {
     assert!(!root.path().join(".settings-cutover-anchor.v1").exists());
     assert_eq!(std::fs::read(old_key).unwrap(), b"preserve existing material");
 }
+
+#[test]
+fn recovery_reports_busy_separately_from_unavailable_ownership() {
+    let busy = OwnerAcquireError::from_io(std::io::Error::from(std::io::ErrorKind::WouldBlock));
+    assert_eq!(busy, OwnerAcquireError::Busy);
+    assert!(busy.message().contains("busy"));
+    assert!(!busy.message().contains("administrator"));
+    let denied = OwnerAcquireError::from_io(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+    assert_eq!(denied, OwnerAcquireError::Unavailable);
+    assert!(denied.message().contains("authorized"));
+}
+
+#[test]
+#[cfg_attr(windows, ignore = "requires elevated machine-lock ACL provisioning; run explicitly in Windows acceptance")]
+fn fresh_install_selects_encrypted_empty_generation_and_resumes_pending() {
+    let root = tempfile::tempdir().unwrap();
+    provision_test_lock(root.path());
+    let anchor = fixture_anchor(root.path(), StoreScope::Machine);
+    let owner = LockedSelectedGeneration::acquire(root.path()).unwrap();
+    let candidate = prepare_fresh_generation(StoreScope::Machine).unwrap();
+    std::fs::write(root.path().join(".settings-cutover-candidate.v1"), &candidate).unwrap();
+    anchor.write(&AnchorState::Preparing { next: cutover::digest(&candidate) }).unwrap();
+    assert!(owner.read_all().is_err());
+    select_fresh_generation(&owner._ownership, root.path(), StoreScope::Machine).unwrap();
+    assert!(owner.read_all().unwrap().is_empty());
+    let seed = json!({"signing_seed_hex": "c".repeat(64)});
+    assert_eq!(owner.get_or_create_f6(|| Ok(seed.clone())).unwrap(), seed);
+    assert_eq!(owner.get_or_create_f6(|| panic!("existing key must be returned")).unwrap(), seed);
+    assert_eq!(std::fs::read(root.path().join(".settings-cutover-candidate.v1")).unwrap(), candidate);
+    assert!(!root.path().join(".install.material").exists());
+}

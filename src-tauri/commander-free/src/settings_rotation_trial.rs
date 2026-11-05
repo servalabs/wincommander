@@ -442,15 +442,31 @@ pub(super) fn read_generation_file(path: &Path, limit: usize) -> Result<Option<V
     Ok(Some(bytes))
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum OwnerAcquireError { Busy, Unavailable }
+impl OwnerAcquireError {
+    fn message(&self) -> &'static str {
+        match self {
+            Self::Busy => "Settings are busy. Wait a moment and try again; existing data was preserved.",
+            Self::Unavailable => "Settings recovery requires an authorized administrator or the owning Windows account. Existing data was preserved.",
+        }
+    }
+    fn from_io(error: std::io::Error) -> Self {
+        if error.kind() == std::io::ErrorKind::WouldBlock { Self::Busy } else { Self::Unavailable }
+    }
+}
 impl LockedSelectedGeneration {
     fn acquire(root: &Path) -> Result<Self, String> { Self::acquire_for(root, StoreScope::Machine) }
     fn acquire_for(root: &Path, scope: StoreScope) -> Result<Self, String> {
+        Self::acquire_for_detailed(root, scope).map_err(|e| e.message().to_string())
+    }
+    fn acquire_for_detailed(root: &Path, scope: StoreScope) -> Result<Self, OwnerAcquireError> {
         #[cfg(windows)]
-        let root_pins = source_snapshot::pin_directories(root)?;
+        let root_pins = source_snapshot::pin_directories(root).map_err(|_| OwnerAcquireError::Unavailable)?;
         let ownership = match scope {
             StoreScope::Machine => super::settings_generation_ownership::SettingsGenerationLock::try_acquire_machine(root, false),
             StoreScope::CurrentUser => super::settings_generation_ownership::SettingsGenerationLock::try_acquire_user(root, false),
-        }.map_err(|error| format!("settings generation ownership unavailable: {error}"))?;
+        }.map_err(OwnerAcquireError::from_io)?;
         Ok(Self { _ownership: ownership, #[cfg(windows)] _root_pins: root_pins,
             path: root.join(".settings-generation.v1"), authority: root.join(".settings-cutover-anchor.v1"), scope })
     }
@@ -601,8 +617,8 @@ pub(super) fn read_with_legacy(root: &Path, scope: StoreScope, section: &str, le
             // Never upgrade in place: release shared ownership before asking
             // for exclusive repair, then re-read the anchor under that guard.
             drop(owner);
-            let exclusive = LockedSelectedGeneration::acquire_for(root, scope)
-                .map_err(|_| "Settings recovery requires an authorized administrator or the owning Windows account. Existing data was preserved.")?;
+            let exclusive = LockedSelectedGeneration::acquire_for_detailed(root, scope)
+                .map_err(|error| error.message().to_string())?;
             let anchor = ProtectedFileAnchor::new(root, scope);
             match anchor.read()? {
                 Some(AnchorState::Updating { .. } | AnchorState::Active { .. }) => {
@@ -781,6 +797,34 @@ pub(super) fn migrate_explicitly() -> Result<(), String> {
         &|bytes| held.borrow_mut().verify_generation(bytes))
 }
 
+// Fresh installs have no legacy key or sections to migrate. The marker and
+// candidate still go through the same interrupted-selection protocol.
+fn prepare_fresh_generation(scope: StoreScope) -> Result<Vec<u8>, String> {
+    seal_generation(&Generation { scope, f6_initialized: false, sections: BTreeMap::new(),
+        source_sections: BTreeMap::new(), source_key_digest: source_digest(b"wincommander-fresh-install-v1") })
+}
+fn verify_fresh_generation(root: &Path, scope: StoreScope, candidate: &[u8]) -> Result<(), String> {
+    super::settings_generation_bootstrap::ensure_fresh_contents(root)?;
+    let generation = open_generation(candidate).map_err(|error| scope.access_error(error))?;
+    if generation.scope != scope || generation.f6_initialized || !generation.sections.is_empty()
+        || !generation.source_sections.is_empty() || generation.source_key_digest != source_digest(b"wincommander-fresh-install-v1") {
+        return Err("fresh settings candidate does not match an empty source".into());
+    }
+    Ok(())
+}
+fn select_fresh_generation(
+    guard: &super::settings_generation_ownership::SettingsGenerationLock,
+    root: &Path, scope: StoreScope,
+) -> Result<(), String> {
+    guard.require_exclusive().map_err(|e| e.to_string())?;
+    let anchor = ProtectedFileAnchor::new(root, scope);
+    if matches!(anchor.read()?, Some(AnchorState::Active { .. })) {
+        return cutover::read_active(guard, &anchor, &SelectedFile::new(root), &|bytes| verify_scoped_generation(scope, bytes)).map(|_| ());
+    }
+    stage_and_select(guard, &anchor, root, || prepare_fresh_generation(scope),
+        &|bytes| verify_fresh_generation(root, scope, bytes))
+}
+
 /// Explicit installer-lab entry for a verified fresh install only. Never
 /// invoked automatically; the caller must establish fresh-install authority
 /// and prevent old executable launches before calling it.
@@ -792,7 +836,9 @@ pub(super) fn provision_verified_fresh_install() -> Result<(), String> {
             StoreScope::Machine => super::settings_generation_acl_windows::provision_or_verify(path),
             StoreScope::CurrentUser => super::settings_generation_acl_windows::provision_user_or_verify(path),
         }.map_err(|_| "cannot provision authorized settings lock".into())
-    })
+    })?;
+    let owner = LockedSelectedGeneration::acquire_for(&root, scope)?;
+    select_fresh_generation(&owner._ownership, &root, scope)
 }
 
 /// Trial reader/writer for an already selected generation. The caller must

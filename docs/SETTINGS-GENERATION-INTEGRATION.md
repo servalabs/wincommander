@@ -83,3 +83,10 @@ fresh-install provisioning seam refuses existing data; it is not called by
 normal startup and is not proof that an installation is truly fresh. Existing
 stores with a missing cutover anchor fail closed and are never automatically
 reclassified as legacy.
+
+The fresh-install lab seam does not create its product root. An installer must
+first securely create or verify the actual known-folder root and its owner and
+DACL, pin its ancestors, prove that the install is fresh, and fence older
+writers. After those prerequisites, the seam can provision the lock and anchor,
+then select a protected empty generation; a Legacy anchor alone is not proof of
+protected settings. The caller and installer wiring do not yet exist.
