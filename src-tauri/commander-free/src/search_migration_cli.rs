@@ -18,7 +18,9 @@ fn classify(parent: &Path, old: &Path, selection: &Path) -> Result<State, String
     let selection_exists = present(selection).map_err(|_| "Cannot inspect the encrypted search selection.")?;
     match (old_exists, selection_exists) {
         (true, true) => {
-            if present(&selection.join("candidate-proof.v1")).map_err(|_| "Cannot inspect search selection proof.")? { Ok(State::NeedsQuarantine) }
+            if present(&selection.join("candidate-proof.v1")).map_err(|_| "Cannot inspect search selection proof.")? {
+                if SearchEngine::experimental_scope_only(old).map_err(|e| e.to_string())? { Ok(State::Quarantined) } else { Ok(State::NeedsQuarantine) }
+            }
             else { Ok(State::NeedsRebuild) }
         },
         (false, true) => Ok(State::Quarantined),
