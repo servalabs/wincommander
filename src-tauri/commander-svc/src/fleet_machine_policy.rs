@@ -1404,13 +1404,18 @@ mod tests {
     }
 
     fn hybrid_request_with_key(offer: &HybridEnrollmentOffer, seed: u8) -> Vec<u8> {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+        hybrid_request_at(offer, seed, now)
+    }
+
+    fn hybrid_request_at(offer: &HybridEnrollmentOffer, seed: u8, timestamp: i64) -> Vec<u8> {
         let outcome = SigningKey::from_bytes(&[seed; 32]);
         let mut body = serde_json::json!({"device_id":trust().device_id, "device_hash":"device-hash",
             "device_kind":"wincommander", "agent_version":"3.6.7", "protocol_version":1,
             "capabilities":["hmac_body_v2"], "outcome_pubkey_b64":STANDARD.encode(outcome.verifying_key().as_bytes()),
             "shield_progress_challenge":offer.challenge, "enrollment_proof_version":2,
             "enrollment_server_key_b64":trust().signer_key,
-            "enrollment_nonce":"44444444-4444-4444-8444-444444444444", "enrollment_ts":42 });
+            "enrollment_nonce":"44444444-4444-4444-8444-444444444444", "enrollment_ts":timestamp });
         let mut preimage = b"WinCommander Fleet enrollment proof v2\nPOST\n/v1/windows/enroll-v2\n".to_vec();
         preimage.extend(fleet_proto::canonical_json_bytes(&body));
         body["enrollment_signature_b64"] = STANDARD.encode(outcome.sign(&preimage).to_bytes()).into();
@@ -1499,6 +1504,18 @@ mod tests {
             };
             assert!(store.claim_hybrid_enrollment(&offer.authorization_id, "S-1-5-21-7", 7, &bad).is_err());
             assert!(store.claim_hybrid_enrollment(&offer.authorization_id, "S-1-5-21-7", 7, &original).is_err());
+        }
+    }
+
+    #[test]
+    fn hybrid_claim_rejects_stale_and_future_signed_requests() {
+        let (_, store) = hybrid_ready();
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+        for timestamp in [now - 600, now + 600, i64::MAX] {
+            let offer = store.begin_hybrid_enrollment(&trust(), "https://fleet.example", "S-1-5-21-7", 7).unwrap();
+            let bytes = hybrid_request_at(&offer, 7, timestamp);
+            assert!(store.claim_hybrid_enrollment(&offer.authorization_id, "S-1-5-21-7", 7, &bytes).is_err());
+            assert!(store.claim_hybrid_enrollment(&offer.authorization_id, "S-1-5-21-7", 7, &hybrid_request(&offer)).is_err());
         }
     }
 

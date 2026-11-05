@@ -49,6 +49,11 @@ impl ClaimedHybridEnrollment {
     }
 }
 
+// Match the server admission window; the server still checks freshness and replay.
+fn timestamp_is_fresh(timestamp: i64, now: i64) -> bool {
+    timestamp > 0 && now.abs_diff(timestamp) <= 300
+}
+
 fn verified_request(
     bytes: &[u8],
     pending: &PendingHybridEnrollment,
@@ -82,13 +87,18 @@ fn verified_request(
         .get("enrollment_ts")
         .and_then(serde_json::Value::as_i64)
         .ok_or(INVALID)?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| i64::try_from(duration.as_secs()).ok())
+        .ok_or(INVALID)?;
     if device != pending.trust.device_id
         || kind != "wincommander"
         || challenge != pending.challenge
         || signer != pending.trust.signer_key
         || outcome != expected_outcome
         || version != 2
-        || timestamp <= 0
+        || !timestamp_is_fresh(timestamp, now)
         || !uuid::Uuid::parse_str(&nonce)
             .is_ok_and(|id| id.get_version_num() == 4 && id.to_string() == nonce)
     {
@@ -207,5 +217,21 @@ impl FleetMachinePolicy {
             && !record.hybrid_unconfirmed
             && record.hybrid_trust.is_some()
             && std::time::Instant::now() < saved.expires
+    }
+}
+
+#[cfg(test)]
+mod freshness_tests {
+    use super::timestamp_is_fresh;
+
+    #[test]
+    fn inclusive_five_minute_window_is_overflow_safe() {
+        let now = 1_700_000_000;
+        for value in [now - 300, now, now + 300] {
+            assert!(timestamp_is_fresh(value, now));
+        }
+        for value in [now - 301, now + 301, 0, i64::MIN, i64::MAX] {
+            assert!(!timestamp_is_fresh(value, now));
+        }
     }
 }
