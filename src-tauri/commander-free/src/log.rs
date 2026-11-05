@@ -158,26 +158,12 @@ fn should_keep_log_record(line: &str, cutoff: chrono::NaiveDate) -> bool {
         .is_none_or(|value| value >= cutoff)
 }
 /// Re-encrypt any plaintext log lines left from before the encryption
-/// migration. Called once at startup before purge_old_log_records in release
-/// builds. Debug builds deliberately use the inverse migration below so a
-/// local Tauri dev session can be inspected without app-side decryption.
+/// migration. Not invoked automatically: path replacement needs a stronger
+/// directory ownership boundary before historical files can be migrated safely.
 #[allow(dead_code)]
 pub(crate) fn migrate_plaintext_logs(log_file: &Path) {
     if migrate_plaintext_logs_with(log_file, crate::datastore::log_encrypt_line).is_err() {
         eprintln!("[Logging] Existing log could not be secured; original retained when possible.");
-    }
-}
-
-/// Migrate historical plaintext away from the UI startup thread. All appends
-/// and rewrites use the same cross-process lock while migration is running.
-pub(crate) fn start_encrypted_log_migration() {
-    #[cfg(all(not(debug_assertions), not(test)))]
-    if std::thread::Builder::new().name("log-migration".into()).spawn(|| {
-        if let Ok(directory) = crate::paths::user_logs_dir() {
-            migrate_plaintext_logs(&directory.join("wincommander.log"));
-        }
-    }).is_err() {
-        eprintln!("[Logging] Existing log migration could not start.");
     }
 }
 

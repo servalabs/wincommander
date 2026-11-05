@@ -1834,7 +1834,6 @@ pub fn run() {
                     ),
                 };
             }
-            log::start_encrypted_log_migration();
             #[cfg(windows)]
             if let Some(window) = app.get_webview_window("main") {
                 startup_visibility::enforce_hidden_before_setup(&window)?;
