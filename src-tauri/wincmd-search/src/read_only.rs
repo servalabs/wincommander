@@ -212,22 +212,22 @@ impl CheckedDirectory {
             FILE_RENAME_INFO, FILE_RENAME_INFO_0, FILE_SHARE_READ, FileDispositionInfo, FileRenameInfo,
             SetFileInformationByHandle};
         use std::os::windows::fs::MetadataExt;
-        let pins = self.pin_mutation_root(path).map_err(|e| io::Error::new(e.kind(), format!("pin root: {e}")))?;
+        let pins = self.pin_mutation_root(path)?;
         after_pin();
         self.check(path, true)?;
-        let root = pins.last().ok_or_else(denied)?;
+        let _root = pins.last().ok_or_else(denied)?;
         let mut random = [0u8; 16]; OsRng.fill_bytes(&mut random);
         let temp_name = format!(".encrypted-index-{}.tmp", hex::encode(random));
         let mut file = std::fs::OpenOptions::new().write(true).access_mode(FILE_GENERIC_WRITE | DELETE | FILE_READ_ATTRIBUTES)
             .share_mode(FILE_SHARE_READ).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
-            .create_new(true).open(self.root.join(temp_name)).map_err(|e| io::Error::new(e.kind(), format!("create temp: {e}")))?;
+            .create_new(true).open(self.root.join(temp_name))?;
         let result = (|| -> io::Result<()> {
             let meta = file.metadata()?;
             if !meta.is_file() || meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 { return Err(denied()); }
-            file.write_all(data).map_err(|e| io::Error::new(e.kind(), format!("write temp: {e}")))?;
-            file.sync_all().map_err(|e| io::Error::new(e.kind(), format!("sync temp: {e}")))?;
+            file.write_all(data)?; file.sync_all()?;
             before_rename();
-            let name: Vec<u16> = path.as_os_str().encode_wide().collect();
+            let destination = self.root.join(path);
+            let name: Vec<u16> = destination.as_os_str().encode_wide().collect();
             let name_bytes = name.len().checked_mul(2).ok_or_else(denied)?;
             let offset = std::mem::offset_of!(FILE_RENAME_INFO, FileName);
             let len = offset.checked_add(name_bytes).and_then(|n| n.checked_add(2)).ok_or_else(denied)?;
@@ -237,12 +237,11 @@ impl CheckedDirectory {
             // the source and pinned root handles remain live throughout the call.
             unsafe {
                 (*rename).Anonymous = FILE_RENAME_INFO_0 { ReplaceIfExists: replace };
-                (*rename).RootDirectory = root.as_raw_handle();
+                (*rename).RootDirectory = std::ptr::null_mut();
                 (*rename).FileNameLength = u32::try_from(name_bytes).map_err(|_| denied())?;
                 std::ptr::copy_nonoverlapping(name.as_ptr(), std::ptr::addr_of_mut!((*rename).FileName).cast::<u16>(), name.len());
                 if SetFileInformationByHandle(file.as_raw_handle(), FileRenameInfo, rename.cast(), u32::try_from(len).map_err(|_| denied())?) == 0 {
-                    let error = io::Error::last_os_error();
-                    return Err(io::Error::new(error.kind(), format!("rename temp: {error}")));
+                    return Err(io::Error::last_os_error());
                 }
             }
             Ok(())
