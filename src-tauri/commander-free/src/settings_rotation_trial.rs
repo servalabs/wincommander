@@ -825,12 +825,30 @@ fn select_fresh_generation(
         &|bytes| verify_fresh_generation(root, scope, bytes))
 }
 
+#[cfg(windows)]
+pub(super) fn pin_root_for_acl(root: &Path) -> Result<Vec<std::fs::File>, String> {
+    source_snapshot::pin_directories(root)
+}
+
+/// Create or verify a fresh install's data root while holding both the known
+/// and configured parent paths pinned. Its DACL is verified before any store
+/// operation. Fresh-install proof and old-process fencing remain external.
+#[cfg(windows)]
+fn prepare_fresh_root() -> Result<(PathBuf, Vec<std::fs::File>, StoreScope), String> {
+    let scope = if crate::paths::current_user_install_uses_local_datastore() { StoreScope::CurrentUser } else { StoreScope::Machine };
+    let root = source_snapshot::known_root(scope)?;
+    let mut pins = source_snapshot::pin_matching_parents(&root, scope)?;
+    pins.extend(super::settings_generation_acl_windows::create_or_verify_root(&root, scope == StoreScope::CurrentUser)
+        .map_err(|_| "cannot create or verify authorized settings root")?);
+    Ok((root, pins, scope))
+}
+
 /// Explicit installer-lab entry for a verified fresh install only. Never
 /// invoked automatically; the caller must establish fresh-install authority
 /// and prevent old executable launches before calling it.
 #[cfg(windows)]
 pub(super) fn provision_verified_fresh_install() -> Result<(), String> {
-    let (root, _pins, scope) = experimental_runtime_root()?;
+    let (root, _pins, scope) = prepare_fresh_root()?;
     super::settings_generation_bootstrap::provision_fresh(&root, scope, |path| {
         match scope {
             StoreScope::Machine => super::settings_generation_acl_windows::provision_or_verify(path),

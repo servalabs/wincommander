@@ -69,6 +69,24 @@ mod settings_generation_ownership;
 #[path = "settings_section_envelope.rs"]
 mod settings_section_envelope;
 
+#[cfg(all(windows, debug_assertions, feature = "experimental-settings-generation"))]
+pub(crate) fn settings_generation_lab_status() -> Result<&'static str, String> {
+    let (root, _pins, scope) = settings_rotation_trial::experimental_runtime_root()?;
+    match settings_rotation_trial::inspect_startup_once(&root, scope)? {
+        settings_rotation_trial::StartupView::Legacy => Ok("Legacy settings selected; migration has not run."),
+        settings_rotation_trial::StartupView::Selected(_) => Ok("Protected settings generation selected."),
+        settings_rotation_trial::StartupView::RecoveryRequired => Err("Settings generation requires authorized recovery; original files were preserved.".into()),
+    }
+}
+#[cfg(all(windows, debug_assertions, feature = "experimental-settings-generation"))]
+pub(crate) fn settings_generation_lab_fresh() -> Result<(), String> {
+    settings_rotation_trial::provision_verified_fresh_install()
+}
+#[cfg(all(windows, debug_assertions, feature = "experimental-settings-generation"))]
+pub(crate) fn settings_generation_lab_migrate() -> Result<(), String> {
+    settings_rotation_trial::migrate_explicitly()
+}
+
 const MATERIAL_FILENAME: &str = ".install.material";
 const USER_MATERIAL_FILENAME: &str = ".user-store.material";
 const PERSONAL_SECRETS_KEY_MARKER: &str = "personal-secrets-key.in-use";

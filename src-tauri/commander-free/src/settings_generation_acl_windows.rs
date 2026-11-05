@@ -11,7 +11,7 @@ use windows_sys::Win32::{
         EqualSid, GetAce, GetSecurityDescriptorControl, GetSecurityDescriptorDacl, GetSecurityDescriptorOwner, GetTokenInformation,
         TokenUser, TOKEN_QUERY, TOKEN_USER, ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION, SECURITY_ATTRIBUTES},
     System::Threading::{GetCurrentProcess, OpenProcessToken},
-    Storage::FileSystem::{CreateFileW, GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, CREATE_NEW, OPEN_EXISTING,
+    Storage::FileSystem::{CreateDirectoryW, CreateFileW, GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, CREATE_NEW, OPEN_EXISTING,
         FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE},
 };
 
@@ -160,6 +160,25 @@ pub(super) fn verify_current_user_root_handle(file: &File) -> io::Result<()> {
 /// Verify the exact current-user lock handle before acquiring its range lock.
 pub(super) fn verify_current_user_lock_handle(file: &File) -> io::Result<()> {
     verify(file, &current_user_descriptor(false)?, false)
+}
+
+/// Create the product root with the intended protected ACL, or verify an
+/// existing root without changing it. The caller must pin and authorize the
+/// already-existing parent and its ancestors throughout this operation.
+pub(super) fn create_or_verify_root(root: &Path, user: bool) -> io::Result<Vec<File>> {
+    let descriptor = if user { current_user_descriptor(true)? } else { Descriptor::from_sddl(MACHINE_ROOT_SDDL)? };
+    let mut attributes = descriptor.attributes();
+    let path: Vec<u16> = root.as_os_str().encode_wide().chain(Some(0)).collect();
+    // SAFETY: path and attributes remain live for the call.
+    if unsafe { CreateDirectoryW(path.as_ptr(), &mut attributes) } == 0 {
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() != Some(ERROR_ALREADY_EXISTS as i32) { return Err(error); }
+    }
+    let pins = super::settings_rotation_trial::pin_root_for_acl(root)
+        .map_err(io::Error::other)?;
+    let root_handle = pins.last().ok_or_else(|| io::Error::other("settings root unavailable"))?;
+    verify(root_handle, &descriptor, true)?;
+    Ok(pins)
 }
 
 /// Create once or verify an existing lock; never replace or repair an unknown

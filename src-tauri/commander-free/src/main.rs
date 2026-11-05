@@ -6,6 +6,16 @@
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    #[cfg(all(windows, debug_assertions, feature = "experimental-settings-generation"))]
+    if args.first().map(String::as_str) == Some("--settings-generation-lab") {
+        attach_parent_console();
+        let outcome = wincommander_lib::settings_generation_lab::run(&args)
+            .expect("matched settings generation lab command");
+        match outcome {
+            Ok(message) => { println!("{message}"); std::process::exit(0); }
+            Err(message) => { eprintln!("{message}"); std::process::exit(1); }
+        }
+    }
     if args.as_slice() == ["--hide-recovery-listener"] {
         wincommander_lib::run_hide_recovery_listener();
         return;

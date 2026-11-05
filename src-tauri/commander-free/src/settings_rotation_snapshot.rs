@@ -54,15 +54,17 @@ pub(super) fn pin_directories(path: &Path) -> Result<Vec<File>, String> {
 // Both directory trees stay pinned by the returned handles. This detects a
 // disagreement between the known-folder root and the legacy live resolver;
 // it does not authorize ACLs or prevent an old process using another path.
-pub(super) fn pin_matching_roots(trusted: &Path, scope: StoreScope) -> Result<Vec<File>, String> {
-    use windows_sys::Win32::Storage::FileSystem::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION};
-    let live_base = match scope {
+fn live_base(scope: StoreScope) -> Result<PathBuf, String> {
+    let value = match scope {
         StoreScope::Machine => std::env::var("ProgramData").or_else(|_| std::env::var("ALLUSERSPROFILE")),
         StoreScope::CurrentUser => std::env::var("LOCALAPPDATA"),
     }.map_err(|_| UNAVAILABLE)?;
-    let live = PathBuf::from(live_base).join(crate::paths::APP_DIR_NAME);
+    Ok(PathBuf::from(value))
+}
+fn pin_matching_paths(trusted: &Path, live: &Path) -> Result<Vec<File>, String> {
+    use windows_sys::Win32::Storage::FileSystem::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION};
     let mut trusted_pins = pin_directories(trusted)?;
-    let live_pins = pin_directories(&live)?;
+    let live_pins = pin_directories(live)?;
     let mut first = BY_HANDLE_FILE_INFORMATION::default();
     let mut second = BY_HANDLE_FILE_INFORMATION::default();
     let a = trusted_pins.last().ok_or(UNAVAILABLE)?;
@@ -77,6 +79,14 @@ pub(super) fn pin_matching_roots(trusted: &Path, scope: StoreScope) -> Result<Ve
     }
     trusted_pins.extend(live_pins);
     Ok(trusted_pins)
+}
+/// Pin matching product roots once they exist.
+pub(super) fn pin_matching_roots(trusted: &Path, scope: StoreScope) -> Result<Vec<File>, String> {
+    pin_matching_paths(trusted, &live_base(scope)?.join(crate::paths::APP_DIR_NAME))
+}
+/// Pin matching known-folder parents before a new product root is created.
+pub(super) fn pin_matching_parents(root: &Path, scope: StoreScope) -> Result<Vec<File>, String> {
+    pin_matching_paths(root.parent().ok_or(UNAVAILABLE)?, &live_base(scope)?)
 }
 
 fn open_locked(path: &Path, limit: u64) -> Result<File, String> {

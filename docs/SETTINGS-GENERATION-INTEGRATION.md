@@ -5,7 +5,7 @@ main-branch format and guarded-key writes. A Windows build with the non-default
 `experimental-settings-generation` feature AND process environment variable
 `WINCOMMANDER_EXPERIMENTAL_SETTINGS_GENERATION=1` routes machine-section reads
 and writes through the experimental lock and authority guard. It does not
-provision the lock or initialize a generation. Current-user installations use
+provision the lock or initialize a generation during normal startup. Current-user installations use
 user-scoped DPAPI for the new generation and fail with an account/profile
 recovery message if Windows cannot unlock it; they never retry the new generation
 with machine-scope protection. Do not ship or enable it before the checks below.
@@ -89,4 +89,17 @@ first securely create or verify the actual known-folder root and its owner and
 DACL, pin its ancestors, prove that the install is fresh, and fence older
 writers. After those prerequisites, the seam can provision the lock and anchor,
 then select a protected empty generation; a Legacy anchor alone is not proof of
-protected settings. The caller and installer wiring do not yet exist.
+protected settings. A debug-only explicit lab command exists, but no installer invokes it.
+
+A Windows debug build with the feature and the environment opt-in can invoke
+`--settings-generation-lab status`, or `fresh --offline-confirmed` / `migrate
+--offline-confirmed` after the command name. These commands can modify the
+actual resolved settings root; they have not been executed as part of this
+checkpoint. The offline acknowledgement is an operator statement, not a
+technical fence against another process. They must not be exposed by a release
+installer until independently enforced maintenance mode, protected root and
+lock ACL acceptance, source preservation and crash/cross-user tests pass.
+Existing installations do not automatically receive a Legacy anchor. A missing
+anchor is an error, because blindly creating one could mistake deleted migration
+state for a first migration and restore stale signing identity. A separately
+authorized recovery/provisioning design is still required for those installs.
