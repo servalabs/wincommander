@@ -50,7 +50,7 @@ fn reject_pending(selection: &Path) -> Result<(), String> {
 /// Run from the temporary early CLI helper, before normal application startup.
 /// The verify phase is read-only and the installer must hold its exclusive lock.
 pub fn run(phase: &str) -> Result<String, String> {
-    let parent = if phase == "quarantine" {
+    let parent = if matches!(phase, "stage" | "quarantine") {
         crate::file_search::runtime_fence::prepare_installer_parent()?
     } else {
         crate::file_search::runtime_fence::verified_parent()?
