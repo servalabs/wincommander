@@ -24,7 +24,7 @@ test("only fixed paid adapters are exposed and UI distinguishes ciphertext copyi
   for (const feature of ["backup_container_export", "backup_container_verify", "backup_generation_restore"]) expect(backend).toContain(`"${feature}"`);
   expect(backend).toContain('"backup_container_export" | "backup_container_verify" | "backup_generation_restore" => "paid"');
   const redaction = backend.slice(backend.indexOf("let sanitized_params:"), backend.indexOf("let sanitized_params:") + 1200);
-  expect(redaction).toMatch(/matches!\(\s*command\.as_str\(\),\s*"backup_container_export" \| "backup_container_verify" \| "backup_generation_restore"\s*\)/);
+  expect(redaction).toMatch(/matches!\(\s*command\.as_str\(\),\s*"backup_container_export"\s*\|\s*"backup_container_verify"\s*\|\s*"backup_generation_restore"\s*\)/);
   expect(redaction).toContain('if is_secret { "***" }');
   expect(ui).toContain("Normally dismount it first");
   expect(ui).toContain("Restored files are plaintext");
