@@ -219,9 +219,8 @@ ${Using:StrFunc} UnStrStr
   ; executable. Older service binaries may take longer to dismount a Vault.
   !insertmacro WC_STOP_OWNED_SERVICE_OR_ABORT "preinstall" ""
   !ifdef WC_EXPERIMENTAL_USER_STAGE_ONLY
-    ; Only pre-stage existing current-user installs. This never selects the new
-    ; store; failure occurs before the installer replaces existing app files.
-    IfFileExists "$INSTDIR\wincommander-free.exe" 0 wc_user_stage_done
+    ; The helper handles fresh installs and fails closed if an existing
+    ; profile has lost its app binary. It never selects the new store.
       InitPluginsDir
       File /oname=$PLUGINSDIR\wincommander-settings-stage.exe "${MAINBINARYSRCPATH}"
       File /oname=$PLUGINSDIR\wincommander-stage-original-user-settings.ps1 "${WC_STAGE_ORIGINAL_USER_SETTINGS}"
@@ -233,7 +232,6 @@ ${Using:StrFunc} UnStrStr
       ${If} $0 != 0
         Abort "WinCommander could not stage user settings. Existing app and settings remain in place."
       ${EndIf}
-    wc_user_stage_done:
   !endif
   !insertmacro WC_LOAD_PROGRAMDATA_OR_ABORT "preinstall"
   IfFileExists "$R5\WinCommander\license_cache.json" 0 wc_no_upgrade_license_to_backup

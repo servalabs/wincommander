@@ -19,6 +19,15 @@ try {
     if (-not [string]::Equals($actual, $expected, [StringComparison]::OrdinalIgnoreCase)) {
         throw 'This installer is not running as the user who owns the target installation.'
     }
+    $installed = Join-Path $actual 'wincommander-free.exe'
+    if (-not [IO.File]::Exists($installed)) {
+        if (-not [IO.Directory]::Exists($actual)) { return }
+        $entries = [IO.Directory]::EnumerateFileSystemEntries($actual).GetEnumerator()
+        try {
+            if (-not $entries.MoveNext()) { return }
+        } finally { $entries.Dispose() }
+        throw 'Existing profile contents require recovery because the app binary is missing.'
+    }
     $helper = [IO.Path]::GetFullPath($ExecutablePath)
     if (-not [IO.File]::Exists($helper)) { throw 'Settings staging helper unavailable.' }
     $env:WINCOMMANDER_EXPERIMENTAL_SETTINGS_GENERATION = '1'
