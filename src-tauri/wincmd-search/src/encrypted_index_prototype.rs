@@ -11,6 +11,9 @@ use std::ops::Range;
 
 const MAGIC: &[u8; 8] = b"WCIDX001";
 const CHUNK: usize = 64 * 1024;
+// Experimental denial-of-service bound. Large-index support must measure the
+// largest ranges Tantivy actually requests before choosing a release value.
+const MAX_READ_RANGE: usize = 8 * 1024 * 1024;
 const HEADER: usize = 24;
 const OVERHEAD: usize = 28; // 96-bit random nonce and 128-bit tag
 const FOOTER: usize = 8 + OVERHEAD;
@@ -128,7 +131,10 @@ impl<R: Read + Seek> ProtectedFile<R> {
         })
     }
     fn read(&mut self, range: Range<usize>) -> io::Result<Vec<u8>> {
-        if range.start > range.end || range.end > self.len {
+        if range.start > range.end
+            || range.end > self.len
+            || range.end - range.start > MAX_READ_RANGE
+        {
             return Err(invalid());
         }
         if range.is_empty() {
@@ -220,6 +226,17 @@ fn empty_file_and_footer_authentication() {
 }
 
 #[test]
+fn oversized_range_is_rejected_without_allocating_the_requested_output() {
+    let key = [2; 32];
+    let plain = vec![7; MAX_READ_RANGE + 1];
+    let mut bytes = Vec::new();
+    encrypt(&mut bytes, &key, "big-segment", &plain).unwrap();
+    let mut file = ProtectedFile::open(io::Cursor::new(bytes), &key, "big-segment").unwrap();
+    assert!(file.read(0..MAX_READ_RANGE + 1).is_err());
+    assert_eq!(file.read(MAX_READ_RANGE..MAX_READ_RANGE + 1).unwrap(), [7]);
+}
+
+#[test]
 fn native_disk_roundtrip_does_not_write_indexed_text_as_plaintext() {
     let key = [6; 32];
     let dir = tempfile::tempdir().unwrap();
@@ -242,6 +259,7 @@ fn native_disk_roundtrip_does_not_write_indexed_text_as_plaintext() {
 
 // Deliberately test-only: key management, migration and atomic manifest limits
 // are not ready for production. It exercises Tantivy's real Directory contract.
+#[cfg(windows)]
 mod tantivy_trial {
     use super::*;
     use crate::read_only::{AccessMode, CheckedDirectory};
@@ -306,7 +324,7 @@ mod tantivy_trial {
         }
     }
     struct TrialHandle {
-        file: Mutex<ProtectedFile<HandleReader>>,
+        file: Mutex<ProtectedFile<std::fs::File>>,
         len: usize,
     }
     impl fmt::Debug for TrialHandle {
@@ -452,12 +470,9 @@ mod tantivy_trial {
     }
     impl Directory for TrialDirectory {
         fn get_file_handle(&self, path: &Path) -> Result<Arc<dyn FileHandle>, OpenReadError> {
-            let source = self.inner.get_file_handle(path)?;
+            let source = self.inner.open_read_pinned(path)?;
             let file = ProtectedFile::open(
-                HandleReader {
-                    inner: source,
-                    offset: 0,
-                },
+                source,
                 &self.key,
                 name(path).map_err(|e| OpenReadError::wrap_io_error(e, path.into()))?,
             )

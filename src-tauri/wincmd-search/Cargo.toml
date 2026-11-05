@@ -31,3 +31,6 @@ rand = "0.8"
 # AV-clean Free binary.
 zip   = "9.3"
 lopdf = "0.46"
+
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }

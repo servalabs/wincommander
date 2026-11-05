@@ -102,24 +102,77 @@ fn validate_storage_once(root: &Path) -> io::Result<()> {
 }
 
 impl CheckedDirectory {
-    #[cfg(test)]
+    #[cfg(all(test, windows))]
+    pub(crate) fn open_read_pinned(&self, path: &Path) -> Result<std::fs::File, OpenReadError> {
+        self.open_read_pinned_after_guard(path, || {})
+    }
+
+    #[cfg(all(test, windows))]
+    fn open_read_pinned_after_guard(
+        &self,
+        path: &Path,
+        before_leaf: impl FnOnce(),
+    ) -> Result<std::fs::File, OpenReadError> {
+        use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+            FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        };
+        let wrap = |e| OpenReadError::wrap_io_error(e, path.into());
+        self.check(path, false).map_err(wrap)?;
+        if !self.root.is_absolute() {
+            return Err(wrap(denied()));
+        }
+        // Pin each existing parent without delete sharing, from the volume root
+        // downward. This prevents renaming a validated ancestor before the
+        // final no-follow leaf handle is opened.
+        let mut parents: Vec<_> = self.root.ancestors().collect();
+        parents.reverse();
+        let mut pinned = Vec::with_capacity(parents.len());
+        for parent in parents {
+            let handle = std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+                .open(parent)
+                .map_err(wrap)?;
+            let meta = handle.metadata().map_err(wrap)?;
+            if !meta.is_dir() || meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                return Err(wrap(denied()));
+            }
+            pinned.push(handle);
+        }
+        before_leaf();
+        let leaf = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(self.root.join(path))
+            .map_err(|e| {
+                if e.kind() == io::ErrorKind::NotFound {
+                    OpenReadError::FileDoesNotExist(path.into())
+                } else {
+                    wrap(e)
+                }
+            })?;
+        let meta = leaf.metadata().map_err(wrap)?;
+        if !meta.is_file() || meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(wrap(denied()));
+        }
+        // The already-open leaf is a stable snapshot after the parents drop.
+        Ok(leaf)
+    }
+
+    #[cfg(all(test, windows))]
     pub(crate) fn atomic_read_bounded(
         &self,
         path: &Path,
         max: usize,
     ) -> Result<Vec<u8>, OpenReadError> {
         use std::io::Read;
-        self.check(path, false)
-            .map_err(|e| OpenReadError::wrap_io_error(e, path.into()))?;
         // One opened handle preserves atomic-replace snapshot semantics; limit
         // the read itself rather than trusting a racy metadata size check.
-        let file = std::fs::File::open(self.root.join(path)).map_err(|e| {
-            if e.kind() == io::ErrorKind::NotFound {
-                OpenReadError::FileDoesNotExist(path.into())
-            } else {
-                OpenReadError::wrap_io_error(e, path.into())
-            }
-        })?;
+        let file = self.open_read_pinned(path)?;
         let limit = max
             .checked_add(1)
             .ok_or_else(|| OpenReadError::wrap_io_error(denied(), path.into()))?;
@@ -266,6 +319,44 @@ impl Directory for CheckedDirectory {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn pinned_read_denies_ancestor_replacement_during_open() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("index");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("manifest"), b"expected").unwrap();
+        let directory = CheckedDirectory::open(&root, AccessMode::SharedReader).unwrap();
+        let leaf = directory
+            .open_read_pinned_after_guard(Path::new("manifest"), || {
+                assert!(std::fs::rename(&root, parent.path().join("moved")).is_err());
+            })
+            .unwrap();
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        leaf.take(128).read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, b"expected");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn pinned_read_rejects_leaf_reparse_swapped_after_path_check() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("index");
+        std::fs::create_dir(&root).unwrap();
+        let leaf = root.join("manifest");
+        let outside = parent.path().join("outside");
+        std::fs::write(&leaf, b"expected").unwrap();
+        std::fs::write(&outside, b"outside secret").unwrap();
+        let directory = CheckedDirectory::open(&root, AccessMode::SharedReader).unwrap();
+        let result = directory.open_read_pinned_after_guard(Path::new("manifest"), || {
+            std::fs::remove_file(&leaf).unwrap();
+            std::os::windows::fs::symlink_file(&outside, &leaf).unwrap();
+        });
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(outside).unwrap(), b"outside secret");
+    }
 
     #[cfg(windows)]
     #[test]
