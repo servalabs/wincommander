@@ -146,6 +146,53 @@ Var WCUserStageServiceRunning
   ${EndIf}
 !macroend
 
+!ifdef WC_EXPERIMENTAL_USER_STAGE_ONLY
+; Restore the prior running state after a rejected stop/stage. A stop request
+; can still be pending when we get here, so poll before requesting start and
+; verify RUNNING rather than treating an accepted start request as success.
+Function WC_RestoreUserStageService
+  StrCpy $R6 0
+  StrCpy $R4 0
+  wc_user_stage_restore_poll:
+    nsExec::ExecToStack 'sc.exe query ${WC_SERVICE_NAME}'
+    Pop $0
+    Pop $1
+    ${If} $0 == 0
+      ${StrStr} $R7 $1 "RUNNING"
+      ${If} $R7 != ""
+        StrCpy $R6 1
+        Return
+      ${EndIf}
+      ${StrStr} $R7 $1 "STOPPED"
+      ${If} $R7 != ""
+        nsExec::ExecToStack 'sc.exe start ${WC_SERVICE_NAME}'
+        Pop $0
+        Pop $1
+      ${EndIf}
+    ${EndIf}
+    ${If} $R4 >= 60
+      Return
+    ${EndIf}
+    Sleep 1000
+    IntOp $R4 $R4 + 1
+    Goto wc_user_stage_restore_poll
+FunctionEnd
+!endif
+
+!macro WC_ABORT_STOP_FAILURE stage message
+  !ifdef WC_EXPERIMENTAL_USER_STAGE_ONLY
+    !if "${stage}" == "preinstall"
+      ${If} $WCUserStageServiceRunning == 1
+        Call WC_RestoreUserStageService
+        ${If} $R6 != 1
+          Abort "The service did not stop safely and could not be restored. Existing app and settings remain in place; restart the service before retrying."
+        ${EndIf}
+      ${EndIf}
+    !endif
+  !endif
+  Abort "${message}"
+!macroend
+
 ; `sc stop` returns before SCM has necessarily released the service process.
 ; Replacing its executable early can fail silently, then leave the next start
 ; using a stale image. Wait until SCM confirms STOPPED before copying.
@@ -162,7 +209,7 @@ Var WCUserStageServiceRunning
     ${If} $0 != 0
     ${AndIf} $0 != 1062
     ${AndIf} $0 != 1052
-      Abort "WinCommander could not stop its existing machine service."
+      !insertmacro WC_ABORT_STOP_FAILURE "${stage}" "WinCommander could not stop its existing machine service."
     ${EndIf}
     StrCpy $R8 0
     wc_wait_for_service_stop_${stage}:
@@ -193,7 +240,7 @@ Var WCUserStageServiceRunning
       ${EndIf}
       !insertmacro WC_WRITE_SERVICE_QUERY_DIAGNOSTIC "${stage}" "$R8/${WC_SERVICE_STOP_TIMEOUT_SECONDS}"
       ${If} $R8 >= ${WC_SERVICE_STOP_TIMEOUT_SECONDS}
-        Abort "WinCommander service did not stop within ${WC_SERVICE_STOP_TIMEOUT_SECONDS} seconds."
+        !insertmacro WC_ABORT_STOP_FAILURE "${stage}" "WinCommander service did not stop within ${WC_SERVICE_STOP_TIMEOUT_SECONDS} seconds."
       ${EndIf}
       DetailPrint "Waiting for WinCommander service to stop ($R8/${WC_SERVICE_STOP_TIMEOUT_SECONDS} seconds; SCM state/checkpoint recorded in installer-lifecycle.log)."
       Sleep 1000
@@ -202,7 +249,7 @@ Var WCUserStageServiceRunning
     wc_service_stopped_${stage}:
   ${ElseIf} $0 != 1060
     !insertmacro WC_WRITE_SERVICE_QUERY_DIAGNOSTIC "${stage}" "initial"
-    Abort "WinCommander could not inspect its existing machine service."
+    !insertmacro WC_ABORT_STOP_FAILURE "${stage}" "WinCommander could not inspect its existing machine service."
   ${EndIf}
 !macroend
 
@@ -252,11 +299,8 @@ Var WCUserStageServiceRunning
       !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "user-settings-stage" "$0" "$1"
       ${If} $0 != 0
         ${If} $WCUserStageServiceRunning == 1
-          nsExec::ExecToStack 'sc.exe start ${WC_SERVICE_NAME}'
-          Pop $0
-          Pop $1
-          ${If} $0 != 0
-          ${AndIf} $0 != 1056
+          Call WC_RestoreUserStageService
+          ${If} $R6 != 1
             Abort "User settings staging failed and the WinCommander service could not restart. Existing app and settings remain in place."
           ${EndIf}
         ${EndIf}
