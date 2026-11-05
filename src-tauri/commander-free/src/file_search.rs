@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Route ordinary and private content search into separate storage lifetimes.
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
+mod runtime_fence;
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
+pub(crate) use runtime_fence::acquire as acquire_runtime_fence;
 mod defaults;
 mod global;
 mod locks;

@@ -10,6 +10,18 @@ use windows_sys::Win32::Storage::FileSystem::{BY_HANDLE_FILE_INFORMATION,
 pub struct SearchOperationFence { _pins: Vec<File>, _file: File }
 
 impl SearchOperationFence {
+    /// Prepare the search parent below an independently verified user root.
+    pub fn prepare_parent(user_root: &Path) -> io::Result<std::path::PathBuf> {
+        let _pins = crate::read_only::CheckedDirectory::pin_root_path(user_root)?;
+        let parent = user_root.join("file-search");
+        match std::fs::create_dir(&parent) {
+            Ok(()) => {},
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {},
+            Err(e) => return Err(e),
+        }
+        let _parent_pins = crate::read_only::CheckedDirectory::pin_root_path(&parent)?;
+        Ok(parent)
+    }
     /// The caller must supply its independently verified user-specific parent.
     pub fn acquire_shared(parent: &Path) -> io::Result<Self> { Self::acquire(parent, false) }
     /// Hold for the full offline installer lifetime; old binaries do not cooperate.
@@ -27,7 +39,10 @@ impl SearchOperationFence {
             || unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0
             || info.nNumberOfLinks != 1 { return Err(denied()); }
         let result = if exclusive { file.try_lock() } else { file.try_lock_shared() };
-        result.map_err(|e| io::Error::other(e.to_string()))?;
+        result.map_err(|e| match e {
+            std::fs::TryLockError::WouldBlock => io::Error::new(io::ErrorKind::WouldBlock, "search migration is in progress"),
+            std::fs::TryLockError::Error(error) => error,
+        })?;
         Ok(Self { _pins: pins, _file: file })
     }
 }
