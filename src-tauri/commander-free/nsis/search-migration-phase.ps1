@@ -43,8 +43,8 @@ try {
     }
     $result = Invoke-Helper "--search-migration-lab $Phase" 'WINCOMMANDER_SEARCH_MIGRATION_OUTCOME:'
     $pattern = if ($Phase -eq 'stage') {
-        '^(fresh|staged reconciliation=pending old-cache=retained|already-quarantined)$'
-    } else { '^(fresh|staged old-cache=retained|already-quarantined)$' }
+        '^(fresh|staged reconciliation=pending old-cache=retained|selected)$'
+    } else { '^(fresh|staged old-cache=retained|selected)$' }
     if ($result -cnotmatch $pattern) { throw 'Protected search staging outcome was not confirmed.' }
     [Console]::Out.WriteLine($result)
 
