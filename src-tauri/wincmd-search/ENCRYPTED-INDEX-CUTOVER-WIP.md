@@ -1,6 +1,6 @@
 # Encrypted search index cutover: experimental design
 
-Status: test-only research. Do not enable the prototype in production. The index
+Status: experimental, disabled-by-default research. Do not enable it in production. The index
 contains potentially sensitive extracted content and is currently plaintext.
 
 - Create a random 256-bit data key for each Windows user and index identity.
@@ -22,9 +22,13 @@ contains potentially sensitive extracted content and is currently plaintext.
   generation is verified and all older processes are excluded; report failures
   honestly. Deleting files does not guarantee physical erasure on SSDs, backups,
   snapshots, or filesystem journals. Avoid plaintext temporary index files.
+- The prototype uses randomly generated 96-bit AES-GCM nonces without a
+  per-key invocation limit or durable crash-safe usage accounting. Establish
+  and enforce an appropriate key-rotation bound or adopt a reviewed alternative
+  before activation. Do not rely on memory-only counters.
 - Before activation, verify large Tantivy reads against the prototype 8 MiB
   range limit, file identity and rename confinement, crash boundaries, disk-full
   recovery, stale processes, cross-user isolation, and installed Windows service
-  behavior. Fixed test keys and the test-only Directory are not key custody.
+  behavior. Fixed test keys and the experimental Directory are not production key custody.
 
 The portable chunk tests do not establish any of these production properties.

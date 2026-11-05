@@ -118,7 +118,10 @@ impl SearchEngine {
     }
 
     /// Opens a separate encrypted generation and rebuilds it through the normal
-    /// search engine. This does not select it for the app or delete old data.
+    /// search engine. This is always an unselected candidate, including on
+    /// reopen; it does not certify that crawling or migration completed.
+    /// Interrupted candidates are retained; use a fresh identity to rebuild.
+    /// This does not select it for the app or delete old data.
     /// The caller must authorize the parent and hold the cross-process lease
     /// against every legacy and new writer, and protect the identity durably.
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
@@ -624,25 +627,58 @@ mod tests {
     /// Build a small tempdir tree, index it synchronously, then search.
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     #[test]
+    fn interrupted_generation_is_refused_and_left_untouched() {
+        use crate::encrypted_index_prototype::tantivy_trial::TrialDirectory;
+        let root = TempDir::new().unwrap();
+        let old = root.path().join("legacy");
+        fs::create_dir(&old).unwrap();
+        fs::write(old.join("meta.json"), b"legacy intact").unwrap();
+        let identity = [56; 16];
+        let candidate = root.path().join(format!(".wincommander-encrypted-{}", hex::encode(identity)));
+        fs::create_dir(&candidate).unwrap();
+        let directory = TrialDirectory::open_protected(&candidate, crate::read_only::AccessMode::Writable, &identity, false).unwrap();
+        let schema = tantivy::schema::Schema::builder().build();
+        drop(tantivy::Index::create(directory, schema, Default::default()).unwrap());
+        let before = fs::read(candidate.join("meta.json")).unwrap();
+        let config = make_config(old.clone(), vec![root.path().to_path_buf()]);
+        assert!(SearchEngine::open_experimental_encrypted_with_policy(config.clone(), Arc::new(|_| true), identity, true).is_err());
+        assert!(SearchEngine::open_experimental_encrypted_with_policy(config, Arc::new(|_| true), identity, false).is_err());
+        assert_eq!(fs::read(candidate.join("meta.json")).unwrap(), before);
+        assert_eq!(fs::read(old.join("meta.json")).unwrap(), b"legacy intact");
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    #[test]
     fn experimental_engine_rebuilds_separate_generation_without_touching_legacy() {
         let root = TempDir::new().unwrap();
         let old = root.path().join("legacy");
         let data = root.path().join("documents");
         fs::create_dir(&old).unwrap();
         fs::create_dir(&data).unwrap();
-        fs::write(old.join("meta.json"), b"legacy unchanged").unwrap();
+        fs::write(old.join("meta.json"), b"legacyindexsecrettoken").unwrap();
         fs::write(data.join("memo.txt"), b"secret protectedenginetoken").unwrap();
-        let config = make_config(old.clone(), vec![data]);
+        let config = make_config(old.clone(), vec![root.path().to_path_buf()]);
         let engine = SearchEngine::open_experimental_encrypted_with_policy(config.clone(), Arc::new(|_| true), [55; 16], false).unwrap();
         let generation = engine.config.index_dir.clone();
         assert_ne!(generation, old);
         let exclusions = build_globset(&engine.config.exclusions).unwrap();
         let files = collect_files(&engine.config.roots, &exclusions, &engine.config.skip_paths, engine.config.max_file_bytes);
-        engine.index_files_sync(files).unwrap();
+        assert!(files.iter().all(|f| !f.path.starts_with(&old) && !f.path.starts_with(&generation)));
+        // Even directly supplied file metadata must not reintroduce either index.
+        let all = collect_files(&engine.config.roots, &exclusions, &[], engine.config.max_file_bytes);
+        engine.index_files_sync(all).unwrap();
+        for index_path in [old.join("meta.json"), generation.join("meta.json")] {
+            let event = notify::Event {
+                kind: notify::EventKind::Modify(notify::event::ModifyKind::Data(notify::event::DataChange::Content)),
+                paths: vec![index_path], attrs: Default::default(),
+            };
+            assert!(watch::apply_fs_event(&event, &engine.config.skip_paths, &exclusions, engine.config.max_file_bytes).is_none());
+        }
         let query = ContentQuery { terms: "protectedenginetoken".into(), roots: vec![], limit: 10, offset: 0, keyword_only: true };
         assert_eq!(engine.search(&query).unwrap().len(), 1);
+        let old_query = ContentQuery { terms: "legacyindexsecrettoken".into(), ..query.clone() };
+        assert!(engine.search(&old_query).unwrap().is_empty());
         drop(engine);
-        assert_eq!(fs::read(old.join("meta.json")).unwrap(), b"legacy unchanged");
+        assert_eq!(fs::read(old.join("meta.json")).unwrap(), b"legacyindexsecrettoken");
         let reopened = SearchEngine::open_experimental_encrypted_with_policy(config, Arc::new(|_| true), [55; 16], true).unwrap();
         assert_eq!(reopened.search(&query).unwrap().len(), 1);
         assert!(generation.join("protected-search-key.v1").exists());
