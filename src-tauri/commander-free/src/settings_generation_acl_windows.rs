@@ -122,7 +122,7 @@ pub(super) fn verify_machine_root_handle(file: &File) -> io::Result<()> {
     verify(file, &Descriptor::from_sddl(MACHINE_ROOT_SDDL)?, true)
 }
 
-fn current_user_sid() -> io::Result<String> {
+pub(super) fn current_user_sid() -> io::Result<String> {
     let mut token = std::ptr::null_mut();
     // SAFETY: output token is initialized by Windows on success.
     if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 { return Err(io::Error::last_os_error()); }

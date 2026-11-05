@@ -3,7 +3,7 @@
 //! The offline acknowledgement does not fence old executables; independently
 //! enforced maintenance mode remains required before deployment.
 #[derive(Debug, PartialEq, Eq)]
-enum Action { Status, Fresh, Migrate, Install, Stage }
+enum Action { Status, Fresh, Migrate, Install, Stage, StageUser(String) }
 fn parse(args: &[String], enabled: bool) -> Option<Result<Action, &'static str>> {
     if args.first().map(String::as_str) != Some("--settings-generation-lab") { return None; }
     if !enabled { return Some(Err("Settings migration lab is disabled; no data changed.")); }
@@ -13,8 +13,12 @@ fn parse(args: &[String], enabled: bool) -> Option<Result<Action, &'static str>>
         ["--settings-generation-lab", "migrate", "--offline-confirmed"] => Ok(Action::Migrate),
         ["--settings-generation-lab", "install", "--offline-confirmed"] => Ok(Action::Install),
         ["--settings-generation-lab", "stage", "--offline-confirmed"] => Ok(Action::Stage),
+        ["--settings-generation-lab", "stage-user", "--offline-confirmed", "--expected-user-sid", sid] if !sid.is_empty() => Ok(Action::StageUser((*sid).to_owned())),
         _ => Err("Use status, or fresh/migrate/install/stage with --offline-confirmed. Existing data was preserved."),
     })
+}
+pub(crate) fn user_sid_matches(expected: &str, actual: &str) -> bool {
+    !expected.is_empty() && expected.eq_ignore_ascii_case(actual)
 }
 #[cfg(windows)]
 pub fn run(args: &[String]) -> Option<Result<&'static str, String>> {
@@ -26,12 +30,31 @@ pub fn run(args: &[String]) -> Option<Result<&'static str, String>> {
         Action::Migrate => crate::datastore::settings_generation_lab_migrate().map(|_| "Protected settings generation prepared; original files retained."),
         Action::Install => crate::datastore::settings_generation_lab_install().map(|_| "Protected settings setup complete; original files retained."),
         Action::Stage => crate::datastore::settings_generation_lab_stage().map(|_| "Settings preflight complete; original store remains active."),
+        Action::StageUser(sid) => crate::datastore::settings_generation_lab_stage_user(&sid).map(|_| "User settings preflight complete; original store remains active."),
     })
 }
 #[cfg(test)]
 mod tests {
     use super::*;
     fn args(values: &[&str]) -> Vec<String> { values.iter().map(|value| value.to_string()).collect() }
+    #[test]
+    fn user_stage_requires_explicit_nonempty_original_user_sid() {
+        let a = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        assert!(parse(&a(&["--settings-generation-lab", "stage-user", "--offline-confirmed"]), true).unwrap().is_err());
+        assert!(parse(&a(&["--settings-generation-lab", "stage-user", "--offline-confirmed", "--expected-user-sid", ""]), true).unwrap().is_err());
+        assert_eq!(parse(&a(&["--settings-generation-lab", "stage-user", "--offline-confirmed", "--expected-user-sid", "S-1-5-21-1"]), true).unwrap(), Ok(Action::StageUser("S-1-5-21-1".into())));
+    }
+    #[test]
+    #[cfg(windows)]
+    fn another_user_is_rejected_before_any_store_access() {
+        assert!(crate::datastore::settings_generation_lab_stage_user("S-1-0-0").is_err());
+    }
+    #[test]
+    fn original_user_sid_must_match_exactly() {
+        assert!(user_sid_matches("S-1-5-21-123", "s-1-5-21-123"));
+        assert!(!user_sid_matches("S-1-5-21-123", "S-1-5-21-124"));
+        assert!(!user_sid_matches("", ""));
+    }
     #[test]
     fn lab_commands_require_explicit_opt_in_and_offline_acknowledgement() {
         assert_eq!(parse(&args(&["--normal"]), true), None);

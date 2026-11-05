@@ -96,7 +96,17 @@ pub(crate) fn settings_generation_lab_install() -> Result<(), String> {
 }
 #[cfg(all(windows, feature = "experimental-settings-generation"))]
 pub(crate) fn settings_generation_lab_stage() -> Result<(), String> {
-    settings_rotation_trial::stage_existing_explicitly()
+    settings_rotation_trial::stage_existing_explicitly(settings_rotation_trial::StoreScope::Machine)
+}
+
+#[cfg(all(windows, feature = "experimental-settings-generation"))]
+pub(crate) fn settings_generation_lab_stage_user(expected_sid: &str) -> Result<(), String> {
+    let actual = settings_generation_acl_windows::current_user_sid()
+        .map_err(|_| "Cannot verify the Windows user; existing settings preserved.")?;
+    if !crate::settings_generation_lab::user_sid_matches(expected_sid, &actual) {
+        return Err("The original Windows user must run settings staging; existing settings preserved.".into());
+    }
+    settings_rotation_trial::stage_existing_explicitly(settings_rotation_trial::StoreScope::CurrentUser)
 }
 
 const MATERIAL_FILENAME: &str = ".install.material";
