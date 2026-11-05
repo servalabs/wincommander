@@ -74,6 +74,14 @@ pub fn run(phase: &str) -> Result<String, String> {
                 },
             }
         }
+        "verify-staged" => match classify(&parent, &old, &selection)? {
+            State::Fresh => Ok("fresh".into()),
+            State::NeedsQuarantine => SearchEngine::verify_selected_generation(&old, &selection)
+                .map(|_| "staged old-cache=retained".into()).map_err(|e| e.to_string()),
+            State::Quarantined => SearchEngine::verify_quarantined_selection(&old, &selection)
+                .map(|_| "already-quarantined".into()).map_err(|e| e.to_string()),
+            State::NeedsRebuild => Err("The encrypted search generation is not ready.".into()),
+        },
         "quarantine" => {
             let guard = SearchOperationFence::acquire_exclusive(&parent)
                 .map_err(|_| "Cannot acquire offline search maintenance lock.")?;

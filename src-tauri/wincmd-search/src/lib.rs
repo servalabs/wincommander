@@ -1388,6 +1388,26 @@ mod tests {
     }
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     #[test]
+    fn staged_index_opens_after_restart_without_moving_old_cache() {
+        let root = TempDir::new().unwrap();
+        let old = root.path().join("legacy"); let data = root.path().join("data"); let selection = root.path().join("selector");
+        fs::create_dir(&old).unwrap(); fs::create_dir(&data).unwrap();
+        fs::write(old.join("meta.json"), b"old app cache").unwrap();
+        fs::write(data.join("doc.txt"), b"stagedrestartneedle").unwrap();
+        let guard = crate::encrypted_search_fence::SearchOperationFence::acquire_exclusive(root.path()).unwrap();
+        let config = make_config(old.clone(), vec![]);
+        SearchEngine::rebuild_offline_and_select(config, Arc::new(|_| false), &selection, &guard).unwrap();
+        SearchEngine::verify_selected_generation(&old, &selection).unwrap();
+        assert_eq!(fs::read(old.join("meta.json")).unwrap(), b"old app cache");
+        drop(guard);
+        let live = SearchEngine::open_experimental_selected_with_policy(make_config(old.clone(), vec![data]), Arc::new(|_| true), &selection).unwrap();
+        let query = ContentQuery { terms: "stagedrestartneedle".into(), roots: vec![], limit: 10, offset: 0, keyword_only: true };
+        assert_eq!(live.search(&query).unwrap().len(), 1);
+        assert_eq!(fs::read(old.join("meta.json")).unwrap(), b"old app cache");
+        live.stop();
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    #[test]
     fn offline_empty_cache_reconciles_with_live_roots_after_restart() {
         let root = TempDir::new().unwrap();
         let old = root.path().join("legacy");
