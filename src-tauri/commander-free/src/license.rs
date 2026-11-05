@@ -1900,14 +1900,20 @@ pub async fn clear_license_cache() -> Result<(), String> {
 /// starting a trial made zero network calls.
 #[tauri::command]
 pub async fn start_trial() -> Result<serde_json::Value, String> {
+    // The legacy desktop-owned exchange cannot be reconciled with a paid
+    // activation or protected service state after a lost response. Do not
+    // consume a trial until the service-owned protocol is paired end to end.
+    #[cfg(feature = "experimental-pq-licence")]
+    return Err("The free trial is temporarily unavailable while licence security is upgraded.".into());
+
     // Portable edition ships no trial — only a purchased key unlocks Pro, so the
     // most-copyable build has nothing to farm.
-    #[cfg(feature = "portable")]
+    #[cfg(all(feature = "portable", not(feature = "experimental-pq-licence")))]
     return Err(
         "The free trial isn't available in this edition — activate a license key.".to_string(),
     );
 
-    #[cfg(not(feature = "portable"))]
+    #[cfg(all(not(feature = "portable"), not(feature = "experimental-pq-licence")))]
     {
         // Local fast-path check: refuses immediately if this device already
         // has ANY cached token (paid licence, or a trial token from a prior

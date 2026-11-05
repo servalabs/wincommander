@@ -94,6 +94,9 @@ mod licence_device_credential;
 #[cfg(all(windows, feature = "experimental-pq-licence"))]
 mod licence_activation_intent;
 #[cfg(all(windows, feature = "experimental-pq-licence"))]
+#[allow(dead_code)] // Reservation, transport and settlement are not connected.
+mod licence_trial_intent;
+#[cfg(all(windows, feature = "experimental-pq-licence"))]
 #[allow(dead_code)] // Service-owned activation is still disconnected.
 mod licence_machine_identity;
 mod shield_journal;

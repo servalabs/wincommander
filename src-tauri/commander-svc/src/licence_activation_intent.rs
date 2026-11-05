@@ -145,7 +145,7 @@ impl PendingActivation {
 
 fn hex_bytes(bytes: &[u8]) -> String { bytes.iter().map(|byte| format!("{byte:02x}")).collect() }
 
-fn credential_commitment(id: &[u8; 32], secret: &[u8; 32]) -> String {
+pub(crate) fn credential_commitment(id: &[u8; 32], secret: &[u8; 32]) -> String {
     use sha2::{Digest, Sha256};
     let mut digest = Sha256::new();
     digest.update(b"wincommander:activation-credential:v1\0");
@@ -293,7 +293,17 @@ fn load_at(store: &Anchor, protector: &dyn Protector) -> Result<Option<PendingAc
 /// Caller holds the shared cross-process licence lock. A damaged or empty
 /// activation key is never treated as absent.
 pub(crate) fn ensure_idle_locked() -> Result<(), &'static str> {
+    ensure_paid_idle_locked()?;
+    crate::licence_trial_intent::ensure_idle_locked()
+}
+
+pub(crate) fn ensure_paid_idle_locked() -> Result<(), &'static str> {
     ensure_idle_at(&machine())
+}
+
+/// Conservative scaffold: even a completed paid intent blocks trial start.
+pub(crate) fn ensure_no_paid_intent_locked() -> Result<(), &'static str> {
+    if machine().exists().map_err(|_| INVALID)? { Err(INVALID) } else { Ok(()) }
 }
 
 fn ensure_idle_at(store: &Anchor) -> Result<(), &'static str> {
@@ -474,6 +484,7 @@ fn begin_at(store: &Anchor, gate: &Anchor, protector: &dyn Protector,
 fn begin_locked(store: &Anchor, gate: &Anchor, protector: &dyn Protector,
     key: &str, device: &str, portable: bool, previous: Option<PreviousCredential<'_>>) -> Result<PendingActivation, &'static str> {
     release_gate::ensure_idle_at(gate)?;
+    crate::licence_trial_intent::ensure_idle_locked()?;
     if let Some(completed) = completed_at(store, protector)? {
         if previous.is_none() && completed_matches(&completed, key, device, portable) {
             // A successful acknowledgement may have been followed by a lost IPC
