@@ -87,6 +87,7 @@ fn hold_ordinary_ancestors(path: &Path) -> Result<Vec<File>, String> {
 }
 
 /// The callback may fail before any file is opened; failures never append.
+#[cfg(any(test, not(debug_assertions)))]
 pub(super) fn append_encrypted(
     path: &Path,
     encrypt: impl FnOnce() -> Result<String, String>,
