@@ -1171,7 +1171,23 @@ mod tests {
         drop(exclusive);
         assert_eq!(backup, expected_backup);
         assert!(!old.exists());
+        fn snapshot(root: &std::path::Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
+            fn walk(root: &std::path::Path, dir: &std::path::Path, out: &mut Vec<(std::path::PathBuf, Vec<u8>)>) {
+                for entry in fs::read_dir(dir).unwrap() {
+                    let path = entry.unwrap().path();
+                    if path.is_dir() { walk(root, &path, out); }
+                    else { out.push((path.strip_prefix(root).unwrap().to_path_buf(), fs::read(path).unwrap())); }
+                }
+            }
+            let mut result = Vec::new(); walk(root, root, &mut result); result.sort(); result
+        }
+        let before_verify = snapshot(root.path());
         SearchEngine::verify_quarantined_selection(&old, &selector).unwrap();
+        assert_eq!(snapshot(root.path()), before_verify, "read-only verification changed files");
+        let displaced = root.path().join("displaced-backup");
+        fs::rename(&backup, &displaced).unwrap();
+        assert!(SearchEngine::verify_quarantined_selection(&old, &selector).is_err());
+        fs::rename(&displaced, &backup).unwrap();
         assert_eq!(fs::read(backup.join("meta.json")).unwrap(), b"legacy retained");
         let query = ContentQuery { terms: "encryptedbackuptoken".into(), roots: vec![], limit: 10, offset: 0, keyword_only: true };
         assert_eq!(engine.search(&query).unwrap().len(), 1);
