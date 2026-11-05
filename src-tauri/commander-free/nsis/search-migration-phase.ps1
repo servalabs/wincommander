@@ -33,7 +33,7 @@ try {
         if ($process.ExitCode -ne 0) { throw "Search migration phase returned exit code $($process.ExitCode)." }
         $outcome = $stdout.Result.Trim()
         $pattern = switch ($Phase) {
-            'quarantine' { '^WINCOMMANDER_SEARCH_MIGRATION_OUTCOME:(fresh|moved(?: indexed=[0-9]+ omitted=[0-9]+ links=[0-9]+)?|already-quarantined)$' }
+            'quarantine' { '^WINCOMMANDER_SEARCH_MIGRATION_OUTCOME:(fresh|moved(?: indexed=[0-9]+ omitted=[0-9]+ links=[0-9]+(?: reconciliation=pending)?)?|already-quarantined)$' }
             'verify' { '^WINCOMMANDER_SEARCH_MIGRATION_OUTCOME:(fresh|verified)$' }
             'restore' { '^WINCOMMANDER_SEARCH_MIGRATION_OUTCOME:restored$' }
         }
