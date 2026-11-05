@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Coordinate direct desktop cache changes with an in-progress service release.
 #[path = "updater/hybrid_free_anchor.rs"]
+#[allow(dead_code)] // Only marker presence is needed here.
 mod anchor;
 #[path = "fleet_lifecycle_mutex.rs"]
+#[allow(dead_code)] // Only named-lock acquisition is needed here.
 mod coordination;
 #[path = "../../runtime-support/licence_release_path.rs"]
 mod release_path;
