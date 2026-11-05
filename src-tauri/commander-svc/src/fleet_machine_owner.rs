@@ -19,8 +19,8 @@ use windows_sys::Win32::Security::{
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_DIRECTORY,
     FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
-    FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE,
-    OPEN_ALWAYS,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_SHARE_READ,
+    FILE_SHARE_WRITE, OPEN_ALWAYS,
 };
 
 const LOCK_FILE: &str = ".fleet-machine-owner.lock";
@@ -55,7 +55,7 @@ pub(super) fn acquire(directory: &Path) -> Result<OwnerLease, &'static str> {
         return Err(UNAVAILABLE);
     }
     let parent = OpenOptions::new()
-        .access_mode(FILE_READ_ATTRIBUTES | 0x0002_0000) // READ_CONTROL
+        .access_mode(FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | 0x0002_0000) // READ_CONTROL
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
         .open(directory)

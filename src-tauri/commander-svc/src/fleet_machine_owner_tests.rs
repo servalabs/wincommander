@@ -82,6 +82,7 @@ fn real_system_store_holds_ownership_until_dropped() {
     let path = root.0.join("fleet-machine");
     let store = super::super::open_system_store(path.clone()).unwrap();
     assert!(super::super::open_system_store(path.clone()).is_err());
+    assert!(std::fs::rename(&path, root.0.join("moved-store")).is_err());
     let busy = Command::new(std::env::current_exe().unwrap())
         .arg("--exact")
         .arg(test_name("owner_lease_child"))
