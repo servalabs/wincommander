@@ -27,6 +27,7 @@ jobs:
             'encrypted_generation_prototype::',
             'encrypted_legacy_quarantine::',
             'encrypted_search_maintenance::',
+            'encrypted_search_fence::',
             'experimental_scope_publication_requires_validated_pinned_root',
             'quarantine_requires_selected_cache_and_preserves_legacy_backup',
             'application_entry_rebuilds_then_refuses_corrupt_selector',

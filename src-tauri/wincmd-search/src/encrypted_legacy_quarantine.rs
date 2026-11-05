@@ -56,17 +56,8 @@ fn move_to_sibling(old: &Path, destination_name: &str) -> io::Result<PathBuf> {
     let parent = old.parent().ok_or_else(denied)?;
     let parent_pins = CheckedDirectory::pin_root_path(parent)?;
     let _parent_handle = parent_pins.last().ok_or_else(denied)?;
-    // Hold a no-follow, single-link lock in the pinned parent, outside the
-    // directory being moved. This coordinates cooperating maintenance only.
-    let maintenance = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false)
-        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
-        .open(parent.join(".encrypted-search-maintenance.lock"))?;
-    let lock_metadata = maintenance.metadata()?;
-    let mut lock_info = BY_HANDLE_FILE_INFORMATION::default();
-    if !lock_metadata.is_file() || lock_metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-        || unsafe { GetFileInformationByHandle(maintenance.as_raw_handle(), &mut lock_info) } == 0
-        || lock_info.nNumberOfLinks != 1 { return Err(denied()); }
-    maintenance.try_lock().map_err(|e| io::Error::other(e.to_string()))?;
+    // Cooperating runtimes hold a shared fence; maintenance holds it exclusively.
+    let _maintenance = crate::encrypted_search_fence::SearchOperationFence::acquire_exclusive(parent)?;
     crate::encrypted_search_maintenance::verify_known_writers_stopped().map_err(io::Error::other)?;
     let old_pins = CheckedDirectory::pin_root_path(old)?;
     let old_handle = old_pins.last().ok_or_else(denied)?;
