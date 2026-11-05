@@ -23,6 +23,7 @@ impl Intent {
         let (volume, file_high, file_low) = identity(old)?;
         Ok(Self { magic: MAGIC.into(), transaction, generation, volume, file_high, file_low, replacement_pending: false })
     }
+    pub(crate) fn identity(&self) -> (u32, u32, u32) { (self.volume, self.file_high, self.file_low) }
     pub(crate) fn matches_path(&self, path: &Path) -> io::Result<bool> {
         Ok(identity(path)? == (self.volume, self.file_high, self.file_low))
     }

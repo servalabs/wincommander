@@ -509,6 +509,11 @@ impl SearchEngine {
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     pub fn quarantine_selected_with_fence(old: &std::path::Path, selection_dir: &std::path::Path,
         fence: &crate::encrypted_search_fence::SearchOperationFence) -> Result<std::path::PathBuf> {
+        Self::quarantine_selected_inner(old, selection_dir, fence, None)
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    fn quarantine_selected_inner(old: &std::path::Path, selection_dir: &std::path::Path,
+        fence: &crate::encrypted_search_fence::SearchOperationFence, expected: Option<(u32, u32, u32)>) -> Result<std::path::PathBuf> {
         use tantivy::directory::Directory;
         use crate::encrypted_generation_prototype::{inspect, PinnedSelectionStore, UserProtector};
         use crate::encrypted_index_prototype::tantivy_trial::TrialDirectory;
@@ -529,7 +534,10 @@ impl SearchEngine {
         let _: serde_json::Value = serde_json::from_slice(&manifest)
             .map_err(|_| SearchError::Config("encrypted index manifest invalid".into()))?;
         tantivy::Index::open(directory).map_err(|_| SearchError::Config("encrypted index cannot be opened".into()))?;
-        Ok(crate::encrypted_legacy_quarantine::quarantine_with_fence(old, &selected.index_id, fence)?)
+        Ok(match expected {
+            Some(identity) => crate::encrypted_legacy_quarantine::quarantine_expected(old, &selected.index_id, fence, identity)?,
+            None => crate::encrypted_legacy_quarantine::quarantine_with_fence(old, &selected.index_id, fence)?,
+        })
     }
     /// Accept only the authenticated, protected scope file recreated by a
     /// selected app; any other legacy-directory entry remains a conflict.
@@ -635,7 +643,7 @@ impl SearchEngine {
         let old_present = old.try_exists()?;
         let backup_present = backup.try_exists()?;
         match (old_present, backup_present) {
-            (true, false) if intent.matches_path(old)? => { Self::quarantine_selected_with_fence(old, selection_dir, fence)?; },
+            (true, false) if intent.matches_path(old)? => { Self::quarantine_selected_inner(old, selection_dir, fence, Some(intent.identity()))?; },
             (false, true) if intent.matches_path(&backup)? => {},
             _ => return Err(SearchError::Config("search migration paths changed; recovery required".into())),
         }
@@ -685,7 +693,7 @@ impl SearchEngine {
         match (old.try_exists()?, backup.try_exists()?) {
             (true, false) if intent.matches_path(old)? => {},
             (false, true) if intent.matches_path(&backup)? => {
-                crate::encrypted_legacy_quarantine::restore_with_fence(old, &intent.generation, fence)?;
+                crate::encrypted_legacy_quarantine::restore_expected(old, &intent.generation, fence, intent.identity())?;
                 if !intent.matches_path(old)? { return Err(SearchError::Config("restored search identity changed".into())); }
             },
             _ => return Err(SearchError::Config("search migration paths changed; recovery required".into())),

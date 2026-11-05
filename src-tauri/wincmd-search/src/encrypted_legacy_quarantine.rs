@@ -33,7 +33,11 @@ pub(crate) fn quarantine(old: &Path, index_id: &[u8; 16]) -> io::Result<PathBuf>
 /// Execute in the holder process without reacquiring its exclusive fence.
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
 pub(crate) fn quarantine_with_fence(old: &Path, index_id: &[u8; 16], fence: &crate::encrypted_search_fence::SearchOperationFence) -> io::Result<PathBuf> {
-    move_to_sibling(old, &backup_name(index_id)?, fence)
+    move_to_sibling(old, &backup_name(index_id)?, fence, None)
+}
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
+pub(crate) fn quarantine_expected(old: &Path, index_id: &[u8; 16], fence: &crate::encrypted_search_fence::SearchOperationFence, expected: (u32, u32, u32)) -> io::Result<PathBuf> {
+    move_to_sibling(old, &backup_name(index_id)?, fence, Some(expected))
 }
 /// Explicit recovery only: do not overwrite a recreated legacy directory.
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
@@ -49,11 +53,11 @@ pub(crate) fn restore_with_fence(old: &Path, index_id: &[u8; 16], fence: &crate:
     let name = old.file_name().and_then(|name| name.to_str())
         .ok_or_else(|| io::Error::other("invalid legacy index name"))?;
     let source = parent.join(backup_name(index_id)?);
-    move_to_sibling(&source, name, fence)
+    move_to_sibling(&source, name, fence, None)
 }
 
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
-fn move_to_sibling(old: &Path, destination_name: &str, fence: &crate::encrypted_search_fence::SearchOperationFence) -> io::Result<PathBuf> {
+fn move_to_sibling(old: &Path, destination_name: &str, fence: &crate::encrypted_search_fence::SearchOperationFence, expected: Option<(u32, u32, u32)>) -> io::Result<PathBuf> {
     use crate::read_only::{AccessMode, CheckedDirectory};
     use std::os::windows::{ffi::OsStrExt, fs::{MetadataExt, OpenOptionsExt}, io::AsRawHandle};
     use windows_sys::Win32::Storage::FileSystem::{
@@ -83,6 +87,7 @@ fn move_to_sibling(old: &Path, destination_name: &str, fence: &crate::encrypted_
         Ok((info.dwVolumeSerialNumber, info.nFileIndexHigh, info.nFileIndexLow))
     };
     let before = identity(old_handle)?;
+    if expected.is_some_and(|expected| expected != before) { return Err(denied()); }
     let legacy = CheckedDirectory::open(old, AccessMode::Writable).map_err(|e| io::Error::other(e.to_string()))?;
     let writer = legacy.acquire_lock_pinned(&tantivy::directory::INDEX_WRITER_LOCK)
         .map_err(|e| io::Error::other(e.to_string()))?;
