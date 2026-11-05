@@ -35,6 +35,7 @@ ${Using:StrFunc} UnStrStr
 !define WC_SETTINGS_STAGE_SERVICE "${__FILEDIR__}\settings-stage-service.ps1"
 !ifdef WC_EXPERIMENTAL_SEARCH_FENCE
 !define WC_HOLD_SEARCH_MAINTENANCE "${__FILEDIR__}\hold-search-maintenance.ps1"
+!define WC_SEARCH_MIGRATION_PHASE "${__FILEDIR__}\search-migration-phase.ps1"
 !endif
 Var WCUserStageServiceRunning
 !endif
@@ -285,6 +286,16 @@ FunctionEnd
     InitPluginsDir
     File /oname=$PLUGINSDIR\wincommander-search-fence.exe "${MAINBINARYSRCPATH}"
     File /oname=$PLUGINSDIR\wincommander-hold-search-maintenance.ps1 "${WC_HOLD_SEARCH_MAINTENANCE}"
+    File /oname=$PLUGINSDIR\wincommander-search-migration-phase.ps1 "${WC_SEARCH_MIGRATION_PHASE}"
+    ; Quarantine holds its own exclusive lock. Release it, then take the
+    ; installer lock and authenticate/recheck before replacing any binaries.
+    !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
+    nsExec::ExecToStack /TIMEOUT=600000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-search-migration-phase.ps1" -Phase quarantine -ExecutablePath "$PLUGINSDIR\wincommander-search-fence.exe" -InstallDirectory "$INSTDIR"'
+    Pop $0
+    Pop $1
+    ${If} $0 != 0
+      !insertmacro WC_ABORT_STOP_FAILURE "preinstall" "WinCommander could not quarantine its existing search index."
+    ${EndIf}
     System::Call 'kernel32::GetCurrentProcessId() i .R6'
     !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
     nsExec::ExecToStack /TIMEOUT=90000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-hold-search-maintenance.ps1" -ExecutablePath "$PLUGINSDIR\wincommander-search-fence.exe" -InstallerProcessId $R6'
@@ -310,6 +321,13 @@ FunctionEnd
         ${EndIf}
       ${EndIf}
       Abort "WinCommander could not establish search maintenance. Existing app and settings remain in place."
+    ${EndIf}
+    !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
+    nsExec::ExecToStack /TIMEOUT=600000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-search-migration-phase.ps1" -Phase verify -ExecutablePath "$PLUGINSDIR\wincommander-search-fence.exe" -InstallDirectory "$INSTDIR"'
+    Pop $0
+    Pop $1
+    ${If} $0 != 0
+      !insertmacro WC_ABORT_STOP_FAILURE "preinstall" "WinCommander could not verify the protected search index."
     ${EndIf}
   !endif
   !ifdef WC_EXPERIMENTAL_USER_STAGE_ONLY
