@@ -8,6 +8,8 @@ use std::{
 };
 
 const MAX_REWRITE_BYTES: u64 = 32 * 1024 * 1024;
+// Keep startup migration well below the five-second writer lock timeout.
+const MAX_MIGRATION_TIME: Duration = Duration::from_secs(2);
 
 fn lock(path: &Path) -> Result<File, String> {
     let parent = path.parent().ok_or("log directory unavailable")?;
@@ -190,8 +192,12 @@ pub(super) fn migrate_with(
         {
             return Ok(None);
         }
+        let started = Instant::now();
         let mut output = String::new();
         for (index, line) in content.lines().filter(|line| !line.is_empty()).enumerate() {
+            if started.elapsed() >= MAX_MIGRATION_TIME {
+                return Err("log migration exceeded time limit".into());
+            }
             if index >= 100_000 {
                 return Err("too many log records for automatic migration".into());
             }
@@ -207,6 +213,9 @@ pub(super) fn migrate_with(
             } else {
                 encrypt(&chrono::Local::now().format("%Y-%m-%d").to_string(), line)?
             };
+            if started.elapsed() >= MAX_MIGRATION_TIME {
+                return Err("log migration exceeded time limit".into());
+            }
             if !encrypted_log(&record) || record.contains(['\r', '\n']) {
                 return Err("invalid encrypted log record".into());
             }
@@ -359,6 +368,32 @@ mod tests {
         let result = std::fs::read_to_string(&path).unwrap();
         assert_eq!(result.lines().count(), 2);
         assert!(result.lines().all(encrypted_log));
+    }
+
+    #[test]
+    fn slow_migration_preserves_original_and_releases_waiting_writer() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("wincommander.log");
+        let original = "legacy private text\n";
+        std::fs::write(&path, original).unwrap();
+        let (started_tx, started_rx) = mpsc::channel();
+        let worker_path = path.clone();
+        let migration = std::thread::spawn(move || {
+            migrate_with(&worker_path, |date, body| {
+                started_tx.send(()).unwrap();
+                std::thread::sleep(MAX_MIGRATION_TIME + Duration::from_millis(100));
+                sealed(date, body)
+            })
+        });
+        started_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        let start = Instant::now();
+        let result = append_encrypted(&path, || sealed("2026-11-05", "new"));
+        assert!(migration.join().unwrap().is_err());
+        result.unwrap();
+        assert!(start.elapsed() < Duration::from_secs(5));
+        let content = std::fs::read_to_string(path).unwrap();
+        assert!(content.starts_with(original));
+        assert!(content.ends_with("L2:2026-11-05:authenticated-ciphertext\n"));
     }
 
     #[test]
