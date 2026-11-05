@@ -1509,6 +1509,6 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[allow(dead_code)] // Cutover stays disabled pending ownership and recovery validation.
 #[path = "settings_rotation_trial.rs"]
 mod settings_rotation_trial;

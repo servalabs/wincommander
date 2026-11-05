@@ -378,3 +378,23 @@ fn selected_generation_update_preserves_other_sections_and_fails_closed() {
     assert!(update_selected_generation(&path, "settings", json!({}), &crate::datastore_io::atomic_write).is_err());
     assert_eq!(std::fs::read(&path).unwrap(), b"corrupt");
 }
+
+#[test]
+fn locked_selected_generation_serializes_owners_and_never_falls_back() {
+    let root = tempfile::tempdir().unwrap();
+    assert!(LockedSelectedGeneration::try_open(root.path()).is_err());
+    let old = [42; 32];
+    let input = sections(&old);
+    let candidate = prepare(&old, &input).unwrap();
+    let path = root.path().join(".settings-generation.v1");
+    select_initial_generation(&path, &candidate, &old, &input, &crate::datastore_io::publish_new).unwrap();
+    let generation = LockedSelectedGeneration::try_open(root.path()).unwrap();
+    assert!(LockedSelectedGeneration::try_open(root.path()).is_err());
+    generation.write_section("settings", json!({"new_value": true})).unwrap();
+    assert_eq!(generation.read_all().unwrap()["settings"]["new_value"], true);
+    assert_eq!(generation.read_all().unwrap()["payments"]["token"], "second secret");
+    drop(generation);
+    assert!(LockedSelectedGeneration::try_open(root.path()).is_ok());
+    std::fs::write(path, b"broken").unwrap();
+    assert!(LockedSelectedGeneration::try_open(root.path()).is_err());
+}

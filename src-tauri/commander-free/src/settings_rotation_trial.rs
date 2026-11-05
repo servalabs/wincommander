@@ -335,6 +335,41 @@ fn publish(
     persist(path, candidate)
 }
 
+/// Gated production seam: keeps cooperative ownership for every operation on
+/// a selected generation. No runtime route constructs this yet. Before wiring,
+/// callers must authorize and pin the root, fence old executables, and protect
+/// the selected file and its authoritative state against replacement.
+pub(super) struct LockedSelectedGeneration {
+    _ownership: super::settings_generation_ownership::SettingsGenerationLock,
+    path: PathBuf,
+}
+
+impl LockedSelectedGeneration {
+    pub(super) fn try_open(root: &Path) -> Result<Self, String> {
+        let ownership = super::settings_generation_ownership::SettingsGenerationLock::try_acquire(root)
+            .map_err(|_| "settings generation ownership unavailable")?;
+        let path = root.join(".settings-generation.v1");
+        let selected = Self { _ownership: ownership, path };
+        // Presence alone is not authorization, but the candidate must at least
+        // be readable and authenticated before this owner is returned.
+        selected.read_all()?;
+        Ok(selected)
+    }
+
+    pub(super) fn read_all(&self) -> Result<BTreeMap<String, Value>, String> {
+        use std::io::Read;
+        let file = std::fs::File::open(&self.path).map_err(|_| "selected settings generation unavailable")?;
+        let mut bytes = Vec::new();
+        file.take((MAX_TOTAL * 2 + 65537) as u64).read_to_end(&mut bytes)
+            .map_err(|_| "cannot read selected settings generation")?;
+        open(&bytes)
+    }
+
+    pub(super) fn write_section(&self, section: &str, value: Value) -> Result<(), String> {
+        update_selected_generation(&self.path, section, value, &crate::datastore_io::atomic_write)
+    }
+}
+
 /// Trial reader/writer for an already selected generation. The caller must
 /// serialize all readers and writers and keep trusted selection state; neither
 /// condition is supplied by this experiment. Never falls back to the legacy
