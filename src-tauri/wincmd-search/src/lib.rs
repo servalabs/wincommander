@@ -13,6 +13,8 @@ mod encrypted_index_prototype;
 mod encrypted_cutover_prototype;
 #[cfg(test)]
 mod encrypted_key_prototype;
+#[cfg(test)]
+mod encrypted_migration_prototype;
 pub mod chunk;
 pub mod crawler;
 #[cfg(windows)]
