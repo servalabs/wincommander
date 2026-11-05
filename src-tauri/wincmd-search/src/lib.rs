@@ -68,6 +68,10 @@ pub struct SearchEngine {
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     experimental_fresh: bool,
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    experimental_legacy_lease: Option<tantivy::directory::DirectoryLock>,
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    experimental_legacy_pins: Option<Vec<std::fs::File>>,
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     experimental_id: Option<[u8; 16]>,
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     experimental_verified: AtomicBool,
@@ -154,6 +158,13 @@ impl SearchEngine {
         if generation.to_string_lossy().eq_ignore_ascii_case(&old.to_string_lossy()) {
             return Err(SearchError::Config("encrypted generation must differ from old index".into()));
         }
+        // Cooperating legacy Tantivy writers use this exact lock. This does
+        // not fence external file writes, schema wipes, or older code paths
+        // that mutate the index without taking the writer lock.
+        let legacy_pins = crate::read_only::CheckedDirectory::pin_root_path(&old)?;
+        let legacy = crate::read_only::CheckedDirectory::open(&old, crate::read_only::AccessMode::Writable)?;
+        let legacy_lease = legacy.acquire_lock_pinned(&tantivy::directory::INDEX_WRITER_LOCK)
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
         // Hold every parent open without delete sharing before the first
         // filesystem mutation. create_dir is exclusive and never replaces an
         // interrupted or existing generation; recovery must explicitly reopen.
@@ -167,6 +178,8 @@ impl SearchEngine {
         config.index_dir = generation;
         let ci = Arc::new(ContentIndex::open_experimental_encrypted(&config.index_dir, index_id, existing)?);
         let mut engine = Self::from_index(config, ci, path_policy)?;
+        engine.experimental_legacy_lease = Some(legacy_lease);
+        engine.experimental_legacy_pins = Some(legacy_pins);
         engine.experimental_fresh = !existing;
         engine.experimental_id = Some(index_id);
         Ok(engine)
@@ -227,6 +240,9 @@ impl SearchEngine {
         use tantivy::directory::Directory;
         use crate::encrypted_generation_prototype::{PinnedSelectionStore, UserProtector};
         let id = self.experimental_id.ok_or_else(|| SearchError::Config("not an encrypted candidate".into()))?;
+        if self.experimental_legacy_lease.is_none() || self.experimental_legacy_pins.is_none() {
+            return Err(SearchError::Config("legacy writer lease unavailable".into()));
+        }
         if !self.experimental_verified.load(Ordering::Acquire) {
             return Err(SearchError::Config("candidate has not passed strict rebuild".into()));
         }
@@ -297,6 +313,10 @@ impl SearchEngine {
             path_mapper: None,
             #[cfg(all(windows, feature = "experimental-encrypted-search"))]
             experimental_fresh: false,
+            #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+            experimental_legacy_lease: None,
+            #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+            experimental_legacy_pins: None,
             #[cfg(all(windows, feature = "experimental-encrypted-search"))]
             experimental_id: None,
             #[cfg(all(windows, feature = "experimental-encrypted-search"))]
@@ -750,6 +770,22 @@ mod tests {
     }
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     #[test]
+    fn candidate_holds_cooperating_legacy_writer_lock() {
+        let root = TempDir::new().unwrap();
+        let old = root.path().join("legacy");
+        fs::create_dir(&old).unwrap();
+        let old_index = ContentIndex::open_or_create(&old).unwrap();
+        let writer = old_index.writer().unwrap();
+        let config = make_config(old.clone(), vec![]);
+        assert!(SearchEngine::open_experimental_encrypted_with_policy(config.clone(), Arc::new(|_| true), [81; 16], false).is_err());
+        drop(writer);
+        let candidate = SearchEngine::open_experimental_encrypted_with_policy(config, Arc::new(|_| true), [81; 16], false).unwrap();
+        assert!(old_index.writer().is_err());
+        drop(candidate);
+        assert!(old_index.writer().is_ok());
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    #[test]
     fn reconciliation_invalidates_candidate_proof() {
         let root = TempDir::new().unwrap();
         let old = root.path().join("legacy"); let data = root.path().join("data");
@@ -820,6 +856,19 @@ mod tests {
         let reopened = SearchEngine::open_experimental_encrypted_with_policy(config, Arc::new(|_| true), [55; 16], true).unwrap();
         assert_eq!(reopened.search(&query).unwrap().len(), 1);
         assert!(generation.join("protected-search-key.v1").exists());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn native_file_lock_interoperates_with_tantivy_writer_lock_on_unix() {
+        use tantivy::directory::{Directory, MmapDirectory, INDEX_WRITER_LOCK};
+        let root = TempDir::new().unwrap();
+        let dir = MmapDirectory::open(root.path()).unwrap();
+        let file = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false)
+            .open(root.path().join(".tantivy-writer.lock")).unwrap();
+        file.try_lock().unwrap();
+        assert!(dir.acquire_lock(&INDEX_WRITER_LOCK).is_err());
+        drop(file);
+        assert!(dir.acquire_lock(&INDEX_WRITER_LOCK).is_ok());
     }
     #[test]
     fn search_engine_open_index_and_search() {
