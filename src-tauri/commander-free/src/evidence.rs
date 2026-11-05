@@ -28,6 +28,17 @@ use std::path::PathBuf;
 
 #[path = "evidence_storage.rs"]
 mod storage;
+#[path = "fleet_lifecycle_mutex.rs"]
+#[allow(dead_code)]
+mod mutex;
+
+fn acquire_evidence_lock() -> Result<mutex::Guard, String> {
+    #[cfg(windows)]
+    let result = mutex::acquire_named(r"Global\WinCommander_evidence-ledger_lock", 5_000);
+    #[cfg(not(windows))]
+    let result = mutex::acquire();
+    result.map_err(|_| "Evidence coordination is unavailable; close older WinCommander sessions and retry".into())
+}
 
 /// Hard cap on retained entries — the ledger is a rolling recent-activity
 /// feed, not the permanent court record (that's the paid vault).
@@ -84,7 +95,7 @@ pub fn evidence_record(
         summary,
         detail,
     };
-    let _lock = crate::paths::acquire_machine_state_lock("evidence-ledger")?;
+    let _lock = acquire_evidence_lock()?;
     let path = ledger_path()?;
     let key = key_path()?;
     let mut ledger = read_ledger(&path, &key)?;
@@ -101,7 +112,7 @@ pub fn evidence_record(
 #[tauri::command]
 pub fn evidence_read(limit: Option<u32>) -> Result<Vec<EvidenceEntry>, String> {
     let n = limit.unwrap_or(200).min(MAX_ENTRIES as u32) as usize;
-    let _lock = crate::paths::acquire_machine_state_lock("evidence-ledger")?;
+    let _lock = acquire_evidence_lock()?;
     let path = ledger_path()?;
     let mut entries = read_ledger(&path, &key_path()?)?.entries;
     entries.reverse();
@@ -120,7 +131,7 @@ pub fn evidence_read_all() -> Result<Vec<EvidenceEntry>, String> {
 /// Clear the ledger (user-initiated). Truncates the file in place.
 #[tauri::command]
 pub fn evidence_clear() -> Result<(), String> {
-    let _lock = crate::paths::acquire_machine_state_lock("evidence-ledger")?;
+    let _lock = acquire_evidence_lock()?;
     let path = ledger_path()?;
     let key = key_path()?;
     let mut ledger = read_ledger(&path, &key)?;

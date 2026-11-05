@@ -815,4 +815,67 @@ mod tests {
         );
         assert_eq!(fs::read(legacy).unwrap(), b"malformed old data");
     }
+
+    #[test]
+    #[ignore = "explicit isolated multi-identity acceptance fixture"]
+    fn multi_identity_acceptance_fixture() {
+        use std::time::{Duration, Instant};
+        let id = std::env::var("WINCMD_EVIDENCE_FIXTURE_ID").expect("fixture id required");
+        assert!(id.len() == 16 && id.bytes().all(|b| b.is_ascii_hexdigit()));
+        let mode = std::env::var("WINCMD_EVIDENCE_FIXTURE_MODE").expect("fixture mode required");
+        let directory = std::path::PathBuf::from(
+            std::env::var_os("WINCMD_EVIDENCE_FIXTURE_DIR").expect("fixture directory required"),
+        );
+        let path = crate::paths::machine_state_file(&format!("evidence-fixture-{id}.dat")).unwrap();
+        let key_path =
+            crate::paths::machine_state_file(&format!("evidence-fixture-{id}.key")).unwrap();
+        let _lock = super::super::mutex::acquire_named(
+            &format!(r"Global\WinCommander_evidence-fixture-{id}_lock"),
+            5_000,
+        )
+        .unwrap();
+        if mode == "hold" {
+            fs::write(directory.join("lock-held"), b"held").unwrap();
+            let until = Instant::now() + Duration::from_secs(25);
+            while !directory.join("release-lock").exists() {
+                assert!(Instant::now() < until, "fixture lock timed out");
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            return;
+        }
+        assert!(matches!(
+            mode.as_str(),
+            "administrator" | "system" | "parth" | "wait-admin"
+        ));
+        let mut ledger = read(
+            &path,
+            &|| Ok(None),
+            &key_path,
+            &crate::paths::atomic_write_machine_state,
+        )
+        .unwrap();
+        let mut item = entry();
+        item.summary = format!("identity-{mode}");
+        ledger.entries.push(item);
+        write(
+            &path,
+            &key_path,
+            &ledger,
+            &crate::paths::atomic_write_machine_state,
+        )
+        .unwrap();
+        let reopened = read(
+            &path,
+            &|| Ok(None),
+            &key_path,
+            &crate::paths::atomic_write_machine_state,
+        )
+        .unwrap();
+        assert!(reopened
+            .entries
+            .iter()
+            .any(|item| item.summary == format!("identity-{mode}")));
+        let encoded = fs::read_to_string(path).unwrap();
+        assert!(!encoded.contains("identity-"));
+    }
 }
