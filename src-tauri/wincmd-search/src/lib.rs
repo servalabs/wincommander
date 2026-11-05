@@ -76,6 +76,8 @@ pub struct SearchEngine {
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     experimental_verified: AtomicBool,
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    experimental_source_digest: Option<[u8; 32]>,
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     experimental_selection: Option<crate::encrypted_generation_prototype::PinnedSelectionStore>,
     config: IndexConfig,
     ci: Arc<ContentIndex>,
@@ -199,6 +201,7 @@ impl SearchEngine {
         let files = crate::encrypted_strict_crawl::collect(
             &self.config.roots, &exclusions, &self.config.skip_paths, self.config.max_file_bytes,
         )?;
+        let source_before = crate::encrypted_strict_crawl::fingerprint(&files)?;
         let mut seen = std::collections::HashSet::new();
         let mut writer = self.ci.writer()?;
         let mut indexed = 0usize;
@@ -223,6 +226,14 @@ impl SearchEngine {
         if reader.searcher().num_docs() != indexed as u64 {
             return Err(SearchError::Config("encrypted candidate document count mismatch".into()));
         }
+        let after_files = crate::encrypted_strict_crawl::collect(
+            &self.config.roots, &exclusions, &self.config.skip_paths, self.config.max_file_bytes,
+        )?;
+        let source_after = crate::encrypted_strict_crawl::fingerprint(&after_files)?;
+        if source_before != source_after {
+            return Err(SearchError::Config("source changed during encrypted rebuild".into()));
+        }
+        self.experimental_source_digest = Some(source_after);
         self.experimental_verified.store(true, Ordering::Release);
         Ok(indexed)
     }
@@ -247,6 +258,17 @@ impl SearchEngine {
             return Err(SearchError::Config("candidate has not passed strict rebuild".into()));
         }
         verify_source()?;
+        // The protected proof itself must never become a search document.
+        self.config.skip_paths.push(selection_dir.to_path_buf());
+        let exclusions = build_globset(&self.config.exclusions)?;
+        let current = crate::encrypted_strict_crawl::collect(
+            &self.config.roots, &exclusions, &self.config.skip_paths, self.config.max_file_bytes,
+        )?;
+        let digest = crate::encrypted_strict_crawl::fingerprint(&current)?;
+        if self.experimental_source_digest != Some(digest) {
+            self.experimental_verified.store(false, Ordering::Release);
+            return Err(SearchError::Config("source changed since encrypted rebuild".into()));
+        }
         let directory = crate::encrypted_index_prototype::tantivy_trial::TrialDirectory::open_protected(
             &self.config.index_dir, crate::read_only::AccessMode::GuardedReader, &id, true,
         )?;
@@ -321,6 +343,8 @@ impl SearchEngine {
             experimental_id: None,
             #[cfg(all(windows, feature = "experimental-encrypted-search"))]
             experimental_verified: AtomicBool::new(false),
+            #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+            experimental_source_digest: None,
             #[cfg(all(windows, feature = "experimental-encrypted-search"))]
             experimental_selection: None,
             config,
