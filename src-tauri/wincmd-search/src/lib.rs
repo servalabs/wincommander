@@ -281,14 +281,9 @@ impl SearchEngine {
         let mut engine = Self::open_experimental_encrypted_with_policy(config, path_policy, selected.index_id, true)?;
         engine.config.skip_paths.push(selection_dir.to_path_buf());
         engine.experimental_selection = Some(selection);
-        // Catch offline deletions/changes before exposing the cache, then run
-        // the ordinary watcher. An incomplete reconciliation is an error, not
-        // authorization to fall back to the old plaintext index.
-        let report = engine.reconcile_sync(&AtomicBool::new(false), usize::MAX)?;
-        if !report.complete {
-            return Err(SearchError::Config("encrypted cache reconciliation incomplete; retry".into()));
-        }
-        engine.start_indexing()?;
+        // Register the watcher before reconciling offline changes so events
+        // occurring during the scan queue until the worker starts.
+        engine.start_indexing_internal(true)?;
         Ok(engine)
     }
     /// Caller must hold its cross-process volume guard until this engine is dropped.
@@ -425,6 +420,10 @@ impl SearchEngine {
     ///    writer, apply, commit.  No `LockBusy` is possible because the crawl
     ///    writer is already gone.
     pub fn start_indexing(&self) -> Result<()> {
+        self.start_indexing_internal(false)
+    }
+
+    fn start_indexing_internal(&self, reconcile_first: bool) -> Result<()> {
         #[cfg(all(windows, feature = "experimental-encrypted-search"))]
         if self.experimental_fresh { return Err(SearchError::Config("strict candidate rebuild required".into())); }
         #[cfg(all(windows, feature = "experimental-encrypted-search"))]
@@ -452,12 +451,30 @@ impl SearchEngine {
         // The engine owns the watcher so dropping/taking it closes `tx` and
         // wakes the drain loop.  On error, proceed crawl-only (as before).
         let (tx, rx) = mpsc::channel::<FsEventAction>();
-        match watch_roots(&roots, skip.clone(), exclusions.clone(), max_bytes, tx) {
-            Ok(w) => {
-                *self.watcher.lock().unwrap() = Some(w);
+        let watching = if reconcile_first {
+            watch::watch_roots_strict(&roots, skip.clone(), exclusions.clone(), max_bytes, tx)
+        } else {
+            watch_roots(&roots, skip.clone(), exclusions.clone(), max_bytes, tx)
+        };
+        match watching {
+            Ok(w) => { *self.watcher.lock().unwrap() = Some(w); }
+            Err(e) if reconcile_first => {
+                status.lock().unwrap().is_indexing = false;
+                return Err(e);
             }
-            Err(e) => {
-                status.lock().unwrap().last_error = Some(e.to_string());
+            Err(e) => { status.lock().unwrap().last_error = Some(e.to_string()); }
+        }
+        if reconcile_first {
+            let reconciled = self.reconcile_sync(&AtomicBool::new(false), usize::MAX);
+            let error = match reconciled {
+                Ok(report) if report.complete => None,
+                Ok(_) => Some(SearchError::Config("encrypted cache reconciliation incomplete; retry".into())),
+                Err(error) => Some(error),
+            };
+            if let Some(error) = error {
+                self.watcher.lock().unwrap().take();
+                status.lock().unwrap().is_indexing = false;
+                return Err(error);
             }
         }
 
@@ -933,6 +950,17 @@ mod tests {
         let reopened = SearchEngine::open_experimental_selected_with_policy(config, Arc::new(|_| true), &proof).unwrap();
         assert_eq!(reopened.search(&query).unwrap().len(), 1);
         assert!(generation.join("protected-search-key.v1").exists());
+    }
+    #[test]
+    fn strict_reconciliation_start_fails_when_watcher_cannot_register() {
+        let root = TempDir::new().unwrap();
+        let index = TempDir::new().unwrap();
+        let config = make_config(index.path().to_path_buf(), vec![root.path().join("missing")]);
+        let engine = SearchEngine::open(config).unwrap();
+        assert!(engine.start_indexing_internal(true).is_err());
+        assert!(!engine.status().is_indexing);
+        assert!(engine.watcher.lock().unwrap().is_none());
+        assert!(engine.worker.lock().unwrap().is_none());
     }
     #[cfg(unix)]
     #[test]

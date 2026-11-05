@@ -90,11 +90,22 @@ pub fn apply_fs_event(
 
 /// Spawn a notify watcher over `roots` and forward classified actions to `tx`.
 pub fn watch_roots(
-    roots: &[PathBuf],
-    skip_paths: Vec<PathBuf>,
-    exclusions: GlobSet,
-    max_file_bytes: u64,
-    tx: mpsc::Sender<FsEventAction>,
+    roots: &[PathBuf], skip_paths: Vec<PathBuf>, exclusions: GlobSet,
+    max_file_bytes: u64, tx: mpsc::Sender<FsEventAction>,
+) -> Result<RecommendedWatcher> {
+    watch_roots_impl(roots, skip_paths, exclusions, max_file_bytes, tx, false)
+}
+
+pub(crate) fn watch_roots_strict(
+    roots: &[PathBuf], skip_paths: Vec<PathBuf>, exclusions: GlobSet,
+    max_file_bytes: u64, tx: mpsc::Sender<FsEventAction>,
+) -> Result<RecommendedWatcher> {
+    watch_roots_impl(roots, skip_paths, exclusions, max_file_bytes, tx, true)
+}
+
+fn watch_roots_impl(
+    roots: &[PathBuf], skip_paths: Vec<PathBuf>, exclusions: GlobSet,
+    max_file_bytes: u64, tx: mpsc::Sender<FsEventAction>, strict: bool,
 ) -> Result<RecommendedWatcher> {
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
         if let Ok(event) = res {
@@ -107,6 +118,7 @@ pub fn watch_roots(
 
     for root in roots {
         if let Err(e) = watcher.watch(root, RecursiveMode::Recursive) {
+            if strict { return Err(SearchError::Io(std::io::Error::other(e.to_string()))); }
             eprintln!("wincmd-search: skipping unwatchable root {:?}: {}", root, e);
             continue;
         }
@@ -124,6 +136,14 @@ mod tests {
     use std::fs;
     use std::path::Path;
     use tempfile::TempDir;
+    #[test]
+    fn strict_watcher_rejects_an_unwatchable_root() {
+        let root = TempDir::new().unwrap();
+        let missing = root.path().join("missing");
+        let exclusions = crate::crawler::build_globset(&[]).unwrap();
+        let (tx, _rx) = std::sync::mpsc::channel();
+        assert!(watch_roots_strict(&[missing], vec![], exclusions, 1024, tx).is_err());
+    }
 
     fn make_event(kind: EventKind, path: &Path) -> Event {
         Event {
