@@ -1317,6 +1317,29 @@ mod tests {
     }
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     #[test]
+    fn search_migration_intent_recovers_and_respects_replacement_boundary() {
+        let root = TempDir::new().unwrap();
+        let old = root.path().join("legacy"); let selection = root.path().join("selector");
+        fs::create_dir(&old).unwrap(); fs::write(old.join("meta.json"), b"original cache").unwrap();
+        let fence = crate::encrypted_search_fence::SearchOperationFence::acquire_exclusive(root.path()).unwrap();
+        let config = make_config(old.clone(), vec![]);
+        SearchEngine::rebuild_offline_and_select(config, Arc::new(|_| false), &selection, &fence).unwrap();
+        let tx = [11; 16];
+        SearchEngine::begin_search_migration(&old, &selection, tx, &fence).unwrap();
+        assert_eq!(SearchEngine::inspect_search_migration(&selection).unwrap(), Some((tx, false)));
+        SearchEngine::begin_search_migration(&old, &selection, tx, &fence).unwrap();
+        assert!(SearchEngine::begin_search_migration(&old, &selection, [12; 16], &fence).is_err());
+        SearchEngine::abort_search_migration(&old, &selection, tx, &fence).unwrap();
+        assert_eq!(fs::read(old.join("meta.json")).unwrap(), b"original cache");
+        SearchEngine::begin_search_migration(&old, &selection, tx, &fence).unwrap();
+        SearchEngine::mark_search_replacement(&old, &selection, tx, &fence).unwrap();
+        assert_eq!(SearchEngine::inspect_search_migration(&selection).unwrap(), Some((tx, true)));
+        assert!(SearchEngine::abort_search_migration(&old, &selection, tx, &fence).is_err());
+        SearchEngine::commit_search_migration(&old, &selection, tx, &fence).unwrap();
+        assert!(SearchEngine::inspect_search_migration(&selection).unwrap().is_none());
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    #[test]
     fn offline_empty_cache_reconciles_with_live_roots_after_restart() {
         let root = TempDir::new().unwrap();
         let old = root.path().join("legacy");
