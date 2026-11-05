@@ -119,7 +119,7 @@ pub(super) fn publish_scope(
     }
 }
 
-#[cfg(all(test, windows))]
+#[cfg(all(test, windows, not(feature = "experimental-encrypted-search")))]
 mod tests {
     use super::*;
 
@@ -137,6 +137,22 @@ mod tests {
     }
 }
 
+#[cfg(all(test, windows, feature = "experimental-encrypted-search"))]
+mod encrypted_scope_tests {
+    use super::*;
+    #[test]
+    fn scope_update_writes_protected_data_and_preserves_legacy_file() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("file-search").join("fts");
+        std::fs::create_dir_all(&directory).unwrap();
+        let old = directory.join("scope-v1.json");
+        std::fs::write(&old, b"legacy retained").unwrap();
+        publish_scope(&directory, &[root.path().join("sensitive-name")], &[], &[]).unwrap();
+        assert_eq!(std::fs::read(old).unwrap(), b"legacy retained");
+        let protected = std::fs::read(directory.join("scope-v2.dpapi")).unwrap();
+        assert!(!protected.windows(b"sensitive-name".len()).any(|s| s == b"sensitive-name"));
+    }
+}
 pub(super) fn remove(directory: &std::path::Path) -> Result<(), String> {
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     { let _ = directory; return Err("Encrypted search reset is not available yet.".into()); }

@@ -13,6 +13,8 @@ mod encrypted_index_prototype;
 mod encrypted_cutover_prototype;
 #[cfg(any(test, all(windows, feature = "experimental-encrypted-search")))]
 mod encrypted_key_prototype;
+#[cfg(any(test, all(windows, feature = "experimental-encrypted-search")))]
+mod encrypted_scope;
 #[cfg(test)]
 mod encrypted_migration_prototype;
 #[cfg(any(test, all(windows, feature = "experimental-encrypted-search")))]
@@ -66,7 +68,7 @@ pub type PathMapper = Arc<dyn Fn(&std::path::Path) -> Option<std::path::PathBuf>
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExperimentalRebuildReport { pub indexed: usize, pub omitted: usize, pub skipped_links: usize }
 /// Experimental scope publication while holding each existing ancestor. The
-/// caller must authorize the user root; it remains plaintext for Pro today.
+/// caller must authorize the user root. The legacy plaintext scope is retained.
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
 pub fn publish_experimental_scope(
     directory: &std::path::Path,
@@ -74,8 +76,9 @@ pub fn publish_experimental_scope(
     validate: impl FnOnce(&std::path::Path) -> std::io::Result<()>,
 ) -> std::io::Result<()> {
     use crate::read_only::{AccessMode, CheckedDirectory};
+    use crate::encrypted_key_prototype::{Protector, UserDpapi};
     use tantivy::directory::error::OpenReadError;
-    if bytes.len() > 1024 * 1024 { return Err(std::io::Error::other("scope exceeds limit")); }
+    let plaintext = crate::encrypted_scope::envelope(bytes)?;
     let parent = directory.parent().ok_or_else(|| std::io::Error::other("invalid scope path"))?;
     let user_root = parent.parent().ok_or_else(|| std::io::Error::other("invalid scope parent"))?;
     let _user_pins = CheckedDirectory::pin_root_path(user_root)?;
@@ -92,13 +95,20 @@ pub fn publish_experimental_scope(
     validate(directory)?;
     let checked = CheckedDirectory::open(directory, AccessMode::Writable)
         .map_err(|error| std::io::Error::other(error.to_string()))?;
-    let path = std::path::Path::new("scope-v1.json");
-    match checked.atomic_read_bounded(path, 1024 * 1024) {
-        Ok(previous) if previous == bytes => return Ok(()),
-        Ok(_) | Err(OpenReadError::FileDoesNotExist(_)) => {},
+    let path = std::path::Path::new("scope-v2.dpapi");
+    match checked.atomic_read_bounded(path, crate::encrypted_scope::MAX_PROTECTED_SCOPE) {
+        Ok(previous) => {
+            let clear = UserDpapi.unprotect(&previous)?;
+            if crate::encrypted_scope::same_scope(&clear, bytes)? { return Ok(()); }
+        }
+        Err(OpenReadError::FileDoesNotExist(_)) => {},
         Err(error) => return Err(std::io::Error::other(error.to_string())),
     }
-    checked.atomic_write_pinned(path, bytes)
+    let protected = UserDpapi.protect(&plaintext)?;
+    if protected.len() > crate::encrypted_scope::MAX_PROTECTED_SCOPE {
+        return Err(std::io::Error::other("protected scope exceeds limit"));
+    }
+    checked.atomic_write_pinned(path, &protected)
 }
 /// Facade: owns the index and orchestrates crawl → extract → chunk → index.
 pub struct SearchEngine {
@@ -979,10 +989,15 @@ mod tests {
         let root = TempDir::new().unwrap();
         let dir = root.path().join("file-search").join("fts");
         assert!(publish_experimental_scope(&dir, b"scope", |_| Err(std::io::Error::other("denied"))).is_err());
-        assert!(!dir.join("scope-v1.json").exists());
+        assert!(!dir.join("scope-v2.dpapi").exists());
         publish_experimental_scope(&dir, b"scope", |_| Ok(())).unwrap();
-        assert_eq!(fs::read(dir.join("scope-v1.json")).unwrap(), b"scope");
+        let protected = fs::read(dir.join("scope-v2.dpapi")).unwrap();
+        assert!(!protected.windows(5).any(|part| part == b"scope"));
         publish_experimental_scope(&dir, b"scope", |_| Ok(())).unwrap();
+        let path = dir.join("scope-v2.dpapi");
+        fs::write(&path, b"corrupt").unwrap();
+        assert!(publish_experimental_scope(&dir, b"replacement", |_| Ok(())).is_err());
+        assert_eq!(fs::read(path).unwrap(), b"corrupt");
     }
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     #[test]
