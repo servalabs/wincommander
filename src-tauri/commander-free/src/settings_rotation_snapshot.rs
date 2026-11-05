@@ -135,6 +135,21 @@ impl Snapshot {
         self.verify_unchanged()?;
         Ok(output)
     }
+
+    /// Stage only an unactivated candidate while all source guards stay alive.
+    /// The callback must not overwrite an active generation. Even success is
+    /// not cutover authorization: a later old writer can still change sources.
+    /// On any error the staged destination may exist and needs inspection.
+    pub(super) fn stage_unactivated(
+        &mut self,
+        stage: &impl Fn(&[u8]) -> Result<(), String>,
+    ) -> Result<(), String> {
+        let output = self.prepare()?;
+        self.verify_unchanged()?;
+        stage(&output)?;
+        self.verify_unchanged()?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

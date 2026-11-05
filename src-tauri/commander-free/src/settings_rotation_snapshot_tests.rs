@@ -57,3 +57,34 @@ fn unreadable_or_invalid_section_aborts_without_publishing() {
     assert!(snapshot.prepare().is_err());
     assert_eq!(fs::read(&path).unwrap(), b"corrupt data");
 }
+
+#[test]
+fn staging_does_not_accept_new_section_created_during_publication() {
+    let dir = tempfile::tempdir().unwrap();
+    fixture(dir.path());
+    let original = fs::read(dir.path().join("store").join("settings.dat")).unwrap();
+    let mut snapshot = Snapshot::capture(dir.path()).unwrap();
+    let later = dir.path().join("store").join("later.dat");
+    let result = snapshot.stage_unactivated(&|_| {
+        fs::write(&later, b"late old-writer data").map_err(|_| "old writer blocked".to_string())
+    });
+    assert!(result.is_err());
+    assert_eq!(fs::read(dir.path().join("store").join("settings.dat")).unwrap(), original);
+}
+
+#[test]
+fn failure_after_staging_does_not_authorize_cutover_or_modify_sources() {
+    let dir = tempfile::tempdir().unwrap();
+    fixture(dir.path());
+    let section = dir.path().join("store").join("settings.dat");
+    let original = fs::read(&section).unwrap();
+    let staged = dir.path().join("unactivated-generation");
+    let mut snapshot = Snapshot::capture(dir.path()).unwrap();
+    let result = snapshot.stage_unactivated(&|candidate| {
+        fs::write(&staged, candidate).map_err(|e| e.to_string())?;
+        Err("publication outcome unknown".into())
+    });
+    assert!(result.is_err());
+    assert_eq!(fs::read(&section).unwrap(), original);
+    assert!(staged.exists());
+}
