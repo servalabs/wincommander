@@ -181,12 +181,33 @@ fn provision_machine_f6_owned(owner: &LockedSelectedGeneration, create: impl FnO
     owner.get_or_create_f6(create).map(|_| ())
 }
 
+// Only an authenticated generation created from a verified fresh source may
+// receive defaults. Migrated or existing sections are never replaced.
+fn provision_fresh_machine_settings_owned(owner: &LockedSelectedGeneration, create: impl FnOnce() -> Result<Value, String>) -> Result<(), String> {
+    if owner.scope != StoreScope::Machine { return Ok(()); }
+    let generation = open_generation(&owner.read_reconciled()?)?;
+    if generation.source_key_digest != source_digest(b"wincommander-fresh-install-v1") || !generation.source_sections.is_empty() {
+        return Ok(());
+    }
+    if matching_section(&generation.sections, "settings").is_some() { return Ok(()); }
+    let value = create()?;
+    if !value.as_object().is_some_and(|object| !object.is_empty()) {
+        return Err("Fresh machine settings are invalid; existing data preserved.".into());
+    }
+    owner.write_section("settings", value.clone())?;
+    let committed = owner.read_all()?;
+    let name = matching_section(&committed, "settings").ok_or("Fresh machine settings were not committed")?;
+    if committed[name] != value { return Err("Fresh machine settings did not verify".into()); }
+    Ok(())
+}
+
 #[cfg(windows)]
 fn provision_machine_f6_after_selection(root: &Path, scope: StoreScope, create: impl FnOnce() -> Result<Value, String>) -> Result<(), String> {
     if scope != StoreScope::Machine { return Ok(()); }
     super::settings_generation_maintenance::verify_known_writers_stopped()?;
     let owner = LockedSelectedGeneration::acquire_for(root, scope)?;
-    provision_machine_f6_owned(&owner, create)
+    provision_machine_f6_owned(&owner, create)?;
+    provision_fresh_machine_settings_owned(&owner, crate::settings::fresh_machine_settings)
 }
 
 /// Installer decision under the same maintenance checks. A protected Active

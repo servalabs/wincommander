@@ -57,6 +57,10 @@ fn fresh_install_selects_encrypted_empty_generation_and_resumes_pending() {
     let seed = json!({"signing_seed_hex": "c".repeat(64)});
     provision_machine_f6_owned(&owner, || Ok(seed.clone())).unwrap();
     provision_machine_f6_owned(&owner, || panic!("existing key must be retained")).unwrap();
+    let defaults = json!({"deviceId": "fresh-device", "policy": {}});
+    provision_fresh_machine_settings_owned(&owner, || Ok(defaults.clone())).unwrap();
+    provision_fresh_machine_settings_owned(&owner, || panic!("defaults must not be replaced on retry")).unwrap();
+    assert_eq!(owner.read_all().unwrap()["settings"], defaults);
     assert_eq!(owner.get_or_create_f6(|| panic!("existing key must be returned")).unwrap(), seed);
     assert_eq!(std::fs::read(root.path().join(".settings-cutover-candidate.v1")).unwrap(), candidate);
     assert!(!root.path().join(".install.material").exists());
@@ -80,8 +84,27 @@ fn first_existing_migration_checks_maintenance_and_preserves_f6_source() {
     cutover::provision_first_migration(&owner._ownership, &anchor, root.path(), &|| verify_source(&candidate, &old, &input)).unwrap();
     stage_and_select(&owner._ownership, &anchor, root.path(), || Ok(candidate.clone()), &|bytes| verify_source(bytes, &old, &input)).unwrap();
     provision_machine_f6_owned(&owner, || panic!("existing F6 identity must not be regenerated")).unwrap();
+    let before = owner.read_all().unwrap();
+    provision_fresh_machine_settings_owned(&owner, || panic!("migrated settings must not be initialized as fresh")).unwrap();
+    assert_eq!(owner.read_all().unwrap(), before);
     assert_eq!(owner.read_all().unwrap()["f6-keystore"], f6);
     assert_eq!(std::fs::read_to_string(source_path).unwrap(), encrypted_f6);
+}
+
+#[test]
+#[cfg_attr(windows, ignore = "requires elevated machine-lock ACL provisioning; run explicitly in Windows acceptance")]
+fn migrated_generation_without_settings_is_not_treated_as_fresh() {
+    let root = tempfile::tempdir().unwrap(); provision_test_lock(root.path());
+    let old = [42; 32];
+    let input: Vec<_> = sections(&old).into_iter().filter(|(name, _)| name != "settings").collect();
+    let candidate = prepare(&old, &input).unwrap();
+    let owner = LockedSelectedGeneration::acquire(root.path()).unwrap();
+    let anchor = ProtectedFileAnchor::new(root.path(), StoreScope::Machine);
+    cutover::provision_first_migration(&owner._ownership, &anchor, root.path(), &|| verify_source(&candidate, &old, &input)).unwrap();
+    stage_and_select(&owner._ownership, &anchor, root.path(), || Ok(candidate.clone()), &|bytes| verify_source(bytes, &old, &input)).unwrap();
+    let before = owner.read_all().unwrap();
+    provision_fresh_machine_settings_owned(&owner, || panic!("migrated source must never receive fresh defaults")).unwrap();
+    assert_eq!(owner.read_all().unwrap(), before);
 }
 
 #[test]
