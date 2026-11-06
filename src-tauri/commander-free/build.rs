@@ -4,6 +4,7 @@ use aes_gcm::{
 };
 use sha2::{Digest, Sha256};
 use std::fs;
+use std::io::Read;
 use std::path::Path;
 mod build_service_pin;
 
@@ -115,6 +116,7 @@ fn validate_release_modules(salt_bytes: &[u8]) {
 // The salt is XOR-obfuscated into generated_key.rs so it is not stored verbatim.
 fn main() {
     println!("cargo:rerun-if-changed=build_service_pin.rs");
+    println!("cargo:rerun-if-changed=resources/wincommander-svc.exe");
     // Do this before the profile branch: a Debug build must be invalidated
     // whenever cleanup.ps1 changes, even though it deliberately does not read
     // or regenerate the release ciphertext.
@@ -192,7 +194,29 @@ fn main() {
     {
         let hash = std::env::var("WINCMD_FENCED_SERVICE_SHA256").ok();
         let app_dir = std::env::var("WINCMD_APP_DIR").ok();
-        build_service_pin::validate(hash.as_deref(), app_dir.as_deref())
+        let path = Path::new("resources/wincommander-svc.exe");
+        let staged_hash = fs::File::open(path).ok().and_then(|mut file| {
+            if !file.metadata().ok()?.is_file() {
+                return None;
+            }
+            let mut hasher = Sha256::new();
+            let mut buffer = [0u8; 65536];
+            loop {
+                let n = file.read(&mut buffer).ok()?;
+                if n == 0 {
+                    break;
+                }
+                hasher.update(&buffer[..n]);
+            }
+            Some(
+                hasher
+                    .finalize()
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>(),
+            )
+        });
+        build_service_pin::validate(hash.as_deref(), app_dir.as_deref(), staged_hash.as_deref())
             .expect("invalid paired search release configuration");
     }
     if std::env::var_os("CARGO_FEATURE_AUTONOMOUS_TEST").is_some() && !is_development_profile {
