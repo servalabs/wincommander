@@ -167,10 +167,10 @@ pub(super) fn verify_current_user_lock_handle(file: &File) -> io::Result<()> {
 /// already-existing parent and its ancestors throughout this operation.
 pub(super) fn create_or_verify_root(root: &Path, user: bool) -> io::Result<Vec<File>> {
     let descriptor = if user { current_user_descriptor(true)? } else { Descriptor::from_sddl(MACHINE_ROOT_SDDL)? };
-    let mut attributes = descriptor.attributes();
+    let attributes = descriptor.attributes();
     let path: Vec<u16> = root.as_os_str().encode_wide().chain(Some(0)).collect();
     // SAFETY: path and attributes remain live for the call.
-    if unsafe { CreateDirectoryW(path.as_ptr(), &mut attributes) } == 0 {
+    if unsafe { CreateDirectoryW(path.as_ptr(), &attributes) } == 0 {
         let error = io::Error::last_os_error();
         if error.raw_os_error() != Some(ERROR_ALREADY_EXISTS as i32) { return Err(error); }
     }
@@ -193,11 +193,11 @@ pub(super) fn provision_user_or_verify(root: &Path) -> io::Result<()> {
     provision_with(root, current_user_descriptor(false)?)
 }
 fn provision_with(root: &Path, descriptor: Descriptor) -> io::Result<()> {
-    let mut attributes = descriptor.attributes();
+    let attributes = descriptor.attributes();
     let name: Vec<u16> = root.join(".settings-generation.lock").as_os_str().encode_wide().chain(Some(0)).collect();
     // SAFETY: the path and security attributes remain valid through CreateFileW.
     let mut handle = unsafe { CreateFileW(name.as_ptr(), GENERIC_READ | GENERIC_WRITE | READ_CONTROL,
-        FILE_SHARE_READ | FILE_SHARE_WRITE, &mut attributes, CREATE_NEW,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, &attributes, CREATE_NEW,
         FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, std::ptr::null_mut()) };
     if handle == INVALID_HANDLE_VALUE {
         let error = io::Error::last_os_error();
@@ -264,9 +264,9 @@ mod tests {
         let other = tempfile::tempdir().unwrap();
         let name: Vec<u16> = other.path().join(".settings-generation.lock").as_os_str().encode_wide().chain(Some(0)).collect();
         let descriptor = Descriptor::from_sddl("D:P(A;;FA;;;WD)").unwrap();
-        let mut attrs = descriptor.attributes();
+        let attrs = descriptor.attributes();
         let handle = unsafe { CreateFileW(name.as_ptr(), GENERIC_READ | GENERIC_WRITE,
-            FILE_SHARE_READ | FILE_SHARE_WRITE, &mut attrs, CREATE_NEW,
+            FILE_SHARE_READ | FILE_SHARE_WRITE, &attrs, CREATE_NEW,
             FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, std::ptr::null_mut()) };
         assert_ne!(handle, INVALID_HANDLE_VALUE);
         let mut foreign = unsafe { File::from_raw_handle(handle) };
