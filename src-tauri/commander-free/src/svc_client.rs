@@ -264,6 +264,72 @@ async fn call_via_with_timeout(
     }
 }
 
+/// Experimental evidence only. The caller must retain the pin through cleanup;
+/// this alone does not establish that a previously running process mapped the
+/// currently pinned image, nor does it fence older processes.
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
+#[allow(dead_code)]
+pub(crate) async fn experimental_search_service_capability(
+) -> Result<wincmd_service_auth::search_service_pin::PinnedSearchService, String> {
+    use tokio::time::timeout;
+    let expected = wincmd_service_auth::search_service_pin::release_digest(option_env!(
+        "WINCMD_FENCED_SERVICE_SHA256"
+    ))
+    .map_err(|_| "paired service digest is missing or invalid".to_string())?;
+    let (mut client, token, peer) = open_authenticated_service_session(
+        wincmd_shared::svc::SVC_PIPE_NAME,
+        "svc.search.fence_capabilities",
+    )
+    .await?;
+    let pin = peer
+        .ok_or_else(|| "service identity was not verified".to_string())?
+        .pin_search_service(&expected)
+        .map_err(|_| "service image could not be pinned".to_string())?;
+    let request_id = next_request_id();
+    let request = wincmd_shared::Envelope::Request(wincmd_shared::Request {
+        request_id,
+        feature_id: "svc.search.fence_capabilities".to_string(),
+        diagnostic_operation_id: None,
+        args: serde_json::json!({}),
+    })
+    .sign(&token);
+    timeout(
+        SVC_TRANSPORT_TIMEOUT,
+        wincmd_shared::write_envelope(&mut client, &request),
+    )
+    .await
+    .map_err(|_| "capability request timed out".to_string())?
+    .map_err(|_| "capability request failed".to_string())?;
+    let reply = timeout(
+        SVC_TRANSPORT_TIMEOUT,
+        wincmd_shared::read_envelope(&mut client),
+    )
+    .await
+    .map_err(|_| "capability reply timed out".to_string())?
+    .map_err(|_| "capability reply failed".to_string())?;
+    if !matches!(reply, wincmd_shared::Envelope::Signed(_)) {
+        return Err("unsigned capability reply".to_string());
+    }
+    let reply = reply
+        .verify_and_unwrap(&token)
+        .map_err(|_| "invalid capability signature".to_string())?;
+    match reply {
+        wincmd_shared::Envelope::Response(response) if response.request_id == request_id => {
+            let value = response.result;
+            if value.get("protocol").and_then(Value::as_u64) == Some(1)
+                && value.get("broker_user_fence").and_then(Value::as_bool) == Some(true)
+                && value.get("system_search_disabled").and_then(Value::as_bool) == Some(true)
+                && value.get("app_dir").and_then(Value::as_str) == Some("WinCommander")
+            {
+                Ok(pin)
+            } else {
+                Err("paired service capability is unavailable".to_string())
+            }
+        }
+        _ => Err("invalid capability response".to_string()),
+    }
+}
+
 #[cfg(windows)]
 fn unverified_management_reply(feature_id: &str, fallback: String) -> String {
     // A malformed receipt cannot prove whether a written folder mutation ran.

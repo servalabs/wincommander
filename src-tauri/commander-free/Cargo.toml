@@ -29,7 +29,7 @@ test = false
 
 [features]
 # Disabled by default; native validation, Pro reader and recovery are pending.
-experimental-encrypted-search = ["wincmd-search/experimental-encrypted-search"]
+experimental-encrypted-search = ["wincmd-search/experimental-encrypted-search", "wincmd-service-auth/experimental-search-service-pin"]
 # Portable single-exe edition. Gates the trial out (the most-copyable build has
 # nothing to farm) and packaging differences. Persistent state is already
 # machine-wide (%ProgramData%) regardless of this flag.
