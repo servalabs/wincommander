@@ -83,3 +83,4 @@ jobs:
         working-directory: .
       - run: cargo check --locked -p commander-free --features experimental-encrypted-search
       - run: 'cargo test --locked -p commander-free --lib --features experimental-encrypted-search search_migration_cli::tests::'
+      - run: 'cargo test --locked -p commander-free --lib --features experimental-encrypted-search file_search::runtime_fence::tests::'
