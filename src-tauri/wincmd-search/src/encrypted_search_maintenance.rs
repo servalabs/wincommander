@@ -2,6 +2,18 @@
 //! Bounded maintenance checks for the opt-in migration lab. They detect known
 //! running writers but do not prevent a process from starting after a scan.
 #![allow(dead_code)]
+// A thread-scoped test seam permits exercising the disposable migration when
+// the developer's actual service is running. Never present in non-test builds.
+#[cfg(all(test, windows))]
+std::thread_local! { static TEST_ASSUME_STOPPED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+#[cfg(all(test, windows))]
+pub(crate) fn with_test_writers_stopped<T>(f: impl FnOnce() -> T) -> T {
+    struct Reset(bool);
+    impl Drop for Reset { fn drop(&mut self) { TEST_ASSUME_STOPPED.with(|v| v.set(self.0)); } }
+    let previous = TEST_ASSUME_STOPPED.with(|v| v.replace(true));
+    let _reset = Reset(previous);
+    f()
+}
 fn known_writer(name: &str) -> bool {
     ["wincommander-free.exe", "wincommander-pro.exe", "wincommander-svc.exe", "wincommander.exe"]
         .iter().any(|expected| name.eq_ignore_ascii_case(expected))
@@ -15,6 +27,8 @@ fn allowed_service(name: &str, pid: u32, expected: Option<u32>) -> bool {
 /// defense against a renamed binary or a new launch racing after a scan.
 #[cfg(windows)]
 pub(crate) fn verify_known_writers_stopped() -> Result<(), String> {
+    #[cfg(test)]
+    if TEST_ASSUME_STOPPED.with(|v| v.get()) { return Ok(()); }
     verify_known_writers_except_service(None)
 }
 

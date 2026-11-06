@@ -65,6 +65,9 @@ pub(super) fn with_engine<T>(
         // This feature remains disabled until native/recovery/Pro validation.
         SearchEngine::open_or_rebuild_experimental_with_policy(config.clone(), policy)
             .map_err(|e| {
+                if matches!(&e, wincmd_search::error::SearchError::Config(message) if message == "SEARCH_INTERRUPTED_CANDIDATE") {
+                    return "SEARCH_INTERRUPTED_CANDIDATE".to_string();
+                }
                 let backups_may_remain = config.index_dir.parent().map(retained_backup_count)
                     .map(|result| result.map(|count| count > 0).unwrap_or(true)).unwrap_or(true);
                 if legacy_data_may_remain(&config.index_dir) || backups_may_remain {
@@ -113,7 +116,9 @@ fn legacy_data_may_remain(directory: &std::path::Path) -> bool {
 fn retained_backup_count(parent: &std::path::Path) -> Result<usize, String> {
     let mut count = 0usize;
     for entry in std::fs::read_dir(parent).map_err(|_| "Cannot inspect old search backups.")? {
-        if entry.map_err(|_| "Cannot inspect old search backups.")?.file_name().to_string_lossy().starts_with(".wincommander-legacy-index-backup-") { count += 1; }
+        let name = entry.map_err(|_| "Cannot inspect old search backups.")?.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with(".wincommander-legacy-index-backup-") || name.starts_with(".wincommander-orphaned-index-") { count += 1; }
     }
     Ok(count)
 }
@@ -204,6 +209,19 @@ fn schedule_legacy_cleanup(config: IndexConfig, protected: Vec<PathBuf>) {
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
 pub(super) fn cleanup_legacy(config: &IndexConfig, protected: &[PathBuf]) -> Result<(usize, usize), String> {
     cleanup_legacy_with_service(config, protected, None)
+}
+/// The replacement lock and Pro admission guard are held by the caller.
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
+pub(super) fn preserve_interrupted_candidate(service: &wincmd_service_auth::search_service_pin::PinnedSearchService) -> Result<(), String> {
+    let mut write = cell().write().map_err(|_| "Search state is unavailable.")?;
+    if let Some(old) = write.take() { old.engine.stop(); }
+    let parent = super::runtime_fence::verified_parent()?;
+    super::runtime_fence::with_exclusive(|fence| {
+        let pid = service.running_pid().map_err(|_| "The verified WinCommander service changed during recovery.")?;
+        SearchEngine::preserve_interrupted_search_candidate_with_service(&parent.join("fts"), fence, pid)
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    })
 }
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
 fn cleanup_legacy_with_service(config: &IndexConfig, protected: &[PathBuf], service: Option<&wincmd_service_auth::search_service_pin::PinnedSearchService>) -> Result<(usize, usize), String> {

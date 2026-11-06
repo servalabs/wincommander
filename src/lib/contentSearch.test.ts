@@ -16,6 +16,7 @@ import type { Chunk, ContentHit } from "../types/wincmd-search";
 describe("indexStatusErrorMessage", () => {
   it("warns when protected search could not start without exposing raw errors", () => {
     expect(indexStatusErrorMessage("SEARCH_PROTECTION_PENDING")).toContain("Older search data may still be on this PC");
+    expect(indexStatusErrorMessage("SEARCH_INTERRUPTED_CANDIDATE")).toContain("needs recovery");
     expect(indexStatusErrorMessage("C:\\private\\secret.txt")).not.toContain("secret.txt");
   });
 });

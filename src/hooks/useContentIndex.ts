@@ -27,6 +27,7 @@ export interface ContentIndexState {
   clearContent: () => void;
   indexStatus: IndexStatus | null;
   indexStatusError: string | null;
+  interruptedSearchCandidate: boolean;
   currentRoots: string[];
   foldersReindexing: boolean;
   managementError: string | null;
@@ -64,6 +65,7 @@ export function useContentIndex(query: string, filterTokens: string): ContentInd
   const [contentQuery, setContentQuery] = useState<string | null>(null);
   const [indexStatus, setIndexStatus] = useState<IndexStatus | null>(null);
   const [indexStatusError, setIndexStatusError] = useState<string | null>(null);
+  const [interruptedSearchCandidate, setInterruptedSearchCandidate] = useState(false);
   const [foldersReindexing, setFoldersReindexing] = useState(false);
   const [reindexing, setReindexing] = useState(false);
   const [rescanning, setRescanning] = useState(false);
@@ -226,6 +228,7 @@ export function useContentIndex(query: string, filterTokens: string): ContentInd
         if (lease()) {
           setIndexStatus(s);
           setIndexStatusError(null);
+          setInterruptedSearchCandidate(false);
           // Synced edits can change matches without changing the document count.
           if (!searchInFlight.current) setSearchRefresh((value) => value + 1);
         }
@@ -234,6 +237,7 @@ export function useContentIndex(query: string, filterTokens: string): ContentInd
         if (!cancelled) {
           setIndexStatus(null);
           setIndexStatusError(indexStatusErrorMessage(error));
+          setInterruptedSearchCandidate(String(error) === "SEARCH_INTERRUPTED_CANDIDATE");
           id = setTimeout(poll, 3000);
         }
       }
@@ -355,6 +359,7 @@ export function useContentIndex(query: string, filterTokens: string): ContentInd
     clearContent,
     indexStatus,
     indexStatusError,
+    interruptedSearchCandidate,
     currentRoots,
     foldersReindexing,
     managementError,

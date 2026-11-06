@@ -1,0 +1,495 @@
+name: Settings migration native fixture
+on:
+  push:
+    branches: [codex/settings-migration-windows-ci-20261106]
+  pull_request:
+    branches: [main]
+    paths: ["tools/settings-migration-ci/**", ".github/workflows/settings-migration-native-fixture.yml"]
+permissions:
+  contents: read
+jobs:
+  windows-fixture:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Prepare isolated source fixture
+        shell: pwsh
+        run: |
+          $destination = 'tools/settings-migration-ci/src'
+          $source = 'src-tauri/commander-free/src'
+          Copy-Item "$source/datastore.rs", "$source/datastore_io.rs", "$source/settings*.rs" $destination
+      - name: Run real DPAPI migration and interruption tests
+        shell: pwsh
+        run: |
+          $env:RUSTFLAGS = '-D warnings'
+          $manifest = 'tools/settings-migration-ci/Cargo.toml'
+          $cases = @(
+            'first_migration_authenticates_preexisting_staged_candidate_before_anchor',
+            'first_existing_migration_checks_maintenance_and_preserves_f6_source',
+            'staged_initial_cutover_resumes_exact_candidate_and_preserves_source',
+            'current_user_generation_preserves_mixed_f6_and_rejects_machine_scope'
+          )
+          foreach ($case in $cases) {
+            $output = cargo test --locked --manifest-path $manifest --features experimental-settings-generation $case -- --ignored --test-threads=1 2>&1 | Out-String
+            Write-Host $output
+            if ($LASTEXITCODE -ne 0 -or $output -notmatch 'test result: ok\. 1 passed; 0 failed; 0 ignored') { throw "Fixture test failed or did not run: $case" }
+          }
+      - name: Verify user identity gates
+        shell: pwsh
+        run: |
+          $env:RUSTFLAGS = '-D warnings'
+          $manifest = 'tools/settings-migration-ci/Cargo.toml'
+          foreach ($case in @('original_user_sid_must_match_exactly', 'user_stage_requires_explicit_nonempty_original_user_sid', 'another_user_is_rejected_before_any_store_access')) {
+            $output = cargo test --locked --manifest-path $manifest --features experimental-settings-generation $case -- --test-threads=1 2>&1 | Out-String
+            Write-Host $output
+            if ($LASTEXITCODE -ne 0 -or $output -notmatch 'test result: ok\. 1 passed; 0 failed; 0 ignored') { throw "Identity test failed or did not run: $case" }
+          }
+      - name: Reject another profile before invoking the helper
+        shell: pwsh
+        run: |
+          $script = 'src-tauri/commander-free/nsis/stage-original-user-settings.ps1'
+          & pwsh -NoProfile -NonInteractive -File $script -ExecutablePath $env:ComSpec -InstallDirectory (Join-Path $env:RUNNER_TEMP 'other-user-profile')
+          if ($LASTEXITCODE -eq 0) { throw 'Another profile unexpectedly passed the installer guard.' }
+          $global:LASTEXITCODE = 0
+      - name: Preserve profile when installed binary is missing
+        shell: pwsh
+        run: |
+          $root = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)) 'WinCommander'
+          if (Test-Path -LiteralPath $root) { throw 'Runner profile is not empty; fixture refuses to touch it.' }
+          New-Item -ItemType Directory -Path $root | Out-Null
+          Set-Content -LiteralPath (Join-Path $root 'saved-settings-sentinel') -Value 'preserve'
+          & pwsh -NoProfile -NonInteractive -File 'src-tauri/commander-free/nsis/stage-original-user-settings.ps1' -ExecutablePath $env:ComSpec -InstallDirectory $root
+          if ($LASTEXITCODE -eq 0) { throw 'Missing installed binary was accepted.' }
+          if ((Get-Content -Raw -LiteralPath (Join-Path $root 'saved-settings-sentinel')).Trim() -ne 'preserve') { throw 'Existing profile contents changed.' }
+          $global:LASTEXITCODE = 0
+      - name: Allow fresh profile with installer diagnostic
+        shell: pwsh
+        run: |
+          $root = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)) 'WinCommander'
+          Remove-Item -LiteralPath (Join-Path $root 'saved-settings-sentinel')
+          Set-Content -LiteralPath (Join-Path $root 'installer-lifecycle.log') -Value 'fixture diagnostic'
+          & pwsh -NoProfile -NonInteractive -File 'src-tauri/commander-free/nsis/stage-original-user-settings.ps1' -ExecutablePath $env:ComSpec -InstallDirectory $root
+          if ($LASTEXITCODE -ne 0) { throw 'Fresh profile with diagnostic was rejected.' }
+      - name: Reject a directory posing as the app executable
+        shell: pwsh
+        run: |
+          $root = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)) 'WinCommander'
+          New-Item -ItemType Directory -Path (Join-Path $root 'wincommander-free.exe') | Out-Null
+          & pwsh -NoProfile -NonInteractive -File 'src-tauri/commander-free/nsis/stage-original-user-settings.ps1' -ExecutablePath $env:ComSpec -InstallDirectory $root
+          if ($LASTEXITCODE -eq 0) { throw 'Directory masquerading as app unexpectedly passed.' }
+          $global:LASTEXITCODE = 0
+      - name: Compile gated installer hook fixture
+        shell: pwsh
+        run: |
+          $nsis = Join-Path ${env:ProgramFiles(x86)} 'NSIS/makensis.exe'
+          if (-not (Test-Path -LiteralPath $nsis)) {
+            choco install nsis --no-progress -y
+            if ($LASTEXITCODE -ne 0) { throw 'NSIS installation failed.' }
+          }
+          $hook = (Resolve-Path 'src-tauri/commander-free/nsis/hooks.nsh').Path
+          $payload = Join-Path $env:WINDIR 'System32/cmd.exe'
+          $output = Join-Path $env:RUNNER_TEMP 'settings-hook-fixture.exe'
+          $fixture = Join-Path $env:RUNNER_TEMP 'settings-hook-fixture.nsi'
+          @"
+          Unicode true
+          Name "Settings hook fixture"
+          OutFile "$output"
+          InstallDir "`$PROGRAMFILES\WinCommander"
+          RequestExecutionLevel user
+          !include "LogicLib.nsh"
+          !define INSTALLMODE "currentUser"
+          !define MAINBINARYSRCPATH "$payload"
+          !define WC_EXPERIMENTAL_USER_STAGE_ONLY
+          !define WC_EXPERIMENTAL_SEARCH_FENCE
+          !include "$hook"
+          Section
+          !insertmacro NSIS_HOOK_PREINSTALL
+          !insertmacro NSIS_HOOK_POSTINSTALL
+          SectionEnd
+          "@ | Set-Content -Encoding ascii -LiteralPath $fixture
+          & $nsis $fixture
+          if ($LASTEXITCODE -ne 0) { throw 'Gated NSIS hook fixture failed to compile.' }
+      - name: Compile paired machine installer hook and test writer checks
+        shell: pwsh
+        run: |
+          & pwsh -NoProfile -NonInteractive -File ./tools/test-known-pro-writers.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Known Pro writer fixture failed.' }
+          $nsis = Join-Path ${env:ProgramFiles(x86)} 'NSIS/makensis.exe'
+          $hook = (Resolve-Path 'src-tauri/commander-free/nsis/hooks.nsh').Path
+          $payload = Join-Path $env:WINDIR 'System32/cmd.exe'
+          $output = Join-Path $env:RUNNER_TEMP 'paired-hook-fixture.exe'
+          $fixture = Join-Path $env:RUNNER_TEMP 'paired-hook-fixture.nsi'
+          @"
+          Unicode true
+          Name "Paired hook fixture"
+          OutFile "$output"
+          InstallDir "`$PROGRAMFILES\WinCommander"
+          RequestExecutionLevel user
+          !include "LogicLib.nsh"
+          !define INSTALLMODE "perMachine"
+          !define MAINBINARYSRCPATH "$payload"
+          !define WC_PAIRED_SEARCH_RELEASE
+          !include "$hook"
+          Section
+          !insertmacro NSIS_HOOK_PREINSTALL
+          !insertmacro NSIS_HOOK_POSTINSTALL
+          SectionEnd
+          "@ | Set-Content -Encoding ascii -LiteralPath $fixture
+          & $nsis $fixture
+          if ($LASTEXITCODE -ne 0) { throw 'Paired NSIS hook fixture failed to compile.' }
+      - name: Exercise service state transitions without changing real services
+        shell: pwsh
+        run: ./tools/test-settings-stage-service.ps1
+      - name: Check real SCM missing-service behavior
+        shell: pwsh
+        run: |
+          if (Get-Service -Name WinCommanderSvc -ErrorAction SilentlyContinue) { throw 'Fixture refuses to touch an existing service.' }
+          $script = 'src-tauri/commander-free/nsis/settings-stage-service.ps1'
+          & pwsh -NoProfile -NonInteractive -File $script -Action Status
+          if ($LASTEXITCODE -ne 0) { throw 'Missing-service status was not recognized.' }
+          & pwsh -NoProfile -NonInteractive -File $script -Action Stop
+          if ($LASTEXITCODE -ne 0) { throw 'Missing-service stop was not recognized.' }
+          & pwsh -NoProfile -NonInteractive -File $script -Action Restore
+          if ($LASTEXITCODE -ne 255) { throw 'Missing-service restoration was not rejected.' }
+          $global:LASTEXITCODE = 0
+      - name: Verify cross-process maintenance lifetime
+        shell: pwsh
+        run: |
+          $env:RUSTFLAGS = '-D warnings'
+          $output = cargo test --locked --manifest-path tools/settings-migration-ci/Cargo.toml --features experimental-settings-generation duplicated_search_fence_is_locked_by_installer_process -- --nocapture --test-threads=1 2>&1 | Out-String
+          Write-Host $output
+          if ($LASTEXITCODE -ne 0 -or $output -notmatch 'test result: ok\. 1 passed; 0 failed; 0 ignored') { throw 'Cross-process fence fixture did not pass.' }
+      - name: Verify NSIS byte-range ownership and crash release
+        shell: pwsh
+        run: |
+          cargo build --locked --manifest-path tools/settings-migration-ci/Cargo.toml --bin lock_probe
+          if ($LASTEXITCODE -ne 0) { throw 'Lock probe did not compile.' }
+          $nsis = Join-Path ${env:ProgramFiles(x86)} 'NSIS/makensis.exe'
+          $lock = Join-Path $env:RUNNER_TEMP 'search-fence-native-test.lock'
+          $ready = Join-Path $env:RUNNER_TEMP 'search-fence-native-test.ready'
+          $output = Join-Path $env:RUNNER_TEMP 'search-fence-native-test.exe'
+          $fixture = Join-Path $env:RUNNER_TEMP 'search-fence-native-test.nsi'
+          @"
+          Unicode true
+          Name "Search fence ownership fixture"
+          OutFile "$output"
+          SilentInstall silent
+          RequestExecutionLevel user
+          Section
+          System::Call 'kernel32::CreateFileW(w "$lock", i 0xC0000000, i 3, p 0, i 4, i 0, p 0) p .R5'
+          System::Call '*(i 0, i 0, i 0, i 0, i 0) p.r0'
+          System::Call 'kernel32::LockFileEx(p `$R5, i 3, i 0, i -1, i -1, p r0) i .r1'
+          System::Free `$0
+          StrCmp `$1 1 0 failed
+          FileOpen `$2 "$ready" w
+          FileWrite `$2 "ready"
+          FileClose `$2
+          Sleep 30000
+          failed:
+          SectionEnd
+          "@ | Set-Content -Encoding ascii -LiteralPath $fixture
+          & $nsis $fixture
+          if ($LASTEXITCODE -ne 0) { throw 'NSIS lock fixture did not compile.' }
+          $process = Start-Process -FilePath $output -ArgumentList '/S' -WindowStyle Hidden -PassThru
+          try {
+            $deadline = [Diagnostics.Stopwatch]::StartNew()
+            while (-not (Test-Path -LiteralPath $ready) -and $deadline.Elapsed.TotalSeconds -lt 20 -and -not $process.HasExited) { Start-Sleep -Milliseconds 200; $process.Refresh() }
+            if (-not (Test-Path -LiteralPath $ready)) { throw 'NSIS lock fixture did not acquire its lock.' }
+            $probe = 'tools/settings-migration-ci/target/debug/lock_probe.exe'
+            & $probe $lock
+            if ($LASTEXITCODE -ne 2) { throw 'Rust shared lock was not excluded by NSIS.' }
+          } finally {
+            if (-not $process.HasExited) { $process.Kill() }
+            $process.WaitForExit()
+          }
+          & $probe $lock
+          if ($LASTEXITCODE -ne 0) { throw 'NSIS lock survived installer process termination.' }
+      - name: Verify non-destructive search staging protocol
+        shell: pwsh
+        run: |
+          cargo build --locked --manifest-path tools/settings-migration-ci/Cargo.toml --bin search_phase_stub
+          if ($LASTEXITCODE -ne 0) { throw 'Search phase stub did not compile.' }
+          $root = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)) 'WinCommander'
+          $helper = (Resolve-Path 'tools/settings-migration-ci/target/debug/search_phase_stub.exe').Path
+          $script = 'src-tauri/commander-free/nsis/search-migration-phase.ps1'
+          $stage = (& pwsh -NoProfile -NonInteractive -File $script -Phase stage -ExecutablePath $helper -InstallDirectory $root | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or $stage -cne 'staged reconciliation=pending old-cache=retained') { throw 'Search stage outcome was not confirmed.' }
+          $verify = (& pwsh -NoProfile -NonInteractive -File $script -Phase verify-staged -ExecutablePath $helper -InstallDirectory $root | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or $verify -cne 'staged old-cache=retained') { throw 'Search verification outcome was not confirmed.' }
+          $env:WINCMD_TEST_SELECTED = '1'
+          foreach ($phase in @('stage', 'verify-staged')) {
+            $selected = (& pwsh -NoProfile -NonInteractive -File $script -Phase $phase -ExecutablePath $helper -InstallDirectory $root | Out-String).Trim()
+            if ($LASTEXITCODE -ne 0 -or $selected -cne 'selected') { throw 'Authenticated selected outcome was not accepted.' }
+          }
+          Remove-Item Env:WINCMD_TEST_SELECTED
+  paired-app-check:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: 1.99.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.4.3
+      - name: Test paired release input contract
+        shell: pwsh
+        run: |
+          bun test tools/paired-search-release-contract.test.ts
+          if ($LASTEXITCODE -ne 0) { throw 'Paired packaging contract tests failed.' }
+          rustc --test src-tauri/commander-free/build_service_pin.rs -o "$env:RUNNER_TEMP/service-pin-tests.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not compile staged service hash fixture.' }
+          & "$env:RUNNER_TEMP/service-pin-tests.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'Staged service hash fixture failed.' }
+      - name: Install locked frontend dependencies
+        run: bun install --frozen-lockfile
+      - name: Generate encrypted backend assets
+        run: bun run encrypt-backend
+      - name: Check combined experimental app features
+        working-directory: src-tauri
+        run: cargo check --locked -p commander-free --features experimental-encrypted-search,experimental-settings-generation
+      - name: Test search phase classification in combined app
+        working-directory: src-tauri
+        run: cargo test --locked -p commander-free --lib --features experimental-encrypted-search,experimental-settings-generation search_migration_cli::tests::fresh_requires_no_legacy_selection_or_recovery_artifacts
+      - name: Test paired Pro digest capability validation
+        working-directory: src-tauri
+        shell: pwsh
+        run: |
+          $output = cargo test --locked -p commander-free --lib --features experimental-encrypted-search,experimental-settings-generation first_rollout_capability_requires_exact_epoch_and_all_fences -- --test-threads=1 2>&1 | Out-String
+          Write-Host $output
+          if ($LASTEXITCODE -ne 0 -or $output -notmatch 'test result: ok\. 1 passed; 0 failed; 0 ignored') { throw 'Paired capability test did not pass.' }
+      - name: Test Pro worker quiescence control paths
+        working-directory: src-tauri
+        shell: pwsh
+        run: |
+          $output = cargo test --locked -p commander-free --lib --features experimental-encrypted-search,experimental-settings-generation search_quiescence_ -- --test-threads=1 2>&1 | Out-String
+          Write-Host $output
+          if ($LASTEXITCODE -ne 0 -or $output -notmatch 'test result: ok\. 5 passed; 0 failed; 0 ignored') { throw 'Pro quiescence tests did not all pass.' }
+      - name: Build the paired debug desktop executable
+        working-directory: src-tauri
+        run: cargo build --locked -p commander-free --bin wincommander-free --features experimental-encrypted-search,experimental-settings-generation
+      - name: Smoke test the real executable in a disposable user profile
+        shell: pwsh
+        run: |
+          $root = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)) 'WinCommander'
+          if (Test-Path -LiteralPath $root) { throw 'Runner profile is not empty; fixture refuses to use it.' }
+          New-Item -ItemType Directory -Path $root | Out-Null
+          $exe = Join-Path $root 'wincommander-free.exe'
+          Copy-Item -LiteralPath 'src-tauri/target/debug/wincommander-free.exe' -Destination $exe
+          foreach ($phase in @('stage', 'verify-staged')) {
+            $info = [Diagnostics.ProcessStartInfo]::new()
+            $info.FileName = $exe
+            $info.Arguments = "--search-migration-lab $phase"
+            $info.UseShellExecute = $false
+            $info.CreateNoWindow = $true
+            $info.RedirectStandardOutput = $true
+            $info.RedirectStandardError = $true
+            $info.EnvironmentVariables['WINCOMMANDER_EXPERIMENTAL_SEARCH_MIGRATION'] = '1'
+            $process = [Diagnostics.Process]::Start($info)
+            try {
+              $stdout = $process.StandardOutput.ReadToEndAsync()
+              $stderr = $process.StandardError.ReadToEndAsync()
+              if (-not $process.WaitForExit(60000)) { $process.Kill(); $process.WaitForExit(); throw "App CLI timed out: $phase" }
+              if ($process.ExitCode -ne 0 -or $stdout.Result.Trim() -cne 'WINCOMMANDER_SEARCH_MIGRATION_OUTCOME:fresh') { throw "App CLI failed: $phase ($($stderr.Result))" }
+            } finally { $process.Dispose() }
+          }
+      - name: Stage a disposable legacy index with the real executable
+        shell: pwsh
+        run: |
+          $root = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)) 'WinCommander'
+          $old = Join-Path $root 'file-search/fts'
+          Push-Location src-tauri
+          try { cargo run --locked -p wincmd-search --example seed_legacy_fixture -- $old; if ($LASTEXITCODE -ne 0) { throw 'Legacy cache fixture could not be created.' } } finally { Pop-Location }
+          $manifest = Join-Path $old 'meta.json'
+          $before = (Get-FileHash -Algorithm SHA256 -LiteralPath $manifest).Hash
+          $exe = Join-Path $root 'wincommander-free.exe'
+          foreach ($phase in @('stage', 'verify-staged')) {
+            $info = [Diagnostics.ProcessStartInfo]::new()
+            $info.FileName = $exe; $info.Arguments = "--search-migration-lab $phase"
+            $info.UseShellExecute = $false; $info.CreateNoWindow = $true
+            $info.RedirectStandardOutput = $true; $info.RedirectStandardError = $true
+            $info.EnvironmentVariables['WINCOMMANDER_EXPERIMENTAL_SEARCH_MIGRATION'] = '1'
+            $process = [Diagnostics.Process]::Start($info)
+            try {
+              $stdout = $process.StandardOutput.ReadToEndAsync(); $stderr = $process.StandardError.ReadToEndAsync()
+              if (-not $process.WaitForExit(120000)) { $process.Kill(); $process.WaitForExit(); throw "App CLI timed out: $phase" }
+              $expected = if ($phase -eq 'stage') { 'WINCOMMANDER_SEARCH_MIGRATION_OUTCOME:staged reconciliation=pending old-cache=retained' } else { 'WINCOMMANDER_SEARCH_MIGRATION_OUTCOME:staged old-cache=retained' }
+              if ($process.ExitCode -ne 0 -or $stdout.Result.Trim() -cne $expected) { throw "App CLI failed: $phase ($($stderr.Result))" }
+            } finally { $process.Dispose() }
+          }
+          if ((Get-FileHash -Algorithm SHA256 -LiteralPath $manifest).Hash -ne $before) { throw 'Legacy search manifest changed during staging.' }
+  broker-fence-check:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: 1.99.1
+      - name: Check feature-gated service broker
+        run: cargo check --locked -p commander-svc --features experimental-search-broker-fence
+      - name: Test disposable broker lease lifetime
+        shell: pwsh
+        run: |
+          $output = cargo test --locked -p commander-svc --bin wincommander-svc --features experimental-search-broker-fence pro_broker::search_fence::tests -- --test-threads=1 2>&1 | Out-String
+          Write-Host $output
+          if ($LASTEXITCODE -ne 0 -or $output -notmatch 'test result: ok\. 10 passed; 0 failed; 1 ignored') { throw 'Broker lease tests did not pass.' }
+      - name: Test service capability is known and read-only
+        run: cargo test --locked -p wincmd-shared search_fence_capability_is_known_and_read_only
+      - name: Test broker provisioning under a second Windows account
+        shell: pwsh
+        run: |
+          $name = 'wcf' + [Guid]::NewGuid().ToString('N').Substring(0, 8)
+          $password = 'Aa1!' + [Guid]::NewGuid().ToString('N')
+          $secure = ConvertTo-SecureString $password -AsPlainText -Force
+          $user = New-LocalUser -Name $name -Password $secure -AccountNeverExpires -PasswordNeverExpires
+          try {
+            $base = Join-Path $env:RUNNER_TEMP ('broker-user-' + [Guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path $base | Out-Null
+            $acl = Get-Acl -LiteralPath $base
+            $rule = [Security.AccessControl.FileSystemAccessRule]::new($user.SID, 'Modify', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
+            $acl.AddAccessRule($rule)
+            Set-Acl -LiteralPath $base -AclObject $acl
+            $env:WINCMD_TEST_BROKER_USER = $name
+            $env:WINCMD_TEST_BROKER_PASSWORD = $password
+            $env:WINCMD_TEST_BROKER_PARENT = Join-Path $base 'app/file-search'
+            $output = cargo test --locked -p commander-svc --bin wincommander-svc --features experimental-search-broker-fence second_user_token_creates_own_search_fence -- --ignored --test-threads=1 2>&1 | Out-String
+            Write-Host $output
+            if ($LASTEXITCODE -ne 0 -or $output -notmatch 'test result: ok\. 1 passed; 0 failed; 0 ignored') { throw 'Cross-user broker fixture failed.' }
+            $lock = Join-Path $env:WINCMD_TEST_BROKER_PARENT '.encrypted-search-maintenance.lock'
+            $ownerName = (Get-Acl -LiteralPath $lock).Owner
+            $owner = [Security.Principal.NTAccount]::new($ownerName).Translate([Security.Principal.SecurityIdentifier])
+            if ($owner.Value -cne $user.SID.Value) { throw 'Broker-created lock is not owned by the authenticated user.' }
+          } finally {
+            Remove-Item Env:WINCMD_TEST_BROKER_USER, Env:WINCMD_TEST_BROKER_PASSWORD, Env:WINCMD_TEST_BROKER_PARENT -ErrorAction SilentlyContinue
+            Remove-LocalUser -SID $user.SID -Confirm:$false
+          }
+      - name: Exercise a disposable SCM service stop and restore
+        shell: pwsh
+        run: |
+          cargo build --locked -p commander-svc --example disposable_scm_fixture --example disposable_watchdog_fixture
+          if ($LASTEXITCODE -ne 0) { throw 'Disposable SCM host did not build.' }
+          $name = 'WinCommanderSearchTestFixture' + [Guid]::NewGuid().ToString('N').Substring(0, 8)
+          if (Get-Service -Name $name -ErrorAction SilentlyContinue) { throw 'Disposable service name already exists.' }
+          $exe = (Resolve-Path 'target/debug/examples/disposable_scm_fixture.exe').Path
+          $helper = Join-Path $env:RUNNER_TEMP ($name + '.ps1')
+          $source = Get-Content -Raw -LiteralPath 'commander-free/nsis/settings-stage-service.ps1'
+          $source.Replace("'WinCommanderSvc'", "'$name'") | Set-Content -Encoding utf8 -LiteralPath $helper
+          $created = $false
+          try {
+            New-Service -Name $name -BinaryPathName "`"$exe`" $name" -StartupType Manual | Out-Null
+            $created = $true
+            Start-Service -Name $name
+            (Get-Service -Name $name).WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
+            & pwsh -NoProfile -NonInteractive -File $helper -Action Status
+            if ($LASTEXITCODE -ne 4) { throw 'Running fixture status was not reported.' }
+            & pwsh -NoProfile -NonInteractive -File $helper -Action Stop
+            if ($LASTEXITCODE -ne 0 -or (Get-Service -Name $name).Status -ne 'Stopped') { throw 'Fixture did not stop.' }
+            & pwsh -NoProfile -NonInteractive -File $helper -Action Restore
+            if ($LASTEXITCODE -ne 0 -or (Get-Service -Name $name).Status -ne 'Running') { throw 'Fixture did not restore.' }
+            # Test-only watchdog simulation; no product watchdog is implied.
+            $marker = Join-Path $env:RUNNER_TEMP ($name + '.state')
+            $ready = Join-Path $env:RUNNER_TEMP ($name + '.ready')
+            $stream = [IO.File]::Open($marker, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+            try { $bytes = [Text.Encoding]::UTF8.GetBytes("original=running`n"); $stream.Write($bytes, 0, $bytes.Length); $stream.Flush($true) } finally { $stream.Dispose() }
+            $parent = Start-Process -FilePath 'pwsh' -ArgumentList '-NoProfile','-NonInteractive','-Command','Start-Sleep -Seconds 120' -WindowStyle Hidden -PassThru
+            $watchdog = $null
+            try {
+              $watchdogExe = (Resolve-Path 'target/debug/examples/disposable_watchdog_fixture.exe').Path
+              $watchdog = Start-Process -FilePath $watchdogExe -ArgumentList @($parent.Id, $name, "`"$marker`"", "`"$ready`"") -WindowStyle Hidden -PassThru
+              $clock = [Diagnostics.Stopwatch]::StartNew()
+              while (-not (Test-Path -LiteralPath $ready) -and $clock.Elapsed.TotalSeconds -lt 20 -and -not $watchdog.HasExited) { Start-Sleep -Milliseconds 100; $watchdog.Refresh() }
+              if (-not (Test-Path -LiteralPath $ready)) { throw 'Fixture watchdog did not become ready.' }
+              Stop-Service -Name $name
+              (Get-Service -Name $name).WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30))
+              $parent.Kill(); $parent.WaitForExit()
+              if (-not $watchdog.WaitForExit(45000) -or $watchdog.ExitCode -ne 0) { throw 'Fixture watchdog failed to restore service.' }
+              if ((Get-Service -Name $name).Status -ne 'Running' -or (Test-Path -LiteralPath $marker)) { throw 'Fixture watchdog did not finish recovery.' }
+            } finally {
+              if (-not $parent.HasExited) { $parent.Kill(); $parent.WaitForExit() }
+              if ($watchdog -and -not $watchdog.HasExited) { $watchdog.Kill(); $watchdog.WaitForExit() }
+            }
+            $global:LASTEXITCODE = 0
+          } finally {
+            if ($created) {
+              $service = Get-Service -Name $name -ErrorAction SilentlyContinue
+              if ($service -and $service.Status -ne 'Stopped') { Stop-Service -Name $name -Force -ErrorAction SilentlyContinue }
+              & sc.exe delete $name | Out-Null
+            }
+          }
+
+  paired-lab-build-check:
+    runs-on: windows-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: 1.99.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.4.3
+      - name: Prepare disposable release inputs
+        shell: pwsh
+        run: |
+          bun install --frozen-lockfile
+          if ($LASTEXITCODE -ne 0) { throw 'Frontend installation failed.' }
+          bun run encrypt-backend
+          if ($LASTEXITCODE -ne 0) { throw 'Backend encryption failed.' }
+          $resource = 'src-tauri/commander-free/resources/wincommander-svc.exe'
+          if (Test-Path -LiteralPath $resource) { throw 'Fixture refuses to overwrite an existing service.' }
+          Copy-Item -LiteralPath $env:ComSpec -Destination $resource
+          "WINCMD_FENCED_SERVICE_SHA256=$((Get-FileHash -Algorithm SHA256 -LiteralPath $resource).Hash)" >> $env:GITHUB_ENV
+          "WINCMD_FENCED_PRO_SHA256=$('b' * 64)" >> $env:GITHUB_ENV
+      - name: Verify Cargo profile and optimization policy
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $fixture = Join-Path $env:RUNNER_TEMP 'paired-profile-check'
+          New-Item -ItemType Directory -Path (Join-Path $fixture 'src') -Force | Out-Null
+          '[package]`nname = "paired-profile-check"`nversion = "0.0.0"`nedition = "2021"' -replace '`n', "`n" | Set-Content -Encoding utf8 (Join-Path $fixture 'Cargo.toml')
+          'fn main() {}' | Set-Content -Encoding utf8 (Join-Path $fixture 'src/main.rs')
+          $policy = (Resolve-Path 'src-tauri/commander-free/build_service_pin.rs').Path.Replace('\', '/')
+          @"
+          #[path = r#"$policy"#] mod policy;
+          fn main() {
+              let profile = std::env::var("PROFILE").ok();
+              let opt = std::env::var("OPT_LEVEL").ok();
+              assert!(!policy::lab_guard_required(profile.as_deref(), opt.as_deref()), "LAB_GUARD_REQUIRED");
+          }
+          "@ | Set-Content -Encoding utf8 (Join-Path $fixture 'build.rs')
+          & cargo check --manifest-path "$fixture/Cargo.toml"
+          if ($LASTEXITCODE -ne 0) { throw 'Unoptimized dev fixture failed.' }
+          $env:CARGO_PROFILE_DEV_OPT_LEVEL = '3'
+          $output = & cargo check --manifest-path "$fixture/Cargo.toml" 2>&1 | Out-String
+          Remove-Item Env:CARGO_PROFILE_DEV_OPT_LEVEL
+          if ($LASTEXITCODE -eq 0 -or $output -notmatch 'LAB_GUARD_REQUIRED') { throw 'Optimized dev guard failed.' }
+          $env:CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS = 'true'
+          $output = & cargo check --release --manifest-path "$fixture/Cargo.toml" 2>&1 | Out-String
+          Remove-Item Env:CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS
+          if ($LASTEXITCODE -eq 0 -or $output -notmatch 'LAB_GUARD_REQUIRED') { throw 'Release debug-assertion guard failed.' }
+          $global:LASTEXITCODE = 0
+      - name: Reject release builds without lab opt-in even with debug assertions
+        working-directory: src-tauri
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $env:CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS = 'true'
+          $output = cargo check --locked --release -p commander-free --features experimental-encrypted-search 2>&1 | Out-String
+          Write-Host $output
+          if ($LASTEXITCODE -eq 0 -or $output -notmatch 'restricted to explicitly opted-in Windows lab builds') { throw 'Release brake failed.' }
+          $global:LASTEXITCODE = 0
+      - name: Check explicitly opted-in paired lab release
+        working-directory: src-tauri
+        shell: pwsh
+        run: |
+          $env:WINCMD_PAIRED_LAB_BUILD = '1'
+          $env:CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS = 'true'
+          cargo check --locked --release -p commander-free --features experimental-encrypted-search
+          if ($LASTEXITCODE -ne 0) { throw 'Valid paired lab build failed.' }

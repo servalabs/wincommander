@@ -248,7 +248,7 @@ pub async fn content_index_status() -> Result<IndexStatus, String> {
     .await
     .unwrap_or_else(|_| Err("Index status worker failed.".to_string()));
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
-    return result.map_err(|_| "SEARCH_PROTECTION_PENDING".to_string());
+    return result.map_err(|error| if error == "SEARCH_INTERRUPTED_CANDIDATE" { error } else { "SEARCH_PROTECTION_PENDING".to_string() });
     #[cfg(not(all(windows, feature = "experimental-encrypted-search")))]
     result
 }
@@ -353,6 +353,24 @@ pub async fn content_reindex() -> Result<(), String> {
     })
     .await
     .map_err(|_| "Index rebuild worker failed.".to_string())?
+}
+
+/// Explicitly preserve an interrupted encrypted-search candidate before retry.
+#[tauri::command]
+pub async fn content_recover_interrupted_cache() -> Result<String, String> {
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    {
+        let pro = crate::sidecar::quiesce_idle_pro_for_search().await?;
+        let service = crate::svc_client::experimental_search_service_capability().await?;
+        tokio::task::spawn_blocking(move || {
+            let _pro = pro;
+            let _replacement_lock = IndexReplacementLock::acquire()?;
+            global::preserve_interrupted_candidate(&service)?;
+            Ok("Interrupted search data was preserved. Open search to rebuild its protected index.".to_string())
+        }).await.map_err(|_| "Search recovery worker failed.".to_string())?
+    }
+    #[cfg(not(all(windows, feature = "experimental-encrypted-search")))]
+    { Err("Search recovery is not available in this version.".into()) }
 }
 
 /// Explicit opt-in, feature-gated maintenance. The result reports retained

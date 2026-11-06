@@ -3085,6 +3085,7 @@ pub fn run() {
             file_search::content_reindex,
             file_search::content_get_doc,
             file_search::content_cleanup_old_cache,
+            file_search::content_recover_interrupted_cache,
             backend::get_file_icon_data,
             backend::open_path,
             backend::open_event_log,

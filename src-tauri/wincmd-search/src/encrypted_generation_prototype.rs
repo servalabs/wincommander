@@ -84,9 +84,15 @@ impl PinnedSelectionStore {
     #[cfg(feature = "experimental-encrypted-search")]
     pub(crate) fn root(&self) -> &std::path::Path { &self.root }
     pub(crate) fn open(root: &std::path::Path) -> io::Result<Self> {
-        use crate::read_only::{AccessMode, CheckedDirectory};
+        Self::open_mode(root, crate::read_only::AccessMode::Writable)
+    }
+    pub(crate) fn open_readonly(root: &std::path::Path) -> io::Result<Self> {
+        Self::open_mode(root, crate::read_only::AccessMode::GuardedReader)
+    }
+    fn open_mode(root: &std::path::Path, mode: crate::read_only::AccessMode) -> io::Result<Self> {
+        use crate::read_only::CheckedDirectory;
         let pins = CheckedDirectory::pin_root_path(root)?;
-        let directory = CheckedDirectory::open(root, AccessMode::Writable).map_err(|e| io::Error::other(e.to_string()))?;
+        let directory = CheckedDirectory::open(root, mode).map_err(|e| io::Error::other(e.to_string()))?;
         Ok(Self { directory, root: root.into(), _pins: pins, held: None })
     }
 }

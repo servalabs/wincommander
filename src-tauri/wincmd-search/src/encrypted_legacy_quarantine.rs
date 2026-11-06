@@ -25,7 +25,7 @@ mod tests {
         let intent = crate::encrypted_migration_transaction::Intent::capture([1; 16], [2; 16], &old).unwrap();
         let fence = crate::encrypted_search_fence::SearchOperationFence::acquire_exclusive(root.path()).unwrap();
         let swapped = std::cell::Cell::new(false);
-        let result = move_to_sibling_with_hook(&old, &backup_name(&[2; 16]).unwrap(), &fence, Some(intent.identity()), || {
+        let result = move_to_sibling_with_hook(&old, &backup_name(&[2; 16]).unwrap(), &fence, Some(intent.identity()), None, || {
             if std::fs::rename(&old, &moved).is_ok() {
                 swapped.set(true);
                 std::fs::create_dir(&old).unwrap(); std::fs::write(old.join("substitute"), b"substitute").unwrap();
@@ -104,12 +104,17 @@ pub(crate) fn restore_expected(old: &Path, index_id: &[u8; 16], fence: &crate::e
     move_to_sibling(&parent.join(backup_name(index_id)?), name, fence, Some(expected))
 }
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
-fn move_to_sibling(old: &Path, destination_name: &str, fence: &crate::encrypted_search_fence::SearchOperationFence, expected: Option<(u32, u32, u32)>) -> io::Result<PathBuf> {
-    move_to_sibling_with_hook(old, destination_name, fence, expected, || {})
+pub(crate) fn move_to_sibling(old: &Path, destination_name: &str, fence: &crate::encrypted_search_fence::SearchOperationFence, expected: Option<(u32, u32, u32)>) -> io::Result<PathBuf> {
+    move_to_sibling_with_hook(old, destination_name, fence, expected, None, || {})
+}
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
+pub(crate) fn move_to_sibling_with_service(old: &Path, destination_name: &str, fence: &crate::encrypted_search_fence::SearchOperationFence, pid: u32) -> io::Result<PathBuf> {
+    if pid == 0 { return Err(io::Error::other("invalid verified service process")); }
+    move_to_sibling_with_hook(old, destination_name, fence, None, Some(pid), || {})
 }
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
 fn move_to_sibling_with_hook(old: &Path, destination_name: &str, fence: &crate::encrypted_search_fence::SearchOperationFence,
-    expected: Option<(u32, u32, u32)>, after_unpin: impl FnOnce()) -> io::Result<PathBuf> {
+    expected: Option<(u32, u32, u32)>, allowed_service_pid: Option<u32>, after_unpin: impl FnOnce()) -> io::Result<PathBuf> {
     use crate::read_only::{AccessMode, CheckedDirectory};
     use std::os::windows::{ffi::OsStrExt, fs::{MetadataExt, OpenOptionsExt}, io::AsRawHandle};
     use windows_sys::Win32::Storage::FileSystem::{
@@ -127,7 +132,11 @@ fn move_to_sibling_with_hook(old: &Path, destination_name: &str, fence: &crate::
     let parent_pins = CheckedDirectory::pin_root_path(parent)?;
     let _parent_handle = parent_pins.last().ok_or_else(denied)?;
     fence.require_exclusive_for(parent)?;
-    crate::encrypted_search_maintenance::verify_known_writers_stopped().map_err(io::Error::other)?;
+    if allowed_service_pid.is_some() {
+        crate::encrypted_search_maintenance::verify_known_writers_except_service(allowed_service_pid).map_err(io::Error::other)?;
+    } else {
+        crate::encrypted_search_maintenance::verify_known_writers_stopped().map_err(io::Error::other)?;
+    }
     let old_pins = CheckedDirectory::pin_root_path(old)?;
     let old_handle = old_pins.last().ok_or_else(denied)?;
     let identity = |file: &std::fs::File| -> io::Result<(u32, u32, u32)> {
@@ -158,7 +167,11 @@ fn move_to_sibling_with_hook(old: &Path, destination_name: &str, fence: &crate::
     }
     // The inner lock blocks Windows from moving the directory. Cooperating
     // maintenance stays fenced externally while we recheck known writers.
-    crate::encrypted_search_maintenance::verify_known_writers_stopped().map_err(io::Error::other)?;
+    if allowed_service_pid.is_some() {
+        crate::encrypted_search_maintenance::verify_known_writers_except_service(allowed_service_pid).map_err(io::Error::other)?;
+    } else {
+        crate::encrypted_search_maintenance::verify_known_writers_stopped().map_err(io::Error::other)?;
+    }
     drop(writer);
     let name = destination_name;
     let destination_path = parent.join(name);
