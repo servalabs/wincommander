@@ -152,11 +152,14 @@ pub(crate) fn start_background_indexing() {
 fn notify_search_protection_pending() {
     static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if WARNED.swap(true, std::sync::atomic::Ordering::AcqRel) { return; }
-    use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONWARNING, MB_OK};
-    let title: Vec<u16> = "WinCommander search data\0".encode_utf16().collect();
-    let message: Vec<u16> = "Search data protection could not finish. Older search data may still be on this PC. Open Search Files for status and try restarting WinCommander.\0".encode_utf16().collect();
-    // The background worker displays the warning once per application start.
-    unsafe { MessageBoxW(std::ptr::null_mut(), message.as_ptr(), title.as_ptr(), MB_OK | MB_ICONWARNING); }
+    // Never wait for a modal while holding search/replacement locks.
+    if std::thread::Builder::new().name("wc-search-protection-warning".into()).spawn(|| {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONWARNING, MB_OK};
+        let title: Vec<u16> = "WinCommander search data\0".encode_utf16().collect();
+        let message: Vec<u16> = "Search data protection could not finish. Older search data may still be on this PC. Open Search Files for status and try restarting WinCommander.\0".encode_utf16().collect();
+        let result = unsafe { MessageBoxW(std::ptr::null_mut(), message.as_ptr(), title.as_ptr(), MB_OK | MB_ICONWARNING) };
+        if result == 0 { WARNED.store(false, std::sync::atomic::Ordering::Release); }
+    }).is_err() { WARNED.store(false, std::sync::atomic::Ordering::Release); }
 }
 
 #[tauri::command]
