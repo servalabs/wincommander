@@ -368,6 +368,20 @@ impl SearchEngine {
         engine.start_indexing_internal(true)?;
         Ok(engine)
     }
+    /// Inspect committed keyword hits without crawling, watching or writing the
+    /// selected encrypted generation. Intended for disposable acceptance tests.
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    pub fn experimental_selected_readonly_query(old_index: &std::path::Path, selection_dir: &std::path::Path, query: &ContentQuery) -> Result<Vec<ContentHit>> {
+        use crate::encrypted_generation_prototype::{inspect, PinnedSelectionStore, UserProtector};
+        let parent = old_index.parent().ok_or_else(|| SearchError::Config("invalid old index path".into()))?;
+        let _parent_pins = crate::read_only::CheckedDirectory::pin_root_path(parent)?;
+        let mut selection = PinnedSelectionStore::open_readonly(selection_dir)?;
+        let selected = inspect(&mut selection, &UserProtector)?
+            .ok_or_else(|| SearchError::Config("encrypted selection missing".into()))?;
+        let generation = parent.join(format!(".wincommander-encrypted-{}", hex::encode(selected.index_id)));
+        let index = ContentIndex::open_experimental_encrypted_readonly(&generation, selected.index_id)?;
+        index.search_keyword(query)
+    }
     /// Experimental application entry point. A missing selector starts a new
     /// encrypted cache; a present but invalid selector is always an error.
     /// Caller must serialize initialization and authorize the per-user parent.
@@ -1723,21 +1737,38 @@ mod tests {
         assert_eq!(report.indexed, 0);
         let generation = fs::read_dir(root.path()).unwrap().map(|e| e.unwrap().path())
             .find(|p| p.file_name().unwrap().to_string_lossy().starts_with(".wincommander-encrypted-")).unwrap();
-        for entry in fs::read_dir(generation).unwrap() {
+        for entry in fs::read_dir(&generation).unwrap() {
             let bytes = fs::read(entry.unwrap().path()).unwrap();
             assert!(!bytes.windows(b"privatecatchupneedle".len()).any(|part| part == b"privatecatchupneedle"));
             assert!(!bytes.windows(b"doc.txt".len()).any(|part| part == b"doc.txt"));
         }
+        let query = ContentQuery { terms: "privatecatchupneedle".into(), roots: vec![], limit: 10, offset: 0, keyword_only: true };
+        let snapshot = || {
+            let mut files = Vec::new();
+            for directory in [&selection, &generation] {
+                for entry in fs::read_dir(directory).unwrap() {
+                    let path = entry.unwrap().path();
+                    files.push((path.clone(), fs::read(path).unwrap()));
+                }
+            }
+            files.sort_by(|a, b| a.0.cmp(&b.0));
+            files
+        };
+        let before = snapshot();
+        assert!(SearchEngine::experimental_selected_readonly_query(&old, &selection, &query).unwrap().is_empty());
+        assert!(SearchEngine::experimental_selected_readonly_query(&old, &selection, &query).unwrap().is_empty());
+        assert_eq!(snapshot(), before, "read-only verification must not change files");
         let backup = SearchEngine::quarantine_selected_with_fence(&old, &selection, &guard).unwrap();
         assert_eq!(fs::read(backup.join("meta.json")).unwrap(), b"legacy saved");
         drop(guard);
         // The helper has exited. The selected-open path must reconcile using
         // the real current-user roots before returning a searchable engine.
-        let live_config = make_config(old, vec![data]);
+        let live_config = make_config(old.clone(), vec![data]);
         let live = SearchEngine::open_experimental_selected_with_policy(live_config, Arc::new(|_| true), &selection).unwrap();
-        let query = ContentQuery { terms: "privatecatchupneedle".into(), roots: vec![], limit: 10, offset: 0, keyword_only: true };
         assert_eq!(live.search(&query).unwrap().len(), 1);
         live.stop();
+        drop(live);
+        assert_eq!(SearchEngine::experimental_selected_readonly_query(&old, &selection, &query).unwrap().len(), 1);
     }
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     #[test]
