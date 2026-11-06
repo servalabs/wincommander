@@ -55,7 +55,8 @@ fn fresh_install_selects_encrypted_empty_generation_and_resumes_pending() {
     select_fresh_generation(&owner._ownership, root.path(), StoreScope::Machine, &|| Ok(())).unwrap();
     assert!(owner.read_all().unwrap().is_empty());
     let seed = json!({"signing_seed_hex": "c".repeat(64)});
-    assert_eq!(owner.get_or_create_f6(|| Ok(seed.clone())).unwrap(), seed);
+    provision_machine_f6_owned(&owner, || Ok(seed.clone())).unwrap();
+    provision_machine_f6_owned(&owner, || panic!("existing key must be retained")).unwrap();
     assert_eq!(owner.get_or_create_f6(|| panic!("existing key must be returned")).unwrap(), seed);
     assert_eq!(std::fs::read(root.path().join(".settings-cutover-candidate.v1")).unwrap(), candidate);
     assert!(!root.path().join(".install.material").exists());
@@ -78,6 +79,7 @@ fn first_existing_migration_checks_maintenance_and_preserves_f6_source() {
     assert!(anchor.read().unwrap().is_none());
     cutover::provision_first_migration(&owner._ownership, &anchor, root.path(), &|| verify_source(&candidate, &old, &input)).unwrap();
     stage_and_select(&owner._ownership, &anchor, root.path(), || Ok(candidate.clone()), &|bytes| verify_source(bytes, &old, &input)).unwrap();
+    provision_machine_f6_owned(&owner, || panic!("existing F6 identity must not be regenerated")).unwrap();
     assert_eq!(owner.read_all().unwrap()["f6-keystore"], f6);
     assert_eq!(std::fs::read_to_string(source_path).unwrap(), encrypted_f6);
 }

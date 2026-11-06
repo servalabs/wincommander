@@ -165,6 +165,22 @@ pub(super) fn stage_existing_explicitly(expected_scope: StoreScope) -> Result<()
     snapshot.verify_generation(&candidate)
 }
 
+/// Under machine install authority, initialize F6 only when the authenticated
+/// generation proves it has never existed. This permits standard-user reads
+/// without granting users the machine settings write lock.
+fn provision_machine_f6_owned(owner: &LockedSelectedGeneration, create: impl FnOnce() -> Result<Value, String>) -> Result<(), String> {
+    if owner.scope != StoreScope::Machine { return Ok(()); }
+    owner.get_or_create_f6(create).map(|_| ())
+}
+
+#[cfg(windows)]
+fn provision_machine_f6_after_selection(root: &Path, scope: StoreScope, create: impl FnOnce() -> Result<Value, String>) -> Result<(), String> {
+    if scope != StoreScope::Machine { return Ok(()); }
+    super::settings_generation_maintenance::verify_known_writers_stopped()?;
+    let owner = LockedSelectedGeneration::acquire_for(root, scope)?;
+    provision_machine_f6_owned(&owner, create)
+}
+
 /// Installer decision under the same maintenance checks. A protected Active
 /// generation is reused; an existing legacy key is migrated; otherwise the
 /// conservative fresh path rejects any unexpected existing file or directory.
@@ -172,23 +188,30 @@ pub(super) fn stage_existing_explicitly(expected_scope: StoreScope) -> Result<()
 pub(super) fn install_migration_explicitly() -> Result<(), String> {
     super::settings_generation_maintenance::verify_known_writers_stopped()?;
     let scope = if crate::paths::current_user_install_uses_local_datastore() { StoreScope::CurrentUser } else { StoreScope::Machine };
-    let root = source_snapshot::known_root(scope)?;
-    match std::fs::symlink_metadata(&root) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return provision_verified_fresh_install(),
+    let initial_root = source_snapshot::known_root(scope)?;
+    match std::fs::symlink_metadata(&initial_root) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => provision_verified_fresh_install()?,
         Err(_) => return Err("Cannot inspect settings root; existing data was preserved.".into()),
-        Ok(_) => {},
+        Ok(_) => {
+            let (root, _pins, scope) = experimental_runtime_root()?;
+            let anchor = ProtectedFileAnchor::new(&root, scope);
+            if matches!(anchor.read()?, Some(AnchorState::Active { .. } | AnchorState::Updating { .. })) {
+                let owner = LockedSelectedGeneration::acquire_for(&root, scope)?;
+                owner.read_reconciled()?;
+            } else {
+                let key_name = match scope { StoreScope::Machine => ".install.material", StoreScope::CurrentUser => ".user-store.material" };
+                if read_generation_file(&root.join(key_name), 65_536)?.is_some() {
+                    migrate_explicitly()?;
+                } else {
+                    provision_verified_fresh_install()?;
+                }
+            }
+        },
     }
     let (root, _pins, scope) = experimental_runtime_root()?;
-    let anchor = ProtectedFileAnchor::new(&root, scope);
-    if matches!(anchor.read()?, Some(AnchorState::Active { .. } | AnchorState::Updating { .. })) {
-        let owner = LockedSelectedGeneration::acquire_for(&root, scope)?;
-        owner.read_reconciled()?;
-        return Ok(());
-    }
-    let key_name = match scope { StoreScope::Machine => ".install.material", StoreScope::CurrentUser => ".user-store.material" };
-    if read_generation_file(&root.join(key_name), 65_536)?.is_some() {
-        migrate_explicitly()
-    } else {
-        provision_verified_fresh_install()
-    }
+    provision_machine_f6_after_selection(&root, scope, || {
+        let (signing, _) = wincmd_shared::wipe_auth::generate_provisioning_keypair();
+        let seed = zeroize::Zeroizing::new(wincmd_shared::wipe_auth::signing_key_to_bytes(&signing));
+        Ok(serde_json::json!({"signing_seed_hex": hex::encode(&*seed)}))
+    })
 }
