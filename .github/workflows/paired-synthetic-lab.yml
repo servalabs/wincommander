@@ -69,3 +69,71 @@ jobs:
           $hash = (Get-FileHash -LiteralPath $services[0].FullName -Algorithm SHA256).Hash
           if ($hash -ine $env:WINCMD_FENCED_SERVICE_SHA256) { throw 'Extracted service hash does not match paired build input.' }
           Write-Host 'Disposable installer contains the expected synthetic guarded service.'
+
+      - name: Seed disposable legacy search cache
+        shell: pwsh
+        run: |
+          $parent = Join-Path $env:LOCALAPPDATA 'WinCommander/file-search'
+          $old = Join-Path $parent 'fts'
+          if (Test-Path -LiteralPath $parent) { throw 'Runner profile is not empty.' }
+          Push-Location src-tauri
+          try {
+            cargo run --locked -p wincmd-search --example seed_legacy_fixture -- $old
+            if ($LASTEXITCODE -ne 0) { throw 'Legacy index fixture could not be created.' }
+          } finally { Pop-Location }
+          if (-not (Test-Path -LiteralPath (Join-Path $old 'meta.json'))) { throw 'Legacy index fixture is missing.' }
+      - name: Install and verify user search migration on disposable runner
+        shell: pwsh
+        run: |
+          $installer = @(Get-ChildItem -File 'src-tauri/target/release/bundle/nsis/*.exe')[0].FullName
+          $app = Join-Path $env:ProgramFiles 'WinCommander/wincommander-free.exe'
+          if ((Get-Service WinCommanderSvc -ErrorAction SilentlyContinue) -or (Test-Path -LiteralPath $app)) { throw 'Runner is not a clean installation.' }
+          $setup = Start-Process -FilePath $installer -ArgumentList '/S' -WindowStyle Hidden -PassThru
+          if (-not $setup.WaitForExit(300000)) { $setup.Kill(); throw 'Synthetic setup timed out.' }
+          if ($setup.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $app)) { throw "Synthetic setup failed: $($setup.ExitCode)." }
+          $service = Get-Service WinCommanderSvc -ErrorAction Stop
+          $service.WaitForStatus('Running', [TimeSpan]::FromSeconds(60))
+          $appProcess = Start-Process -FilePath $app -WindowStyle Hidden -PassThru
+          $parent = Join-Path $env:LOCALAPPDATA 'WinCommander/file-search'
+          $selection = Join-Path $parent '.wincommander-encrypted-selection/candidate-proof.v1'
+          $deadline = [Diagnostics.Stopwatch]::StartNew()
+          while (-not (Test-Path -LiteralPath $selection) -and $deadline.Elapsed.TotalSeconds -lt 180 -and -not $appProcess.HasExited) {
+            Start-Sleep -Seconds 2; $appProcess.Refresh()
+          }
+          if (-not (Test-Path -LiteralPath $selection)) { throw 'Installed app did not create protected search selection.' }
+          if ($appProcess.HasExited) { throw "Installed app exited early: $($appProcess.ExitCode)." }
+          Write-Host 'Installed user process created a protected search candidate.'
+      - name: Verify failed upgrade keeps service running
+        shell: pwsh
+        run: |
+          $installer = @(Get-ChildItem -File 'src-tauri/target/release/bundle/nsis/*.exe')[0].FullName
+          $proDir = Join-Path $env:ProgramData 'WinCommander/bin'
+          $fakePro = Join-Path $proDir 'wincommander-pro.exe'
+          if (Test-Path -LiteralPath $fakePro) { throw 'Runner contains an unexpected Pro executable.' }
+          New-Item -ItemType Directory -Path $proDir -Force | Out-Null
+          Copy-Item -LiteralPath $env:ComSpec -Destination $fakePro
+          $fake = Start-Process -FilePath $fakePro -ArgumentList '/c ping -n 180 127.0.0.1 >nul' -WindowStyle Hidden -PassThru
+          try {
+            Start-Sleep -Seconds 2
+            if ($fake.HasExited) { throw 'Synthetic Pro process did not remain active.' }
+            $setup = Start-Process -FilePath $installer -ArgumentList '/S' -WindowStyle Hidden -PassThru
+            if (-not $setup.WaitForExit(300000)) { $setup.Kill(); throw 'Blocked upgrade timed out.' }
+            if ($setup.ExitCode -eq 0) { throw 'Upgrade accepted an active old Pro process.' }
+            $service = Get-Service WinCommanderSvc -ErrorAction Stop
+            $service.WaitForStatus('Running', [TimeSpan]::FromSeconds(60))
+            Write-Host 'Blocked upgrade preserved the previously running service.'
+          } finally {
+            if (-not $fake.HasExited) { $fake.Kill(); $fake.WaitForExit() }
+          }
+      - name: Retry upgrade and verify service
+        shell: pwsh
+        run: |
+          $installer = @(Get-ChildItem -File 'src-tauri/target/release/bundle/nsis/*.exe')[0].FullName
+          $setup = Start-Process -FilePath $installer -ArgumentList '/S' -WindowStyle Hidden -PassThru
+          if (-not $setup.WaitForExit(300000)) { $setup.Kill(); throw 'Retry setup timed out.' }
+          if ($setup.ExitCode -ne 0) { throw "Upgrade retry failed: $($setup.ExitCode)." }
+          $service = Get-Service WinCommanderSvc -ErrorAction Stop
+          $service.WaitForStatus('Running', [TimeSpan]::FromSeconds(60))
+          $selection = Join-Path $env:LOCALAPPDATA 'WinCommander/file-search/.wincommander-encrypted-selection/candidate-proof.v1'
+          if (-not (Test-Path -LiteralPath $selection)) { throw 'Protected search selection disappeared during upgrade.' }
+          Write-Host 'Retry installed and retained the user protected search selection.'
