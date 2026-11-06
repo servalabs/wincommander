@@ -5,7 +5,7 @@ use std::{collections::HashSet, io, path::{Component, Path}};
 use std::os::windows::{fs::{MetadataExt, OpenOptionsExt}, io::AsRawHandle};
 use windows_sys::Win32::Storage::FileSystem::{
     BY_HANDLE_FILE_INFORMATION, DELETE, FILE_ATTRIBUTE_REPARSE_POINT,
-    FILE_DISPOSITION_INFO, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
+    FILE_DISPOSITION_INFO, FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_READ, FILE_READ_ATTRIBUTES,
     FILE_SHARE_READ, FILE_SHARE_WRITE, FileDispositionInfo, GetFileInformationByHandle,
     SetFileInformationByHandle,
 };
@@ -73,9 +73,29 @@ fn open_checked(path: &Path) -> io::Result<(std::fs::File, (u32, u32, u32))> {
         || info.nNumberOfLinks != 1 { return Err(refused()); }
     Ok((file, (info.dwVolumeSerialNumber, info.nFileIndexHigh, info.nFileIndexLow)))
 }
+fn open_scope(path: &Path, delete: bool) -> io::Result<std::fs::File> {
+    let access = FILE_GENERIC_READ | FILE_READ_ATTRIBUTES | if delete { DELETE } else { 0 };
+    let file = std::fs::OpenOptions::new().read(true).access_mode(access)
+        .share_mode(FILE_SHARE_READ).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT).open(path)?;
+    let meta = file.metadata()?; let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    // SAFETY: live file and information buffer.
+    if !meta.is_file() || meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+        || unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0
+        || info.nNumberOfLinks != 1 { return Err(refused()); }
+    Ok(file)
+}
+fn read_bounded(file: &mut std::fs::File, limit: usize) -> io::Result<Vec<u8>> {
+    use std::io::Read;
+    let mut bytes = Vec::new(); file.take((limit + 1) as u64).read_to_end(&mut bytes)?;
+    if bytes.len() > limit { return Err(refused()); } Ok(bytes)
+}
 /// Caller has verified the selected encrypted cache using the authoritative
 /// user configuration, stopped old processes, and holds the exclusive fence.
 pub(crate) fn remove_managed(old: &Path, fence: &crate::encrypted_search_fence::SearchOperationFence) -> io::Result<usize> {
+    remove_managed_with_hook(old, fence, || {})
+}
+fn remove_managed_with_hook(old: &Path, fence: &crate::encrypted_search_fence::SearchOperationFence,
+    after_validation: impl FnOnce()) -> io::Result<usize> {
     let parent = old.parent().ok_or_else(refused)?;
     fence.require_exclusive_for(parent)?;
     crate::encrypted_search_maintenance::verify_known_writers_stopped().map_err(io::Error::other)?;
@@ -93,16 +113,18 @@ pub(crate) fn remove_managed(old: &Path, fence: &crate::encrypted_search_fence::
         names.push(name);
     }
     if names.is_empty() { return Ok(0); }
+    let mut scope_v1 = None;
+    let mut _scope_v2 = None;
     if names.iter().any(|name| name == "scope-v1.json") {
         use crate::encrypted_key_prototype::{Protector, UserDpapi};
-        let protected = directory.atomic_read_bounded(Path::new("scope-v2.dpapi"), crate::encrypted_scope::MAX_PROTECTED_SCOPE)
-            .map_err(|e| io::Error::other(e.to_string()))?;
+        let mut protected_file = open_scope(&old.join("scope-v2.dpapi"), false)?;
+        let protected = read_bounded(&mut protected_file, crate::encrypted_scope::MAX_PROTECTED_SCOPE)?;
         let clear = UserDpapi.unprotect(&protected)?;
         if clear.len() < 8 || !crate::encrypted_scope::same_scope(&clear, &clear[8..]).unwrap_or(false) {
             return Err(refused());
         }
-        let original = directory.atomic_read_bounded(Path::new("scope-v1.json"), crate::encrypted_scope::MAX_SCOPE)
-            .map_err(|e| io::Error::other(e.to_string()))?;
+        let mut original_file = open_scope(&old.join("scope-v1.json"), true)?;
+        let original = read_bounded(&mut original_file, crate::encrypted_scope::MAX_SCOPE)?;
         let previous: serde_json::Value = serde_json::from_slice(&original).map_err(|_| refused())?;
         let protected: serde_json::Value = serde_json::from_slice(&clear[8..]).map_err(|_| refused())?;
         let valid = |value: &serde_json::Value| value.get("version").and_then(|v| v.as_u64()) == Some(1)
@@ -111,6 +133,7 @@ pub(crate) fn remove_managed(old: &Path, fence: &crate::encrypted_search_fence::
         // If the current protected scope changed, retain the old copy rather
         // than guessing whether it is safe to discard.
         if !valid(&previous) || !valid(&protected) || previous != protected { return Err(refused()); }
+        scope_v1 = Some(original_file); _scope_v2 = Some(protected_file);
     }
     let manifest = directory.atomic_read_bounded(Path::new(".managed.json"), MAX_MANIFEST)
         .map_err(|e| io::Error::other(e.to_string()))?;
@@ -127,9 +150,23 @@ pub(crate) fn remove_managed(old: &Path, fence: &crate::encrypted_search_fence::
     }
     // Preflight all candidates before any mutation, recording their identities.
     let mut candidates = Vec::new();
-    for name in names { let (_, id) = open_checked(&old.join(&name))?; candidates.push((name, id)); }
+    for name in names {
+        if name == "scope-v1.json" { continue; }
+        let (_, id) = open_checked(&old.join(&name))?; candidates.push((name, id));
+    }
     candidates.sort_by_key(|(name, _)| name == ".managed.json"); // manifest last enables retry.
+    after_validation();
     let mut removed = 0;
+    if let Some(file) = scope_v1.take() {
+        let mut disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
+        // SAFETY: this is the same no-write/no-delete-shared handle whose
+        // bounded plaintext was compared against the held protected scope.
+        if unsafe { SetFileInformationByHandle(file.as_raw_handle(), FileDispositionInfo,
+            std::ptr::from_mut(&mut disposition).cast(), std::mem::size_of::<FILE_DISPOSITION_INFO>() as u32) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        drop(file); removed += 1;
+    }
     for (name, expected) in candidates {
         let (file, id) = match open_checked(&old.join(&name)) {
             Ok(value) => value,
@@ -203,6 +240,23 @@ mod tests {
         crate::publish_experimental_scope(&old, changed, |_| Ok(())).unwrap();
         assert!(remove_managed(&old, &fence).is_err());
         assert_eq!(std::fs::read(old.join("scope-v1.json")).unwrap(), prior);
+    }
+    #[test]
+    fn validated_scope_handles_block_swap_or_write_until_deletion() {
+        let root = tempfile::tempdir().unwrap(); let old = root.path().join("fts");
+        std::fs::create_dir(&old).unwrap();
+        let scope = br#"{"version":1,"roots":[],"exclusions":[],"blocked_roots":[]}"#;
+        std::fs::write(old.join("scope-v1.json"), scope).unwrap();
+        std::fs::write(old.join("meta.json"), b"old").unwrap();
+        std::fs::write(old.join(".managed.json"), b"[]").unwrap();
+        crate::publish_experimental_scope(&old, scope, |_| Ok(())).unwrap();
+        let fence = crate::encrypted_search_fence::SearchOperationFence::acquire_exclusive(root.path()).unwrap();
+        remove_managed_with_hook(&old, &fence, || {
+            assert!(std::fs::write(old.join("scope-v1.json"), b"changed").is_err());
+            assert!(std::fs::rename(old.join("scope-v2.dpapi"), old.join("moved")).is_err());
+        }).unwrap();
+        assert!(!old.join("scope-v1.json").exists());
+        assert!(old.join("scope-v2.dpapi").is_file());
     }
     #[test]
     fn hardlinked_cache_candidate_is_never_deleted() {
