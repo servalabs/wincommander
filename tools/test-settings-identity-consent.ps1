@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([Parameter(Mandatory)][string]$ScratchRoot)
+param([Parameter(Mandatory)][string]$ScratchRoot, [switch]$ExistingIdentity)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $base = (Resolve-Path -LiteralPath $ScratchRoot).Path
@@ -10,6 +10,7 @@ $include = (Resolve-Path (Join-Path $PSScriptRoot '../src-tauri/commander-free/n
 $nsis = Join-Path ${env:ProgramFiles(x86)} 'NSIS/makensis.exe'
 $output = Join-Path $work 'fixture.exe'
 $source = Join-Path $work 'fixture.nsi'
+$request = if ($ExistingIdentity) { 'WC_REQUEST_EXISTING_MACHINE_IDENTITY_CONSENT' } else { 'WC_REQUEST_SETTINGS_IDENTITY_CONSENT' }
 @"
 Unicode true
 Name "WinCommander identity consent fixture"
@@ -19,9 +20,12 @@ AutoCloseWindow true
 Var WCSettingsIdentityConsent
 !include "$include"
 Section
-!insertmacro WC_REQUEST_SETTINGS_IDENTITY_CONSENT
+!insertmacro $request
+!insertmacro WC_CHECK_NEW_IDENTITY_CONSENT `$1
 FileOpen `$0 "`$EXEDIR\consent-result.txt" w
 FileWrite `$0 `$WCSettingsIdentityConsent
+FileWrite `$0 ":"
+FileWrite `$0 `$1
 FileClose `$0
 SectionEnd
 "@ | Set-Content -LiteralPath $source -Encoding ascii
@@ -37,7 +41,8 @@ public static class ConsentFixtureWin32 {
   [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr window, uint msg, IntPtr w, IntPtr l);
 }
 '@
-foreach ($case in @(@{Name='yes'; Id=6; Expected='1'}, @{Name='no'; Id=7; Expected='0'}, @{Name='silent'; Id=0; Expected='0'})) {
+$yes = if ($ExistingIdentity) { '3:0' } else { '2:1' }
+foreach ($case in @(@{Name='yes'; Id=6; Expected=$yes}, @{Name='no'; Id=7; Expected='0:0'}, @{Name='silent'; Id=0; Expected='0:0'})) {
     $dir = Join-Path $work $case.Name
     New-Item -ItemType Directory -Path $dir | Out-Null
     $exe = Join-Path $dir 'fixture.exe'; Copy-Item -LiteralPath $output -Destination $exe

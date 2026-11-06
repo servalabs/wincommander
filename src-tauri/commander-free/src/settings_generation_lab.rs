@@ -80,7 +80,7 @@ pub fn hold_search_maintenance_fence(pid: u32) -> Result<(), String> {
 
 /// Strict internal installer protocol; the proof never grants identity consent.
 #[cfg(windows)]
-pub fn run_source_proof(args: &[String]) -> Result<(String, bool), String> {
+pub fn run_source_proof(args: &[String]) -> Result<(String, u8), String> {
     if std::env::var_os("WINCOMMANDER_EXPERIMENTAL_SETTINGS_GENERATION").as_deref() != Some(std::ffi::OsStr::new("1")) {
         return Err("Settings migration lab is disabled; existing data preserved.".into());
     }
@@ -88,7 +88,7 @@ pub fn run_source_proof(args: &[String]) -> Result<(String, bool), String> {
         ["--settings-source-proof-lab", "stage", "--offline-confirmed"] => crate::datastore::settings_generation_lab_stage_proof(),
         ["--settings-source-proof-lab", "install", "--offline-confirmed", proof] => {
             crate::datastore::settings_generation_lab_install_proof(proof)?;
-            Ok((String::new(), false))
+            Ok((String::new(), 0))
         },
         _ => Err("Invalid settings source-proof command; existing data preserved.".into()),
     }

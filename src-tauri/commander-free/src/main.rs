@@ -12,9 +12,9 @@ fn main() {
         #[cfg(feature = "experimental-settings-generation")]
         {
             match wincommander_lib::settings_generation_lab::run_source_proof(&args) {
-                Ok((proof, needs_identity)) => {
+                Ok((proof, consent_code)) => {
                     if !proof.is_empty() { println!("{proof}"); }
-                    std::process::exit(if needs_identity { 2 } else { 0 });
+                    std::process::exit(i32::from(consent_code));
                 },
                 Err(message) => {
                     let code = if message.starts_with("SETTINGS_IDENTITY_UNVERIFIED:") { 2 } else { 1 };

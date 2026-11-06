@@ -15,7 +15,7 @@ try {
     if ($Action -eq 'stage') {
         $lines = @(& $resolved --settings-source-proof-lab stage --offline-confirmed)
         $nativeExit = $LASTEXITCODE
-        if ($nativeExit -ne 0 -and $nativeExit -ne 2) { throw "Settings preflight returned exit code $nativeExit." }
+        if ($nativeExit -ne 0 -and $nativeExit -ne 2 -and $nativeExit -ne 3) { throw "Settings preflight returned exit code $nativeExit." }
         if ($lines.Count -ne 1 -or $lines[0] -cnotmatch '^(F0{64}|[LPA][0-9a-f]{64})$') {
             throw 'Settings preflight did not return one valid source proof.'
         }

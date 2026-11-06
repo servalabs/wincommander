@@ -236,12 +236,12 @@ fn publish_stage_after_identity_check(stage: &Path, prepared: &[u8]) -> Result<V
 /// Preflight the machine source without publishing a new candidate. Proof is
 /// only meaningful while it is retained by the same installer invocation.
 #[cfg(windows)]
-pub(super) fn stage_machine_with_proof() -> Result<(String, bool), String> {
+pub(super) fn stage_machine_with_proof() -> Result<(String, u8), String> {
     super::settings_generation_maintenance::verify_known_writers_stopped()?;
     let _maintenance_pins = source_snapshot::pin_machine_maintenance()?;
     let root = source_snapshot::known_root(StoreScope::Machine)?;
     match std::fs::symlink_metadata(&root) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((InstallSourceProof::Fresh.encode(), true)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((InstallSourceProof::Fresh.encode(), 2)),
         Err(_) => return Err("Cannot inspect settings root; existing data preserved.".into()),
         Ok(_) => {},
     }
@@ -256,7 +256,7 @@ pub(super) fn stage_machine_with_proof() -> Result<(String, bool), String> {
             }
         }
         super::settings_generation_bootstrap::ensure_fresh_contents(&root)?;
-        return Ok((InstallSourceProof::Fresh.encode(), true));
+        return Ok((InstallSourceProof::Fresh.encode(), 2));
     }
     super::settings_generation_acl_windows::provision_or_verify(&root)
         .map_err(|_| "Cannot provision settings lock; existing data preserved.")?;
@@ -269,12 +269,12 @@ pub(super) fn stage_machine_with_proof() -> Result<(String, bool), String> {
         let bytes = owner.read_reconciled()?;
         let selected = open_generation(&bytes)?;
         return Ok((InstallSourceProof::Active(hex::encode(Sha256::digest(&bytes))).encode(),
-            verify_f6_creation_authority(&selected).is_err()));
+            machine_identity_consent_code(&selected)));
     }
     if key.is_none() {
         let pending = state.as_ref().ok_or("Settings anchor disappeared; recovery required")?;
         verify_fresh_pending(&root, pending)?;
-        return Ok((InstallSourceProof::Fresh.encode(), true));
+        return Ok((InstallSourceProof::Fresh.encode(), 2));
     }
     let mut snapshot = source_snapshot::Snapshot::capture_machine()?;
     let stage_path = root.join(".settings-cutover-candidate.v1");
@@ -300,7 +300,7 @@ pub(super) fn stage_machine_with_proof() -> Result<(String, bool), String> {
     let digest = legacy_source_proof(&generation)?;
     let proof = if matches!(state, Some(AnchorState::Preparing { .. })) { InstallSourceProof::Preparing(digest) }
         else { InstallSourceProof::Legacy(digest) };
-    Ok((proof.encode(), verify_f6_creation_authority(&generation).is_err()))
+    Ok((proof.encode(), machine_identity_consent_code(&generation)))
 }
 /// Pre-replacement staging only. It never provisions a cutover anchor or
 /// selects a generation, so the original installation remains authoritative.
@@ -371,6 +371,9 @@ fn verify_f6_creation_authority(generation: &Generation) -> Result<(), String> {
         return Err(unverified_identity());
     }
     Ok(())
+}
+fn machine_identity_consent_code(generation: &Generation) -> u8 {
+    if verify_f6_creation_authority(generation).is_err() { 2 } else { 3 }
 }
 
 /// Explicit, offline administrator action. The caller must explain that a

@@ -54,6 +54,17 @@ fn installer_source_proof_parser_rejects_truncation_and_ambiguous_states() {
 }
 
 #[test]
+fn machine_identity_choice_distinguishes_missing_from_existing_key() {
+    let mut generation = Generation { scope: StoreScope::Machine, f6_initialized: false,
+        sections: BTreeMap::new(), source_key_digest: source_digest(b"source-key"), source_sections: BTreeMap::new() };
+    assert_eq!(machine_identity_consent_code(&generation), 2);
+    let seed = json!({"signing_seed_hex": "a".repeat(64)});
+    generation.sections.insert("f6-keystore".into(), seed.clone()); generation.f6_initialized = true;
+    assert_eq!(machine_identity_consent_code(&generation), 3);
+    assert_eq!(generation.sections["f6-keystore"], seed);
+}
+
+#[test]
 fn installer_proof_distinguishes_legacy_preparing_and_active_states() {
     let mut generation = Generation { scope: StoreScope::Machine, f6_initialized: false,
         sections: BTreeMap::new(), source_key_digest: source_digest(b"source-key"),

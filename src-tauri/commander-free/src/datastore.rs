@@ -97,7 +97,7 @@ pub(crate) fn require_selected_settings_lab_startup() -> Result<(), String> {
 }
 
 #[cfg(all(windows, feature = "experimental-settings-generation"))]
-pub(crate) fn settings_generation_lab_stage_proof() -> Result<(String, bool), String> {
+pub(crate) fn settings_generation_lab_stage_proof() -> Result<(String, u8), String> {
     settings_rotation_trial::stage_machine_with_proof()
 }
 #[cfg(all(windows, feature = "experimental-settings-generation"))]

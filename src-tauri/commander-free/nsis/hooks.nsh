@@ -372,13 +372,19 @@ FunctionEnd
         !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "settings-lab-stage" "$0" "$1"
         ${If} $0 == 0
         ${OrIf} $0 == 2
+        ${OrIf} $0 == 3
           ; Wrapper has strictly validated one 65-character proof line.
           StrCpy $WCSettingsSourceProof $1 65
         ${EndIf}
         ${If} $0 == 2
           !insertmacro WC_REQUEST_SETTINGS_IDENTITY_CONSENT
-          ${If} $WCSettingsIdentityConsent != 1
+          ${If} $WCSettingsIdentityConsent != 2
             !insertmacro WC_PAIRED_ABORT "The identity was not changed and existing files were preserved. Contact support if the previous identity is needed."
+          ${EndIf}
+        ${ElseIf} $0 == 3
+          !insertmacro WC_REQUEST_EXISTING_MACHINE_IDENTITY_CONSENT
+          ${If} $WCSettingsIdentityConsent != 3
+            !insertmacro WC_PAIRED_ABORT "The identity was not changed and existing files were preserved. Contact support if the per-user identity is needed."
           ${EndIf}
         ${ElseIf} $0 != 0
           !insertmacro WC_PAIRED_ABORT "Settings could not be prepared. Existing settings were preserved."
@@ -579,7 +585,8 @@ FunctionEnd
     Pop $1
     !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "settings-lab-select" "$0" "$1"
     ${If} $0 == 2
-      ${If} $WCSettingsIdentityConsent != 1
+      !insertmacro WC_CHECK_NEW_IDENTITY_CONSENT $R6
+      ${If} $R6 != 1
         Abort "The device identity requires confirmation. Setup is incomplete and WinCommander may not start. Existing files were preserved; retry setup to review the choice."
       ${EndIf}
       !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
@@ -595,8 +602,12 @@ FunctionEnd
       Pop $0
       Pop $1
       !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "settings-lab-recheck" "$0" "$1"
-      ${If} $0 != 0
+      ${If} $0 != 3
         Abort "The new identity could not be verified. Existing data was preserved; retry setup."
+      ${EndIf}
+      StrCpy $R6 $1 1
+      ${If} $R6 != "A"
+        Abort "The new identity's selected settings could not be verified. Existing data was preserved; retry setup."
       ${EndIf}
       StrCpy $WCSettingsSourceProof $1 65
       !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8

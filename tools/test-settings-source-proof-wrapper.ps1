@@ -29,9 +29,12 @@ function Invoke-Fixture([string]$Action, [string]$Proof = '') {
 $env:WINCMD_TEST_EXIT='2'; $env:WINCMD_TEST_PROOF='F'+('0'*64)
 $result = Invoke-Fixture 'stage'
 if ($result.Exit -ne 2 -or $result.Output.Trim() -cne $env:WINCMD_TEST_PROOF) { throw 'Valid consent-required proof was not preserved.' }
+$env:WINCMD_TEST_EXIT='3'; $env:WINCMD_TEST_PROOF='L'+('b'*64)
+$result = Invoke-Fixture 'stage'
+if ($result.Exit -ne 3 -or $result.Output.Trim() -cne $env:WINCMD_TEST_PROOF) { throw 'Existing-identity consent proof was not preserved.' }
 foreach ($bad in @('Labc', ('F'+('1'*64)), ('A'+('A'*64)), ('X'+('a'*64)))) {
     $env:WINCMD_TEST_PROOF=$bad; $result = Invoke-Fixture 'stage'
-    if ($result.Exit -eq 0 -or $result.Exit -eq 2) { throw 'Invalid proof was accepted.' }
+    if ($result.Exit -eq 0 -or $result.Exit -eq 2 -or $result.Exit -eq 3) { throw 'Invalid proof was accepted.' }
 }
 $env:WINCMD_TEST_EXIT='0'; $proof='L'+('a'*64)
 $result = Invoke-Fixture 'install' $proof
