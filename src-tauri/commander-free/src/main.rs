@@ -7,6 +7,25 @@
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     #[cfg(windows)]
+    if args.first().map(String::as_str) == Some("--settings-source-proof-lab") {
+        attach_parent_console();
+        #[cfg(feature = "experimental-settings-generation")]
+        {
+            match wincommander_lib::settings_generation_lab::run_source_proof(&args) {
+                Ok((proof, needs_identity)) => {
+                    if !proof.is_empty() { println!("{proof}"); }
+                    std::process::exit(if needs_identity { 2 } else { 0 });
+                },
+                Err(message) => {
+                    let code = if message.starts_with("SETTINGS_IDENTITY_UNVERIFIED:") { 2 } else { 1 };
+                    eprintln!("{message}"); std::process::exit(code);
+                },
+            }
+        }
+        #[cfg(not(feature = "experimental-settings-generation"))]
+        std::process::exit(1);
+    }
+    #[cfg(windows)]
     if args.first().map(String::as_str) == Some("--search-migration-transaction") {
         #[cfg(feature = "experimental-encrypted-search")]
         {

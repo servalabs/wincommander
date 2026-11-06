@@ -1,5 +1,25 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 use super::*;
+
+#[test]
+fn legacy_source_proof_binds_scope_key_names_and_exact_source_bytes() {
+    let generation = |scope, key: &[u8], sections: &[(&str, &[u8])]| Generation {
+        scope, f6_initialized: false, sections: BTreeMap::new(),
+        source_key_digest: source_digest(key),
+        source_sections: sections.iter().map(|(name, bytes)| ((*name).into(), source_digest(bytes))).collect(),
+    };
+    let one = generation(StoreScope::Machine, b"key-one", &[("ab", b"c"), ("d", b"e")]);
+    let baseline = legacy_source_proof(&one).unwrap();
+    assert_eq!(baseline.len(), 64);
+    assert_eq!(baseline, legacy_source_proof(&one).unwrap());
+    for other in [
+        generation(StoreScope::CurrentUser, b"key-one", &[("ab", b"c"), ("d", b"e")]),
+        generation(StoreScope::Machine, b"key-two", &[("ab", b"c"), ("d", b"e")]),
+        generation(StoreScope::Machine, b"key-one", &[("a", b"c"), ("bd", b"e")]),
+        generation(StoreScope::Machine, b"key-one", &[("ab", b"changed"), ("d", b"e")]),
+        generation(StoreScope::Machine, b"key-one", &[("ab", b"c")]),
+    ] { assert_ne!(legacy_source_proof(&other).unwrap(), baseline); }
+}
 use serde_json::json;
 
 // Machine-lock fixture requires an elevated Windows test process; it creates

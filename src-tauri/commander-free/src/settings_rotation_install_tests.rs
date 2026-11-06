@@ -42,6 +42,83 @@ fn recovery_reports_busy_separately_from_unavailable_ownership() {
 }
 
 #[test]
+fn installer_source_proof_parser_rejects_truncation_and_ambiguous_states() {
+    for proof in [InstallSourceProof::Fresh, InstallSourceProof::Legacy("1".repeat(64)),
+        InstallSourceProof::Preparing("a".repeat(64)), InstallSourceProof::Active("f".repeat(64))] {
+        assert_eq!(InstallSourceProof::parse(&proof.encode()).unwrap(), proof);
+    }
+    for invalid in ["F", "", &format!("F{}", "1".repeat(64)), &format!("L{}", "A".repeat(64)),
+        &format!("X{}", "a".repeat(64)), &format!("A{}\n", "a".repeat(64))] {
+        assert!(InstallSourceProof::parse(invalid).is_err());
+    }
+}
+
+#[test]
+fn installer_proof_distinguishes_legacy_preparing_and_active_states() {
+    let mut generation = Generation { scope: StoreScope::Machine, f6_initialized: false,
+        sections: BTreeMap::new(), source_key_digest: source_digest(b"source-key"),
+        source_sections: BTreeMap::from([("settings".into(), source_digest(b"old-settings"))]) };
+    let digest = legacy_source_proof(&generation).unwrap();
+    let legacy = InstallSourceProof::Legacy(digest.clone());
+    let preparing = InstallSourceProof::Preparing(digest);
+    let pending = Some(AnchorState::Preparing { next: "pending-candidate".into() });
+    assert!(verify_legacy_source_proof(&None, &legacy, &generation).is_ok());
+    assert!(verify_legacy_source_proof(&Some(AnchorState::Legacy), &legacy, &generation).is_ok());
+    assert!(verify_legacy_source_proof(&pending, &legacy, &generation).is_err());
+    assert!(verify_legacy_source_proof(&pending, &preparing, &generation).is_ok());
+    generation.source_sections.insert("settings".into(), source_digest(b"changed-settings"));
+    assert!(verify_legacy_source_proof(&pending, &preparing, &generation).is_err());
+    let active = InstallSourceProof::Active(hex::encode(Sha256::digest(b"selected")));
+    assert!(verify_active_source_proof(&active, b"selected").is_ok());
+    assert!(verify_active_source_proof(&active, b"changed").is_err());
+    assert!(verify_active_source_proof(&legacy, b"selected").is_err());
+}
+
+#[test]
+fn fresh_pending_proof_accepts_only_exact_candidate_and_selection() {
+    let root = tempfile::tempdir().unwrap();
+    assert!(verify_fresh_pending(root.path(), &AnchorState::Legacy).is_ok());
+    let candidate = prepare_fresh_generation(StoreScope::Machine).unwrap();
+    let stage = root.path().join(".settings-cutover-candidate.v1");
+    let selected = root.path().join(".settings-generation.v1");
+    let pending = AnchorState::Preparing { next: cutover::digest(&candidate) };
+    assert!(verify_fresh_pending(root.path(), &pending).is_err());
+    std::fs::write(&stage, &candidate).unwrap();
+    assert!(verify_fresh_pending(root.path(), &AnchorState::Legacy).is_ok());
+    assert!(verify_fresh_pending(root.path(), &pending).is_ok());
+    std::fs::write(&selected, &candidate).unwrap();
+    assert!(verify_fresh_pending(root.path(), &AnchorState::Legacy).is_err());
+    assert!(verify_fresh_pending(root.path(), &pending).is_ok());
+    std::fs::write(&selected, b"wrong selected bytes").unwrap();
+    assert!(verify_fresh_pending(root.path(), &pending).is_err());
+    assert_eq!(std::fs::read(stage).unwrap(), candidate);
+}
+
+#[test]
+#[cfg_attr(windows, ignore = "requires elevated machine-lock ACL provisioning; run explicitly in Windows acceptance")]
+fn changed_source_after_preflight_is_rejected_before_candidate_publication() {
+    let root = tempfile::tempdir().unwrap(); provision_test_lock(root.path());
+    let anchor = fixture_anchor(root.path(), StoreScope::Machine);
+    let owner = LockedSelectedGeneration::acquire(root.path()).unwrap();
+    let old = [42; 32]; let original = sections(&old);
+    let original_generation = prepare(&old, &original).unwrap();
+    let expected = InstallSourceProof::Legacy(legacy_source_proof(&open_generation(&original_generation).unwrap()).unwrap());
+    let key = derive_section_key(&old, None).unwrap();
+    let mut changed = original.clone();
+    changed[0].1 = encode_section(&key, &serde_json::to_vec(&json!({"changed": true})).unwrap(), "machine:settings").unwrap();
+    let candidate = prepare(&old, &changed).unwrap();
+    let stage = root.path().join(".settings-cutover-candidate.v1");
+    let result = stage_and_select(&owner._ownership, &anchor, root.path(), || Ok(candidate.clone()), &|bytes| {
+        verify_source(bytes, &old, &changed)?;
+        verify_legacy_source_proof(&Some(AnchorState::Legacy), &expected, &open_generation(bytes)?)
+    });
+    assert!(result.is_err());
+    assert_eq!(anchor.read().unwrap(), Some(AnchorState::Legacy));
+    assert!(!stage.exists());
+    assert!(!root.path().join(".settings-generation.v1").exists());
+}
+
+#[test]
 fn fresh_machine_stage_requires_confirmation_without_touching_source() {
     let parent = tempfile::tempdir().unwrap();
     let root = parent.path().join("missing-root");

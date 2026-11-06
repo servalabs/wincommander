@@ -27,10 +27,7 @@ pub fn run(args: &[String]) -> Option<Result<&'static str, String>> {
     let action = match parse(args, enabled)? { Ok(action) => action, Err(error) => return Some(Err(error.into())) };
     Some(match action {
         Action::Status => crate::datastore::settings_generation_lab_status(),
-        Action::Fresh => crate::datastore::settings_generation_lab_fresh().map(|_| "Protected fresh settings generation prepared."),
-        Action::Migrate => crate::datastore::settings_generation_lab_migrate().map(|_| "Protected settings generation prepared; original files retained."),
-        Action::Install => crate::datastore::settings_generation_lab_install().map(|_| "Protected settings setup complete; original files retained."),
-        Action::Stage => crate::datastore::settings_generation_lab_stage().map(|_| "Settings preflight complete; original store remains active."),
+        Action::Fresh | Action::Migrate | Action::Install | Action::Stage => Err("Use the installer source-proof flow; existing settings were preserved.".into()),
         Action::NewIdentity => crate::datastore::settings_generation_lab_create_new_identity().map(|_| "A new machine identity was created; previous identities were not recovered."),
         Action::StageUser(sid) => crate::datastore::settings_generation_lab_stage_user(&sid).map(|_| "User settings preflight complete; original store remains active."),
     })
@@ -79,4 +76,20 @@ mod tests {
 #[cfg(windows)]
 pub fn hold_search_maintenance_fence(pid: u32) -> Result<(), String> {
     crate::datastore::hold_search_fence_for_installer(pid)
+}
+
+/// Strict internal installer protocol; the proof never grants identity consent.
+#[cfg(windows)]
+pub fn run_source_proof(args: &[String]) -> Result<(String, bool), String> {
+    if std::env::var_os("WINCOMMANDER_EXPERIMENTAL_SETTINGS_GENERATION").as_deref() != Some(std::ffi::OsStr::new("1")) {
+        return Err("Settings migration lab is disabled; existing data preserved.".into());
+    }
+    match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
+        ["--settings-source-proof-lab", "stage", "--offline-confirmed"] => crate::datastore::settings_generation_lab_stage_proof(),
+        ["--settings-source-proof-lab", "install", "--offline-confirmed", proof] => {
+            crate::datastore::settings_generation_lab_install_proof(proof)?;
+            Ok((String::new(), false))
+        },
+        _ => Err("Invalid settings source-proof command; existing data preserved.".into()),
+    }
 }

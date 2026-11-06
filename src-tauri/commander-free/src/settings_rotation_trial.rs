@@ -70,6 +70,27 @@ fn source_digest(bytes: &[u8]) -> String {
     B64.encode(Sha256::digest(bytes))
 }
 
+/// A source proof is computed only from an already authenticated generation.
+/// Length prefixes bind exact section names and bytes without delimiter
+/// ambiguity; random resealing does not change this proof.
+fn legacy_source_proof(generation: &Generation) -> Result<String, String> {
+    let key = B64.decode(&generation.source_key_digest).map_err(|_| "invalid source key proof")?;
+    if key.len() != 32 { return Err("invalid source key proof".into()); }
+    let mut hash = Sha256::new();
+    hash.update(b"wincommander-settings-source-proof-v1\0");
+    hash.update([match generation.scope { StoreScope::Machine => 1, StoreScope::CurrentUser => 2 }]);
+    hash.update(&key);
+    hash.update((generation.source_sections.len() as u64).to_be_bytes());
+    for (name, digest) in &generation.source_sections {
+        let digest = B64.decode(digest).map_err(|_| "invalid source section proof")?;
+        if digest.len() != 32 { return Err("invalid source section proof".into()); }
+        hash.update((name.len() as u64).to_be_bytes());
+        hash.update(name.as_bytes());
+        hash.update(&digest);
+    }
+    Ok(hex::encode(hash.finalize()))
+}
+
 fn valid_digest(value: &str) -> bool {
     B64.decode(value).is_ok_and(|bytes| bytes.len() == 32)
 }

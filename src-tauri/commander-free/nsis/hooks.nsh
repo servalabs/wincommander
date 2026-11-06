@@ -18,6 +18,7 @@
 !endif
 !define WC_SETTINGS_LAB_MAINTENANCE "${__FILEDIR__}\install-settings-generation.ps1"
 Var WCSettingsIdentityConsent
+Var WCSettingsSourceProof
 !include "${__FILEDIR__}\settings-identity-consent.nsh"
 !endif
 !include "TextFunc.nsh"
@@ -361,6 +362,7 @@ FunctionEnd
       !ifdef WC_PAIRED_SETTINGS_LAB
         ; Stage only: original settings and F6 identity remain authoritative.
         StrCpy $WCSettingsIdentityConsent 0
+        StrCpy $WCSettingsSourceProof ""
         File /oname=$PLUGINSDIR\wincommander-settings-lab.exe "${MAINBINARYSRCPATH}"
         File /oname=$PLUGINSDIR\wincommander-settings-lab.ps1 "${WC_SETTINGS_LAB_MAINTENANCE}"
         !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
@@ -368,6 +370,11 @@ FunctionEnd
         Pop $0
         Pop $1
         !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "settings-lab-stage" "$0" "$1"
+        ${If} $0 == 0
+        ${OrIf} $0 == 2
+          ; Wrapper has strictly validated one 65-character proof line.
+          StrCpy $WCSettingsSourceProof $1 65
+        ${EndIf}
         ${If} $0 == 2
           !insertmacro WC_REQUEST_SETTINGS_IDENTITY_CONSENT
           ${If} $WCSettingsIdentityConsent != 1
@@ -567,7 +574,7 @@ FunctionEnd
     ; The new desktop and service are installed, but the service is stopped.
     ; Re-read and authenticate the source before selecting the new generation.
     !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
-    nsExec::ExecToStack /TIMEOUT=600000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-settings-lab.ps1" -ExecutablePath "$INSTDIR\wincommander-free.exe" -Action install'
+    nsExec::ExecToStack /TIMEOUT=600000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-settings-lab.ps1" -ExecutablePath "$INSTDIR\wincommander-free.exe" -Action install -SourceProof "$WCSettingsSourceProof"'
     Pop $0
     Pop $1
     !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "settings-lab-select" "$0" "$1"
@@ -584,7 +591,16 @@ FunctionEnd
         Abort "Setup is incomplete and WinCommander may not start. A new identity may have been created; close WinCommander and Pro in all Windows sessions and retry setup to check. Existing files were preserved."
       ${EndIf}
       !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
-      nsExec::ExecToStack /TIMEOUT=600000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-settings-lab.ps1" -ExecutablePath "$INSTDIR\wincommander-free.exe" -Action install'
+      nsExec::ExecToStack /TIMEOUT=600000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-settings-lab.ps1" -ExecutablePath "$INSTDIR\wincommander-free.exe" -Action stage'
+      Pop $0
+      Pop $1
+      !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "settings-lab-recheck" "$0" "$1"
+      ${If} $0 != 0
+        Abort "The new identity could not be verified. Existing data was preserved; retry setup."
+      ${EndIf}
+      StrCpy $WCSettingsSourceProof $1 65
+      !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
+      nsExec::ExecToStack /TIMEOUT=600000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-settings-lab.ps1" -ExecutablePath "$INSTDIR\wincommander-free.exe" -Action install -SourceProof "$WCSettingsSourceProof"'
       Pop $0
       Pop $1
       !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "settings-lab-select-retry" "$0" "$1"

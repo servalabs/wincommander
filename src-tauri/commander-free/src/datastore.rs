@@ -97,24 +97,16 @@ pub(crate) fn require_selected_settings_lab_startup() -> Result<(), String> {
 }
 
 #[cfg(all(windows, feature = "experimental-settings-generation"))]
-pub(crate) fn settings_generation_lab_fresh() -> Result<(), String> {
-    settings_rotation_trial::provision_verified_fresh_install()
+pub(crate) fn settings_generation_lab_stage_proof() -> Result<(String, bool), String> {
+    settings_rotation_trial::stage_machine_with_proof()
 }
 #[cfg(all(windows, feature = "experimental-settings-generation"))]
-pub(crate) fn settings_generation_lab_migrate() -> Result<(), String> {
-    settings_rotation_trial::migrate_explicitly()
-}
-#[cfg(all(windows, feature = "experimental-settings-generation"))]
-pub(crate) fn settings_generation_lab_install() -> Result<(), String> {
-    settings_rotation_trial::install_migration_explicitly()
+pub(crate) fn settings_generation_lab_install_proof(proof: &str) -> Result<(), String> {
+    settings_rotation_trial::install_machine_with_proof(proof)
 }
 #[cfg(all(windows, feature = "experimental-settings-generation"))]
 pub(crate) fn settings_generation_lab_create_new_identity() -> Result<(), String> {
     settings_rotation_trial::create_new_machine_identity_explicitly()
-}
-#[cfg(all(windows, feature = "experimental-settings-generation"))]
-pub(crate) fn settings_generation_lab_stage() -> Result<(), String> {
-    settings_rotation_trial::stage_existing_explicitly(settings_rotation_trial::StoreScope::Machine)
 }
 
 #[cfg(all(windows, feature = "experimental-settings-generation"))]
