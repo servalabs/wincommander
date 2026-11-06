@@ -199,6 +199,22 @@ pub fn copy_tree(src: &Path, dst: &Path, skip: &dyn Fn(&Path) -> bool) -> std::i
         return Ok(1);
     }
     let meta = std::fs::symlink_metadata(src)?;
+    // Refuse links and Windows junction/reparse entries instead of traversing
+    // them into an unexpected tree or back into the staging directory.
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if meta.file_attributes() & 0x400 != 0 {
+            return Err(std::io::Error::other(
+                "Safe Paste does not follow reparse points",
+            ));
+        }
+    }
+    if meta.file_type().is_symlink() {
+        return Err(std::io::Error::other(
+            "Safe Paste does not follow symbolic links",
+        ));
+    }
     if meta.is_dir() {
         std::fs::create_dir_all(dst)?;
         let mut skipped = 0;
@@ -356,51 +372,34 @@ fn same_filesystem_volume(_left: &Path, _right: &Path) -> bool {
     true
 }
 
-/// Commit a fully scrubbed batch without leaving a partial paste when one of
-/// the final renames fails. Name collisions remain individual safe skips; an
-/// actual I/O error rolls prior commits back into the private staging area.
+/// Publish clean items without replacing a destination that appears concurrently.
+/// If publication fails after some successes those items remain in place.
 fn commit_staged_batch(
     staged: Vec<(PathBuf, PathBuf)>,
     skipped: &mut Vec<SafeSkip>,
 ) -> Result<Vec<String>, String> {
-    let mut committed: Vec<(PathBuf, PathBuf)> = Vec::new();
-    for (stage_target, target) in staged {
-        if target.exists() {
-            skipped.push(SafeSkip {
-                name: target
-                    .file_name()
-                    .map(|name| name.to_string_lossy().to_string())
-                    .unwrap_or_default(),
-                reason: "a file with that name already exists".into(),
-            });
-            continue;
-        }
-        if let Err(error) = std::fs::rename(&stage_target, &target) {
-            let mut rollback_errors = Vec::new();
-            for (staged_back, published) in committed.iter().rev() {
-                if let Err(rollback) = std::fs::rename(published, staged_back) {
-                    rollback_errors.push(format!("{}: {rollback}", published.to_string_lossy()));
-                }
+    let mut committed = Vec::new();
+    for (source, target) in staged {
+        #[cfg(windows)]
+        let result = crate::safe_paste_publish::move_no_replace(&source, &target);
+        #[cfg(not(windows))]
+        let result = std::fs::rename(&source, &target);
+        match result {
+            Ok(()) => committed.push(target.to_string_lossy().to_string()),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists
+                || matches!(error.raw_os_error(), Some(80 | 183)) => {
+                skipped.push(SafeSkip {
+                    name: target.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
+                    reason: "a file with that name already exists".into(),
+                });
             }
-            let rollback_detail = if rollback_errors.is_empty() {
-                String::new()
-            } else {
-                format!(
-                    "; rollback was incomplete for {}",
-                    rollback_errors.join(", ")
-                )
-            };
-            return Err(format!(
-                "Safe Paste couldn't commit cleaned {}: {error}{rollback_detail}",
-                target.to_string_lossy()
-            ));
+            Err(error) => return Err(format!(
+                "Safe Paste could not publish a cleaned item: {error}. {} earlier item(s) were already pasted.",
+                committed.len()
+            )),
         }
-        committed.push((stage_target, target));
     }
-    Ok(committed
-        .into_iter()
-        .map(|(_, target)| target.to_string_lossy().to_string())
-        .collect())
+    Ok(committed)
 }
 
 /// Reject every scrub outcome that could leave an identifying or unprocessed
@@ -1208,106 +1207,120 @@ pub async fn safe_paste_prepare_headless(dest_dir: String) -> Result<SafePasteRe
         ".safe-paste-v4-marker.tmp",
     )?;
 
-    let mut staged: Vec<(PathBuf, PathBuf)> = Vec::new();
-    let mut nested_decoys_skipped = 0u32;
-    for (src, target) in to_copy {
-        let stage_target = staging.path().join(
-            target
-                .file_name()
-                .expect("resolve_targets always produces a filename"),
-        );
-        match copy_tree(&src, &stage_target, &decoy_skip) {
-            Ok(n) => {
-                nested_decoys_skipped += n;
-                staged.push((stage_target, target));
-            }
-            Err(e) => {
-                // Nothing has reached the requested folder yet.
-                let _ = if stage_target.is_dir() {
-                    std::fs::remove_dir_all(&stage_target)
-                } else {
-                    std::fs::remove_file(&stage_target)
-                };
-                skipped.push(SafeSkip {
-                    name: src
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_default(),
-                    reason: format!("copy failed: {e}"),
-                });
+    let operation: Result<SafePasteResult, String> = async {
+        // Resolve existing paths before copying to catch a destination alias
+        // into a source. This is a preliminary check, not a substitute for
+        // pinned handles against concurrent namespace replacement.
+        let staging_real = std::fs::canonicalize(staging.path())
+            .map_err(|_| "Safe Paste cannot verify its staging location.".to_string())?;
+        for (source, _) in &to_copy {
+            if source.is_dir() {
+                let source_real = std::fs::canonicalize(source)
+                    .map_err(|_| "Safe Paste cannot verify a source folder.".to_string())?;
+                if is_within(&staging_real, &source_real) {
+                    return Err("Safe Paste cannot stage inside a selected source folder.".into());
+                }
             }
         }
-    }
-    if nested_decoys_skipped > 0 {
-        skipped.push(SafeSkip {
-            name: format!("{nested_decoys_skipped} protected item(s)"),
-            reason: "decoy (skipped for safety)".into(),
-        });
-    }
+        let mut staged: Vec<(PathBuf, PathBuf)> = Vec::new();
+        let mut nested_decoys_skipped = 0u32;
+        for (src, target) in to_copy {
+            let stage_target = staging.path().join(
+                target
+                    .file_name()
+                    .expect("resolve_targets always produces a filename"),
+            );
+            match copy_tree(&src, &stage_target, &decoy_skip) {
+                Ok(n) => {
+                    nested_decoys_skipped += n;
+                    staged.push((stage_target, target));
+                }
+                Err(e) => {
+                    // Nothing has reached the requested folder yet.
+                    let _ = if stage_target.is_dir() {
+                        std::fs::remove_dir_all(&stage_target)
+                    } else {
+                        std::fs::remove_file(&stage_target)
+                    };
+                    skipped.push(SafeSkip {
+                        name: src
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_default(),
+                        reason: format!("copy failed: {e}"),
+                    });
+                }
+            }
+        }
+        if nested_decoys_skipped > 0 {
+            skipped.push(SafeSkip {
+                name: format!("{nested_decoys_skipped} protected item(s)"),
+                reason: "decoy (skipped for safety)".into(),
+            });
+        }
 
-    let mut files_to_scrub = Vec::new();
-    for (stage_target, target) in &staged {
-        staged_files(stage_target, &mut files_to_scrub).map_err(|e| {
-            format!(
-                "Safe Paste couldn't inspect staged {}: {e}",
-                target.to_string_lossy()
-            )
-        })?;
-    }
+        let mut files_to_scrub = Vec::new();
+        for (stage_target, target) in &staged {
+            staged_files(stage_target, &mut files_to_scrub).map_err(|e| {
+                format!(
+                    "Safe Paste couldn't inspect staged {}: {e}",
+                    target.to_string_lossy()
+                )
+            })?;
+        }
 
-    if !files_to_scrub.is_empty() {
-        let scrub_output_dirs: HashSet<PathBuf> = files_to_scrub
-            .iter()
-            .filter_map(|file| file.parent().map(|parent| parent.join("_scrubbed")))
-            .filter(|path| path.is_dir())
-            .collect();
-        let report = crate::file_metadata::scrub_metadata_paths_headless(
-            files_to_scrub
+        if !files_to_scrub.is_empty() {
+            let scrub_output_dirs: HashSet<PathBuf> = files_to_scrub
                 .iter()
-                .map(|path| path.to_string_lossy().to_string())
-                .collect(),
-            Some(crate::file_metadata::ScrubOptions {
-                output_dir: None,
-                dry_run: false,
-                recursive: false,
-                paranoid: crate::file_metadata::ParanoidOptions::default(),
-                replace_originals: true,
-            }),
-        )
-        .await?;
+                .filter_map(|file| file.parent().map(|parent| parent.join("_scrubbed")))
+                .filter(|path| path.is_dir())
+                .collect();
+            let report = crate::file_metadata::scrub_metadata_paths_headless(
+                files_to_scrub
+                    .iter()
+                    .map(|path| path.to_string_lossy().to_string())
+                    .collect(),
+                Some(crate::file_metadata::ScrubOptions {
+                    output_dir: None,
+                    dry_run: false,
+                    recursive: false,
+                    paranoid: crate::file_metadata::ParanoidOptions::default(),
+                    replace_originals: true,
+                }),
+            )
+            .await?;
 
-        // A skipped, failed, or residual-bearing staged file is not safe to
-        // publish. TempDir removes the complete staging area on return.
-        validate_scrub_report(&report, files_to_scrub.len())
-            .map_err(|detail| format!("Safe Paste scrub failed; no files were pasted: {detail}"))?;
-        // If the source is a directory, a scrubber output folder can otherwise
-        // travel with that directory when it is renamed into the destination.
-        cleanup_new_scrub_output_dirs(&files_to_scrub, &scrub_output_dirs)?;
+            // A skipped, failed, or residual-bearing staged file is not safe to
+            // publish. TempDir removes the complete staging area on return.
+            validate_scrub_report(&report, files_to_scrub.len()).map_err(|detail| {
+                format!("Safe Paste scrub failed; no files were pasted: {detail}")
+            })?;
+            // If the source is a directory, a scrubber output folder can otherwise
+            // travel with that directory when it is renamed into the destination.
+            cleanup_new_scrub_output_dirs(&files_to_scrub, &scrub_output_dirs)?;
+        }
+
+        // Publish each cleaned item without replacing an existing destination.
+        let copied = commit_staged_batch(staged, &mut skipped)?;
+        crate::log_message(
+            "info",
+            &format!(
+                "[SafePaste] scrubbed and committed {} item(s), skipped {}",
+                copied.len(),
+                skipped.len()
+            ),
+        );
+        Ok(SafePasteResult {
+            copied,
+            skipped,
+            source_count,
+        })
     }
+    .await;
 
-    // A folder can change while the scrubber runs. The commit re-checks every
-    // name and rolls the complete group back if a later rename fails.
-    let copied = commit_staged_batch(staged, &mut skipped)?;
-    staging.close().map_err(|_| {
-        "Safe Paste completed but could not remove temporary files. Contact support.".to_string()
-    })?;
-    std::fs::remove_file(&marker_path).map_err(|_| {
-        "Safe Paste completed but its recovery marker remains. Contact support.".to_string()
-    })?;
-
-    crate::log_message(
-        "info",
-        &format!(
-            "[SafePaste] scrubbed and committed {} item(s), skipped {}",
-            copied.len(),
-            skipped.len()
-        ),
-    );
-    Ok(SafePasteResult {
-        copied,
-        skipped,
-        source_count,
-    })
+    staging.close().map_err(|_| "Safe Paste could not remove its temporary files; an item may already have been pasted. Contact support.".to_string())?;
+    std::fs::remove_file(&marker_path).map_err(|_| "Safe Paste could not clear its recovery marker; an item may already have been pasted. Contact support.".to_string())?;
+    operation
 }
 
 // ── Cross-process serialisation ─────────────────────────────────────────────
@@ -1407,6 +1420,14 @@ mod tests {
         let path = root.path().join("selection");
         assert!(read_protected::<SafeClip>(&path).unwrap().is_none());
         std::fs::write(&path, b"{} ").unwrap();
+        assert!(read_protected::<SafeClip>(&path).is_err());
+    }
+
+    #[test]
+    fn oversized_protected_handoff_is_refused() {
+        let root = tempfile::TempDir::new().unwrap();
+        let path = root.path().join("selection");
+        std::fs::write(&path, vec![1_u8; 4 * 1024 * 1024 + 1]).unwrap();
         assert!(read_protected::<SafeClip>(&path).is_err());
     }
 

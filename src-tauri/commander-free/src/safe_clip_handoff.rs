@@ -5,11 +5,16 @@ const PROTECTED_HANDOFF_MAGIC: &[u8] = b"WCSAFE4\0";
 pub(crate) fn read_protected<T: serde::de::DeserializeOwned>(
     path: &Path,
 ) -> Result<Option<T>, String> {
-    let bytes = match std::fs::read(path) {
-        Ok(bytes) => bytes,
+    use std::io::Read;
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(_) => return Err("Safe Copy could not read its protected selection.".into()),
     };
+    let mut bytes = Vec::new();
+    file.take(4 * 1024 * 1024 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "Safe Copy could not read its protected selection.".to_string())?;
     if bytes.len() > 4 * 1024 * 1024 || !bytes.starts_with(PROTECTED_HANDOFF_MAGIC) {
         return Err("Safe Copy selection is invalid; use Safe Copy again.".into());
     }

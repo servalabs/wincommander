@@ -132,6 +132,8 @@ mod routine_cleaner;
 mod runtime_visibility;
 mod safe_clip;
 mod safe_clip_handoff;
+#[cfg(windows)]
+mod safe_paste_publish;
 mod screen_privacy;
 mod search_actions;
 mod security_data;
