@@ -89,10 +89,8 @@ pub(super) fn automatic_cleanup_message() -> Option<String> {
 }
 
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
-fn schedule_legacy_cleanup(config: IndexConfig, protected: Vec<PathBuf>) {
-    use std::sync::atomic::Ordering;
-    // A protected scope and Tantivy lock alone contain no old index data.
-    let requires_cleanup = match std::fs::read_dir(&config.index_dir) {
+fn legacy_data_may_remain(directory: &std::path::Path) -> bool {
+    match std::fs::read_dir(directory) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
         Err(_) => true,
         Ok(entries) => entries.into_iter().any(|entry| match entry {
@@ -100,7 +98,32 @@ fn schedule_legacy_cleanup(config: IndexConfig, protected: Vec<PathBuf>) {
             Ok(entry) => !matches!(entry.file_name().to_str(),
                 Some("scope-v2.dpapi" | ".tantivy-writer.lock" | ".tantivy-meta.lock")),
         }),
-    };
+    }
+}
+
+#[cfg(all(test, windows, feature = "experimental-encrypted-search"))]
+mod cleanup_tests {
+    use super::*;
+    #[test]
+    fn automatic_cleanup_detects_legacy_but_not_protected_scope_only() {
+        let root = tempfile::tempdir().unwrap(); let old = root.path().join("fts");
+        assert!(!legacy_data_may_remain(&old));
+        std::fs::create_dir(&old).unwrap();
+        std::fs::write(old.join("scope-v2.dpapi"), b"protected").unwrap();
+        std::fs::write(old.join(".tantivy-writer.lock"), b"").unwrap();
+        assert!(!legacy_data_may_remain(&old));
+        std::fs::write(old.join("scope-v1.json"), b"old").unwrap();
+        assert!(legacy_data_may_remain(&old));
+        std::fs::remove_file(old.join("scope-v1.json")).unwrap();
+        std::fs::write(old.join("unexpected"), b"do not delete").unwrap();
+        assert!(legacy_data_may_remain(&old));
+    }
+}
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
+fn schedule_legacy_cleanup(config: IndexConfig, protected: Vec<PathBuf>) {
+    use std::sync::atomic::Ordering;
+    // A protected scope and Tantivy lock alone contain no old index data.
+    let requires_cleanup = legacy_data_may_remain(&config.index_dir);
     if !requires_cleanup || AUTO_CLEANUP_STARTED.swap(true, Ordering::AcqRel) { return; }
     let spawned = std::thread::Builder::new().name("search-legacy-cleanup".into()).spawn(move || {
         let outcome = (|| {
