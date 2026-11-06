@@ -20,8 +20,11 @@ fn expected_pair<'a>(hash: Option<&'a str>, app: Option<&str>, protocol: Option<
     Ok(hash)
 }
 pub(super) fn capability() -> serde_json::Value {
-    let paired = expected_pair(option_env!("WINCMD_FENCED_PRO_SHA256"),
-        option_env!("WINCMD_FENCED_PRO_APP_DIR"), option_env!("WINCMD_FENCED_PRO_PROTOCOL")).is_ok();
+    capability_for(option_env!("WINCMD_FENCED_PRO_SHA256"),
+        option_env!("WINCMD_FENCED_PRO_APP_DIR"), option_env!("WINCMD_FENCED_PRO_PROTOCOL"))
+}
+fn capability_for(hash: Option<&str>, app: Option<&str>, protocol: Option<&str>) -> serde_json::Value {
+    let paired = expected_pair(hash, app, protocol).is_ok();
     serde_json::json!({
         "protocol": 1,
         "broker_user_fence": paired,
@@ -221,6 +224,20 @@ mod tests {
             assert_eq!(capability["protocol"], 1);
             assert_eq!(capability["broker_user_fence"], false);
             assert_eq!(capability["system_search_disabled"], false);
+        }
+    }
+    #[test]
+    fn capability_requires_the_complete_guarded_pair() {
+        let hash = "a".repeat(64);
+        let app = option_env!("WINCMD_APP_DIR").unwrap_or("WinCommander");
+        let valid = capability_for(Some(&hash), Some(app), Some(FENCE_PROTOCOL));
+        assert_eq!(valid["broker_user_fence"], true);
+        assert_eq!(valid["system_search_disabled"], true);
+        for invalid in [capability_for(None, Some(app), Some(FENCE_PROTOCOL)),
+            capability_for(Some(&hash), Some("other"), Some(FENCE_PROTOCOL)),
+            capability_for(Some(&hash), Some(app), Some("other"))] {
+            assert_eq!(invalid["broker_user_fence"], false);
+            assert_eq!(invalid["system_search_disabled"], false);
         }
     }
     #[test]
