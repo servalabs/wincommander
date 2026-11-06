@@ -1633,8 +1633,9 @@ mod tests {
         let mut writer = index.writer(50_000_000).unwrap();
         writer.add_document(doc!(body => "legacyplaintextneedle")).unwrap(); writer.commit().unwrap();
         drop(writer); drop(index);
-        fs::write(old.join("scope-v1.json"), b"legacy private roots").unwrap();
-        publish_experimental_scope(&old, b"protected scope", |_| Ok(())).unwrap();
+        let scope = br#"{"version":1,"roots":[],"exclusions":[],"blocked_roots":[]}"#;
+        fs::write(old.join("scope-v1.json"), scope).unwrap();
+        publish_experimental_scope(&old, scope, |_| Ok(())).unwrap();
         let fence = crate::encrypted_search_fence::SearchOperationFence::acquire_exclusive(root.path()).unwrap();
         SearchEngine::rebuild_offline_and_select(make_config(old.clone(), vec![]), Arc::new(|_| false), &selection, &fence).unwrap();
         let mut engine = SearchEngine::open_experimental_selected_with_policy(make_config(old.clone(), vec![data]), Arc::new(|_| true), &selection).unwrap();

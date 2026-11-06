@@ -64,6 +64,16 @@ pub(crate) fn remove_managed(old: &Path, fence: &crate::encrypted_search_fence::
         if clear.len() < 8 || !crate::encrypted_scope::same_scope(&clear, &clear[8..]).unwrap_or(false) {
             return Err(refused());
         }
+        let original = directory.atomic_read_bounded(Path::new("scope-v1.json"), crate::encrypted_scope::MAX_SCOPE)
+            .map_err(|e| io::Error::other(e.to_string()))?;
+        let previous: serde_json::Value = serde_json::from_slice(&original).map_err(|_| refused())?;
+        let protected: serde_json::Value = serde_json::from_slice(&clear[8..]).map_err(|_| refused())?;
+        let valid = |value: &serde_json::Value| value.get("version").and_then(|v| v.as_u64()) == Some(1)
+            && ["roots", "exclusions", "blocked_roots"].iter().all(|key|
+                value.get(*key).and_then(|v| v.as_array()).is_some_and(|items| items.iter().all(|item| item.is_string())));
+        // If the current protected scope changed, retain the old copy rather
+        // than guessing whether it is safe to discard.
+        if !valid(&previous) || !valid(&protected) || previous != protected { return Err(refused()); }
     }
     let manifest = directory.atomic_read_bounded(Path::new(".managed.json"), MAX_MANIFEST)
         .map_err(|e| io::Error::other(e.to_string()))?;
