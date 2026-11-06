@@ -1,4 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+pub fn lab_build_enabled(value: Option<&str>) -> bool {
+    value == Some("1")
+}
+
 pub fn validate(
     hash: Option<&str>,
     app_dir: Option<&str>,
@@ -33,7 +37,13 @@ pub fn validate(
 
 #[cfg(test)]
 mod tests {
-    use super::validate;
+    use super::{lab_build_enabled, validate};
+    #[test]
+    fn paired_release_requires_explicit_lab_opt_in() {
+        assert!(lab_build_enabled(Some("1")));
+        assert!(!lab_build_enabled(None));
+        assert!(!lab_build_enabled(Some("true")));
+    }
     #[test]
     fn paired_release_requires_exact_digest_and_app_directory() {
         let pro = "b".repeat(64);
