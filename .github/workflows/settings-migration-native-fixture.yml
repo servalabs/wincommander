@@ -288,6 +288,34 @@ jobs:
         run: |
           $output = cargo test --locked -p commander-svc --bin wincommander-svc --features experimental-search-broker-fence pro_broker::search_fence::tests -- --test-threads=1 2>&1 | Out-String
           Write-Host $output
-          if ($LASTEXITCODE -ne 0 -or $output -notmatch 'test result: ok\. 9 passed; 0 failed; 0 ignored') { throw 'Broker lease tests did not pass.' }
+          if ($LASTEXITCODE -ne 0 -or $output -notmatch 'test result: ok\. 9 passed; 0 failed; 1 ignored') { throw 'Broker lease tests did not pass.' }
       - name: Test service capability is known and read-only
         run: cargo test --locked -p wincmd-shared search_fence_capability_is_known_and_read_only
+      - name: Test broker provisioning under a second Windows account
+        shell: pwsh
+        run: |
+          $name = 'wcf' + [Guid]::NewGuid().ToString('N').Substring(0, 8)
+          $password = 'Aa1!' + [Guid]::NewGuid().ToString('N')
+          $secure = ConvertTo-SecureString $password -AsPlainText -Force
+          $user = New-LocalUser -Name $name -Password $secure -AccountNeverExpires -PasswordNeverExpires
+          try {
+            $base = Join-Path $env:RUNNER_TEMP ('broker-user-' + [Guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path $base | Out-Null
+            $acl = Get-Acl -LiteralPath $base
+            $rule = [Security.AccessControl.FileSystemAccessRule]::new($user.SID, 'Modify', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
+            $acl.AddAccessRule($rule)
+            Set-Acl -LiteralPath $base -AclObject $acl
+            $env:WINCMD_TEST_BROKER_USER = $name
+            $env:WINCMD_TEST_BROKER_PASSWORD = $password
+            $env:WINCMD_TEST_BROKER_PARENT = Join-Path $base 'app/file-search'
+            $output = cargo test --locked -p commander-svc --bin wincommander-svc --features experimental-search-broker-fence second_user_token_creates_own_search_fence -- --ignored --test-threads=1 2>&1 | Out-String
+            Write-Host $output
+            if ($LASTEXITCODE -ne 0 -or $output -notmatch 'test result: ok\. 1 passed; 0 failed; 0 ignored') { throw 'Cross-user broker fixture failed.' }
+            $lock = Join-Path $env:WINCMD_TEST_BROKER_PARENT '.encrypted-search-maintenance.lock'
+            $ownerName = (Get-Acl -LiteralPath $lock).Owner
+            $owner = [Security.Principal.NTAccount]::new($ownerName).Translate([Security.Principal.SecurityIdentifier])
+            if ($owner.Value -cne $user.SID.Value) { throw 'Broker-created lock is not owned by the authenticated user.' }
+          } finally {
+            Remove-Item Env:WINCMD_TEST_BROKER_USER, Env:WINCMD_TEST_BROKER_PASSWORD, Env:WINCMD_TEST_BROKER_PARENT -ErrorAction SilentlyContinue
+            Remove-LocalUser -SID $user.SID -Confirm:$false
+          }
