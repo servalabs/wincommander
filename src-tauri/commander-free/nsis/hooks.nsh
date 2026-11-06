@@ -525,18 +525,6 @@ FunctionEnd
     !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "service-payload" "missing" "${WC_SERVICE_PAYLOAD}"
     Abort "The WinCommander service payload is missing; the installation was not completed."
   wc_service_payload_ok:
-  !ifdef WC_PAIRED_SETTINGS_LAB
-    ; The new desktop has been copied but the old service is still stopped.
-    ; Re-read and authenticate the source before selecting the new generation.
-    !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
-    nsExec::ExecToStack /TIMEOUT=600000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-settings-lab.ps1" -ExecutablePath "$INSTDIR\wincommander-free.exe" -Action install'
-    Pop $0
-    Pop $1
-    !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "settings-lab-select" "$0" "$1"
-    ${If} $0 != 0
-      Abort "Protected settings could not be selected. Existing settings were preserved; retry setup before starting WinCommander."
-    ${EndIf}
-  !endif
   ; Stop the existing service before replacing its owned executable. The
   ; separately entitled Pro helper is installed on demand and is never bundled
   ; into, replaced by, or required for a Free installer update.
@@ -564,6 +552,18 @@ FunctionEnd
     !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "service-config" "$0" "$1"
     Abort "WinCommander could not configure its machine service."
   ${EndIf}
+  !ifdef WC_PAIRED_SETTINGS_LAB
+    ; The new desktop and service are installed, but the service is stopped.
+    ; Re-read and authenticate the source before selecting the new generation.
+    !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
+    nsExec::ExecToStack /TIMEOUT=600000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-settings-lab.ps1" -ExecutablePath "$INSTDIR\wincommander-free.exe" -Action install'
+    Pop $0
+    Pop $1
+    !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "settings-lab-select" "$0" "$1"
+    ${If} $0 != 0
+      Abort "Protected settings could not be selected. Existing settings were preserved; retry setup before starting WinCommander."
+    ${EndIf}
+  !endif
   nsExec::ExecToStack 'sc.exe start ${WC_SERVICE_NAME}'
   Pop $0
   Pop $1

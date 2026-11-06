@@ -135,3 +135,10 @@ fn duplicated_search_fence_is_locked_by_installer_process() {
     drop(fence);
     reader.try_lock_shared().unwrap();
 }
+
+#[test]
+fn installer_startup_never_falls_back_to_legacy_or_incomplete_generation() {
+    assert!(require_selected_startup(StartupView::Legacy).is_err());
+    assert!(require_selected_startup(StartupView::RecoveryRequired).is_err());
+    assert!(require_selected_startup(StartupView::Selected(BTreeMap::new())).is_ok());
+}

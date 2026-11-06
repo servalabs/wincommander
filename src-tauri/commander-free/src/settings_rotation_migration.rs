@@ -9,6 +9,14 @@ pub(super) enum StartupView {
 pub(super) fn inspect_startup_once(root: &Path, scope: StoreScope) -> Result<StartupView, String> {
     ReadOnlySelectedGeneration::acquire(root, scope)?.inspect_startup()
 }
+/// The paired installer lab cannot start the desktop on legacy or an
+/// incomplete generation. Retrying setup remains the recovery route.
+pub(super) fn require_selected_startup(view: StartupView) -> Result<(), String> {
+    match view {
+        StartupView::Selected(_) => Ok(()),
+        _ => Err("Protected settings setup needs to finish; retry setup.".into()),
+    }
+}
 
 /// Open and release shared ownership for this read only. It cannot be cached by
 /// callers, avoiding long-lived reader locks that would block policy writers.

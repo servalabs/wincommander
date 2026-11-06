@@ -1601,6 +1601,14 @@ fn setup_tauri_cli_runtime(app: &mut tauri::App) -> Result<(), Box<dyn std::erro
 pub mod search_migration_cli;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(all(windows, feature = "experimental-settings-generation"))]
+    if let Err(message) = datastore::require_selected_settings_lab_startup() {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+        let text: Vec<u16> = format!("{message}\0").encode_utf16().collect();
+        let title: Vec<u16> = "WinCommander\0".encode_utf16().collect();
+        unsafe { MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), MB_OK | MB_ICONERROR); }
+        return;
+    }
     // Keep the cooperating user-profile launch fence for this process lifetime.
     // The installer helper runs through a separate early CLI entrypoint.
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]

@@ -82,6 +82,18 @@ pub(crate) fn settings_generation_lab_status() -> Result<&'static str, String> {
         settings_rotation_trial::StartupView::RecoveryRequired => Err("Settings generation requires authorized recovery; original files were preserved.".into()),
     }
 }
+/// Lab desktop startup must never silently return to the legacy store while a
+/// selected generation is incomplete or its paired service is stopped.
+#[cfg(all(windows, feature = "experimental-settings-generation"))]
+pub(crate) fn require_selected_settings_lab_startup() -> Result<(), String> {
+    if option_env!("WINCMD_SETTINGS_LAB_AUTOROUTE") != Some("1") { return Ok(()); }
+    settings_generation_maintenance::wait_for_running_service()?;
+    let (root, _pins, scope) = settings_rotation_trial::experimental_runtime_root()?;
+    settings_rotation_trial::require_selected_startup(
+        settings_rotation_trial::inspect_startup_once(&root, scope)?,
+    )
+}
+
 #[cfg(all(windows, feature = "experimental-settings-generation"))]
 pub(crate) fn settings_generation_lab_fresh() -> Result<(), String> {
     settings_rotation_trial::provision_verified_fresh_install()

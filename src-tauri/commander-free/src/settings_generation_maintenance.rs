@@ -62,6 +62,33 @@ pub(super) fn verify_known_writers_stopped() -> Result<(), String> {
     Ok(())
 }
 
+/// A paired settings lab desktop starts only after the machine service is
+/// running. This is an availability gate, not proof of service provenance.
+#[cfg(windows)]
+pub(super) fn wait_for_running_service() -> Result<(), String> {
+    use std::{ffi::c_void, mem::size_of, ptr, time::{Duration, Instant}};
+    use windows_sys::Win32::System::Services::{CloseServiceHandle, OpenSCManagerW, OpenServiceW,
+        QueryServiceStatusEx, SC_MANAGER_CONNECT, SC_STATUS_PROCESS_INFO, SERVICE_QUERY_STATUS,
+        SERVICE_RUNNING, SERVICE_STATUS_PROCESS};
+    struct Service(*mut c_void);
+    impl Drop for Service { fn drop(&mut self) { if !self.0.is_null() { unsafe { CloseServiceHandle(self.0); } } } }
+    let scm = Service(unsafe { OpenSCManagerW(ptr::null(), ptr::null(), SC_MANAGER_CONNECT) });
+    if scm.0.is_null() { return Err("Cannot verify the WinCommander service; retry setup.".into()); }
+    let name: Vec<u16> = "WinCommanderSvc\0".encode_utf16().collect();
+    let service = Service(unsafe { OpenServiceW(scm.0, name.as_ptr(), SERVICE_QUERY_STATUS) });
+    if service.0.is_null() { return Err("WinCommander setup needs to finish; retry setup.".into()); }
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let mut state = SERVICE_STATUS_PROCESS::default(); let mut needed = 0;
+        if unsafe { QueryServiceStatusEx(service.0, SC_STATUS_PROCESS_INFO, (&mut state as *mut SERVICE_STATUS_PROCESS).cast(), size_of::<SERVICE_STATUS_PROCESS>() as u32, &mut needed) } == 0 {
+            return Err("Cannot verify the WinCommander service; retry setup.".into());
+        }
+        if state.dwCurrentState == SERVICE_RUNNING { return Ok(()); }
+        if Instant::now() >= deadline { return Err("WinCommander setup needs to finish; retry setup.".into()); }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
