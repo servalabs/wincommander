@@ -25,7 +25,7 @@ pub(crate) fn search_fence_capabilities() -> serde_json::Value {
     #[cfg(all(windows, feature = "experimental-search-broker-fence"))]
     { search_fence::capability() }
     #[cfg(not(all(windows, feature = "experimental-search-broker-fence")))]
-    { serde_json::json!({"protocol": 1, "broker_user_fence": false, "system_search_disabled": false, "app_dir": option_env!("WINCMD_APP_DIR").unwrap_or("WinCommander")}) }
+    { serde_json::json!({"protocol": 1, "epoch": "wincommander-paired-search-fence-2026-11-v1", "broker_user_fence": false, "system_search_disabled": false, "app_dir": option_env!("WINCMD_APP_DIR").unwrap_or("WinCommander")}) }
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]

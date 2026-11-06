@@ -27,6 +27,7 @@ fn capability_for(hash: Option<&str>, app: Option<&str>, protocol: Option<&str>)
     let paired = expected_pair(hash, app, protocol).is_ok();
     serde_json::json!({
         "protocol": 1,
+        "epoch": "wincommander-paired-search-fence-2026-11-v1",
         "broker_user_fence": paired,
         "system_search_disabled": paired,
         "app_dir": option_env!("WINCMD_APP_DIR").unwrap_or("WinCommander"),
@@ -222,6 +223,7 @@ mod tests {
         if option_env!("WINCMD_FENCED_PRO_SHA256").is_none() {
             let capability = capability();
             assert_eq!(capability["protocol"], 1);
+            assert_eq!(capability["epoch"], "wincommander-paired-search-fence-2026-11-v1");
             assert_eq!(capability["broker_user_fence"], false);
             assert_eq!(capability["system_search_disabled"], false);
         }
