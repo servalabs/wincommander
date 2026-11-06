@@ -69,9 +69,55 @@ pub(super) fn with_engine<T>(
     #[cfg(not(all(windows, feature = "experimental-encrypted-search")))]
     engine.start_indexing().map_err(|e| e.to_string())?;
     *write = Some(GlobalIndex { signature, engine });
-    operation(&write.as_ref().ok_or("Search state is unavailable.")?.engine)
+    let result = operation(&write.as_ref().ok_or("Search state is unavailable.")?.engine);
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    {
+        drop(write);
+        if result.is_ok() { schedule_legacy_cleanup(config, protected.to_vec()); }
+    }
+    result
 }
 
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
+static AUTO_CLEANUP_STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
+static AUTO_CLEANUP_MESSAGE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
+pub(super) fn automatic_cleanup_message() -> Option<String> {
+    AUTO_CLEANUP_MESSAGE.lock().ok().and_then(|message| message.clone())
+}
+
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
+fn schedule_legacy_cleanup(config: IndexConfig, protected: Vec<PathBuf>) {
+    use std::sync::atomic::Ordering;
+    // A protected scope and Tantivy lock alone contain no old index data.
+    let requires_cleanup = match std::fs::read_dir(&config.index_dir) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(_) => true,
+        Ok(entries) => entries.into_iter().any(|entry| match entry {
+            Err(_) => true,
+            Ok(entry) => !matches!(entry.file_name().to_str(),
+                Some("scope-v2.dpapi" | ".tantivy-writer.lock" | ".tantivy-meta.lock")),
+        }),
+    };
+    if !requires_cleanup || AUTO_CLEANUP_STARTED.swap(true, Ordering::AcqRel) { return; }
+    let spawned = std::thread::Builder::new().name("search-legacy-cleanup".into()).spawn(move || {
+        let outcome = (|| {
+            let _replacement = super::locks::IndexReplacementLock::acquire()?;
+            cleanup_legacy(&config, &protected)
+        })();
+        let message = match outcome {
+            Ok((_, 0)) => None,
+            Ok((_, count)) => Some(format!("Old search backups remain in WinCommander storage ({count} folders).")),
+            Err(error) => Some(format!("Old search data could not be cleaned: {error}")),
+        };
+        if let Ok(mut slot) = AUTO_CLEANUP_MESSAGE.lock() { *slot = message; }
+    });
+    if spawned.is_err() {
+        if let Ok(mut slot) = AUTO_CLEANUP_MESSAGE.lock() { *slot = Some("Old search data cleanup could not start.".into()); }
+    }
+}
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
 pub(super) fn cleanup_legacy(config: &IndexConfig, protected: &[PathBuf]) -> Result<(usize, usize), String> {
     let expected = serde_json::to_string(&(config, protected)).map_err(|e| e.to_string())?;

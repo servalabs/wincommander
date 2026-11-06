@@ -213,6 +213,8 @@ pub async fn content_index_status() -> Result<IndexStatus, String> {
             &plan.protected,
             |engine| Ok(engine.status()),
         )?;
+        #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+        if status.last_error.is_none() { status.last_error = global::automatic_cleanup_message(); }
         for shard in &plan.private {
             let (state, message, count) = private_jobs::state(shard);
             status.indexed_docs += count;
