@@ -95,6 +95,21 @@ pub(crate) fn remove_managed(old: &Path, fence: &crate::encrypted_search_fence::
 mod tests {
     use super::*;
     #[test]
+    fn cleans_real_tantivy_cache_on_disposable_directory() {
+        use tantivy::{doc, schema::{Schema, TEXT}};
+        let root = tempfile::tempdir().unwrap(); let old = root.path().join("fts");
+        std::fs::create_dir(&old).unwrap();
+        let mut builder = Schema::builder(); let body = builder.add_text_field("body", TEXT);
+        let index = tantivy::Index::create_in_dir(&old, builder.build()).unwrap();
+        let mut writer = index.writer(50_000_000).unwrap();
+        writer.add_document(doc!(body => "old cache content")).unwrap(); writer.commit().unwrap();
+        drop(writer); drop(index);
+        let fence = crate::encrypted_search_fence::SearchOperationFence::acquire_exclusive(root.path()).unwrap();
+        assert!(remove_managed(&old, &fence).unwrap() > 0);
+        assert!(!old.join("meta.json").exists());
+        assert_eq!(remove_managed(&old, &fence).unwrap(), 0);
+    }
+    #[test]
     fn disposable_cache_cleanup_is_bounded_and_retryable() {
         let root = tempfile::tempdir().unwrap(); let old = root.path().join("fts");
         std::fs::create_dir(&old).unwrap();
