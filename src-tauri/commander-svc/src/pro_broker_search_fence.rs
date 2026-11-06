@@ -114,6 +114,14 @@ mod tests {
             .open(root.join(".encrypted-search-maintenance.lock")).unwrap()
     }
     #[test]
+    fn broker_does_not_create_a_missing_user_lock() {
+        let root = fixture();
+        std::fs::remove_file(root.join(".encrypted-search-maintenance.lock")).unwrap();
+        assert!(acquire_at(&root).is_err());
+        assert!(!root.join(".encrypted-search-maintenance.lock").exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+    #[test]
     fn broker_lease_excludes_cleanup_and_releases_on_drop() {
         let root = fixture();
         let lease = acquire_at(&root).unwrap();
