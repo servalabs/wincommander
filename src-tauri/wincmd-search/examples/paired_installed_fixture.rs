@@ -22,8 +22,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             engine
         }
         "verify" => {
-            let selection = index.parent().ok_or("missing index parent")?.join(".wincommander-encrypted-selection");
-            let hits = SearchEngine::experimental_selected_readonly_query(&index, &selection, &query)?;
+            let parent = index.parent().ok_or("missing index parent")?;
+            let selection = parent.join(".wincommander-encrypted-selection");
+            let fence = wincmd_search::encrypted_search_fence::SearchOperationFence::acquire_exclusive(parent)?;
+            let hits = SearchEngine::experimental_selected_readonly_query(&index, &selection, &query, &fence)?;
             if !hits.iter().any(|hit| hit.path.eq_ignore_ascii_case(&file.to_string_lossy())) {
                 return Err("synthetic document was not already present in the protected index".into());
             }

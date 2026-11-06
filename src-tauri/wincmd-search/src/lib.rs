@@ -371,9 +371,10 @@ impl SearchEngine {
     /// Inspect committed keyword hits without crawling, watching or writing the
     /// selected encrypted generation. Intended for disposable acceptance tests.
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
-    pub fn experimental_selected_readonly_query(old_index: &std::path::Path, selection_dir: &std::path::Path, query: &ContentQuery) -> Result<Vec<ContentHit>> {
+    pub fn experimental_selected_readonly_query(old_index: &std::path::Path, selection_dir: &std::path::Path, query: &ContentQuery, fence: &crate::encrypted_search_fence::SearchOperationFence) -> Result<Vec<ContentHit>> {
         use crate::encrypted_generation_prototype::{inspect, PinnedSelectionStore, UserProtector};
         let parent = old_index.parent().ok_or_else(|| SearchError::Config("invalid old index path".into()))?;
+        fence.require_exclusive_for(parent)?;
         let _parent_pins = crate::read_only::CheckedDirectory::pin_root_path(parent)?;
         let mut selection = PinnedSelectionStore::open_readonly(selection_dir)?;
         let selected = inspect(&mut selection, &UserProtector)?
@@ -1755,9 +1756,21 @@ mod tests {
             files
         };
         let before = snapshot();
-        assert!(SearchEngine::experimental_selected_readonly_query(&old, &selection, &query).unwrap().is_empty());
-        assert!(SearchEngine::experimental_selected_readonly_query(&old, &selection, &query).unwrap().is_empty());
+        assert!(crate::encrypted_search_fence::SearchOperationFence::acquire_shared(root.path()).is_err());
+        assert!(SearchEngine::experimental_selected_readonly_query(&old, &selection, &query, &guard).unwrap().is_empty());
+        assert!(SearchEngine::experimental_selected_readonly_query(&old, &selection, &query, &guard).unwrap().is_empty());
         assert_eq!(snapshot(), before, "read-only verification must not change files");
+        let proof = selection.join("candidate-proof.v1");
+        let missing_proof = selection.join("candidate-proof.saved");
+        fs::rename(&proof, &missing_proof).unwrap();
+        assert!(SearchEngine::experimental_selected_readonly_query(&old, &selection, &query, &guard).is_err());
+        fs::rename(&missing_proof, &proof).unwrap();
+        let key = generation.join("protected-search-key.v1");
+        let missing_key = generation.join("protected-search-key.saved");
+        fs::rename(&key, &missing_key).unwrap();
+        assert!(SearchEngine::experimental_selected_readonly_query(&old, &selection, &query, &guard).is_err());
+        fs::rename(&missing_key, &key).unwrap();
+        assert_eq!(snapshot(), before, "failed verification must not change files");
         let backup = SearchEngine::quarantine_selected_with_fence(&old, &selection, &guard).unwrap();
         assert_eq!(fs::read(backup.join("meta.json")).unwrap(), b"legacy saved");
         drop(guard);
@@ -1768,7 +1781,8 @@ mod tests {
         assert_eq!(live.search(&query).unwrap().len(), 1);
         live.stop();
         drop(live);
-        assert_eq!(SearchEngine::experimental_selected_readonly_query(&old, &selection, &query).unwrap().len(), 1);
+        let guard = crate::encrypted_search_fence::SearchOperationFence::acquire_exclusive(root.path()).unwrap();
+        assert_eq!(SearchEngine::experimental_selected_readonly_query(&old, &selection, &query, &guard).unwrap().len(), 1);
     }
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     #[test]
