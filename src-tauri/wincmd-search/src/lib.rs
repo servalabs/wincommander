@@ -528,15 +528,24 @@ impl SearchEngine {
         // An interrupted rebuild may have created a large encrypted candidate
         // before it could publish an origin. Refuse to accumulate a new one on
         // each restart, including when a legacy index is still present.
+        let mut interrupted_count = 0usize;
+        let mut preserved_candidate = false;
         for entry in std::fs::read_dir(parent)? {
             let name = entry?.file_name();
             let name = name.to_string_lossy();
+            preserved_candidate |= name.starts_with(".wincommander-orphaned-index-");
             if fresh && name.starts_with(".wincommander-legacy-index-backup-") {
                 return Err(SearchError::Config("Prior encrypted search data needs recovery; existing files were retained.".into()));
             }
             if name.strip_prefix(".wincommander-encrypted-").is_some_and(|id| id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit())) {
-                return Err(SearchError::Config("SEARCH_INTERRUPTED_CANDIDATE".into()));
+                interrupted_count += 1;
             }
+        }
+        if interrupted_count == 1 && !preserved_candidate {
+            return Err(SearchError::Config("SEARCH_INTERRUPTED_CANDIDATE".into()));
+        }
+        if interrupted_count > 0 {
+            return Err(SearchError::Config("Interrupted search data requires further recovery; existing files were retained.".into()));
         }
         let mut identity = [0u8; 16];
         OsRng.fill_bytes(&mut identity);
@@ -1895,6 +1904,14 @@ mod tests {
                     .filter(|id| id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit())).map(|_| ())
             }).count(), 1);
         }
+        let saved = root.path().join(".wincommander-orphaned-index-existing");
+        fs::create_dir(&saved).unwrap();
+        let result = SearchEngine::open_or_rebuild_experimental_with_policy(make_config(old.clone(), vec![]), Arc::new(|_| true));
+        assert!(matches!(result, Err(SearchError::Config(message)) if message.contains("further recovery")));
+        fs::remove_dir(saved).unwrap();
+        fs::create_dir(root.path().join(format!(".wincommander-encrypted-{}", "cd".repeat(16)))).unwrap();
+        let result = SearchEngine::open_or_rebuild_experimental_with_policy(make_config(old, vec![]), Arc::new(|_| true));
+        assert!(matches!(result, Err(SearchError::Config(message)) if message.contains("further recovery")));
     }
 
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
