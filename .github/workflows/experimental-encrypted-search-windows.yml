@@ -80,4 +80,4 @@ jobs:
       - run: bun run encrypt-backend
         working-directory: .
       - run: cargo check --locked -p commander-free --features experimental-encrypted-search
-      - run: cargo test --locked -p commander-free --lib --features experimental-encrypted-search search_migration_cli::tests::fresh_requires_no_legacy_selection_or_recovery_artifacts
+      - run: cargo test --locked -p commander-free --lib --features experimental-encrypted-search search_migration_cli::tests::

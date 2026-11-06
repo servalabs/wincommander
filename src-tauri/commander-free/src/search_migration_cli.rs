@@ -59,6 +59,10 @@ pub fn run(phase: &str) -> Result<String, String> {
     } else {
         crate::file_search::runtime_fence::verified_parent()?
     };
+    run_in_parent(phase, &parent)
+}
+
+fn run_in_parent(phase: &str, parent: &Path) -> Result<String, String> {
     let old = parent.join("fts");
     let selection = parent.join(".wincommander-encrypted-selection");
     match phase {
@@ -145,6 +149,18 @@ pub fn run(phase: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn stage_and_verify_preserve_existing_cache() {
+        let root = tempfile::tempdir().unwrap(); let old = root.path().join("fts");
+        std::fs::create_dir(&old).unwrap();
+        std::fs::write(old.join("meta.json"), b"legacy installer fixture").unwrap();
+        let outcome = run_in_parent("stage", root.path()).unwrap();
+        assert!(outcome.contains("old-cache=retained"));
+        assert_eq!(std::fs::read(old.join("meta.json")).unwrap(), b"legacy installer fixture");
+        assert!(run_in_parent("verify-staged", root.path()).unwrap().contains("old-cache=retained"));
+        assert_eq!(std::fs::read(old.join("meta.json")).unwrap(), b"legacy installer fixture");
+        assert!(run_in_parent("stage", root.path()).is_ok());
+    }
     #[test]
     fn fresh_requires_no_legacy_selection_or_recovery_artifacts() {
         let root = tempfile::tempdir().unwrap();
