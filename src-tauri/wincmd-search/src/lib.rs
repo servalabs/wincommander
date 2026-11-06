@@ -1674,7 +1674,8 @@ mod tests {
         drop(directory);
         let original = root.path().join("original");
         fs::rename(&old, &original).unwrap(); fs::create_dir(&old).unwrap();
-        assert!(SearchEngine::open_or_rebuild_experimental_with_policy(config, Arc::new(|_| true)).is_err());
+        let result = SearchEngine::open_or_rebuild_experimental_with_policy(config, Arc::new(|_| true));
+        assert!(matches!(result, Err(SearchError::Config(message)) if message == "Original search source changed; recovery required."));
         assert!(original.is_dir()); assert!(!selection.join("candidate-proof.v1").exists());
     }
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
