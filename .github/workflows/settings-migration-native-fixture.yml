@@ -450,6 +450,7 @@ jobs:
       - name: Verify Cargo profile and optimization policy
         shell: pwsh
         run: |
+          $PSNativeCommandUseErrorActionPreference = $false
           $fixture = Join-Path $env:RUNNER_TEMP 'paired-profile-check'
           New-Item -ItemType Directory -Path (Join-Path $fixture 'src') -Force | Out-Null
           '[package]`nname = "paired-profile-check"`nversion = "0.0.0"`nedition = "2021"' -replace '`n', "`n" | Set-Content -Encoding utf8 (Join-Path $fixture 'Cargo.toml')
@@ -473,14 +474,17 @@ jobs:
           $output = & cargo check --release --manifest-path "$fixture/Cargo.toml" 2>&1 | Out-String
           Remove-Item Env:CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS
           if ($LASTEXITCODE -eq 0 -or $output -notmatch 'LAB_GUARD_REQUIRED') { throw 'Release debug-assertion guard failed.' }
+          $global:LASTEXITCODE = 0
       - name: Reject release builds without lab opt-in even with debug assertions
         working-directory: src-tauri
         shell: pwsh
         run: |
+          $PSNativeCommandUseErrorActionPreference = $false
           $env:CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS = 'true'
           $output = cargo check --locked --release -p commander-free --features experimental-encrypted-search 2>&1 | Out-String
           Write-Host $output
           if ($LASTEXITCODE -eq 0 -or $output -notmatch 'restricted to explicitly opted-in Windows lab builds') { throw 'Release brake failed.' }
+          $global:LASTEXITCODE = 0
       - name: Check explicitly opted-in paired lab release
         working-directory: src-tauri
         shell: pwsh
