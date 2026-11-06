@@ -37,6 +37,11 @@ Var WCSearchFenceHandle
 !endif
 Var WCUserStageServiceRunning
 !endif
+!ifdef WC_PAIRED_SEARCH_RELEASE
+!define WC_CHECK_KNOWN_PRO "${__FILEDIR__}\check-known-pro-writers.ps1"
+!define WC_PAIRED_SERVICE_CONTROL "${__FILEDIR__}\settings-stage-service.ps1"
+Var WCPairedServiceRunning
+!endif
 !define WC_REPAIR_SHARED_SETTINGS "${__FILEDIR__}\repair-shared-settings.ps1"
 !define WC_REPAIR_VAULT_DRIVER_ACCESS "${__FILEDIR__}\..\..\..\tools\repair-vault-driver-access.ps1"
 !define WC_UPGRADE_LICENSE_BACKUP "$R5\WinCommander-license_cache.upgrade-backup.json"
@@ -195,6 +200,21 @@ FunctionEnd
   Abort "${message}"
 !macroend
 
+!ifdef WC_PAIRED_SEARCH_RELEASE
+!macro WC_PAIRED_ABORT message
+  ${If} $WCPairedServiceRunning == 1
+    !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
+    nsExec::ExecToStack /TIMEOUT=150000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-paired-service.ps1" -Action Restore'
+    Pop $0
+    Pop $1
+    ${If} $0 != 0
+      Abort "The previous WinCommander service could not be restored. Restart it before retrying setup."
+    ${EndIf}
+  ${EndIf}
+  Abort "${message}"
+!macroend
+!endif
+
 ; `sc stop` returns before SCM has necessarily released the service process.
 ; Replacing its executable early can fail silently, then leave the next start
 ; using a stale image. Wait until SCM confirms STOPPED before copying.
@@ -294,7 +314,42 @@ FunctionEnd
       !insertmacro WC_ABORT_STOP_FAILURE "preinstall" "WinCommander could not stop its service for settings staging."
     ${EndIf}
   !else
-    !insertmacro WC_STOP_OWNED_SERVICE_OR_ABORT "preinstall" ""
+    !ifdef WC_PAIRED_SEARCH_RELEASE
+      InitPluginsDir
+      File /oname=$PLUGINSDIR\wincommander-paired-service.ps1 "${WC_PAIRED_SERVICE_CONTROL}"
+      File /oname=$PLUGINSDIR\wincommander-check-pro.ps1 "${WC_CHECK_KNOWN_PRO}"
+      !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
+      nsExec::ExecToStack /TIMEOUT=30000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-paired-service.ps1" -Action Status'
+      Pop $0
+      Pop $1
+      StrCpy $WCPairedServiceRunning 0
+      ${If} $0 == 4
+        StrCpy $WCPairedServiceRunning 1
+      ${ElseIf} $0 != 1
+      ${AndIf} $0 != 0
+        Abort "WinCommander could not inspect its service before updating."
+      ${EndIf}
+      nsExec::ExecToStack /TIMEOUT=30000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-check-pro.ps1" -InstallDirectory "$INSTDIR"'
+      Pop $0
+      Pop $1
+      ${If} $0 != 0
+        Abort "Close WinCommander Pro in all Windows sessions and retry the update."
+      ${EndIf}
+      nsExec::ExecToStack /TIMEOUT=225000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-paired-service.ps1" -Action Stop'
+      Pop $0
+      Pop $1
+      ${If} $0 != 0
+        !insertmacro WC_PAIRED_ABORT "WinCommander could not stop its service before updating."
+      ${EndIf}
+      nsExec::ExecToStack /TIMEOUT=30000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-check-pro.ps1" -InstallDirectory "$INSTDIR"'
+      Pop $0
+      Pop $1
+      ${If} $0 != 0
+        !insertmacro WC_PAIRED_ABORT "Close WinCommander Pro in all Windows sessions and retry the update."
+      ${EndIf}
+    !else
+      !insertmacro WC_STOP_OWNED_SERVICE_OR_ABORT "preinstall" ""
+    !endif
   !endif
   !ifdef WC_EXPERIMENTAL_SEARCH_FENCE
     ; The helper duplicates verified file and directory handles into this

@@ -8,3 +8,10 @@ export function pairedServiceHash(service: Uint8Array, expected: string): string
   if (actual !== expected.toLowerCase()) throw new Error("Final service bytes do not match the paired SHA-256.");
   return actual;
 }
+
+export function pairedSearchTemplate(template: string): string {
+  if (!template.includes('!include "{{installer_hooks}}"') || template.includes('!define WC_PAIRED_SEARCH_RELEASE')) {
+    throw new Error("Unexpected NSIS template; paired writer checks cannot be bound.");
+  }
+  return '!define WC_PAIRED_SEARCH_RELEASE\n' + template;
+}

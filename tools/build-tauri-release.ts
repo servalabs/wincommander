@@ -1,7 +1,7 @@
 import { copyFileSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { assertSharedAssets } from "./check-shared-assets";
-import { pairedServiceHash } from "./paired-search-release-contract";
+import { pairedServiceHash, pairedSearchTemplate } from "./paired-search-release-contract";
 
 const root = resolve(import.meta.dirname, "..");
 assertSharedAssets(root);
@@ -9,6 +9,7 @@ const configPath = resolve(root, "src-tauri", "commander-free", "tauri.conf.json
 const generatedConfigPath = resolve(root, "src-tauri", "commander-free", "tauri.release.generated.json");
 const contextShredBuildPath = resolve(root, "src-tauri", "target", "release", "wincommander-context-shred.exe");
 const pairedSearch = process.argv.includes("--experimental-paired-search");
+const pairedTemplatePath = resolve(root, "src-tauri", "commander-free", "nsis", "installer.paired.generated.nsi");
 const serviceBuildPath = pairedSearch
   ? resolve(process.env.WINCMD_FENCED_SERVICE_PATH ?? "")
   : resolve(root, "src-tauri", "target", "release", "wincommander-svc.exe");
@@ -77,7 +78,7 @@ run(
   "Calculator launcher release build",
 );
 const config = JSON.parse(readFileSync(configPath, "utf8")) as {
-  bundle: { resources: string[]; targets: string | string[] };
+  bundle: { resources: string[]; targets: string | string[]; windows: { nsis: { template: string } } };
 };
 const contextShredResource = "resources/wincommander-context-shred.exe";
 const contextDeleteIconResource = "resources/context-delete.ico";
@@ -99,6 +100,11 @@ config.bundle.resources = [
 // places the immutable application binary in Program Files, while each person
 // still gets their own settings when they run it without elevation.
 config.bundle.targets = ["nsis"];
+if (pairedSearch) {
+  const originalTemplate = resolve(root, "src-tauri", "commander-free", config.bundle.windows.nsis.template);
+  writeFileSync(pairedTemplatePath, pairedSearchTemplate(readFileSync(originalTemplate, "utf8")));
+  config.bundle.windows.nsis.template = "nsis/installer.paired.generated.nsi";
+}
 
 copyFileSync(contextShredBuildPath, stagedContextShredPath);
 copyFileSync(contextDeleteIconPath, stagedContextDeleteIconPath);
@@ -112,6 +118,7 @@ try {
   if (pairedSearch) pairedServiceHash(readFileSync(stagedServicePath), process.env.WINCMD_FENCED_SERVICE_SHA256 ?? "");
 } finally {
   rmSync(generatedConfigPath, { force: true });
+  if (pairedSearch) rmSync(pairedTemplatePath, { force: true });
   rmSync(stagedContextShredPath, { force: true });
   rmSync(stagedContextDeleteIconPath, { force: true });
   rmSync(stagedServicePath, { force: true });
