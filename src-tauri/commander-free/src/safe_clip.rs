@@ -38,9 +38,9 @@ use clipboard_win::{formats::FileList, Clipboard, Setter};
 // Version 3 stores paths below the scrubbed cache rather than raw selections,
 // and expands selected-folder roots into their scrubbed immediate children.
 // Older records are intentionally not eligible for system-clipboard publish.
-const CLIP_VERSION: u32 = 3;
-const CLIP_FILE: &str = "safe-clip.json";
-const SHELL_PENDING_FILE: &str = ".safe-copy-selection.json";
+const CLIP_VERSION: u32 = 4;
+const CLIP_FILE: &str = "safe-clip-v4.protected";
+const SHELL_PENDING_FILE: &str = ".safe-copy-selection-v4.protected";
 const CACHE_DIR: &str = "safe-clip-cache";
 const CACHE_STAGING_PREFIX: &str = ".wincommander-safe-copy-staging-";
 const SAFE_COPY_CANCELLED: &str = "Safe Copy canceled. The clipboard was not updated.";
@@ -445,26 +445,50 @@ fn clip_path() -> Result<PathBuf, String> {
     Ok(crate::paths::user_data_dir()?.join(CLIP_FILE))
 }
 
-fn read_clip() -> Option<SafeClip> {
-    let path = clip_path().ok()?;
-    let raw = std::fs::read_to_string(&path).ok()?;
-    serde_json::from_str(&raw).ok()
+const PROTECTED_HANDOFF_MAGIC: &[u8] = b"WCSAFE4\0";
+
+fn read_protected<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Option<T>, String> {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err("Safe Copy could not read its protected selection.".into()),
+    };
+    if bytes.len() > 4 * 1024 * 1024 || !bytes.starts_with(PROTECTED_HANDOFF_MAGIC) {
+        return Err("Safe Copy selection is invalid; use Safe Copy again.".into());
+    }
+    let plain = zeroize::Zeroizing::new(crate::datastore::user_dpapi_unprotect(
+        &bytes[PROTECTED_HANDOFF_MAGIC.len()..],
+    )?);
+    serde_json::from_slice(&plain)
+        .map(Some)
+        .map_err(|_| "Safe Copy selection is invalid; use Safe Copy again.".into())
+}
+
+fn read_clip() -> Result<Option<SafeClip>, String> {
+    let clip: Option<SafeClip> = read_protected(&clip_path()?)?;
+    if clip.as_ref().is_some_and(|c| c.version != CLIP_VERSION) {
+        return Err("Safe Copy selection is outdated; use Safe Copy again.".into());
+    }
+    Ok(clip)
 }
 
 fn write_clip_atomic(clip: &SafeClip) -> Result<(), String> {
-    let path = clip_path()?;
-    write_json_atomic(&path, clip, ".safe-clip.json.tmp")
+    write_json_atomic(&clip_path()?, clip, ".safe-clip-v4.tmp")
 }
 
 fn write_json_atomic<T: Serialize>(path: &Path, value: &T, tmp_name: &str) -> Result<(), String> {
     let parent = path.parent().ok_or("safe-clip path has no parent")?;
     std::fs::create_dir_all(parent).map_err(|e| format!("create dir: {e}"))?;
-    let bytes = serde_json::to_vec_pretty(value).map_err(|e| format!("serialize: {e}"))?;
+    let bytes =
+        zeroize::Zeroizing::new(serde_json::to_vec(value).map_err(|e| format!("serialize: {e}"))?);
+    let protected = crate::datastore::user_dpapi_protect(&bytes)?;
+    let mut envelope = PROTECTED_HANDOFF_MAGIC.to_vec();
+    envelope.extend_from_slice(&protected);
     let tmp = parent.join(tmp_name);
-    std::fs::write(&tmp, &bytes).map_err(|e| format!("write temp: {e}"))?;
+    std::fs::write(&tmp, &envelope).map_err(|e| format!("write protected selection: {e}"))?;
     std::fs::rename(&tmp, path).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
-        format!("atomic rename: {e}")
+        format!("publish protected selection: {e}")
     })
 }
 
@@ -475,10 +499,7 @@ fn shell_pending_path() -> Result<PathBuf, String> {
 fn queue_shell_selection(paths: &[String]) -> Result<(), String> {
     let _guard = ClipLock::acquire()?;
     let path = shell_pending_path()?;
-    let mut pending = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|raw| serde_json::from_str::<PendingShellSelection>(&raw).ok())
-        .unwrap_or_default();
+    let mut pending: PendingShellSelection = read_protected(&path)?.unwrap_or_default();
     if pending.sources.is_empty() || pending.first_queued_at_ms == 0 {
         pending.first_queued_at_ms = now_ms();
     }
@@ -500,11 +521,9 @@ fn queue_shell_selection(paths: &[String]) -> Result<(), String> {
 fn take_settled_shell_selection(force: bool) -> Result<Option<(Vec<String>, u128)>, String> {
     let _guard = ClipLock::acquire()?;
     let path = shell_pending_path()?;
-    let Ok(raw) = std::fs::read_to_string(&path) else {
+    let Some(pending): Option<PendingShellSelection> = read_protected(&path)? else {
         return Ok(None);
     };
-    let pending: PendingShellSelection = serde_json::from_str(&raw)
-        .map_err(|error| format!("Safe Copy could not read its pending selection: {error}"))?;
     if pending.sources.is_empty() {
         let _ = std::fs::remove_file(&path);
         return Ok(None);
@@ -772,7 +791,7 @@ pub async fn record_sources(paths: &[String]) -> Result<usize, String> {
             if cancellation_requested {
                 SAFE_COPY_CANCELLED
             } else if result.is_ok() {
-                "Safe Copy is ready to paste."
+                "Selection saved. Right-click a destination and choose Safe Paste; normal Paste is unchanged."
             } else {
                 "Safe Copy could not complete. Please try again."
             },
@@ -806,77 +825,23 @@ async fn record_sources_inner(
     if !filtered.is_empty() {
         crate::license::require_paid("Safe Copy")?;
     }
-    let root = cache_root()?;
     if filtered.is_empty() {
         return Err("Safe Copy requires at least one non-protected item".into());
     }
-
-    let staged_batch = tempfile::Builder::new()
-        .prefix(CACHE_STAGING_PREFIX)
-        .tempdir_in(&root)
-        .map_err(|error| format!("Safe Copy could create its scrub staging area: {error}"))?;
-
-    // The licence and scrub complete before `write_clip_atomic` or CF_HDROP.
-    // Thus an error leaves the prior clean clipboard selection intact.
-    let mut cached_sources = Vec::with_capacity(filtered.len());
-    for (index, raw) in filtered.iter().enumerate() {
-        if let Some(progress) = progress {
-            progress.set_selection(index + 1, filtered.len());
+    for path in &filtered {
+        if !Path::new(path).is_absolute() || !Path::new(path).exists() {
+            return Err("Safe Copy requires existing absolute paths.".into());
         }
-        ensure_safe_copy_not_cancelled(progress)?;
-        cached_sources.extend(
-            cache_scrubbed_source(Path::new(raw), staged_batch.path(), &decoys, progress).await?,
-        );
     }
-    if cached_sources.is_empty() {
-        return Err("Safe Copy found no items inside the selected folder(s).".into());
-    }
-    if let Some(progress) = progress {
-        progress.set_phase("Waiting to update the clean clipboard…");
-    }
-    let relative_sources: Vec<PathBuf> = cached_sources
-        .iter()
-        .map(|path| {
-            path.strip_prefix(staged_batch.path())
-                .map(Path::to_path_buf)
-                .map_err(|_| {
-                    "Safe Copy staging produced a path outside its private batch".to_string()
-                })
-        })
-        .collect::<Result<_, _>>()?;
-
-    // Scrubbing can take much longer than a registry/clipboard update. Keep
-    // the cross-process mutex only around publishing and cleanup so concurrent
-    // requests cannot delete one another's active staging directories.
     let _guard = ClipLock::acquire()?;
     ensure_safe_copy_not_cancelled(progress)?;
-    if let Some(progress) = progress {
-        if !progress.begin_commit() {
-            return Err(SAFE_COPY_CANCELLED.to_string());
-        }
-    }
-    let staging_path = staged_batch.keep();
-    let batch = root.join(uuid::Uuid::new_v4().to_string());
-    if let Err(error) = std::fs::rename(&staging_path, &batch) {
-        let _ = std::fs::remove_dir_all(&staging_path);
-        return Err(format!(
-            "Safe Copy could not publish its clean cache: {error}"
-        ));
-    }
-
     let clip = SafeClip {
         version: CLIP_VERSION,
-        sources: relative_sources
-            .iter()
-            .map(|path| batch.join(path).to_string_lossy().to_string())
-            .collect(),
+        sources: filtered,
         stamped_at_ms: now_ms(),
     };
     let count = clip.sources.len();
     write_clip_atomic(&clip)?;
-    // `clip.sources` is a complete, scrubbed batch, never the original paths.
-    publish_windows_file_clipboard(&clip.sources)?;
-    remove_old_cache_batches(&root, &batch);
     Ok(count)
 }
 
@@ -1083,7 +1048,10 @@ pub fn handle_safe_copy_cli(args: &[String]) {
         .collect();
     let result = run_headless_with_pro_shutdown("Safe Copy", record_shell_selection(&paths));
     match result {
-        Ok(Some(n)) => crate::log_message("info", &format!("[SafeCopy] recorded {n} item(s)")),
+        Ok(Some(n)) => {
+            crate::log_message("info", &format!("[SafeCopy] recorded {n} item(s)"));
+            show_safe_copy_instructions();
+        }
         Ok(None) => crate::log_message("info", "[SafeCopy] joined grouped selection"),
         Err(e) => crate::log_message("warn", &format!("[SafeCopy] record failed: {e}")),
     }
@@ -1096,7 +1064,8 @@ pub fn handle_safe_copy_cli(args: &[String]) {
 pub fn handle_safe_paste_cli(args: &[String]) -> i32 {
     let dest = args
         .iter()
-        .skip(1).find(|arg| !arg.starts_with("--"))
+        .skip(1)
+        .find(|arg| !arg.starts_with("--"))
         .cloned();
     let Some(dest) = dest else {
         let error = "Safe Paste did not receive a destination folder. Refresh the context-menu integration and try again.";
@@ -1159,6 +1128,16 @@ where
     })
 }
 
+fn show_safe_copy_instructions() {
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_OK};
+        let text: Vec<u16> = "Selection saved. Right-click the destination and choose Safe Paste. Normal Windows Paste is unchanged. Files are read when pasted.\0".encode_utf16().collect();
+        let title: Vec<u16> = "WinCommander Safe Copy\0".encode_utf16().collect();
+        MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), MB_OK);
+    }
+}
+
 fn show_safe_paste_error(message: &str) {
     #[cfg(windows)]
     unsafe {
@@ -1191,9 +1170,7 @@ pub async fn safe_copy_record(_app: tauri::AppHandle, paths: Vec<String>) -> Res
 /// cache. The main UI intentionally does not present this as a persistent hint.
 #[tauri::command]
 pub async fn safe_clip_status() -> Result<SafeClipStatus, String> {
-    let cache = cache_root()?;
-    Ok(read_clip()
-        .filter(|clip| cache_batch_for_clip(clip, &cache).is_some())
+    Ok(read_clip()?
         .map(|c| SafeClipStatus {
             count: c.sources.len(),
             stamped_at_ms: c.stamped_at_ms,
@@ -1228,7 +1205,7 @@ pub async fn safe_paste_prepare_headless(dest_dir: String) -> Result<SafePasteRe
     if !dest.is_dir() {
         return Err("Safe Paste destination is not a folder".into());
     }
-    let clip = read_clip().unwrap_or(SafeClip {
+    let clip = read_clip()?.unwrap_or(SafeClip {
         version: CLIP_VERSION,
         sources: vec![],
         stamped_at_ms: 0,
@@ -1241,13 +1218,7 @@ pub async fn safe_paste_prepare_headless(dest_dir: String) -> Result<SafePasteRe
             source_count: 0,
         });
     }
-    // Older clips either stored raw selection paths or preserved the selected
-    // folder root. Require a fresh Safe Copy so Safe Paste cannot reintroduce
-    // the old wrapper-folder behavior.
-    let cache = cache_root()?;
-    if cache_batch_for_clip(&clip, &cache).is_none() {
-        return Err("This Safe Copy selection uses an outdated cache layout. Use Safe Copy again before pasting.".into());
-    }
+    // Version 4 stores current-user-protected paths. Files are read at paste time.
     let sources: Vec<PathBuf> = clip.sources.iter().map(PathBuf::from).collect();
     let decoys: HashSet<PathBuf> = crate::file_monitor::enrolled_decoy_paths()
         .into_iter()
@@ -1266,7 +1237,21 @@ pub async fn safe_paste_prepare_headless(dest_dir: String) -> Result<SafePasteRe
     // Stage outside the visible destination, on the same volume, so Explorer
     // never shows a temporary wrapper folder while scrubbed files are being
     // prepared. Only clean sources are ever renamed into `dest`.
+    // A durable marker deliberately blocks subsequent pastes if this process
+    // terminates during staging. Never guess ownership or delete an orphan.
+    let marker_path = crate::paths::user_data_dir()?.join(".safe-paste-v4-incomplete");
+    let marker = std::fs::OpenOptions::new().write(true).create_new(true).open(&marker_path)
+        .map_err(|_| "Safe Paste found an unfinished or concurrent operation. Temporary files may remain; contact support before retrying.".to_string())?;
+    marker
+        .sync_all()
+        .map_err(|_| "Safe Paste could not record its recovery marker.".to_string())?;
+    drop(marker);
     let staging = safe_paste_staging_dir(&dest)?;
+    write_json_atomic(
+        &marker_path,
+        &staging.path().to_string_lossy().to_string(),
+        ".safe-paste-v4-marker.tmp",
+    )?;
 
     let mut staged: Vec<(PathBuf, PathBuf)> = Vec::new();
     let mut nested_decoys_skipped = 0u32;
@@ -1348,6 +1333,12 @@ pub async fn safe_paste_prepare_headless(dest_dir: String) -> Result<SafePasteRe
     // A folder can change while the scrubber runs. The commit re-checks every
     // name and rolls the complete group back if a later rename fails.
     let copied = commit_staged_batch(staged, &mut skipped)?;
+    staging.close().map_err(|_| {
+        "Safe Paste completed but could not remove temporary files. Contact support.".to_string()
+    })?;
+    std::fs::remove_file(&marker_path).map_err(|_| {
+        "Safe Paste completed but its recovery marker remains. Contact support.".to_string()
+    })?;
 
     crate::log_message(
         "info",
@@ -1429,6 +1420,40 @@ impl Drop for ClipLock {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    #[cfg(windows)]
+    #[test]
+    fn protected_handoff_hides_path_and_rejects_tampering() {
+        let root = tempfile::TempDir::new().unwrap();
+        let path = root.path().join("selection");
+        let selection = SafeClip {
+            version: CLIP_VERSION,
+            sources: vec!["C:\\secret\\private.txt".into()],
+            stamped_at_ms: 1,
+        };
+        write_json_atomic(&path, &selection, "selection.tmp").unwrap();
+        let mut stored = std::fs::read(&path).unwrap();
+        assert!(!stored
+            .windows(b"private.txt".len())
+            .any(|part| part == b"private.txt"));
+        assert_eq!(
+            read_protected::<SafeClip>(&path).unwrap().unwrap().sources,
+            selection.sources
+        );
+        let last = stored.len() - 1;
+        stored[last] ^= 1;
+        std::fs::write(&path, stored).unwrap();
+        assert!(read_protected::<SafeClip>(&path).is_err());
+    }
+
+    #[test]
+    fn protected_handoff_rejects_plaintext_and_missing_is_distinct() {
+        let root = tempfile::TempDir::new().unwrap();
+        let path = root.path().join("selection");
+        assert!(read_protected::<SafeClip>(&path).unwrap().is_none());
+        std::fs::write(&path, b"{} ").unwrap();
+        assert!(read_protected::<SafeClip>(&path).is_err());
+    }
 
     #[test]
     fn promoting_a_file_keeps_its_name_as_one_clip_item() {

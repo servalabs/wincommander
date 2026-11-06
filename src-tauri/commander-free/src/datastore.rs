@@ -272,7 +272,7 @@ fn dpapi_unprotect(blob: &[u8]) -> Result<Vec<u8>, String> {
 // CRYPTPROTECT_LOCAL_MACHINE this material is only usable by this Windows
 // account. Clipboard rule authoring is personal state, never service state.
 #[cfg(windows)]
-fn user_dpapi_protect(plain: &[u8]) -> Result<Vec<u8>, String> {
+pub(crate) fn user_dpapi_protect(plain: &[u8]) -> Result<Vec<u8>, String> {
     use windows_sys::Win32::Foundation::LocalFree;
     use windows_sys::Win32::Security::Cryptography::{
         CryptProtectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
@@ -307,7 +307,7 @@ fn user_dpapi_protect(plain: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(windows)]
-fn user_dpapi_unprotect(blob: &[u8]) -> Result<Vec<u8>, String> {
+pub(crate) fn user_dpapi_unprotect(blob: &[u8]) -> Result<Vec<u8>, String> {
     use windows_sys::Win32::Foundation::LocalFree;
     use windows_sys::Win32::Security::Cryptography::{
         CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
@@ -364,12 +364,12 @@ fn dpapi_unprotect(blob: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(not(windows))]
-fn user_dpapi_protect(plain: &[u8]) -> Result<Vec<u8>, String> {
+pub(crate) fn user_dpapi_protect(plain: &[u8]) -> Result<Vec<u8>, String> {
     Ok(plain.to_vec())
 }
 
 #[cfg(not(windows))]
-fn user_dpapi_unprotect(blob: &[u8]) -> Result<Vec<u8>, String> {
+pub(crate) fn user_dpapi_unprotect(blob: &[u8]) -> Result<Vec<u8>, String> {
     Ok(blob.to_vec())
 }
 
