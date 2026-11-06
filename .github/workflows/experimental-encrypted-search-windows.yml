@@ -89,3 +89,4 @@ jobs:
       - run: 'cargo test --locked -p commander-free --lib --features experimental-encrypted-search search_migration_cli::tests::'
       - run: 'cargo test --locked -p commander-free --lib --features experimental-encrypted-search file_search::runtime_fence::tests::'
       - run: 'cargo test --locked -p commander-free --lib --features experimental-encrypted-search file_search::global::cleanup_tests::'
+      - run: 'cargo test --locked -p commander-free --lib --features experimental-encrypted-search first_rollout_capability_requires_exact_epoch_and_all_fences'

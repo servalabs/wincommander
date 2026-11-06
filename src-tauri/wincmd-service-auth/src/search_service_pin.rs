@@ -18,6 +18,39 @@ pub struct PinnedSearchService {
     _peer: VerifiedServicePeer,
     _image: File,
     _ancestors: Vec<File>,
+    path: PathBuf,
+}
+
+impl PinnedSearchService {
+    /// Recheck the authenticated process against SCM; the retained process
+    /// handle prevents PID reuse while this guard is alive.
+    pub fn running_pid(&self) -> io::Result<u32> {
+        let pid = unsafe { GetProcessId(self._peer._process.as_raw_handle() as HANDLE) };
+        let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
+            .map_err(|_| denied())?;
+        let service = manager
+            .open_service(
+                wincmd_shared::svc::SVC_WINDOWS_SERVICE_NAME,
+                ServiceAccess::QUERY_STATUS | ServiceAccess::QUERY_CONFIG,
+            )
+            .map_err(|_| denied())?;
+        let status = service.query_status().map_err(|_| denied())?;
+        require_running_pid(
+            status.current_state == ServiceState::Running,
+            status.process_id,
+            pid,
+        )?;
+        let config = service.query_config().map_err(|_| denied())?;
+        require_service_configuration(
+            status.service_type,
+            config.service_type,
+            config.account_name.as_deref(),
+        )?;
+        if service_executable(&config.executable_path)? != self.path {
+            return Err(denied());
+        }
+        Ok(pid)
+    }
 }
 
 /// A release image pinned while SCM reports the service stopped. A privileged
@@ -27,83 +60,6 @@ pub struct StoppedSearchServiceImage {
     path: PathBuf,
     image: File,
     ancestors: Vec<File>,
-}
-
-/// Experimental coordinator. Only call from an elevated, exclusive maintenance
-/// process after stopping older clients and excluding SCM configuration changes.
-/// A separate durable watchdog is required to recover an abrupt process crash.
-/// This function is intentionally not connected to search cleanup.
-pub fn restart_and_pin_search_service(
-    expected: &[u8; 32],
-) -> io::Result<StoppedSearchServiceImage> {
-    use windows_service::service::Service;
-    let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
-        .map_err(|_| denied())?;
-    let service = manager
-        .open_service(
-            wincmd_shared::svc::SVC_WINDOWS_SERVICE_NAME,
-            ServiceAccess::QUERY_STATUS
-                | ServiceAccess::QUERY_CONFIG
-                | ServiceAccess::START
-                | ServiceAccess::STOP,
-        )
-        .map_err(|_| denied())?;
-    let initial = service.query_status().map_err(|_| denied())?;
-    if initial.current_state != ServiceState::Running {
-        return Err(denied());
-    }
-    struct Restore<'a> {
-        service: &'a Service,
-        armed: bool,
-    }
-    impl Drop for Restore<'_> {
-        fn drop(&mut self) {
-            if self.armed {
-                let _ = self.service.start::<&str>(&[]);
-            }
-        }
-    }
-    // Arm before stopping so ordinary errors and unwinding attempt restoration.
-    // Drop cannot recover abrupt process death or report restoration failure.
-    let mut restore = Restore {
-        service: &service,
-        armed: true,
-    };
-    service.stop().map_err(|_| denied())?;
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    loop {
-        let status = service.query_status().map_err(|_| denied())?;
-        if status.current_state == ServiceState::Stopped {
-            break;
-        }
-        if std::time::Instant::now() >= deadline {
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "service stop timed out",
-            ));
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
-    let pin = pin_stopped_search_service(expected)?;
-    service.start::<&str>(&[]).map_err(|_| denied())?;
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    loop {
-        let status = service.query_status().map_err(|_| denied())?;
-        if status.current_state == ServiceState::Running {
-            restore.armed = false;
-            return Ok(pin);
-        }
-        if status.current_state == ServiceState::Stopped {
-            return Err(denied());
-        }
-        if std::time::Instant::now() >= deadline {
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "service start timed out",
-            ));
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
 }
 
 /// Prepare a controlled start without starting or stopping any service itself.
@@ -196,6 +152,7 @@ impl StoppedSearchServiceImage {
             _peer: peer,
             _image: self.image,
             _ancestors: self.ancestors,
+            path: self.path,
         })
     }
 }
@@ -326,6 +283,7 @@ impl VerifiedServicePeer {
             _peer: self,
             _image: image,
             _ancestors: ancestors,
+            path,
         })
     }
 }

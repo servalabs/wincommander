@@ -104,11 +104,18 @@ fn read_bounded(file: &mut std::fs::File, limit: usize) -> io::Result<Vec<u8>> {
 pub(crate) fn remove_managed(old: &Path, fence: &crate::encrypted_search_fence::SearchOperationFence) -> io::Result<usize> {
     remove_managed_with_hook(old, fence, || {})
 }
+pub(crate) fn remove_managed_with_service(old: &Path, fence: &crate::encrypted_search_fence::SearchOperationFence, service_pid: u32) -> io::Result<usize> {
+    remove_managed_inner(old, fence, Some(service_pid), || {})
+}
 fn remove_managed_with_hook(old: &Path, fence: &crate::encrypted_search_fence::SearchOperationFence,
     after_validation: impl FnOnce()) -> io::Result<usize> {
+    remove_managed_inner(old, fence, None, after_validation)
+}
+fn remove_managed_inner(old: &Path, fence: &crate::encrypted_search_fence::SearchOperationFence,
+    service_pid: Option<u32>, after_validation: impl FnOnce()) -> io::Result<usize> {
     let parent = old.parent().ok_or_else(refused)?;
     fence.require_exclusive_for(parent)?;
-    crate::encrypted_search_maintenance::verify_known_writers_stopped().map_err(io::Error::other)?;
+    crate::encrypted_search_maintenance::verify_known_writers_except_service(service_pid).map_err(io::Error::other)?;
     let _pins = CheckedDirectory::pin_root_path(old)?;
     let directory = CheckedDirectory::open(old, AccessMode::Writable).map_err(|e| io::Error::other(e.to_string()))?;
     let _writer = directory.acquire_lock_pinned(&tantivy::directory::INDEX_WRITER_LOCK)

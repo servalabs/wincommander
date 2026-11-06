@@ -316,11 +316,7 @@ pub(crate) async fn experimental_search_service_capability(
     match reply {
         wincmd_shared::Envelope::Response(response) if response.request_id == request_id => {
             let value = response.result;
-            if value.get("protocol").and_then(Value::as_u64) == Some(1)
-                && value.get("broker_user_fence").and_then(Value::as_bool) == Some(true)
-                && value.get("system_search_disabled").and_then(Value::as_bool) == Some(true)
-                && value.get("app_dir").and_then(Value::as_str) == Some("WinCommander")
-            {
+            if experimental_capability_matches(&value) {
                 Ok(pin)
             } else {
                 Err("paired service capability is unavailable".to_string())
@@ -328,6 +324,39 @@ pub(crate) async fn experimental_search_service_capability(
         }
         _ => Err("invalid capability response".to_string()),
     }
+}
+
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
+fn experimental_capability_matches(value: &Value) -> bool {
+    // The first paired rollout assumes no earlier release emitted this epoch.
+    // Bump it whenever the broker or Pro fence security contract changes. This
+    // is not proof against a deliberately copied or replaced old executable.
+    value.get("protocol").and_then(Value::as_u64) == Some(1)
+        && value.get("epoch").and_then(Value::as_str)
+            == Some("wincommander-paired-search-fence-2026-11-v1")
+        && value.get("broker_user_fence").and_then(Value::as_bool) == Some(true)
+        && value.get("system_search_disabled").and_then(Value::as_bool) == Some(true)
+        && value.get("app_dir").and_then(Value::as_str) == Some("WinCommander")
+}
+
+#[cfg(all(test, windows, feature = "experimental-encrypted-search"))]
+#[test]
+fn first_rollout_capability_requires_exact_epoch_and_all_fences() {
+    let mut value = serde_json::json!({"protocol":1,"epoch":"wincommander-paired-search-fence-2026-11-v1","broker_user_fence":true,"system_search_disabled":true,"app_dir":"WinCommander"});
+    assert!(experimental_capability_matches(&value));
+    for key in [
+        "epoch",
+        "broker_user_fence",
+        "system_search_disabled",
+        "protocol",
+        "app_dir",
+    ] {
+        let old = value[key].take();
+        assert!(!experimental_capability_matches(&value));
+        value[key] = old;
+    }
+    value["epoch"] = serde_json::json!("old-release");
+    assert!(!experimental_capability_matches(&value));
 }
 
 #[cfg(windows)]

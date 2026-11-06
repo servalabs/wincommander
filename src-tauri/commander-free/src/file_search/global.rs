@@ -166,9 +166,16 @@ fn schedule_legacy_cleanup(config: IndexConfig, protected: Vec<PathBuf>) {
     if AUTO_CLEANUP_STARTED.swap(true, Ordering::AcqRel) { return; }
     let spawned = std::thread::Builder::new().name("search-legacy-cleanup".into()).spawn(move || {
         let outcome = (|| {
-            SearchEngine::check_legacy_cleanup_readiness().map_err(|e| e.to_string())?;
+            let service = if SearchEngine::check_legacy_cleanup_readiness().is_ok() {
+                None
+            } else {
+                // First rollout only: older deployed services do not implement
+                // this epoch. This does not prove mapped image bytes against
+                // deliberate replacement or copied old binaries.
+                Some(tauri::async_runtime::block_on(crate::svc_client::experimental_search_service_capability())?)
+            };
             let _replacement = super::locks::IndexReplacementLock::acquire()?;
-            cleanup_legacy(&config, &protected)
+            cleanup_legacy_with_service(&config, &protected, service.as_ref())
         })();
         let message = match outcome {
             Ok((_, 0)) => None,
@@ -185,6 +192,10 @@ fn schedule_legacy_cleanup(config: IndexConfig, protected: Vec<PathBuf>) {
 }
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
 pub(super) fn cleanup_legacy(config: &IndexConfig, protected: &[PathBuf]) -> Result<(usize, usize), String> {
+    cleanup_legacy_with_service(config, protected, None)
+}
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
+fn cleanup_legacy_with_service(config: &IndexConfig, protected: &[PathBuf], service: Option<&wincmd_service_auth::search_service_pin::PinnedSearchService>) -> Result<(usize, usize), String> {
     let expected = serde_json::to_string(&(config, protected)).map_err(|e| e.to_string())?;
     let mut write = cell().write().map_err(|_| "Search state is unavailable.")?;
     let current = write.as_mut().ok_or("Open search and let it finish indexing before cleanup.")?;
@@ -194,7 +205,13 @@ pub(super) fn cleanup_legacy(config: &IndexConfig, protected: &[PathBuf]) -> Res
     current.engine.stop();
     let result = super::runtime_fence::with_exclusive(|fence| {
         let backup_count = retained_backup_count(parent)?;
-        let removed = current.engine.cleanup_legacy_cache_after_reconciliation(fence).map_err(|e| e.to_string())?;
+        let removed = match service {
+            Some(service) => {
+                let pid = service.running_pid().map_err(|_| "The verified WinCommander service changed during cleanup.")?;
+                current.engine.cleanup_legacy_cache_with_fenced_service(fence, pid)
+            }
+            None => current.engine.cleanup_legacy_cache_after_reconciliation(fence),
+        }.map_err(|e| e.to_string())?;
         Ok((removed, backup_count))
     });
     // Cleanup stops its watcher, and even failed maintenance must reopen it.

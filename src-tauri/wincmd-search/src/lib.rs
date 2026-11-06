@@ -858,6 +858,20 @@ impl SearchEngine {
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     fn cleanup_legacy_cache_inner(&mut self, fence: &crate::encrypted_search_fence::SearchOperationFence,
         authorized_parent: &std::path::Path) -> Result<usize> {
+        self.cleanup_legacy_cache_inner_with_service(fence, authorized_parent, None)
+    }
+    /// The caller must authenticate the service capability and retain its
+    /// verified process and image handles throughout this operation.
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    pub fn cleanup_legacy_cache_with_fenced_service(&mut self, fence: &crate::encrypted_search_fence::SearchOperationFence,
+        service_pid: u32) -> Result<usize> {
+        if service_pid == 0 { return Err(SearchError::Config("Invalid service identity".into())); }
+        let authorized = crate::encrypted_legacy_cleanup::authorized_parent()?;
+        self.cleanup_legacy_cache_inner_with_service(fence, &authorized, Some(service_pid))
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    fn cleanup_legacy_cache_inner_with_service(&mut self, fence: &crate::encrypted_search_fence::SearchOperationFence,
+        authorized_parent: &std::path::Path, service_pid: Option<u32>) -> Result<usize> {
         let old = self.experimental_legacy_path.as_ref()
             .ok_or_else(|| SearchError::Config("legacy search location unavailable".into()))?;
         if old.file_name() != Some(std::ffi::OsStr::new("fts")) {
@@ -890,7 +904,10 @@ impl SearchEngine {
         if origin.id != id || origin.fresh || origin.source != actual {
             return Err(SearchError::Config("legacy search ownership could not be verified".into()));
         }
-        Ok(crate::encrypted_legacy_cleanup::remove_managed(old, fence)?)
+        Ok(match service_pid {
+            Some(pid) => crate::encrypted_legacy_cleanup::remove_managed_with_service(old, fence, pid)?,
+            None => crate::encrypted_legacy_cleanup::remove_managed(old, fence)?,
+        })
     }
     /// Locate the generation-specific quarantine path for inspection after an
     /// interrupted move. Existence alone is not proof of successful migration.
