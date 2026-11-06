@@ -1,13 +1,22 @@
 import { copyFileSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { assertSharedAssets } from "./check-shared-assets";
+import { pairedSearchTemplate, pairedServiceHash } from "./paired-search-release-contract";
 
 const root = resolve(import.meta.dirname, "..");
 assertSharedAssets(root);
 const configPath = resolve(root, "src-tauri", "commander-free", "tauri.conf.json");
 const generatedConfigPath = resolve(root, "src-tauri", "commander-free", "tauri.release.generated.json");
 const contextShredBuildPath = resolve(root, "src-tauri", "target", "release", "wincommander-context-shred.exe");
-const serviceBuildPath = resolve(root, "src-tauri", "target", "release", "wincommander-svc.exe");
+const pairedSearch = process.argv.includes("--experimental-paired-search");
+const serviceBuildPath = pairedSearch
+  ? resolve(process.env.WINCMD_FENCED_SERVICE_PATH ?? "")
+  : resolve(root, "src-tauri", "target", "release", "wincommander-svc.exe");
+const pairedTemplatePath = resolve(root, "src-tauri", "commander-free", "nsis", "installer.paired.generated.nsi");
+if (pairedSearch && !process.env.WINCMD_FENCED_SERVICE_PATH) {
+  throw new Error("Paired build requires the final signed guarded service path.");
+}
+if (pairedSearch) pairedServiceHash(readFileSync(serviceBuildPath), process.env.WINCMD_FENCED_SERVICE_SHA256 ?? "");
 const calculatorBuildPath = resolve(root, "src-tauri", "target", "release", "Calculator.exe");
 const contextDeleteIconPath = resolve(
   root,
@@ -58,16 +67,18 @@ run(
   ["cargo", "build", "--manifest-path", "src-tauri/Cargo.toml", "-p", "commander-context-shred", "--release"],
   "WinCommander context-delete helper release build",
 );
-run(
-  ["cargo", "build", "--manifest-path", "src-tauri/Cargo.toml", "-p", "commander-svc", "--release"],
-  "WinCommander machine-service release build",
-);
+if (!pairedSearch) {
+  run(
+    ["cargo", "build", "--manifest-path", "src-tauri/Cargo.toml", "-p", "commander-svc", "--release"],
+    "WinCommander machine-service release build",
+  );
+}
 run(
   ["cargo", "build", "--manifest-path", "src-tauri/Cargo.toml", "-p", "commander-calculator-launcher", "--release"],
   "Calculator launcher release build",
 );
 const config = JSON.parse(readFileSync(configPath, "utf8")) as {
-  bundle: { resources: string[]; targets: string | string[] };
+  bundle: { resources: string[]; targets: string | string[]; windows: { nsis: { template: string } } };
 };
 const contextShredResource = "resources/wincommander-context-shred.exe";
 const contextDeleteIconResource = "resources/context-delete.ico";
@@ -89,16 +100,25 @@ config.bundle.resources = [
 // places the immutable application binary in Program Files, while each person
 // still gets their own settings when they run it without elevation.
 config.bundle.targets = ["nsis"];
+if (pairedSearch) {
+  const originalTemplate = resolve(root, "src-tauri", "commander-free", config.bundle.windows.nsis.template);
+  writeFileSync(pairedTemplatePath, pairedSearchTemplate(readFileSync(originalTemplate, "utf8")));
+  config.bundle.windows.nsis.template = "nsis/installer.paired.generated.nsi";
+}
 
 copyFileSync(contextShredBuildPath, stagedContextShredPath);
 copyFileSync(contextDeleteIconPath, stagedContextDeleteIconPath);
 copyFileSync(serviceBuildPath, stagedServicePath);
+if (pairedSearch) pairedServiceHash(readFileSync(stagedServicePath), process.env.WINCMD_FENCED_SERVICE_SHA256 ?? "");
 copyFileSync(calculatorBuildPath, stagedCalculatorPath);
 writeFileSync(generatedConfigPath, `${JSON.stringify(config, null, 2)}\n`);
 try {
-  run(["bun", "x", "--package", "@tauri-apps/cli@2.12.4", "tauri", "build", "--config", generatedConfigPath], "Tauri release bundle");
+  run(["bun", "x", "--package", "@tauri-apps/cli@2.12.4", "tauri", "build", "--config", generatedConfigPath,
+    ...(pairedSearch ? ["--features", "experimental-encrypted-search"] : [])], "Tauri release bundle");
+  if (pairedSearch) pairedServiceHash(readFileSync(stagedServicePath), process.env.WINCMD_FENCED_SERVICE_SHA256 ?? "");
 } finally {
   rmSync(generatedConfigPath, { force: true });
+  if (pairedSearch) rmSync(pairedTemplatePath, { force: true });
   rmSync(stagedContextShredPath, { force: true });
   rmSync(stagedContextDeleteIconPath, { force: true });
   rmSync(stagedServicePath, { force: true });
