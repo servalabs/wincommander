@@ -1741,7 +1741,7 @@ mod tests {
         candidate.select_experimental_candidate(&selection).unwrap();
         drop(candidate);
         let generation = root.path().join(format!(".wincommander-encrypted-{}", hex::encode([73; 16])));
-        let query = ContentQuery { terms: "readonlyfixturecanary".into(), roots: vec![data], limit: 10, offset: 0, keyword_only: true };
+        let query = ContentQuery { terms: "readonlyfixturecanary".into(), roots: vec![data.clone()], limit: 10, offset: 0, keyword_only: true };
         let snapshot = || {
             let mut files = Vec::new();
             for directory in [&selection, &generation] {
@@ -1769,6 +1769,17 @@ mod tests {
         fs::rename(&held_key, &key).unwrap();
         assert_eq!(snapshot(), before);
         assert!(crate::encrypted_search_fence::SearchOperationFence::acquire_shared(root.path()).is_err());
+        drop(guard);
+        let live = SearchEngine::open_experimental_selected_with_policy(
+            make_config(old.clone(), vec![data]), Arc::new(|_| true), &selection,
+        ).unwrap();
+        assert_eq!(live.search(&query).unwrap().len(), 1);
+        live.stop();
+        drop(live);
+        let guard = crate::encrypted_search_fence::SearchOperationFence::acquire_exclusive(root.path()).unwrap();
+        let after_indexing = snapshot();
+        assert_eq!(SearchEngine::experimental_selected_readonly_query(&old, &selection, &query, &guard).unwrap().len(), 1);
+        assert_eq!(snapshot(), after_indexing);
     }
 
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
