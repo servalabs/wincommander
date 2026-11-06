@@ -239,4 +239,3 @@ fn duplicate_search_fence_handles(parent_dir: &std::path::Path, pid: u32, mut pi
     std::io::stdout().flush().map_err(|_| "Cannot confirm search maintenance handle.")?;
     Ok(())
 }
-

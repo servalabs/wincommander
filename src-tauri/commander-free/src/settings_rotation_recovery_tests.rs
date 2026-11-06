@@ -212,4 +212,3 @@ fn f6_shared_read_rechecks_and_concurrent_creators_return_one_winner() {
     let owner = LockedSelectedGeneration::try_open(root.path()).unwrap();
     assert!(owner.write_section("f6-keystore", json!({"signing_seed_hex":"ff".repeat(32)})).is_err());
 }
-

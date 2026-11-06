@@ -162,4 +162,3 @@ impl GuardedStage<'_> {
         self.snapshot.verify_generation(&self.output)
     }
 }
-

@@ -287,4 +287,3 @@ impl LockedSelectedGeneration {
         cutover::update(&self._ownership, &anchor, &file, &candidate, &|bytes| verify_scoped_generation(self.scope, bytes))
     }
 }
-

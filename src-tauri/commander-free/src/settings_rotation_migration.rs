@@ -192,4 +192,3 @@ pub(super) fn install_migration_explicitly() -> Result<(), String> {
         provision_verified_fresh_install()
     }
 }
-

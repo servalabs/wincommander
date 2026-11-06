@@ -106,4 +106,3 @@
         assert_eq!(anchor.read().unwrap(), Some(AnchorState::Legacy));
         assert_eq!(std::fs::read(key).unwrap(), b"existing key");
     }
-

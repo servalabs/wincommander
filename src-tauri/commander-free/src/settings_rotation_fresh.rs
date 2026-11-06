@@ -128,4 +128,3 @@ fn select_initial_generation(
     verify_source(&observed, old_material, sections)?;
     Ok(())
 }
-
