@@ -54,6 +54,20 @@ export default function SearchFilesPanel() {
   const [copiedPath, setCopiedPath] = useState<string | null>(null);
   // Index setup stays available independently of the query and result tab.
   const [showIndexSettings, setShowIndexSettings] = useState(false);
+  const [recoveringIndex, setRecoveringIndex] = useState(false);
+  const [recoveryNotice, setRecoveryNotice] = useState<string | null>(null);
+  const recoverIndex = useCallback(async () => {
+    setRecoveringIndex(true);
+    setRecoveryNotice(null);
+    try {
+      await invoke("content_recover_interrupted_cache");
+      setRecoveryNotice("Interrupted search data was kept. Search will retry the protected rebuild.");
+    } catch {
+      setRecoveryNotice("Search recovery could not finish. Close other WinCommander windows and try again. Your existing search data was kept.");
+    } finally {
+      setRecoveringIndex(false);
+    }
+  }, []);
   // Virtual selection across BOTH groups as one flat list; -1 = none.
   // Focus never leaves the input — rows are aria options, not tab stops.
   const [selected, setSelected] = useState(-1);
@@ -391,6 +405,10 @@ export default function SearchFilesPanel() {
         onToggle={() => setShowIndexSettings((value) => !value)}
         indexStatus={content.indexStatus}
         indexDisplayError={indexDisplayError}
+        searchProtectionPending={content.searchProtectionPending}
+        recoveringIndex={recoveringIndex}
+        recoveryNotice={recoveryNotice}
+        onRecoverIndex={recoverIndex}
         foldersReindexing={content.foldersReindexing}
         managementError={content.managementError}
         privacyStatus={content.privacyStatus}

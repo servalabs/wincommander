@@ -9,11 +9,15 @@ interface IndexControlsProps extends IndexedFoldersProps {
   onToggle: () => void;
   indexStatus: IndexStatus | null;
   indexDisplayError: string | null;
+  searchProtectionPending: boolean;
+  recoveringIndex: boolean;
+  recoveryNotice: string | null;
+  onRecoverIndex: () => void;
   foldersReindexing: boolean;
   managementError: string | null;
 }
 
-export default function IndexControls({ expanded, onToggle, indexStatus, indexDisplayError, foldersReindexing, managementError, ...folders }: IndexControlsProps) {
+export default function IndexControls({ expanded, onToggle, indexStatus, indexDisplayError, searchProtectionPending, recoveringIndex, recoveryNotice, onRecoverIndex, foldersReindexing, managementError, ...folders }: IndexControlsProps) {
   const showFolders = expanded || folders.roots.length === 0;
   return (
     <section className="sfp-index-controls" aria-label="Content search index">
@@ -39,6 +43,12 @@ export default function IndexControls({ expanded, onToggle, indexStatus, indexDi
           Indexed folders
         </Button>
       </div>
+      {searchProtectionPending && (
+        <Button size="sm" variant="ghost" disabled={recoveringIndex} onClick={onRecoverIndex}>
+          {recoveringIndex ? "Recovering search…" : "Recover interrupted search"}
+        </Button>
+      )}
+      {recoveryNotice && <p className="sfp-index-status__error" role="status">{recoveryNotice}</p>}
       {managementError && <p className="sfp-index-status__error" role="alert">{managementError}</p>}
       {showFolders && (
         <div id="sfp-indexed-folders" className="sfp-index-folders">
