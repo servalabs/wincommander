@@ -844,6 +844,20 @@ impl SearchEngine {
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     pub fn cleanup_legacy_cache_after_reconciliation(&mut self,
         fence: &crate::encrypted_search_fence::SearchOperationFence) -> Result<usize> {
+        let authorized = crate::encrypted_legacy_cleanup::authorized_parent()?;
+        self.cleanup_legacy_cache_inner(fence, &authorized)
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    fn cleanup_legacy_cache_inner(&mut self, fence: &crate::encrypted_search_fence::SearchOperationFence,
+        authorized_parent: &std::path::Path) -> Result<usize> {
+        let old = self.experimental_legacy_path.as_ref()
+            .ok_or_else(|| SearchError::Config("legacy search location unavailable".into()))?;
+        if old.file_name() != Some(std::ffi::OsStr::new("fts")) {
+            return Err(SearchError::Config("legacy search location is not authorized".into()));
+        }
+        let actual_parent = old.parent().ok_or_else(|| SearchError::Config("legacy search location unavailable".into()))?;
+        let _authorized_pins = crate::encrypted_legacy_cleanup::pin_authorized_parent(actual_parent, authorized_parent)?;
+        fence.require_exclusive_for(actual_parent)?;
         if self.experimental_selection.is_none() || self.experimental_id.is_none() || self.config.roots.is_empty() {
             return Err(SearchError::Config("A selected index and authoritative search roots are required.".into()));
         }
@@ -1639,7 +1653,10 @@ mod tests {
         let fence = crate::encrypted_search_fence::SearchOperationFence::acquire_exclusive(root.path()).unwrap();
         SearchEngine::rebuild_offline_and_select(make_config(old.clone(), vec![]), Arc::new(|_| false), &selection, &fence).unwrap();
         let mut engine = SearchEngine::open_experimental_selected_with_policy(make_config(old.clone(), vec![data]), Arc::new(|_| true), &selection).unwrap();
-        assert!(engine.cleanup_legacy_cache_after_reconciliation(&fence).unwrap() > 0);
+        let wrong_parent = TempDir::new().unwrap();
+        assert!(engine.cleanup_legacy_cache_inner(&fence, wrong_parent.path()).is_err());
+        assert!(old.join("meta.json").is_file());
+        assert!(engine.cleanup_legacy_cache_inner(&fence, root.path()).unwrap() > 0);
         assert!(!old.join("meta.json").exists()); assert!(!old.join("scope-v1.json").exists());
         assert!(old.join("scope-v2.dpapi").is_file());
         let query = ContentQuery { terms: "livecleanupneedle".into(), roots: vec![], limit: 10, offset: 0, keyword_only: true };

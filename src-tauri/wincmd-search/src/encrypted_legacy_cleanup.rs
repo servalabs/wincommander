@@ -13,6 +13,43 @@ use crate::read_only::{AccessMode, CheckedDirectory};
 const MAX_FILES: usize = 8192;
 const MAX_MANIFEST: usize = 4 * 1024 * 1024;
 fn refused() -> io::Error { io::Error::new(io::ErrorKind::PermissionDenied, "legacy search cleanup refused") }
+/// Resolve the current token's trusted local-app-data folder. No environment
+/// override or caller-supplied path is used for the destructive operation.
+pub(crate) fn authorized_parent() -> io::Result<std::path::PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::{System::Com::CoTaskMemFree, UI::Shell::{FOLDERID_LocalAppData, SHGetKnownFolderPath}};
+    let app = option_env!("WINCMD_APP_DIR").unwrap_or("WinCommander");
+    let mut parts = Path::new(app).components();
+    if !matches!(parts.next(), Some(Component::Normal(_))) || parts.next().is_some() { return Err(refused()); }
+    let mut raw = std::ptr::null_mut();
+    // SAFETY: API allocates a null-terminated path, released below.
+    let result = unsafe { SHGetKnownFolderPath(&FOLDERID_LocalAppData, 0, std::ptr::null_mut(), &mut raw) };
+    if result < 0 || raw.is_null() {
+        if !raw.is_null() { unsafe { CoTaskMemFree(raw.cast()) }; }
+        return Err(refused());
+    }
+    let base = unsafe {
+        let mut len = 0usize; while *raw.add(len) != 0 { len += 1; }
+        let path = std::ffi::OsString::from_wide(std::slice::from_raw_parts(raw, len));
+        CoTaskMemFree(raw.cast()); std::path::PathBuf::from(path)
+    };
+    if !base.is_absolute() { return Err(refused()); }
+    Ok(base.join(app).join("file-search"))
+}
+
+/// Hold both directory chains and require that they identify the same parent.
+pub(crate) fn pin_authorized_parent(actual: &Path, authorized: &Path) -> io::Result<Vec<std::fs::File>> {
+    let actual_pins = CheckedDirectory::pin_root_path(actual)?;
+    let authorized_pins = CheckedDirectory::pin_root_path(authorized)?;
+    let identity = |file: &std::fs::File| -> io::Result<(u32, u32, u32)> {
+        let mut info = BY_HANDLE_FILE_INFORMATION::default();
+        // SAFETY: handles and output remain valid.
+        if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 { return Err(io::Error::last_os_error()); }
+        Ok((info.dwVolumeSerialNumber, info.nFileIndexHigh, info.nFileIndexLow))
+    };
+    if identity(actual_pins.last().ok_or_else(refused)?)? != identity(authorized_pins.last().ok_or_else(refused)?)? { return Err(refused()); }
+    let mut pins = actual_pins; pins.extend(authorized_pins); Ok(pins)
+}
 fn cache_file(name: &str) -> bool {
     if matches!(name, "meta.json" | "schema.version" | ".managed.json" | "scope-v1.json") { return true; }
     let parts: Vec<&str> = name.split('.').collect();
