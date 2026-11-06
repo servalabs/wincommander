@@ -234,6 +234,25 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
     #[test]
+    fn pinned_binary_can_launch_and_matches_child_image() {
+        use sha2::{Digest, Sha256};
+        use windows_sys::Win32::System::Threading::QueryFullProcessImageNameW;
+        let root = fixture(); let path = root.join("fenced-pro.exe");
+        let system = std::env::var_os("SystemRoot").unwrap();
+        std::fs::copy(PathBuf::from(system).join("System32").join("cmd.exe"), &path).unwrap();
+        let hash = super::super::bytes_to_hex(&Sha256::digest(std::fs::read(&path).unwrap()));
+        let held = pin_and_verify(&path, &hash).unwrap();
+        let mut child = Command::new(&path).args(["/C", "ping -n 20 127.0.0.1 >nul"]).stdout(Stdio::null()).spawn().unwrap();
+        let mut image = vec![0u16; 32768]; let mut len = image.len() as u32;
+        assert_ne!(unsafe { QueryFullProcessImageNameW(child.as_raw_handle(), 0, image.as_mut_ptr(), &mut len) }, 0);
+        let actual = PathBuf::from(std::ffi::OsString::from_wide(&image[..len as usize]));
+        let file = OpenOptions::new().read(true).share_mode(FILE_SHARE_READ).open(actual).unwrap();
+        assert!(held.matches(&file));
+        child.kill().unwrap(); child.wait().unwrap();
+        drop(file); drop(held);
+        let _ = std::fs::remove_dir_all(root);
+    }
+    #[test]
     fn unconfirmed_child_exit_retains_lease() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         struct DropProbe(Arc<AtomicUsize>);
