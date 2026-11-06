@@ -46,7 +46,7 @@ export default function CleanupActionsMonitoring({
                         <div className="flex-1 h-px bg-[var(--color-border)] opacity-50" />
                         <span className="text-[9px] italic opacity-60 whitespace-nowrap" style={{ color: 'var(--color-text-muted)' }}>run on demand</span>
                     </div>
-                    <div className="cleanup-action-grid grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4">
+                    <div className="cleanup-action-grid cleanup-one-time-grid">
                         {ACTION_CATEGORIES.map(cat => {
                             const d = cardDataMap[cat.id] || { count: -1, items: [], loading: false, clearing: false };
                             const label = cleanupDisplayName(cat, displayMode ?? "advanced");
@@ -83,7 +83,7 @@ export default function CleanupActionsMonitoring({
                         <h4 className="text-[10px] font-semibold uppercase tracking-wider whitespace-nowrap" style={{ color: 'var(--color-text-muted)' }}>Windows repair</h4>
                         <div className="flex-1 h-px bg-[var(--color-border)] opacity-50" />
                     </div>
-                    <div className="cleanup-action-grid grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4">{repairActions}</div>
+                    <div className="cleanup-action-grid cleanup-one-time-grid">{repairActions}</div>
                 </section>
 
                 {/* System Monitoring */}

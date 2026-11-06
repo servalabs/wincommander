@@ -1286,7 +1286,11 @@ function Get-FleetForensicProjection {
                 $sourceRows = @($result.entries)
                 $records = @($sourceRows | ForEach-Object { @{ category = (& $sanitizeText $_.category 96); count = [int]$_.count; sample = (& $sanitizeText (($_.sample | ConvertTo-Json -Compress -Depth 3)) 256) } })
                 $columns = @(@{ key = 'category'; label = 'Category'; type = 'text' }, @{ key = 'count'; label = 'Records'; type = 'number' }, @{ key = 'sample'; label = 'Sample'; type = 'text'; sensitive = $true })
-                return (New-FleetForensicProjection -Category 'amcache' -Label 'Amcache' -Columns $columns -Records $records -Total ([int]$result.total) -Extra @{ hveFileExists = [bool]$result.hveFileExists; hveFileSizeMb = [double]$result.hveFileSizeMb })
+                $extra = @{}
+                if ($null -ne $result.hveFileExists) { $extra.hveFileExists = [bool]$result.hveFileExists }
+                if ($null -ne $result.hveFileSizeMb) { $extra.hveFileSizeMb = [double]$result.hveFileSizeMb }
+                if ($result.coverageNote) { $extra.coverageNote = [string]$result.coverageNote }
+                return (New-FleetForensicProjection -Category 'amcache' -Label 'Amcache' -Columns $columns -Records $records -Total ([int]$result.total) -Extra $extra)
             }
 
             'nt_user_traces' {
@@ -2969,6 +2973,79 @@ function Get-VirtualMemoryStatus {
 # GROUP I-A: STATUS VIEWERS (Get-* companions for each clear function)
 # ============================================================================
 
+function Invoke-WCAmcacheNativeCollector {
+    # WinCommander is a GUI-subsystem executable. PowerShell's call operator
+    # does not wait for it reliably, so explicitly own and drain both pipes.
+    $process = New-Object System.Diagnostics.Process
+    try {
+        $start = New-Object System.Diagnostics.ProcessStartInfo
+        $start.FileName = $env:WINCMD_EXE_PATH
+        $start.Arguments = '--internal-amcache-scan'
+        $start.UseShellExecute = $false
+        $start.CreateNoWindow = $true
+        $start.RedirectStandardOutput = $true
+        $start.RedirectStandardError = $true
+        $start.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+        $start.StandardErrorEncoding = [System.Text.Encoding]::UTF8
+        $process.StartInfo = $start
+        if (-not $process.Start()) { return $null }
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $stderr = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit(180000)) {
+            try { $process.Kill(); [void]$process.WaitForExit(5000) } catch { }
+            return $null
+        }
+        $output = $stdout.GetAwaiter().GetResult()
+        [void]$stderr.GetAwaiter().GetResult()
+        if ($process.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($output)) { return $null }
+        return $output
+    } catch { return $null }
+    finally {
+        if ($process) {
+            try { if (-not $process.HasExited) { $process.Kill(); [void]$process.WaitForExit(5000) } } catch { }
+            $process.Dispose()
+        }
+    }
+}
+
+function Get-WCAmcacheSnapshotInventory {
+    param([switch]$FleetProjection)
+    # The executable is supplied by the native backend, never by a UI parameter.
+    # The helper accepts no file path and creates its own temporary snapshot.
+    if ($env:WINCMD_AMCACHE_SNAPSHOT_AVAILABLE -ne '1' -or -not $env:WINCMD_EXE_PATH) { return $null }
+    try {
+        $output = Invoke-WCAmcacheNativeCollector
+        if (-not $output) { return $null }
+        $result = ConvertFrom-Json -InputObject $output -ErrorAction Stop
+        if ($result.status -ne 'complete' -or $null -eq $result.entries -or $null -eq $result.total) { return $null }
+        $expected = @('InventoryApplication', 'InventoryApplicationFile', 'InventoryApplicationShortcut', 'InventoryDeviceContainer', 'InventoryDriverBinary')
+        $entries = @(); $seen = @{}; $total = 0
+        foreach ($category in @($result.entries)) {
+            $name = [string]$category.category
+            if ($name -notin $expected -or $seen.ContainsKey($name) -or $null -eq $category.count -or $null -eq $category.sample) { return $null }
+            $count = 0
+            if (-not [int]::TryParse([string]$category.count, [ref]$count) -or $count -lt 0) { return $null }
+            $samples = @($category.sample)
+            if ($samples.Count -ne $count) { return $null }
+            $records = @()
+            foreach ($sample in $samples) {
+                if ($null -eq $sample -or [string]::IsNullOrWhiteSpace([string]$sample.id)) { return $null }
+                $record = @{ id = [string]$sample.id; name = [string]$sample.name; path = [string]$sample.path }
+                foreach ($field in @('productName', 'binaryVersion', 'longPath', 'longPathHash')) {
+                    if ($sample.$field -is [string] -and $sample.$field.Trim()) { $record[$field] = $sample.$field }
+                }
+                if (-not $FleetProjection -and $null -ne $sample.registryValues) { $record.registryValues = $sample.registryValues }
+                $records += $record
+            }
+            $entries += @{ category = $name; count = $count; sample = @($records) }
+            $seen[$name] = $true; $total += $count
+        }
+        $reportedTotal = 0
+        if ($seen.Count -ne $expected.Count -or -not [int]::TryParse([string]$result.total, [ref]$reportedTotal) -or $total -ne $reportedTotal) { return $null }
+        return @{ entries = @($entries); total = $total; partial = $false; status = 'complete'; inventoryRoot = $null; source = 'snapshot'; snapshotAt = $result.snapshotAt; coverage = 'limited'; coverageNote = 'This inventory comes from a temporary disk snapshot. Recent activity may not yet be recorded by Windows.' }
+    } catch { return $null }
+}
+
 function Get-AmcacheEntries {
     param([switch]$FleetProjection)
     # Returns Amcache hive file info + live registry entry counts per category
@@ -3018,6 +3095,16 @@ function Get-AmcacheEntries {
         }
         $mountAvailable = -not [string]::IsNullOrWhiteSpace($inventoryRoot)
 
+        $snapshotAttempted = -not $mountAvailable -and $hveExists -ne $false -and $env:WINCMD_AMCACHE_SNAPSHOT_AVAILABLE -eq '1' -and [bool]$env:WINCMD_EXE_PATH
+        if ($snapshotAttempted) {
+            $snapshot = Get-WCAmcacheSnapshotInventory -FleetProjection:$FleetProjection
+            if ($snapshot) {
+                $snapshot.hveFileExists = $true
+                $snapshot.hveFileSizeMb = $hveSize
+                return $snapshot
+            }
+        }
+
         $cats = $categoryNames |
             ForEach-Object { @{ name = $_; path = if ($mountAvailable) { "$inventoryRoot\$_" } else { $null } } }
         foreach ($cat in $cats) {
@@ -3060,7 +3147,8 @@ function Get-AmcacheEntries {
         foreach ($entry in $entries) { $totalCount += [int]$entry['count'] }
         $partial = -not $mountAvailable -and ($hveExists -or $hveReadError -or $mountErrors.Count -gt 0)
         $message = if ($partial) {
-            if ($hveReadError -or $mountErrors.Count) { 'App Launch Cache inventory is unavailable. Windows could not verify access to its file or registry locations. Open WinCommander as administrator and scan again.' }
+            if ($snapshotAttempted) { 'App Launch Cache inventory is unavailable. The temporary snapshot could not be read or verified. Check administrator access and scan again.' }
+            elseif ($hveReadError -or $mountErrors.Count) { 'App Launch Cache inventory is unavailable. Windows could not verify access to its file or registry locations. Open WinCommander as administrator and scan again.' }
             else { 'App Launch Cache inventory is unavailable. The Amcache file exists, but no readable registry inventory is mounted. The offline hive is not read by this scan.' }
         } else { $null }
         @{ entries = $entries; hveFileSizeMb = $hveSize; hveFileExists = $hveExists; inventoryRoot = $inventoryRoot; total = if ($partial) { $null } else { $totalCount }; partial = $partial; status = if ($partial) { 'unavailable' } else { 'complete' }; message = $message }
@@ -3374,6 +3462,10 @@ function Get-CleanupBoundedFileInventory {
                     }
                 }
             }
+        } catch [System.Management.Automation.ItemNotFoundException] {
+            # A cache directory can disappear between listing its parent and reading it.
+        } catch [System.IO.DirectoryNotFoundException] {
+            # The directory no longer exists, so there is nothing left to scan.
         } catch { $errors.Add($_.Exception.Message) }
     }
     @{ files = @($files.ToArray()); errors = @($errors.ToArray()); partial = $errors.Count -gt 0; skippedLinks = $skippedLinks }
@@ -3400,7 +3492,7 @@ function Get-SQLiteWALList {
             coverage = 'limited'; coverageNote = 'Scans two app-data roots to depth 5, excluding directory links and junctions.'
             skippedLinks = $inventory.skippedLinks; errors = $inventory.errors
             partial = $inventory.partial; truncated = $false; error = $inventory.partial -and $found.Count -eq 0
-            message = if ($inventory.partial) { 'Some application-data locations could not be checked. ' + (($inventory.errors | Select-Object -Unique) -join ' ') } else { 'This count covers the stated depth-limited scope.' }
+            message = if ($inventory.partial) { "Some application-data locations could not be checked ($($inventory.errors.Count)). Example: $($inventory.errors[0])" } else { 'This count covers the stated depth-limited scope.' }
         }
     }
     catch { @{ error = $true; message = $_.Exception.Message } }
@@ -4243,6 +4335,7 @@ function Get-SSHStateInfo {
         $files = @()
         $agentVerified = $true
         $hostsVerified = $true
+        $agentCoverage = $null
         $knownHosts = Join-Path $env:USERPROFILE '.ssh\\known_hosts'
         try {
             $item = Get-Item -LiteralPath $knownHosts -Force -ErrorAction Stop
@@ -4254,11 +4347,19 @@ function Get-SSHStateInfo {
             $agentStatus = Invoke-WCSshAdd -Option '-l'
             if ($agentStatus -eq 0) {
                 $files += @{ name = 'SSH agent identities loaded'; sizeKB = 0; modified = '' }
-            } elseif ($agentStatus -ne 1) { $agentVerified = $false }
+            } elseif ($agentStatus -ne 1) {
+                # A stopped Windows agent with no custom socket is a normal
+                # configuration, rather than a failed inventory. Other SSH
+                # agents are outside the scope of this check.
+                $service = if (-not $env:SSH_AUTH_SOCK) { Get-Service -Name 'ssh-agent' -ErrorAction SilentlyContinue } else { $null }
+                if ($service -and $service.Status -eq 'Stopped') {
+                    $agentCoverage = 'The Windows SSH agent is stopped. Other SSH agents are not checked.'
+                } else { $agentVerified = $false }
+            }
         } catch { $agentVerified = $false }
         $totalBytes = [int64](($files | ForEach-Object { [int64]($_.sizeKB * 1KB) } | Measure-Object -Sum).Sum)
         $complete = $agentVerified -and $hostsVerified
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); partial = (-not $complete); status = if ($complete) { 'complete' } else { 'partial' }; message = if (-not $agentVerified -and -not $hostsVerified) { 'SSH agent state and known-hosts metadata could not be checked.' } elseif (-not $agentVerified) { 'SSH agent state could not be checked.' } elseif (-not $hostsVerified) { 'SSH known-hosts metadata could not be checked.' } else { $null } }
+        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); partial = (-not $complete); status = if ($complete) { 'complete' } else { 'partial' }; coverage = if ($agentCoverage) { 'limited' } else { $null }; coverageNote = $agentCoverage; message = if (-not $agentVerified -and -not $hostsVerified) { 'SSH agent state and known-hosts metadata could not be checked.' } elseif (-not $agentVerified) { 'SSH agent state could not be checked.' } elseif (-not $hostsVerified) { 'SSH known-hosts metadata could not be checked.' } else { $null } }
     }
     catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
 }
@@ -4942,6 +5043,8 @@ function Get-EmbeddedWebCacheInfo {
                 if (++$visited -gt $maxDirectories -or $timer.ElapsedMilliseconds -ge $MaxMilliseconds) { $partial = $true; $limitReached = $true; break }
                 $current = $pending.Dequeue()
                 try { $children = @(Get-ChildItem -LiteralPath $current.path -Force -ErrorAction Stop) }
+                catch [System.Management.Automation.ItemNotFoundException] { continue }
+                catch [System.IO.DirectoryNotFoundException] { continue }
                 catch { $partial = $true; continue }
                 foreach ($directory in $children) {
                     if ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint) { $skippedLinks++; continue }
@@ -4957,6 +5060,8 @@ function Get-EmbeddedWebCacheInfo {
                         if (++$visited -gt $maxDirectories -or $timer.ElapsedMilliseconds -ge $MaxMilliseconds) { $partial = $true; $sizeIncomplete = $true; $limitReached = $true; break }
                         $cacheDir = $cachePending.Dequeue()
                         try { $cacheChildren = @(Get-ChildItem -LiteralPath $cacheDir.path -Force -ErrorAction Stop) }
+                        catch [System.Management.Automation.ItemNotFoundException] { continue }
+                        catch [System.IO.DirectoryNotFoundException] { continue }
                         catch { $partial = $true; $sizeIncomplete = $true; continue }
                         foreach ($child in $cacheChildren) {
                             if ($child.Attributes -band [IO.FileAttributes]::ReparsePoint) { $skippedLinks++; continue }

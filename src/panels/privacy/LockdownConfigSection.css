@@ -33,6 +33,8 @@
 .sd-workspace-warning { margin: 0; padding: 8px 10px; border-left: 3px solid var(--color-danger); background: var(--color-danger-dim); color: var(--color-text-primary); font-size: 11px; line-height: 1.45; }
 .sd-columns-card .sd-row { grid-template-columns: 28px minmax(0, 1fr) auto; }
 .sd-step-info { max-width: 300px; margin: 0; padding: 10px; color: var(--color-text-primary); font-size: 12px; line-height: 1.45; }
+.sd-step-info-button { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--color-text-secondary); cursor: pointer; }
+.sd-step-info-button:hover, .sd-step-info-button:focus-visible { color: var(--color-text-primary); background: var(--surface-3); }
 
 .lockdown-triggers-card {
     grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));

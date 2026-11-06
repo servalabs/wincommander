@@ -632,7 +632,7 @@ interface StepRowProps {
 // be a stable reference (writeStep, passed directly — see call site).
 const StepRow = memo(function StepRow({ def, checked, onToggle }: StepRowProps) {
   return (
-    <label
+    <div
       className="sd-row"
       onClick={(e) => {
         const target = e.target as HTMLElement;
@@ -644,10 +644,7 @@ const StepRow = memo(function StepRow({ def, checked, onToggle }: StepRowProps) 
         // from the checkbox's onChange — doubling the settings-write latency
         // for every single click.)
         if (target.closest('button, [role="checkbox"]')) return;
-        // Clicking elsewhere in the row (label text, padding): handle it here,
-        // and suppress the native label→control click-forwarding this element
-        // would otherwise also perform (it targets the same checkbox), which
-        // would otherwise fire onToggle a second time for the same click.
+        // Clicking the row text or padding toggles the step.
         e.preventDefault();
         onToggle(def.id, !checked);
       }}
@@ -662,9 +659,9 @@ const StepRow = memo(function StepRow({ def, checked, onToggle }: StepRowProps) 
         <div className={`sd-row-label ${!checked ? "is-disabled" : ""}`}>{def.label}</div>
       </div>
       {DESTRUCT_STEP_DESCRIPTIONS[def.id] && <Popover position="bottom" content={<p className="sd-step-info">{DESTRUCT_STEP_DESCRIPTIONS[def.id]}</p>}>
-        <Button minimal small icon="info-sign" aria-label={`About ${def.label}`} title={`About ${def.label}`} />
+        <button type="button" className="sd-step-info-button" aria-label={`About ${def.label}`} title={`About ${def.label}`}><Icon icon="info-sign" size={14} /></button>
       </Popover>}
-    </label>
+    </div>
   );
 });
 

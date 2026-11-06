@@ -9,6 +9,29 @@ use tauri::{
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 mod action_steps;
+#[cfg(feature = "amcache-snapshot-experimental")]
+mod amcache_reader;
+#[cfg(feature = "amcache-snapshot-experimental")]
+mod amcache_snapshot;
+
+/// Internal fixed-purpose collector. The caller cannot supply a hive path.
+/// This remains opt-in until privileged end-to-end validation is complete.
+pub fn run_internal_amcache_scan() -> Result<serde_json::Value, String> {
+    #[cfg(feature = "amcache-snapshot-experimental")]
+    {
+        amcache_snapshot::with_amcache_snapshot(|path| {
+            let snapshot_at = chrono::Utc::now().to_rfc3339();
+            let mut result = amcache_reader::read_amcache_snapshot(path)?;
+            let object = result.as_object_mut().ok_or("Invalid snapshot result")?;
+            object.insert("snapshotAt".to_owned(), snapshot_at.into());
+            Ok(result)
+        })
+    }
+    #[cfg(not(feature = "amcache-snapshot-experimental"))]
+    {
+        Err("App Launch Cache snapshots are not enabled in this build.".into())
+    }
+}
 mod activity_watch_autostart;
 mod advisor;
 mod appearance;

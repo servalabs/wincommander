@@ -5721,6 +5721,16 @@ pub(crate) async fn run_fleet_forensic_projection(
 
     let (mut command, _ps_exe) = build_powershell_command();
     command.env("WINCMD_COMMAND", "Get-FleetForensicProjection");
+    // The snapshot inventory is currently authorized for local display only.
+    // Fleet must not acquire new per-record data through this experimental path.
+    command.env_remove("WINCMD_AMCACHE_SNAPSHOT_AVAILABLE");
+    // The cleanup module uses this trusted executable for its fixed internal
+    // Amcache snapshot collector. Do not inherit a caller-provided path.
+    if let Ok(exe_path) = std::env::current_exe() {
+        command.env("WINCMD_EXE_PATH", exe_path);
+    } else {
+        command.env_remove("WINCMD_EXE_PATH");
+    }
     command.env(
         "WINCMD_PARAMS_JSON",
         // The sidecar parser accepts this literal boolean only. It is a
@@ -5739,7 +5749,8 @@ pub(crate) async fn run_fleet_forensic_projection(
 
     let child_pid = child.id();
     let wait = tokio::task::spawn_blocking(move || child.wait_with_output());
-    let output = match tokio::time::timeout(std::time::Duration::from_secs(60), wait).await {
+    let timeout_seconds = if cfg!(feature = "amcache-snapshot-experimental") && category == "amcache" { 240 } else { 60 };
+    let output = match tokio::time::timeout(std::time::Duration::from_secs(timeout_seconds), wait).await {
         Ok(Ok(Ok(output))) => output,
         Ok(_) => return Err("WinCommander could not read the local cleanup records".to_string()),
         Err(_) => {
@@ -6252,6 +6263,10 @@ pub(crate) async fn run_backend_script_with_timeout(
     let (mut cmd, ps_exe) = build_powershell_command();
 
     cmd.env("WINCMD_COMMAND", &command);
+    #[cfg(feature = "amcache-snapshot-experimental")]
+    cmd.env("WINCMD_AMCACHE_SNAPSHOT_AVAILABLE", "1");
+    #[cfg(not(feature = "amcache-snapshot-experimental"))]
+    cmd.env_remove("WINCMD_AMCACHE_SNAPSHOT_AVAILABLE");
     cmd.env("WINCMD_PARAMS_JSON", &params_json);
     // The Python detector intentionally outlives this short-lived PowerShell
     // wrapper, so give it the real Free owner rather than the wrapper PID.
@@ -6334,7 +6349,8 @@ pub(crate) async fn run_backend_script_with_timeout(
     let trimmed = stdout.trim();
     let stderr_trimmed = stderr.trim();
 
-    // These outputs can contain locally requested Wi-Fi keys, clipboard text, or command history.
+    // These outputs can contain locally requested Wi-Fi keys, clipboard text,
+    // command history, or application inventory.
     // Never forward or log raw output when the child fails or sends malformed
     // JSON; its contents must not escape through an error or raw-output path.
     if matches!(
@@ -6343,6 +6359,7 @@ pub(crate) async fn run_backend_script_with_timeout(
             | "Get-ClipboardHistoryStatus"
             | "Get-CleanupSummaryAllUsers"
             | "Get-PSHistory"
+            | "Get-AmcacheEntries"
     ) && (!output.status.success()
         || serde_json::from_str::<serde_json::Value>(trimmed).is_err())
     {

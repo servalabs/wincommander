@@ -35,7 +35,10 @@ export default function DiskAnalyzerHeader({ analyzer, mode, children }: { analy
 
         {meta && !stale && normalizeDiskPath(analyzer.scanPath) !== normalizeDiskPath(meta.scanRoot) && <div className="da-scan-notice" role="status"><Icon icon="info-sign" size={15} /><span>Results describe {displayPath(meta.scanRoot)}. Analyze the newly chosen location to update them.</span></div>}
         {meta && !stale && !scanning && <details className="da-scope-statistics"><summary aria-label="Scan summary and volume details">
-            <span>{scope.files.toLocaleString()} files · {scope.folders.toLocaleString()} folders · <strong>{formatDiskBytes(scope.size)}</strong></span><span>Volume details</span>
+            <span>{scope.files.toLocaleString()} files · {scope.folders.toLocaleString()} folders · <strong>{formatDiskBytes(scope.size)}</strong></span><span className="da-scope-actions">{meta && !stale && (meta.complete === false || meta.skippedEntries || meta.skippedLinks || meta.cancelled || meta.truncated) ? (() => {
+            const detail = `${meta.cancelled ? "Scan stopped. " : "Partial scan. "}${meta.skippedEntries ? `${meta.skippedEntries.toLocaleString()} entries skipped${meta.skippedLinks ? `, including ${meta.skippedLinks.toLocaleString()} links` : ""}. ` : ""}${meta.truncated ? "Scan safety limit reached (2,000,000 entries or 128 folder levels). Open a smaller folder and use Rescan folder for more detail. " : ""}Totals cover scanned content only.`;
+            return <span className="da-scan-warning" role="status" tabIndex={0} title={detail} aria-label={detail}><Icon icon="warning-sign" size={15} /></span>;
+        })() : null}<span>Volume details</span></span>
         </summary><div className="da-scope-caption"><span>Allocated disk size is unavailable. Logical sizes do not measure space recovered after deletion.</span><span>{displayPath(mode !== "large" ? currentPath : meta.scanRoot)}</span></div><div className="da-metrics" aria-label="Volume details">
             <div><small>{mode !== "large" ? "Current folder content" : "Scanned content"}</small><strong>{formatDiskBytes(scope.size)}</strong></div>
             <div><small>Files</small><strong>{scope.files.toLocaleString()}</strong></div>
@@ -43,10 +46,6 @@ export default function DiskAnalyzerHeader({ analyzer, mode, children }: { analy
             <div><small>Volume free space</small><strong>{meta.driveCapacity > 0 ? formatDiskBytes(meta.freeSpace) : "Unavailable"}</strong></div>
             <div><small>Volume capacity</small><strong>{meta.driveCapacity > 0 ? formatDiskBytes(meta.driveCapacity) : "Unavailable"}</strong></div>
         </div></details>}
-        {meta && !stale && (meta.complete === false || meta.skippedEntries || meta.skippedLinks || meta.cancelled || meta.truncated) ? (() => {
-            const detail = `${meta.cancelled ? "Scan stopped. " : "Partial scan. "}${meta.skippedEntries ? `${meta.skippedEntries.toLocaleString()} entries skipped${meta.skippedLinks ? `, including ${meta.skippedLinks.toLocaleString()} links` : ""}. ` : ""}${meta.truncated ? "Scan safety limit reached (2,000,000 entries or 128 folder levels). Open a smaller folder and use Rescan folder for more detail. " : ""}Totals cover scanned content only.`;
-            return <span className="da-scan-notice" role="status" tabIndex={0} title={detail} aria-label={detail}><Icon icon="warning-sign" size={15} /></span>;
-        })() : null}
         {mode !== "large" && meta && !stale && <nav className="da-location-nav" aria-label="Folder navigation">
             <Button minimal small icon="chevron-left" title="Back" aria-label="Back" disabled={busy || historyIndex <= 0} onClick={() => void analyzer.navigate(history[historyIndex - 1], historyIndex - 1)} />
             <Button minimal small icon="chevron-right" title="Forward" aria-label="Forward" disabled={busy || historyIndex >= history.length - 1} onClick={() => void analyzer.navigate(history[historyIndex + 1], historyIndex + 1)} />

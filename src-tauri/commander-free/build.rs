@@ -113,6 +113,14 @@ fn validate_release_modules(salt_bytes: &[u8]) {
 // writes a random salt and matching ciphertext; debug builds do not consume it.
 // The salt is XOR-obfuscated into generated_key.rs so it is not stored verbatim.
 fn main() {
+    #[cfg(feature = "amcache-snapshot-experimental")]
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        cc::Build::new().cpp(true).file("src/amcache_snapshot.cpp").compile("amcache_snapshot");
+        println!("cargo:rerun-if-changed=src/amcache_snapshot.cpp");
+        println!("cargo:rustc-link-lib=VssApi");
+        println!("cargo:rustc-link-lib=Ole32");
+        println!("cargo:rustc-link-lib=OleAut32");
+    }
     // Do this before the profile branch: a Debug build must be invalidated
     // whenever cleanup.ps1 changes, even though it deliberately does not read
     // or regenerate the release ciphertext.

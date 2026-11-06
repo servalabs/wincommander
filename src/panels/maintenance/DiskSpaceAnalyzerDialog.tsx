@@ -57,6 +57,12 @@ export default function DiskSpaceAnalyzerDialog({ isOpen, onClose, initialMode =
     }
     const content = <div className="da-workspace">
         <DiskAnalyzerHeader analyzer={analyzer} mode={mode}><DiskAnalyzerTabs mode={mode} disabled={analyzer.deleting} onChange={setMode} /></DiskAnalyzerHeader>
+        <footer className="da-selection-bar"><div className="da-selection-summary"><Layers3 size={17} /><span><strong>{selectedItems.length} selected</strong><small>{formatDiskBytes(selectedBytes)} · Space recovered may differ</small></span></div>
+            {analyzer.meta && !analyzer.stale && !analyzer.scanning && mode !== "types" && <DiskItemDetails item={analyzer.focused} disabled={busy} onOpen={item => void analyzer.openInExplorer(item)} onNavigate={path => void analyzer.navigate(path)} onDelete={item => analyzer.setConfirmItems([item])} />}
+        <div className="da-selection-actions">
+            {analyzer.selected.size > 0 && <Button minimal disabled={busy} onClick={() => analyzer.setSelected(new Set())}>Clear</Button>}
+            <Button intent="danger" icon="trash" title="Review deletion" aria-label={`Review deletion of ${selectedItems.length} selected file${selectedItems.length === 1 ? "" : "s"}`} disabled={busy || !selectedItems.length || analyzer.stale} onClick={() => analyzer.setConfirmItems(selectedItems)} />
+        </div></footer>
         <div id="disk-analyzer-view" role="tabpanel" aria-labelledby={`disk-tab-${mode}`} className="da-analyzer-content">
         {analyzer.scanning ? <div className="da-workspace-empty" role="status"><Spinner size={38} /><h3>Analyzing your storage</h3>
             <p>{analyzer.progress ? `${analyzer.progress.filesScanned.toLocaleString()} files · ${analyzer.progress.foldersScanned.toLocaleString()} folders · ${formatDiskBytes(analyzer.progress.bytesScanned)} found` : "Reading files and folders. Scan time depends on the selected location."}</p>
@@ -88,12 +94,6 @@ export default function DiskSpaceAnalyzerDialog({ isOpen, onClose, initialMode =
                     </div>
                 </>}
         </div>
-        <footer className="da-selection-bar"><div className="da-selection-summary"><Layers3 size={17} /><span><strong>{selectedItems.length} selected</strong><small>{formatDiskBytes(selectedBytes)} · Space recovered may differ</small></span></div>
-            {analyzer.meta && !analyzer.stale && !analyzer.scanning && mode !== "types" && <DiskItemDetails item={analyzer.focused} disabled={busy} onOpen={item => void analyzer.openInExplorer(item)} onNavigate={path => void analyzer.navigate(path)} onDelete={item => analyzer.setConfirmItems([item])} />}
-        <div className="da-selection-actions">
-            {analyzer.selected.size > 0 && <Button minimal disabled={busy} onClick={() => analyzer.setSelected(new Set())}>Clear</Button>}
-            <Button intent="danger" icon="trash" title="Review deletion" aria-label={`Review deletion of ${selectedItems.length} selected file${selectedItems.length === 1 ? "" : "s"}`} disabled={busy || !selectedItems.length || analyzer.stale} onClick={() => analyzer.setConfirmItems(selectedItems)} />
-        </div></footer>
     </div>;
     return <>
         {inline ? <div className="disk-analyzer-inline">{content}</div> : <Dialog isOpen={isOpen} onClose={onClose} title="Disk Space Analyzer" icon="search-around" className="disk-analyzer-dialog">{content}</Dialog>}

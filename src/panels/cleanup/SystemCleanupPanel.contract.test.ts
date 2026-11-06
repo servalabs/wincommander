@@ -281,10 +281,11 @@ describe("System Cleanup panel reconstruction contracts", () => {
 
   test("one-time actions and browser inventory collapse safely on narrow viewports", async () => {
     const actions = await read("src/panels/cleanup/CleanupActionsMonitoring.tsx");
+    const actionStyles = await read("src/components/cleanup/CleanupTraceCard.css");
     const legacyDialogs = await read("src/panels/cleanup/useCleanupLegacyDialogs.tsx");
 
-    expect(actions).toContain("grid grid-cols-1 gap-2");
-    expect(actions).toContain("grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4");
+    expect(actions).toContain("cleanup-action-grid cleanup-one-time-grid");
+    expect(actionStyles).toContain("repeat(auto-fit, minmax(min(100%, 15rem), 1fr))");
     expect(actions).toContain('aria-labelledby="cleanup-one-time-actions-heading"');
     expect(actions).toContain('aria-labelledby="cleanup-system-monitoring-heading"');
     expect(legacyDialogs).toContain("grid grid-cols-1 gap-3 pb-1.5 lg:grid-cols-2");

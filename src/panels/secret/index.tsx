@@ -806,7 +806,6 @@ function LockdownTimerRow() {
                 />
                 <input type="number" min={3} max={86400} step={1} value={timerInput} onChange={(e) => { const raw = e.currentTarget.value; setTimerInput(raw); const value = Number(raw); if (/^\d+$/.test(raw) && value >= 3 && value <= 86400) { setTimerSec(value); saverRef.current?.queue(value); } }} onBlur={(e) => handleChange(e)} onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }} aria-label="Custom lockdown countdown in seconds" className="sec-timer-input" /> <span>sec</span>
             </div>
-            <p className="dgz-hint">Seconds before Lockdown fires (3–86400). Default: 4.</p>
         </div>
     );
 }

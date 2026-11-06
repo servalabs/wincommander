@@ -14,7 +14,6 @@ export default function AdapterControls() {
     const adapters = inventory?.adapters ?? [];
     const visibleAdapters = adapters.filter(adapter => !isInactiveAdapter(adapter.status));
     const inactiveRecovery = adapters.filter(adapter => isInactiveAdapter(adapter.status) && adapter.recoveryPending);
-    const inactiveErrors = adapters.some(adapter => isInactiveAdapter(adapter.status) && adapter.configurationError);
     const disabled = needsElevation || !!busyId || !!error || !inventory;
 
     const renderAdapter = (adapter: PhysicalNetworkAdapter) => (
@@ -45,15 +44,12 @@ export default function AdapterControls() {
                 <span className="merged-segment__count">{error ? "Unavailable" : inventory ? `${adapters.filter(a => a.status === "Up").length} up` : "—"}</span>
                 <Button small minimal icon="refresh" aria-label="Refresh network adapters" title="Refresh network adapters" disabled={loading || !!busyId} onClick={() => void refresh()} />
             </header>
-            <p className="merged-segment__blurb">Change the address visible to your local network. Driver support varies; this does not prevent all tracking.</p>
             <div className="merged-segment__body">
                 {needsElevation && <p role="alert" className="text-xs">{MACHINE_SCOPE_ELEVATION_MESSAGE}</p>}
                 {error && <p role="alert" className="text-xs">{error} {inventory && "The list below is the last successful snapshot."}</p>}
                 {loading && !inventory && <p role="status" className="text-xs">Reading Windows adapters…</p>}
-                {inventory?.checkedAt && <p className="text-xs text-[var(--color-text-muted)]">Last checked: {new Date(inventory.checkedAt).toLocaleTimeString()}</p>}
                 {!error && inventory && adapters.length === 0 && <p className="text-xs">No physical network adapters are present.</p>}
                 {!error && adapters.length > 0 && adapters.every(a => isInactiveAdapter(a.status)) && <p className="text-xs">Adapters are present; none currently has an active link.</p>}
-                {inactiveErrors && <p role="alert" className="text-xs">Configuration is unavailable for an inactive adapter.</p>}
                 {inactiveRecovery.map(adapter => <div key={adapter.id} role="alert" className="flex flex-wrap items-center gap-2 text-xs">
                     <span>{adapter.name}: an interrupted address change needs recovery.</span>
                     <Button small intent="warning" disabled={disabled} onClick={() => setPending({ adapter, action: "recover" })}>Undo interrupted change</Button>
