@@ -23,7 +23,8 @@ jobs:
           toolchain: 1.99.1
       - name: Test service image pin
         shell: pwsh
-        run: cargo test --locked -p wincmd-service-auth --features experimental-search-service-pin search_service_pin::tests:: -- --test-threads=1
+        run: |
+          cargo test --locked -p wincmd-service-auth --features experimental-search-service-pin search_service_pin::tests:: -- --test-threads=1
       - name: Run disposable encrypted search fixtures
         shell: pwsh
         run: |
