@@ -68,7 +68,7 @@ export function RoutineCleanerPanel({ cleaner, categories: allowedCategories, co
 
   useEffect(() => {
     if (result && !result.cancelled && !result.errors.length) {
-      void showSuccess(`Removed ${formatBytes(result.bytesRecovered)} of logical data from ${result.filesCleaned.toLocaleString()} files.`);
+      void showSuccess(`Processed ${result.filesCleaned.toLocaleString()} files; ${formatBytes(result.bytesRecovered)} reported by cleanup.`);
     }
   }, [result]);
 
@@ -123,7 +123,7 @@ export function RoutineCleanerHeaderActions({ cleaner, onRequestClean }: { clean
     <div className="maintenance-cache-header-actions">
       <div className="maintenance-cache-header-selection" role="status" aria-live="polite">
         <strong>{selectedItems.length} targets selected</strong>
-        <span>{formatBytes(logicalBytes)} logical file size{vacuumEstimateBytes ? ` · ${formatBytes(vacuumEstimateBytes)} estimated database reclaim` : ""}</span>
+        <span title="Selected file sizes; reclaimed disk space can differ.">{formatBytes(logicalBytes)}{vacuumEstimateBytes ? ` · ${formatBytes(vacuumEstimateBytes)} estimated database reclaim` : ""}</span>
       </div>
       <div className="maintenance-cache-header-buttons">
         <Button size="sm" variant="ghost" onClick={cleaner.clearSelection} disabled={isRunning || !selectedItems.length}>Clear</Button>
@@ -165,9 +165,9 @@ function CacheScanIdleState({ isScanning, onScan, disabled, label }: { isScannin
 }
 
 function CleanResult({ result }: { result: RoutineCleanerCleanResult }) {
-  if (result.cancelled) return <ResultNotice tone="warning" title="Cleaning cancelled" message={`Removed ${formatBytes(result.bytesRecovered)} of logical data before cancellation.`} />;
+  if (result.cancelled) return <ResultNotice tone="warning" title="Cleaning cancelled" message={`${formatBytes(result.bytesRecovered)} reported by cleanup before cancellation.`} />;
   if (result.errors.length) return <ResultNotice tone="warning" title="Cleaning completed with issues" message={`${result.itemsCleaned} targets cleaned; ${result.errors.length} target${result.errors.length === 1 ? "" : "s"} could not be completed.`} />;
-  return <ResultNotice tone="success" title="Cleaning complete" message={`Removed ${formatBytes(result.bytesRecovered)} of logical data from ${result.filesCleaned.toLocaleString()} files.`} />;
+  return <ResultNotice tone="success" title="Cleaning complete" message={`Processed ${result.filesCleaned.toLocaleString()} files; ${formatBytes(result.bytesRecovered)} reported by cleanup.`} />;
 }
 
 function ResultNotice({ tone, title, message }: { tone: "success" | "warning" | "danger"; title: string; message: string }) {

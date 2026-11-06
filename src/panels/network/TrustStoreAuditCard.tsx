@@ -40,6 +40,11 @@ function simpleName(subject: string): string {
   return cn || subject || "Unnamed certificate";
 }
 
+export function distinctIssuer(subject: string, issuer: string): string | null {
+  const trimmed = issuer.trim();
+  return trimmed && trimmed !== subject.trim() ? trimmed : null;
+}
+
 export function TrustStoreAuditCard() {
   const { audit, busy, error, inspect } = useTrustStoreAudit();
   const [baseline, setBaseline] = useState<BaselineEntry[] | null>(() => loadBaseline());
@@ -196,6 +201,7 @@ export function TrustStoreAuditCard() {
                   <tbody>
                     {visible.map((cert, index) => {
                       const owner = likelyOwner(cert.subject);
+                      const issuer = distinctIssuer(cert.subject, cert.issuer);
                       const isAdded = baselineIds.size > 0 && !baselineIds.has(identity(cert));
                       const outsideRef = audit.referenceAvailable && !cert.inWindowsAuthRoot;
                       const why = [
@@ -207,8 +213,8 @@ export function TrustStoreAuditCard() {
                         <tr key={identity(cert)} className="border-t border-[var(--border)] align-top">
                           <td className="px-3 py-2">{index + 1}</td>
                           <td className="px-3 py-2">
-                            <div className="font-semibold text-[var(--text)]">{simpleName(cert.subject)}</div>
-                            <div className="mt-0.5 max-w-[340px] break-words text-[10px] text-[var(--text-mute)]">{cert.issuer}</div>
+                            <div className="font-semibold text-[var(--text)]" title={cert.subject || undefined}>{simpleName(cert.subject)}</div>
+                            {issuer && <div className="mt-0.5 max-w-[340px] break-words text-[10px] text-[var(--text-mute)]">Issuer: {issuer}</div>}
                           </td>
                           <td className="px-3 py-2 font-mono text-[10px]">{cert.scope}</td>
                           <td className="px-3 py-2">{why}</td>
