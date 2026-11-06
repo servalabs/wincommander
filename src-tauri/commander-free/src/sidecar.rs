@@ -835,6 +835,45 @@ fn pool_semaphore() -> &'static Semaphore {
     SEM.get_or_init(|| Semaphore::new(POOL_CAPACITY))
 }
 
+/// Holds dispatch admission and the agent slot for the entire search cleanup.
+/// Existing long-lived agents may host monitors; never stop them implicitly.
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
+pub(crate) struct ProSearchQuiescence {
+    _workers: tokio::sync::SemaphorePermit<'static>,
+    _backup: tokio::sync::SemaphorePermit<'static>,
+    _agent: tokio::sync::MutexGuard<'static, Option<ProSession>>,
+}
+
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
+async fn acquire_search_worker_permits(semaphore: &Semaphore, budget: Duration) -> Result<tokio::sync::SemaphorePermit<'_>, String> {
+    timeout(budget, semaphore.acquire_many(POOL_CAPACITY as u32)).await
+        .map_err(|_| "Pro is busy; search cleanup remains pending.".to_string())?
+        .map_err(|_| "Pro is unavailable; search cleanup remains pending.".to_string())
+}
+
+/// Drain only idle workers after all paid dispatches finish. New dispatches and
+/// agent starts remain blocked until the returned guard is dropped. A running
+/// agent is preserved because it may own live user monitors. A separate Pro or
+/// broker process remains protected by the OS search fence and may still cause
+/// cleanup to fail safely and retry later.
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
+pub(crate) async fn quiesce_idle_pro_for_search() -> Result<ProSearchQuiescence, String> {
+    let backup = backup::admit().map_err(|_| "A Pro backup is active; search cleanup remains pending.".to_string())?;
+    let workers = acquire_search_worker_permits(pool_semaphore(), ADMISSION_TIMEOUT).await?;
+    let agent = timeout(ADMISSION_TIMEOUT, agent_session_slot().lock()).await
+        .map_err(|_| "Pro monitoring is busy; search cleanup remains pending.".to_string())?;
+    if agent.is_some() {
+        return Err("Pro monitoring is active; search cleanup remains pending until it stops.".into());
+    }
+    let sessions = {
+        let mut pool = timeout(SHUTDOWN_STAGE_TIMEOUT, pro_session_pool().lock()).await
+            .map_err(|_| "Pro workers are busy; search cleanup remains pending.".to_string())?;
+        std::mem::take(&mut *pool)
+    };
+    stop_pro_sessions(sessions.into_iter().map(|entry| entry.session).collect()).await;
+    Ok(ProSearchQuiescence { _workers: workers, _backup: backup, _agent: agent })
+}
+
 /// Compute a Windows named-pipe path from a random suffix. The
 /// `\\.\pipe\` prefix is required by the OS; we add a `wincmd-pro-`
 /// component so the pipe is greppable in tools like Process Explorer.
@@ -2210,6 +2249,100 @@ async fn close_pro_session_inner() {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    #[tokio::test]
+    async fn search_quiescence_waits_for_dispatch_and_blocks_new_work() {
+        use std::time::Duration;
+        let semaphore = tokio::sync::Semaphore::new(super::POOL_CAPACITY);
+        let active = semaphore.acquire().await.unwrap();
+        assert!(super::acquire_search_worker_permits(&semaphore, Duration::from_millis(10)).await.is_err());
+        drop(active);
+        let guard = super::acquire_search_worker_permits(&semaphore, Duration::from_secs(1)).await.unwrap();
+        assert!(semaphore.try_acquire().is_err());
+        drop(guard);
+        assert!(semaphore.try_acquire().is_ok());
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    async fn fixture_pro_session() -> (super::ProSession, tokio::net::windows::named_pipe::NamedPipeClient, tokio::io::ReadHalf<tokio::net::windows::named_pipe::NamedPipeServer>, windows_sys::Win32::Foundation::HANDLE) {
+        use std::{collections::HashMap, sync::Arc};
+        use tokio::net::windows::named_pipe::{ClientOptions, ServerOptions};
+        use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE};
+        let name = super::random_pipe_name();
+        let server = ServerOptions::new().first_pipe_instance(true).create(&name).unwrap();
+        let client = ClientOptions::new().open(&name).unwrap();
+        server.connect().await.unwrap();
+        let (read, write) = tokio::io::split(server);
+        let mut command = tokio::process::Command::new("cmd.exe");
+        command.args(["/C", "ping -n 30 127.0.0.1 >nul"]).kill_on_drop(true);
+        let child = command.spawn().unwrap();
+        let process = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, child.id().unwrap()) };
+        assert!(!process.is_null());
+        let session = super::ProSession { vault_runtime_version: None, write: Arc::new(tokio::sync::Mutex::new(write)), child,
+            session_token: String::new(), inflight: Arc::new(tokio::sync::Mutex::new(HashMap::new())), reader: None, log_drains: vec![] };
+        (session, client, read, process)
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    #[tokio::test]
+    async fn search_quiescence_stops_only_idle_worker_and_restores_admission() {
+        use windows_sys::Win32::{Foundation::{CloseHandle, WAIT_OBJECT_0}, System::Threading::WaitForSingleObject};
+        let (session, _client, _read, process) = fixture_pro_session().await;
+        super::pro_session_pool().lock().await.push(super::PooledProSession { session, idle_until: std::time::Instant::now() + std::time::Duration::from_secs(30) });
+        let guard = super::quiesce_idle_pro_for_search().await.unwrap();
+        assert_eq!(unsafe { WaitForSingleObject(process, 5000) }, WAIT_OBJECT_0);
+        assert!(super::pool_semaphore().try_acquire().is_err());
+        drop(guard);
+        assert!(super::pool_semaphore().try_acquire().is_ok());
+        unsafe { CloseHandle(process); }
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    #[tokio::test]
+    async fn search_quiescence_survives_cancelled_waiter_until_blocking_work_finishes() {
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let waiter = tokio::spawn(async move {
+            let guard = super::quiesce_idle_pro_for_search().await.unwrap();
+            tokio::task::spawn_blocking(move || {
+                let _guard = guard;
+                ready_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                drop(_guard);
+                done_tx.send(()).unwrap();
+            }).await.unwrap();
+        });
+        ready_rx.await.unwrap();
+        waiter.abort();
+        assert!(waiter.await.unwrap_err().is_cancelled());
+        assert!(super::pool_semaphore().try_acquire().is_err());
+        assert!(super::backup::admit().is_err());
+        release_tx.send(()).unwrap();
+        done_rx.await.unwrap();
+        assert!(super::pool_semaphore().try_acquire().is_ok());
+        assert!(super::backup::admit().is_ok());
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    #[tokio::test]
+    async fn search_quiescence_defers_active_backup_and_blocks_new_backup() {
+        let active = super::backup::admit().unwrap();
+        assert!(super::quiesce_idle_pro_for_search().await.is_err());
+        drop(active);
+        let guard = super::quiesce_idle_pro_for_search().await.unwrap();
+        assert!(super::backup::admit().is_err());
+        drop(guard);
+        assert!(super::backup::admit().is_ok());
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    #[tokio::test]
+    async fn search_quiescence_preserves_active_monitor_agent() {
+        use windows_sys::Win32::{Foundation::{CloseHandle, WAIT_TIMEOUT}, System::Threading::WaitForSingleObject};
+        let (session, _client, _read, process) = fixture_pro_session().await;
+        *super::agent_session_slot().lock().await = Some(session);
+        assert!(super::quiesce_idle_pro_for_search().await.is_err());
+        assert_eq!(unsafe { WaitForSingleObject(process, 0) }, WAIT_TIMEOUT);
+        let session = super::agent_session_slot().lock().await.take().unwrap();
+        super::stop_pro_session(session).await;
+        unsafe { CloseHandle(process); }
+    }
     #[cfg(feature = "experimental-pq-pro-release")]
     #[test]
     fn hybrid_mode_does_not_apply_debug_hash_bypass() {

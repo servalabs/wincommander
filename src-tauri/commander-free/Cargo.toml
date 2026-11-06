@@ -28,6 +28,9 @@ path = "src/main.rs"
 test = false
 
 [features]
+# Both experiments remain independently opt-in.
+experimental-settings-generation = []
+experimental-encrypted-search = ["wincmd-search/experimental-encrypted-search", "wincmd-service-auth/experimental-search-service-pin"]
 # Portable single-exe edition. Gates the trial out (the most-copyable build has
 # nothing to farm) and packaging differences. Persistent state is already
 # machine-wide (%ProgramData%) regardless of this flag.
@@ -213,6 +216,7 @@ windows-sys = { version = "0.61", features = [
   "Win32_System_Registry",
   "Win32_System_Services",
   "Win32_System_Threading",
+  "Win32_System_Diagnostics_ToolHelp",
   "Win32_System_Pipes",
   "Win32_System_RemoteDesktop",
   # The single wincommander-free.exe attaches to its parent terminal only

@@ -4,6 +4,12 @@
 ; WinCommanderSvc only when a Vault operation needs it.  This prevents an
 ; ordinary app update or uninstall from leaving a kernel driver unloading.
 
+!ifdef WC_EXPERIMENTAL_SEARCH_FENCE
+!ifndef WC_EXPERIMENTAL_USER_STAGE_ONLY
+!error "Search maintenance fencing requires the gated current-user staging installer"
+!endif
+!endif
+!include "TextFunc.nsh"
 !include "StrFunc.nsh"
 ${Using:StrFunc} StrStr
 ${Using:StrFunc} UnStrStr
@@ -21,6 +27,21 @@ ${Using:StrFunc} UnStrStr
 !define WC_MIGRATE_WIPE_TASKS "${__FILEDIR__}\migrate-wipe-tasks.ps1"
 !define WC_MIGRATE_SYSTEM_MAINTENANCE_TASKS "${__FILEDIR__}\migrate-system-maintenance-tasks.ps1"
 !define WC_WIPE_TASK_MODULE "${__FILEDIR__}\..\..\wincmd-shared\scripts\auto-erase.ps1"
+!ifdef WC_EXPERIMENTAL_USER_STAGE_ONLY
+!define WC_STAGE_ORIGINAL_USER_SETTINGS "${__FILEDIR__}\stage-original-user-settings.ps1"
+!define WC_SETTINGS_STAGE_SERVICE "${__FILEDIR__}\settings-stage-service.ps1"
+!ifdef WC_EXPERIMENTAL_SEARCH_FENCE
+!define WC_HOLD_SEARCH_MAINTENANCE "${__FILEDIR__}\hold-search-maintenance.ps1"
+!define WC_SEARCH_MIGRATION_PHASE "${__FILEDIR__}\search-migration-phase.ps1"
+Var WCSearchFenceHandle
+!endif
+Var WCUserStageServiceRunning
+!endif
+!ifdef WC_PAIRED_SEARCH_RELEASE
+!define WC_CHECK_KNOWN_PRO "${__FILEDIR__}\check-known-pro-writers.ps1"
+!define WC_PAIRED_SERVICE_CONTROL "${__FILEDIR__}\settings-stage-service.ps1"
+Var WCPairedServiceRunning
+!endif
 !define WC_REPAIR_SHARED_SETTINGS "${__FILEDIR__}\repair-shared-settings.ps1"
 !define WC_REPAIR_VAULT_DRIVER_ACCESS "${__FILEDIR__}\..\..\..\tools\repair-vault-driver-access.ps1"
 !define WC_UPGRADE_LICENSE_BACKUP "$R5\WinCommander-license_cache.upgrade-backup.json"
@@ -139,6 +160,61 @@ ${Using:StrFunc} UnStrStr
   ${EndIf}
 !macroend
 
+!ifdef WC_EXPERIMENTAL_USER_STAGE_ONLY
+Function WC_RestoreUserStageService
+  !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
+  nsExec::ExecToStack /TIMEOUT=150000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-settings-stage-service.ps1" -Action Restore'
+  Pop $0
+  Pop $1
+  StrCpy $R6 0
+  ${If} $0 == 0
+    StrCpy $R6 1
+  ${EndIf}
+FunctionEnd
+!endif
+
+; Invoke only after all installation steps have succeeded.
+!macro WC_RELEASE_SEARCH_BEFORE_LAUNCH
+  !ifdef WC_EXPERIMENTAL_SEARCH_FENCE
+    ${If} $WCSearchFenceHandle != 0
+      System::Call 'kernel32::CloseHandle(p $WCSearchFenceHandle) i .r0'
+      ${If} $0 == 0
+        Abort "The search maintenance lock could not be released. Restart WinCommander after setup closes."
+      ${EndIf}
+      StrCpy $WCSearchFenceHandle 0
+    ${EndIf}
+  !endif
+!macroend
+
+!macro WC_ABORT_STOP_FAILURE stage message
+  !ifdef WC_EXPERIMENTAL_USER_STAGE_ONLY
+    !if "${stage}" == "preinstall"
+      ${If} $WCUserStageServiceRunning == 1
+        Call WC_RestoreUserStageService
+        ${If} $R6 != 1
+          Abort "The service did not stop safely and could not be restored. Existing app and settings remain in place; restart the service before retrying."
+        ${EndIf}
+      ${EndIf}
+    !endif
+  !endif
+  Abort "${message}"
+!macroend
+
+!ifdef WC_PAIRED_SEARCH_RELEASE
+!macro WC_PAIRED_ABORT message
+  ${If} $WCPairedServiceRunning == 1
+    !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
+    nsExec::ExecToStack /TIMEOUT=150000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-paired-service.ps1" -Action Restore'
+    Pop $0
+    Pop $1
+    ${If} $0 != 0
+      Abort "The previous WinCommander service could not be restored. Restart it before retrying setup."
+    ${EndIf}
+  ${EndIf}
+  Abort "${message}"
+!macroend
+!endif
+
 ; `sc stop` returns before SCM has necessarily released the service process.
 ; Replacing its executable early can fail silently, then leave the next start
 ; using a stale image. Wait until SCM confirms STOPPED before copying.
@@ -155,7 +231,7 @@ ${Using:StrFunc} UnStrStr
     ${If} $0 != 0
     ${AndIf} $0 != 1062
     ${AndIf} $0 != 1052
-      Abort "WinCommander could not stop its existing machine service."
+      !insertmacro WC_ABORT_STOP_FAILURE "${stage}" "WinCommander could not stop its existing machine service."
     ${EndIf}
     StrCpy $R8 0
     wc_wait_for_service_stop_${stage}:
@@ -186,7 +262,7 @@ ${Using:StrFunc} UnStrStr
       ${EndIf}
       !insertmacro WC_WRITE_SERVICE_QUERY_DIAGNOSTIC "${stage}" "$R8/${WC_SERVICE_STOP_TIMEOUT_SECONDS}"
       ${If} $R8 >= ${WC_SERVICE_STOP_TIMEOUT_SECONDS}
-        Abort "WinCommander service did not stop within ${WC_SERVICE_STOP_TIMEOUT_SECONDS} seconds."
+        !insertmacro WC_ABORT_STOP_FAILURE "${stage}" "WinCommander service did not stop within ${WC_SERVICE_STOP_TIMEOUT_SECONDS} seconds."
       ${EndIf}
       DetailPrint "Waiting for WinCommander service to stop ($R8/${WC_SERVICE_STOP_TIMEOUT_SECONDS} seconds; SCM state/checkpoint recorded in installer-lifecycle.log)."
       Sleep 1000
@@ -195,7 +271,7 @@ ${Using:StrFunc} UnStrStr
     wc_service_stopped_${stage}:
   ${ElseIf} $0 != 1060
     !insertmacro WC_WRITE_SERVICE_QUERY_DIAGNOSTIC "${stage}" "initial"
-    Abort "WinCommander could not inspect its existing machine service."
+    !insertmacro WC_ABORT_STOP_FAILURE "${stage}" "WinCommander could not inspect its existing machine service."
   ${EndIf}
 !macroend
 
@@ -203,6 +279,11 @@ ${Using:StrFunc} UnStrStr
 ; migration can run its old uninstaller before this hook, so keep the licence
 ; fallback for other update paths without relying on it for Pro preservation.
 !macro NSIS_HOOK_PREINSTALL
+  !ifdef WC_EXPERIMENTAL_USER_STAGE_ONLY
+    !if "${INSTALLMODE}" != "currentUser"
+      !error "Original-user staging requires currentUser installer mode"
+    !endif
+  !endif
   ; Start this install's evidence fresh, then retain it through POSTINSTALL so
   ; an update report includes the desktop close and the old-service shutdown.
   Delete "${WC_LIFECYCLE_DIAGNOSTIC_LOG}"
@@ -211,7 +292,124 @@ ${Using:StrFunc} UnStrStr
   !insertmacro WC_CLOSE_OWNED_DESKTOP_APP_OR_ABORT "preinstall"
   ; Stop with the service's full advertised budget before replacing its
   ; executable. Older service binaries may take longer to dismount a Vault.
-  !insertmacro WC_STOP_OWNED_SERVICE_OR_ABORT "preinstall" ""
+  !ifdef WC_EXPERIMENTAL_USER_STAGE_ONLY
+    ; Query numeric SCM state using ServiceController, independent of locale.
+    InitPluginsDir
+    File /oname=$PLUGINSDIR\wincommander-settings-stage-service.ps1 "${WC_SETTINGS_STAGE_SERVICE}"
+    !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
+    nsExec::ExecToStack /TIMEOUT=30000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-settings-stage-service.ps1" -Action Status'
+    Pop $0
+    Pop $1
+    StrCpy $WCUserStageServiceRunning 0
+    ${If} $0 == 4
+      StrCpy $WCUserStageServiceRunning 1
+    ${ElseIf} $0 != 1
+    ${AndIf} $0 != 0
+      Abort "WinCommander could not safely inspect its service before staging."
+    ${EndIf}
+    nsExec::ExecToStack /TIMEOUT=225000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-settings-stage-service.ps1" -Action Stop'
+    Pop $0
+    Pop $1
+    ${If} $0 != 0
+      !insertmacro WC_ABORT_STOP_FAILURE "preinstall" "WinCommander could not stop its service for settings staging."
+    ${EndIf}
+  !else
+    !ifdef WC_PAIRED_SEARCH_RELEASE
+      InitPluginsDir
+      File /oname=$PLUGINSDIR\wincommander-paired-service.ps1 "${WC_PAIRED_SERVICE_CONTROL}"
+      File /oname=$PLUGINSDIR\wincommander-check-pro.ps1 "${WC_CHECK_KNOWN_PRO}"
+      !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
+      nsExec::ExecToStack /TIMEOUT=30000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-paired-service.ps1" -Action Status'
+      Pop $0
+      Pop $1
+      StrCpy $WCPairedServiceRunning 0
+      ${If} $0 == 4
+        StrCpy $WCPairedServiceRunning 1
+      ${ElseIf} $0 != 1
+      ${AndIf} $0 != 0
+        Abort "WinCommander could not inspect its service before updating."
+      ${EndIf}
+      nsExec::ExecToStack /TIMEOUT=30000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-check-pro.ps1" -InstallDirectory "$INSTDIR"'
+      Pop $0
+      Pop $1
+      ${If} $0 != 0
+        Abort "Close WinCommander Pro in all Windows sessions and retry the update."
+      ${EndIf}
+      nsExec::ExecToStack /TIMEOUT=225000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-paired-service.ps1" -Action Stop'
+      Pop $0
+      Pop $1
+      ${If} $0 != 0
+        !insertmacro WC_PAIRED_ABORT "WinCommander could not stop its service before updating."
+      ${EndIf}
+      nsExec::ExecToStack /TIMEOUT=30000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-check-pro.ps1" -InstallDirectory "$INSTDIR"'
+      Pop $0
+      Pop $1
+      ${If} $0 != 0
+        !insertmacro WC_PAIRED_ABORT "Close WinCommander Pro in all Windows sessions and retry the update."
+      ${EndIf}
+    !else
+      !insertmacro WC_STOP_OWNED_SERVICE_OR_ABORT "preinstall" ""
+    !endif
+  !endif
+  !ifdef WC_EXPERIMENTAL_SEARCH_FENCE
+    ; The helper duplicates verified file and directory handles into this
+    ; installer. Only this process acquires and owns the exclusive lock.
+    InitPluginsDir
+    StrCpy $WCSearchFenceHandle 0
+    File /oname=$PLUGINSDIR\wincommander-search-fence.exe "${MAINBINARYSRCPATH}"
+    File /oname=$PLUGINSDIR\wincommander-hold-search-maintenance.ps1 "${WC_HOLD_SEARCH_MAINTENANCE}"
+    File /oname=$PLUGINSDIR\wincommander-search-migration-phase.ps1 "${WC_SEARCH_MIGRATION_PHASE}"
+    ; Prepare a protected empty cache without moving the legacy index.
+    !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
+    nsExec::ExecToStack /TIMEOUT=600000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-search-migration-phase.ps1" -Phase stage -ExecutablePath "$PLUGINSDIR\wincommander-search-fence.exe" -InstallDirectory "$INSTDIR"'
+    Pop $0
+    Pop $1
+    ${If} $0 != 0
+      !insertmacro WC_ABORT_STOP_FAILURE "preinstall" "WinCommander could not prepare protected search. The existing index remains in place."
+    ${EndIf}
+    System::Call 'kernel32::GetCurrentProcessId() i .R6'
+    !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
+    nsExec::ExecToStack /TIMEOUT=90000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-hold-search-maintenance.ps1" -ExecutablePath "$PLUGINSDIR\wincommander-search-fence.exe" -InstallerProcessId $R6'
+    Pop $0
+    Pop $1
+    ${If} $0 == 0
+      ; nsExec returns a newline-terminated decimal handle owned by this process.
+      ${TrimNewLines} "$1" $R5
+      StrCpy $WCSearchFenceHandle $R5
+      System::Call '*(i 0, i 0, i 0, i 0, i 0) p.r0'
+      ${If} $0 != 0
+        System::Call 'kernel32::LockFileEx(p $R5, i 3, i 0, i -1, i -1, p r0) i .r1'
+        System::Free $0
+        StrCpy $0 $1
+      ${EndIf}
+    ${Else}
+      StrCpy $0 0
+    ${EndIf}
+    ${If} $0 != 1
+      !insertmacro WC_ABORT_STOP_FAILURE "preinstall" "Search maintenance could not start. The existing index remains in place."
+    ${EndIf}
+    !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
+    nsExec::ExecToStack /TIMEOUT=600000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-search-migration-phase.ps1" -Phase verify-staged -ExecutablePath "$PLUGINSDIR\wincommander-search-fence.exe" -InstallDirectory "$INSTDIR"'
+    Pop $0
+    Pop $1
+    ${If} $0 != 0
+      !insertmacro WC_ABORT_STOP_FAILURE "preinstall" "Protected search verification failed. The existing index remains in place."
+    ${EndIf}
+  !endif
+  !ifdef WC_EXPERIMENTAL_USER_STAGE_ONLY
+    ; User settings remain in their original authoritative store.
+    InitPluginsDir
+    File /oname=$PLUGINSDIR\wincommander-settings-stage.exe "${MAINBINARYSRCPATH}"
+    File /oname=$PLUGINSDIR\wincommander-stage-original-user-settings.ps1 "${WC_STAGE_ORIGINAL_USER_SETTINGS}"
+    !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
+    nsExec::ExecToStack /TIMEOUT=600000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-stage-original-user-settings.ps1" -ExecutablePath "$PLUGINSDIR\wincommander-settings-stage.exe" -InstallDirectory "$INSTDIR"'
+    Pop $0
+    Pop $1
+    !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "user-settings-stage" "$0" "$1"
+    ${If} $0 != 0
+      !insertmacro WC_ABORT_STOP_FAILURE "preinstall" "WinCommander could not stage user settings. Existing app and settings remain in place."
+    ${EndIf}
+  !endif
   !insertmacro WC_LOAD_PROGRAMDATA_OR_ABORT "preinstall"
   IfFileExists "$R5\WinCommander\license_cache.json" 0 wc_no_upgrade_license_to_backup
     ClearErrors

@@ -23,6 +23,7 @@ describe("search files panel helpers", () => {
 
   test("getIndexDisplayError keeps real index failures visible", () => {
     expect(getIndexDisplayError("Index error: lock busy")).toBe("Index error: lock busy");
+    expect(getIndexDisplayError("Old search data remains.")).toBe("Old search data remains.");
   });
 
   test("Tab recognizes a folder keyword as the visible Folders filter", () => {

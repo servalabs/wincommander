@@ -1,0 +1,248 @@
+# Disposable public fixtures only; never publish private artifacts.
+name: Paired synthetic lab packaging
+on:
+  push:
+    branches: [codex/settings-migration-windows-ci-20261106]
+    paths: ['.github/workflows/paired-synthetic-lab.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_RELEASE_LTO: 'false'
+      WINCMD_APP_DIR: WinCommander
+      WINCMD_FENCED_PRO_APP_DIR: WinCommander
+      WINCMD_FENCED_PRO_PROTOCOL: wincommander-search-fence-v1
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: 1.99.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.4.3
+      - name: Prepare public synthetic Pro input
+        shell: pwsh
+        run: |
+          $fake = Join-Path $env:RUNNER_TEMP 'synthetic-pro.exe'
+          Copy-Item -LiteralPath $env:ComSpec -Destination $fake
+          "WINCMD_FENCED_PRO_SHA256=$((Get-FileHash -LiteralPath $fake -Algorithm SHA256).Hash)" >> $env:GITHUB_ENV
+      - name: Build guarded service with synthetic Pro hash
+        shell: pwsh
+        run: |
+          $env:RUSTFLAGS = '-C target-feature=+crt-static'
+          cargo build --locked --release --manifest-path src-tauri/Cargo.toml -p commander-svc --features experimental-search-broker-fence
+          if ($LASTEXITCODE -ne 0) { throw 'Synthetic guarded service build failed.' }
+          $service = (Resolve-Path 'src-tauri/target/release/wincommander-svc.exe').Path
+          "WINCMD_FENCED_SERVICE_PATH=$service" >> $env:GITHUB_ENV
+          "WINCMD_FENCED_SERVICE_SHA256=$((Get-FileHash -LiteralPath $service -Algorithm SHA256).Hash)" >> $env:GITHUB_ENV
+      - name: Prepare frontend and disable updater signing for disposable fixture
+        shell: pwsh
+        run: |
+          bun install --frozen-lockfile
+          if ($LASTEXITCODE -ne 0) { throw 'Frontend dependency install failed.' }
+          $path = 'src-tauri/commander-free/tauri.conf.json'
+          $config = Get-Content -Raw -LiteralPath $path | ConvertFrom-Json
+          $config.bundle.createUpdaterArtifacts = $false
+          $config | ConvertTo-Json -Depth 100 | Set-Content -Encoding utf8 -LiteralPath $path
+      - name: Build disposable paired lab installer
+        shell: pwsh
+        run: |
+          bun run tools/build-tauri-release.ts --experimental-paired-search-lab
+          if ($LASTEXITCODE -ne 0) { throw 'Synthetic paired installer build failed.' }
+      - name: Extract and compare bundled service bytes
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem -File 'src-tauri/target/release/bundle/nsis/*.exe')
+          if ($installers.Count -ne 1) { throw 'Expected exactly one synthetic NSIS installer.' }
+          $extract = Join-Path $env:RUNNER_TEMP 'paired-lab-extracted'
+          if (Test-Path -LiteralPath $extract) { throw 'Extraction path already exists.' }
+          & 7z x $installers[0].FullName "-o$extract" -y
+          if ($LASTEXITCODE -ne 0) { throw 'Synthetic installer extraction failed.' }
+          $services = @(Get-ChildItem -LiteralPath $extract -Recurse -File -Filter 'wincommander-svc.exe')
+          if ($services.Count -ne 1 -or $services[0].Directory.Name -ine 'resources') { throw 'Expected one service under resources.' }
+          $hash = (Get-FileHash -LiteralPath $services[0].FullName -Algorithm SHA256).Hash
+          if ($hash -ine $env:WINCMD_FENCED_SERVICE_SHA256) { throw 'Extracted service hash does not match paired build input.' }
+          Write-Host 'Disposable installer contains the expected synthetic guarded service.'
+
+      - name: Test fenced read-only protected search verification
+        working-directory: src-tauri
+        shell: pwsh
+        run: |
+          $output = cargo test --locked -p wincmd-search --features experimental-encrypted-search offline_empty_cache_reconciles_with_live_roots_after_restart -- --test-threads=1 2>&1 | Out-String
+          Write-Host $output
+          if ($LASTEXITCODE -ne 0 -or $output -notmatch 'test result: ok\. 1 passed; 0 failed; 0 ignored') { throw 'Fenced read-only search verification test failed.' }
+      - name: Seed disposable legacy search cache
+        shell: pwsh
+        run: |
+          $parent = Join-Path $env:LOCALAPPDATA 'WinCommander/file-search'
+          $old = Join-Path $parent 'fts'
+          if (Test-Path -LiteralPath $parent) { throw 'Runner profile is not empty.' }
+          $docs = Join-Path $env:USERPROFILE 'Documents'
+          if ([string]::IsNullOrWhiteSpace($docs)) { throw 'Runner Documents path unavailable.' }
+          Push-Location src-tauri
+          try {
+            cargo run --locked -p wincmd-search --features experimental-encrypted-search --example paired_installed_fixture -- seed $old $docs
+            if ($LASTEXITCODE -ne 0) { throw 'Legacy index fixture could not be created.' }
+          } finally { Pop-Location }
+          if (-not (Test-Path -LiteralPath (Join-Path $old 'meta.json'))) { throw 'Legacy index fixture is missing.' }
+      - name: Install and verify user search migration on disposable runner
+        shell: pwsh
+        run: |
+          $installer = @(Get-ChildItem -File 'src-tauri/target/release/bundle/nsis/*.exe')[0].FullName
+          $app = Join-Path $env:ProgramFiles 'WinCommander/wincommander-free.exe'
+          if ((Get-Service WinCommanderSvc -ErrorAction SilentlyContinue) -or (Test-Path -LiteralPath $app)) { throw 'Runner is not a clean installation.' }
+          $setup = Start-Process -FilePath $installer -ArgumentList '/S' -WindowStyle Hidden -PassThru
+          if (-not $setup.WaitForExit(300000)) { $setup.Kill(); throw 'Synthetic setup timed out.' }
+          if ($setup.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $app)) { throw "Synthetic setup failed: $($setup.ExitCode)." }
+          $service = Get-Service WinCommanderSvc -ErrorAction Stop
+          $service.WaitForStatus('Running', [TimeSpan]::FromSeconds(60))
+          $appProcess = Start-Process -FilePath $app -WindowStyle Hidden -PassThru
+          $parent = Join-Path $env:LOCALAPPDATA 'WinCommander/file-search'
+          $selection = Join-Path $parent '.wincommander-encrypted-selection/candidate-proof.v1'
+          $deadline = [Diagnostics.Stopwatch]::StartNew()
+          while (-not (Test-Path -LiteralPath $selection) -and $deadline.Elapsed.TotalSeconds -lt 180 -and -not $appProcess.HasExited) {
+            Start-Sleep -Seconds 2; $appProcess.Refresh()
+          }
+          if (-not (Test-Path -LiteralPath $selection)) { throw 'Installed app did not create protected search selection.' }
+          if ($appProcess.HasExited) { throw "Installed app exited early: $($appProcess.ExitCode)." }
+          $initialSelectionHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $selection).Hash
+          "INITIAL_SELECTION_SHA256=$initialSelectionHash" >> $env:GITHUB_ENV
+          Write-Host 'Installed user process created a protected search candidate.'
+          # Stop the app before the probe acquires the exclusive maintenance
+          # fence. The probe only reads; it cannot crawl or reconcile documents.
+          $PSNativeCommandUseErrorActionPreference = $false
+          $checker = (Resolve-Path 'src-tauri/target/debug/examples/paired_installed_fixture.exe').Path
+          $old = Join-Path $parent 'fts'
+          $docs = Join-Path $env:USERPROFILE 'Documents'
+          $result = 1
+          for ($attempt = 1; $attempt -le 6; $attempt++) {
+            Start-Sleep -Seconds 15
+            $appProcess.Refresh()
+            if ($appProcess.HasExited) { throw 'Installed app exited before indexing the synthetic document.' }
+            $appProcess.Kill(); $appProcess.WaitForExit()
+            & $checker verify $old $docs 2>$null
+            $result = $LASTEXITCODE
+            if ($result -eq 0) { break }
+            if ($attempt -lt 6) { $appProcess = Start-Process -FilePath $app -WindowStyle Hidden -PassThru }
+          }
+          if ($result -ne 0) { throw 'Installed app did not commit the synthetic document to protected search.' }
+          if ((Get-FileHash -Algorithm SHA256 -LiteralPath $selection).Hash -ine $initialSelectionHash) { throw 'Protected selection changed while checking indexing.' }
+          $global:LASTEXITCODE = 0
+          Write-Host 'Exclusive read-only query found the document committed by the installed app.'
+      - name: Verify failed upgrade keeps service running
+        shell: pwsh
+        run: |
+          $installer = @(Get-ChildItem -File 'src-tauri/target/release/bundle/nsis/*.exe')[0].FullName
+          $proDir = Join-Path $env:ProgramData 'WinCommander/bin'
+          $fakePro = Join-Path $proDir 'wincommander-pro.exe'
+          if (Test-Path -LiteralPath $fakePro) { throw 'Runner contains an unexpected Pro executable.' }
+          New-Item -ItemType Directory -Path $proDir -Force | Out-Null
+          Copy-Item -LiteralPath $env:ComSpec -Destination $fakePro
+          $fake = Start-Process -FilePath $fakePro -ArgumentList '/c ping -n 180 127.0.0.1 >nul' -WindowStyle Hidden -PassThru
+          try {
+            Write-Host "Synthetic Pro process ID: $($fake.Id)"
+            Start-Sleep -Seconds 2
+            if ($fake.HasExited) { throw 'Synthetic Pro process did not remain active.' }
+            $setup = Start-Process -FilePath $installer -ArgumentList '/S' -WindowStyle Hidden -PassThru
+            if (-not $setup.WaitForExit(300000)) { $setup.Kill(); throw 'Blocked upgrade timed out.' }
+            if ($setup.ExitCode -eq 0) { throw 'Upgrade accepted an active old Pro process.' }
+            $service = Get-Service WinCommanderSvc -ErrorAction Stop
+            $service.WaitForStatus('Running', [TimeSpan]::FromSeconds(60))
+            Write-Host 'Blocked upgrade preserved the previously running service.'
+          } finally {
+            if (-not $fake.HasExited) { $fake.Kill(); $fake.WaitForExit() }
+          }
+          # The service can also launch this disposable cmd.exe as a core-pipe
+          # child. It cannot speak Pro's protocol; stop only this fixture image.
+          $pin = [IO.File]::Open($fakePro, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+          try {
+            $sha = [Security.Cryptography.SHA256]::Create()
+            try { $digest = [Convert]::ToHexString($sha.ComputeHash($pin)) } finally { $sha.Dispose() }
+            if ($digest -ine $env:WINCMD_FENCED_PRO_SHA256) { throw 'Synthetic Pro image changed before fixture cleanup.' }
+            $owned = @(Get-CimInstance -ClassName Win32_Process -Filter "Name='wincommander-pro.exe'" | Where-Object {
+              $_.ExecutablePath -and [string]::Equals([IO.Path]::GetFullPath($_.ExecutablePath), [IO.Path]::GetFullPath($fakePro), [StringComparison]::OrdinalIgnoreCase)
+            })
+            foreach ($entry in $owned) {
+              $process = [Diagnostics.Process]::GetProcessById([int]$entry.ProcessId)
+              try {
+                if (-not [string]::Equals([IO.Path]::GetFullPath($process.MainModule.FileName), [IO.Path]::GetFullPath($fakePro), [StringComparison]::OrdinalIgnoreCase)) { throw 'Synthetic process identity changed.' }
+                if ([Math]::Abs(($process.StartTime.ToUniversalTime() - $entry.CreationDate.ToUniversalTime()).TotalMilliseconds) -gt 1000) { throw 'Synthetic process ID was reused.' }
+                $process.Kill()
+                if (-not $process.WaitForExit(15000)) { throw 'Synthetic Pro process did not exit.' }
+              } finally { $process.Dispose() }
+            }
+          } finally { $pin.Dispose() }
+      - name: Retry upgrade and verify service
+        shell: pwsh
+        run: |
+          $installer = @(Get-ChildItem -File 'src-tauri/target/release/bundle/nsis/*.exe')[0].FullName
+          Write-Host 'Pro processes before retry:'
+          Get-CimInstance -ClassName Win32_Process -Filter "Name='wincommander-pro.exe'" | Select-Object ProcessId, ParentProcessId, ExecutablePath, CommandLine | Format-List | Out-String | Write-Host
+          $setup = Start-Process -FilePath $installer -ArgumentList '/S' -WindowStyle Hidden -PassThru
+          if (-not $setup.WaitForExit(300000)) { $setup.Kill(); throw 'Retry setup timed out.' }
+          if ($setup.ExitCode -ne 0) {
+            $log = Join-Path $env:ProgramFiles 'WinCommander/installer-lifecycle.log'
+            if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log | Write-Host }
+            Write-Host 'Pro processes after failed retry:'
+            Get-CimInstance -ClassName Win32_Process -Filter "Name='wincommander-pro.exe'" | Select-Object ProcessId, ParentProcessId, ExecutablePath, CommandLine | Format-List | Out-String | Write-Host
+            throw "Upgrade retry failed: $($setup.ExitCode)."
+          }
+          $service = Get-Service WinCommanderSvc -ErrorAction Stop
+          $service.WaitForStatus('Running', [TimeSpan]::FromSeconds(60))
+          $selection = Join-Path $env:LOCALAPPDATA 'WinCommander/file-search/.wincommander-encrypted-selection/candidate-proof.v1'
+          if (-not (Test-Path -LiteralPath $selection)) { throw 'Protected search selection disappeared during upgrade.' }
+          if ((Get-FileHash -Algorithm SHA256 -LiteralPath $selection).Hash -ine $env:INITIAL_SELECTION_SHA256) { throw 'Protected search selection changed during upgrade.' }
+          Write-Host 'Retry installed and retained the user protected search selection.'
+          $app = Join-Path $env:ProgramFiles 'WinCommander/wincommander-free.exe'
+          $runtime = Start-Process -FilePath $app -WindowStyle Hidden -PassThru
+          try {
+            Start-Sleep -Seconds 10
+            $runtime.Refresh()
+            if ($runtime.HasExited) { throw "Upgraded app failed to restart: $($runtime.ExitCode)." }
+          } finally {
+            if (-not $runtime.HasExited) { $runtime.Kill(); $runtime.WaitForExit() }
+          }
+          $info = [Diagnostics.ProcessStartInfo]::new()
+          $info.FileName = $app; $info.Arguments = '--search-migration-lab verify-staged'
+          $info.UseShellExecute = $false; $info.CreateNoWindow = $true
+          $info.RedirectStandardOutput = $true; $info.RedirectStandardError = $true
+          $info.EnvironmentVariables['WINCOMMANDER_EXPERIMENTAL_SEARCH_MIGRATION'] = '1'
+          $probe = [Diagnostics.Process]::Start($info)
+          try {
+            $stdout = $probe.StandardOutput.ReadToEndAsync(); $stderr = $probe.StandardError.ReadToEndAsync()
+            if (-not $probe.WaitForExit(60000)) { $probe.Kill(); throw 'Search verification timed out.' }
+            if ($probe.ExitCode -ne 0 -or $stdout.Result.Trim() -notmatch '^WINCOMMANDER_SEARCH_MIGRATION_OUTCOME:(selected|staged old-cache=retained)$') {
+              throw "Installed search selection failed verification: $($stderr.Result)"
+            }
+          } finally { $probe.Dispose() }
+          Write-Host 'Restarted installed app and authenticated its protected search selection.'
+          if ((Get-FileHash -Algorithm SHA256 -LiteralPath $selection).Hash -ine $env:INITIAL_SELECTION_SHA256) { throw 'Protected selection changed across restart.' }
+          # Corruption must fail closed; restore exact fixture bytes afterward.
+          $original = [IO.File]::ReadAllBytes($selection)
+          try {
+            [IO.File]::WriteAllBytes($selection, [Text.Encoding]::ASCII.GetBytes('corrupt-fixture'))
+            $probe = [Diagnostics.Process]::Start($info)
+            try {
+              $discardOut = $probe.StandardOutput.ReadToEndAsync(); $discardErr = $probe.StandardError.ReadToEndAsync()
+              if (-not $probe.WaitForExit(60000)) { $probe.Kill(); throw 'Corruption check timed out.' }
+              if ($probe.ExitCode -eq 0) { throw 'Corrupted selection was accepted.' }
+            } finally { $probe.Dispose() }
+          } finally { [IO.File]::WriteAllBytes($selection, $original) }
+          if ((Get-FileHash -Algorithm SHA256 -LiteralPath $selection).Hash -ine $env:INITIAL_SELECTION_SHA256) { throw 'Selection fixture restore failed.' }
+          Write-Host 'Corrupted selection was rejected and the fixture was restored.'
+          $docs = Join-Path $env:USERPROFILE 'Documents'
+          $old = Join-Path $env:LOCALAPPDATA 'WinCommander/file-search/fts'
+          Push-Location src-tauri
+          try {
+            cargo run --locked -p wincmd-search --features experimental-encrypted-search --example paired_installed_fixture -- verify $old $docs
+            if ($LASTEXITCODE -ne 0) { throw 'Migrated synthetic document was not searchable.' }
+          } finally { Pop-Location }
+          if ((Get-FileHash -Algorithm SHA256 -LiteralPath $selection).Hash -ine $env:INITIAL_SELECTION_SHA256) { throw 'Search verification replaced the selected generation.' }
+          Write-Host 'Read-only query found the document again after restarting the installed app.'

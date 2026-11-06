@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Route ordinary and private content search into separate storage lifetimes.
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
+pub(crate) mod runtime_fence;
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
+pub(crate) use runtime_fence::install_runtime_fence;
 mod defaults;
 mod global;
 mod locks;
@@ -130,6 +134,8 @@ pub(crate) fn start_background_indexing() {
                     "warn",
                     &format!("[FileSearch] background index start failed: {error}"),
                 );
+                #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+                notify_search_protection_pending();
             }
         })
     {
@@ -137,7 +143,23 @@ pub(crate) fn start_background_indexing() {
             "warn",
             &format!("[FileSearch] could not start background index: {error}"),
         );
+        #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+        notify_search_protection_pending();
     }
+}
+
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
+fn notify_search_protection_pending() {
+    static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if WARNED.swap(true, std::sync::atomic::Ordering::AcqRel) { return; }
+    // Never wait for a modal while holding search/replacement locks.
+    if std::thread::Builder::new().name("wc-search-protection-warning".into()).spawn(|| {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONWARNING, MB_OK};
+        let title: Vec<u16> = "WinCommander search data\0".encode_utf16().collect();
+        let message: Vec<u16> = "Search data protection could not finish. Older search data may still be on this PC. Open Search Files for status and try restarting WinCommander.\0".encode_utf16().collect();
+        let result = unsafe { MessageBoxW(std::ptr::null_mut(), message.as_ptr(), title.as_ptr(), MB_OK | MB_ICONWARNING) };
+        if result == 0 { WARNED.store(false, std::sync::atomic::Ordering::Release); }
+    }).is_err() { WARNED.store(false, std::sync::atomic::Ordering::Release); }
 }
 
 #[tauri::command]
@@ -201,7 +223,7 @@ pub async fn search_content(
 
 #[tauri::command]
 pub async fn content_index_status() -> Result<IndexStatus, String> {
-    tokio::task::spawn_blocking(move || {
+    let result = tokio::task::spawn_blocking(move || {
         let (settings, plan) = ensure_indexing_started()?;
         let fs = &settings.app.file_search;
         let mut status = global::with_engine(
@@ -209,6 +231,10 @@ pub async fn content_index_status() -> Result<IndexStatus, String> {
             &plan.protected,
             |engine| Ok(engine.status()),
         )?;
+        #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+        if let Some(message) = global::automatic_cleanup_message() {
+            status.last_error = Some(combine_cleanup_notice(status.last_error.take(), message));
+        }
         for shard in &plan.private {
             let (state, message, count) = private_jobs::state(shard);
             status.indexed_docs += count;
@@ -220,7 +246,27 @@ pub async fn content_index_status() -> Result<IndexStatus, String> {
         Ok(status)
     })
     .await
-    .map_err(|_| "Index status worker failed.".to_string())?
+    .unwrap_or_else(|_| Err("Index status worker failed.".to_string()));
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    return result.map_err(|_| "SEARCH_PROTECTION_PENDING".to_string());
+    #[cfg(not(all(windows, feature = "experimental-encrypted-search")))]
+    result
+}
+
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
+fn combine_cleanup_notice(existing: Option<String>, notice: String) -> String {
+    match existing {
+        Some(existing) if !existing.starts_with("Extraction error:") => format!("{notice} {existing}"),
+        _ => notice,
+    }
+}
+
+#[cfg(all(test, windows, feature = "experimental-encrypted-search"))]
+#[test]
+fn cleanup_notice_stays_visible_without_leaking_extraction_error() {
+    let message = combine_cleanup_notice(Some("Extraction error: C:\\private\\file.txt".into()), "Old search data remains.".into());
+    assert_eq!(message, "Old search data remains.");
+    assert_eq!(combine_cleanup_notice(Some("Index unavailable.".into()), "Old search data remains.".into()), "Old search data remains. Index unavailable.");
 }
 
 #[tauri::command]
@@ -307,6 +353,26 @@ pub async fn content_reindex() -> Result<(), String> {
     })
     .await
     .map_err(|_| "Index rebuild worker failed.".to_string())?
+}
+
+/// Explicit opt-in, feature-gated maintenance. The result reports retained
+/// plaintext backups separately; deletion is not secure erasure on SSDs.
+#[tauri::command]
+pub async fn content_cleanup_old_cache() -> Result<String, String> {
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    {
+        let _pro = crate::sidecar::quiesce_idle_pro_for_search().await?;
+        tokio::task::spawn_blocking(move || {
+            let _pro = _pro; // Hold until cleanup finishes even if the caller is cancelled.
+            let _replacement_lock = IndexReplacementLock::acquire()?;
+            let (settings, plan) = prepare(false)?;
+            let config = build_index_config(&settings.app.file_search, plan.ordinary)?;
+            let (removed, backups) = global::cleanup_legacy(&config, &plan.protected)?;
+            Ok(format!("Removed {removed} old search-cache files. {backups} retained search backup folders were found in WinCommander search storage. Search will reopen and reconcile on the next request. Deletion does not guarantee secure erasure from SSDs or backups."))
+        }).await.map_err(|_| "Search cleanup worker failed.".to_string())?
+    }
+    #[cfg(not(all(windows, feature = "experimental-encrypted-search")))]
+    { Err("Search cleanup is not available in this version.".into()) }
 }
 
 #[tauri::command]
