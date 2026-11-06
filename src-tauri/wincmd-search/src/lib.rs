@@ -1622,6 +1622,30 @@ mod tests {
     }
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     #[test]
+    fn verified_cleanup_removes_real_legacy_cache_and_requires_reopen() {
+        use tantivy::{doc, schema::{Schema, TEXT}};
+        let root = TempDir::new().unwrap();
+        let old = root.path().join("fts"); let data = root.path().join("data"); let selection = root.path().join("selector");
+        fs::create_dir(&old).unwrap(); fs::create_dir(&data).unwrap();
+        fs::write(data.join("doc.txt"), b"livecleanupneedle").unwrap();
+        let mut builder = Schema::builder(); let body = builder.add_text_field("body", TEXT);
+        let index = tantivy::Index::create_in_dir(&old, builder.build()).unwrap();
+        let mut writer = index.writer(50_000_000).unwrap();
+        writer.add_document(doc!(body => "legacyplaintextneedle")).unwrap(); writer.commit().unwrap();
+        drop(writer); drop(index);
+        fs::write(old.join("scope-v1.json"), b"legacy private roots").unwrap();
+        publish_experimental_scope(&old, b"protected scope", |_| Ok(())).unwrap();
+        let fence = crate::encrypted_search_fence::SearchOperationFence::acquire_exclusive(root.path()).unwrap();
+        SearchEngine::rebuild_offline_and_select(make_config(old.clone(), vec![]), Arc::new(|_| false), &selection, &fence).unwrap();
+        let mut engine = SearchEngine::open_experimental_selected_with_policy(make_config(old.clone(), vec![data]), Arc::new(|_| true), &selection).unwrap();
+        assert!(engine.cleanup_legacy_cache_after_reconciliation(&fence).unwrap() > 0);
+        assert!(!old.join("meta.json").exists()); assert!(!old.join("scope-v1.json").exists());
+        assert!(old.join("scope-v2.dpapi").is_file());
+        let query = ContentQuery { terms: "livecleanupneedle".into(), roots: vec![], limit: 10, offset: 0, keyword_only: true };
+        assert!(engine.search(&query).is_err(), "stopped watcher must require reopening");
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    #[test]
     fn staged_index_opens_after_restart_without_moving_old_cache() {
         let root = TempDir::new().unwrap();
         let old = root.path().join("legacy"); let data = root.path().join("data"); let selection = root.path().join("selector");
