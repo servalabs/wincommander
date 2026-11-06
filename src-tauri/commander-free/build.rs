@@ -125,7 +125,6 @@ fn main() {
     println!("cargo:rerun-if-env-changed=WINCMD_PRO_SHA256_CURRENT");
     println!("cargo:rerun-if-env-changed=WINCMD_PRO_SHA256_PREVIOUS");
     println!("cargo:rerun-if-env-changed=WINCMD_PAIRED_LAB_BUILD");
-    println!("cargo:rustc-check-cfg=cfg(wincommander_paired_lab_build)");
     println!("cargo:rerun-if-env-changed=WINCMD_FENCED_SERVICE_SHA256");
     println!("cargo:rerun-if-env-changed=WINCMD_FENCED_PRO_SHA256");
     println!("cargo:rerun-if-env-changed=WINCMD_APP_DIR");
@@ -193,8 +192,12 @@ fn main() {
     let is_development_profile = std::env::var("PROFILE").as_deref() == Ok("debug");
     if std::env::var_os("CARGO_FEATURE_EXPERIMENTAL_ENCRYPTED_SEARCH").is_some()
         && !is_development_profile
-        && std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
     {
+        assert!(
+            std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+                && build_service_pin::lab_build_enabled(std::env::var("WINCMD_PAIRED_LAB_BUILD").ok().as_deref()),
+            "experimental encrypted search is restricted to explicitly opted-in Windows lab builds"
+        );
         let hash = std::env::var("WINCMD_FENCED_SERVICE_SHA256").ok();
         let pro_hash = std::env::var("WINCMD_FENCED_PRO_SHA256").ok();
         let app_dir = std::env::var("WINCMD_APP_DIR").ok();
@@ -227,9 +230,6 @@ fn main() {
             pro_hash.as_deref(),
         )
         .expect("invalid paired search release configuration");
-        if build_service_pin::lab_build_enabled(std::env::var("WINCMD_PAIRED_LAB_BUILD").ok().as_deref()) {
-            println!("cargo:rustc-cfg=wincommander_paired_lab_build");
-        }
     }
     if std::env::var_os("CARGO_FEATURE_AUTONOMOUS_TEST").is_some() && !is_development_profile {
         panic!("the autonomous-test feature is restricted to debug test artifacts");

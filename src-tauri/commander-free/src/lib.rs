@@ -1,7 +1,3 @@
-// Only explicitly selected, hash-validated lab artifacts may use an optimized
-// experimental build. They are not approved for production distribution.
-#[cfg(all(feature = "experimental-encrypted-search", not(debug_assertions), not(wincommander_paired_lab_build)))]
-compile_error!("experimental encrypted search is not approved for release");
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex, OnceLock,
