@@ -20,6 +20,109 @@ pub struct PinnedSearchService {
     _ancestors: Vec<File>,
 }
 
+/// A release image pinned while SCM reports the service stopped. A privileged
+/// coordinator must hold this across the service start and session verification.
+/// The coordinator must also exclude SCM reconfiguration for the whole start.
+pub struct StoppedSearchServiceImage {
+    path: PathBuf,
+    image: File,
+    ancestors: Vec<File>,
+}
+
+/// Prepare a controlled start without starting or stopping any service itself.
+/// This proof is experimental and is not authorization for cleanup.
+pub fn pin_stopped_search_service(expected: &[u8; 32]) -> io::Result<StoppedSearchServiceImage> {
+    let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
+        .map_err(|_| denied())?;
+    let service = manager
+        .open_service(
+            wincmd_shared::svc::SVC_WINDOWS_SERVICE_NAME,
+            ServiceAccess::QUERY_STATUS | ServiceAccess::QUERY_CONFIG,
+        )
+        .map_err(|_| denied())?;
+    let status = service.query_status().map_err(|_| denied())?;
+    if status.current_state != ServiceState::Stopped {
+        return Err(denied());
+    }
+    let config = service.query_config().map_err(|_| denied())?;
+    // Stopped status may not report a service type; inspect the configured type.
+    require_service_configuration(
+        config.service_type,
+        config.service_type,
+        config.account_name.as_deref(),
+    )?;
+    let path = service_executable(&config.executable_path)?;
+    if !path.file_name().is_some_and(|name| {
+        name.to_string_lossy()
+            .eq_ignore_ascii_case("wincommander-svc.exe")
+    }) {
+        return Err(denied());
+    }
+    let (image, ancestors) = pin_file(&path, expected)?;
+    let again = service.query_config().map_err(|_| denied())?;
+    if service.query_status().map_err(|_| denied())?.current_state != ServiceState::Stopped
+        || service_executable(&again.executable_path)? != path
+    {
+        return Err(denied());
+    }
+    require_service_configuration(
+        again.service_type,
+        again.service_type,
+        again.account_name.as_deref(),
+    )?;
+    Ok(StoppedSearchServiceImage {
+        path,
+        image,
+        ancestors,
+    })
+}
+
+impl StoppedSearchServiceImage {
+    /// Bind the already-authenticated pipe to the process started while this pin
+    /// was held. SCM configuration and older processes still require fencing.
+    pub fn bind_started(self, peer: VerifiedServicePeer) -> io::Result<PinnedSearchService> {
+        let pid = unsafe { GetProcessId(peer._process.as_raw_handle() as HANDLE) };
+        let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
+            .map_err(|_| denied())?;
+        let service = manager
+            .open_service(
+                wincmd_shared::svc::SVC_WINDOWS_SERVICE_NAME,
+                ServiceAccess::QUERY_STATUS | ServiceAccess::QUERY_CONFIG,
+            )
+            .map_err(|_| denied())?;
+        let status = service.query_status().map_err(|_| denied())?;
+        require_running_pid(
+            status.current_state == ServiceState::Running,
+            status.process_id,
+            pid,
+        )?;
+        let config = service.query_config().map_err(|_| denied())?;
+        require_service_configuration(
+            status.service_type,
+            config.service_type,
+            config.account_name.as_deref(),
+        )?;
+        if service_executable(&config.executable_path)? != self.path {
+            return Err(denied());
+        }
+        verify_process_image(
+            &peer._process,
+            &std::fs::canonicalize(&self.path).map_err(|_| denied())?,
+        )?;
+        let status = service.query_status().map_err(|_| denied())?;
+        require_running_pid(
+            status.current_state == ServiceState::Running,
+            status.process_id,
+            pid,
+        )?;
+        Ok(PinnedSearchService {
+            _peer: peer,
+            _image: self.image,
+            _ancestors: self.ancestors,
+        })
+    }
+}
+
 /// Parse the release-provided SHA-256. Missing or malformed input fails closed.
 pub fn release_digest(value: Option<&str>) -> io::Result<[u8; 32]> {
     let text = value.ok_or_else(denied)?;
