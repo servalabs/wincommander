@@ -58,6 +58,29 @@ fn fresh_machine_stage_requires_confirmation_without_touching_source() {
 }
 
 #[test]
+fn unconfirmed_missing_identity_does_not_leave_a_stale_candidate() {
+    let root = tempfile::tempdir().unwrap();
+    let stage = root.path().join(".settings-cutover-candidate.v1");
+    let old = [42; 32]; let input = sections(&old);
+    let candidate = prepare(&old, &input).unwrap();
+    let error = publish_stage_after_identity_check(&stage, &candidate).unwrap_err();
+    assert!(error.starts_with("SETTINGS_IDENTITY_UNVERIFIED:"));
+    assert!(!stage.exists());
+    let key = derive_section_key(&old, None).unwrap();
+    let mut changed = input.clone();
+    changed[0].1 = encode_section(&key, &serde_json::to_vec(&json!({"changed": true})).unwrap(), "machine:settings").unwrap();
+    let later = prepare(&old, &changed).unwrap();
+    assert!(publish_stage_after_identity_check(&stage, &later).unwrap_err().starts_with("SETTINGS_IDENTITY_UNVERIFIED:"));
+    assert!(!stage.exists());
+    let f6 = json!({"signing_seed_hex": "a".repeat(64)});
+    let mut existing = input;
+    existing.push(("f6-keystore".into(), encode_section(&key, &serde_json::to_vec(&f6).unwrap(), "machine:f6-keystore").unwrap()));
+    let with_identity = prepare(&old, &existing).unwrap();
+    assert_eq!(publish_stage_after_identity_check(&stage, &with_identity).unwrap(), with_identity);
+    assert_eq!(std::fs::read(stage).unwrap(), with_identity);
+}
+
+#[test]
 #[cfg_attr(windows, ignore = "requires elevated machine-lock ACL provisioning; run explicitly in Windows acceptance")]
 fn staging_retry_recovers_only_authenticated_interrupted_updates() {
     let root = tempfile::tempdir().unwrap(); provision_test_lock(root.path());

@@ -148,6 +148,17 @@ fn stage_keyless_store(root: &Path, scope: StoreScope) -> Result<(), String> {
         Err(_) => Err("Settings key is missing or store cannot be inspected; existing data preserved.".into()),
     }
 }
+
+// Do not leave an unselected candidate behind when setup needs an identity
+// choice. The old application may keep writing its store after the user says
+// No; a candidate published before that choice would become stale on retry.
+fn publish_stage_after_identity_check(stage: &Path, prepared: &[u8]) -> Result<Vec<u8>, String> {
+    verify_f6_creation_authority(&open_generation(prepared)?)?;
+    if !crate::datastore_io::publish_new(stage, prepared)? { return Err("Settings staging changed; retry with originals preserved.".into()); }
+    let observed = read_generation_file(stage, MAX_TOTAL * 2 + 65_536)?.ok_or("Settings stage unavailable")?;
+    if observed != prepared { return Err("Settings stage readback failed; originals preserved.".into()); }
+    Ok(observed)
+}
 /// Pre-replacement staging only. It never provisions a cutover anchor or
 /// selects a generation, so the original installation remains authoritative.
 /// User staging additionally requires an expected SID checked by the caller.
@@ -190,10 +201,7 @@ pub(super) fn stage_existing_explicitly(expected_scope: StoreScope) -> Result<()
             let prepared = snapshot.prepare()?;
             snapshot.verify_generation(&prepared)?;
             super::settings_generation_maintenance::verify_known_writers_stopped()?;
-            if !crate::datastore_io::publish_new(&stage, &prepared)? { return Err("Settings staging changed; retry with originals preserved.".into()); }
-            let observed = read_generation_file(&stage, MAX_TOTAL * 2 + 65_536)?.ok_or("Settings stage unavailable")?;
-            if observed != prepared { return Err("Settings stage readback failed; originals preserved.".into()); }
-            observed
+            publish_stage_after_identity_check(&stage, &prepared)?
         },
     };
     if let Some(AnchorState::Preparing { next }) = anchor.read()? {
