@@ -114,7 +114,7 @@ copyFileSync(calculatorBuildPath, stagedCalculatorPath);
 writeFileSync(generatedConfigPath, `${JSON.stringify(config, null, 2)}\n`);
 try {
   run(["bun", "x", "--package", "@tauri-apps/cli@2.12.4", "tauri", "build", "--config", generatedConfigPath,
-    ...(pairedSearch ? ["--features", "experimental-encrypted-search"] : [])], "Tauri release bundle");
+    ...(pairedSearch ? ["--features", "experimental-encrypted-search,experimental-settings-generation"] : [])], "Tauri release bundle");
   if (pairedSearch) pairedServiceHash(readFileSync(stagedServicePath), process.env.WINCMD_FENCED_SERVICE_SHA256 ?? "");
 } finally {
   rmSync(generatedConfigPath, { force: true });
