@@ -16,6 +16,12 @@ failed attempt may reflect token privileges or filesystem policy rather than
 prove safety. The program reports the Windows result and leaves its disposable
 fixture in place; it does not perform cleanup or change accounts or services.
 
+With `--deny-write`, a restricted-token run returned Windows sharing violation
+32 when opening the mutation handle. While the pin was held, it read an
+existing child file and could still create a new child. A pre-existing directory
+write handle prevented acquiring the pin. These outcomes do not establish that
+holding such a pin on a live machine is compatible with unrelated software.
+
 From an elevated Windows terminal in this worktree, with the named temporary
 directory already present and at least 5 GiB free on D: and 12 GiB on C::
 
@@ -25,4 +31,5 @@ $env:TMP = $env:TEMP
 rustc +1.99.1 --edition 2021 tools/settings-parent-reparse-probe.rs -o "$env:TEMP\settings-parent-reparse-probe.exe"
 $fixture = Join-Path $env:TEMP ('reparse-fixture-' + [Guid]::NewGuid().ToString('N'))
 & "$env:TEMP\settings-parent-reparse-probe.exe" $fixture --restricted
+# For the no-write-sharing comparison, use a new unique fixture path and add --deny-write.
 ```

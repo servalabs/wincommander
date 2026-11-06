@@ -51,6 +51,8 @@ fn prepare_fresh_root() -> Result<(PathBuf, Vec<std::fs::File>, StoreScope), Str
 #[cfg(windows)]
 pub(super) fn provision_verified_fresh_install() -> Result<(), String> {
     super::settings_generation_maintenance::verify_known_writers_stopped()?;
+    let _maintenance_pins = if crate::paths::current_user_install_uses_local_datastore() { None }
+        else { Some(source_snapshot::pin_machine_maintenance()?) };
     let (root, _pins, scope) = prepare_fresh_root()?;
     super::settings_generation_maintenance::verify_known_writers_stopped()?;
     super::settings_generation_bootstrap::provision_fresh(&root, scope, |path| {

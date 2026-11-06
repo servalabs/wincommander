@@ -75,6 +75,8 @@ fn stage_and_select<A: Anchor>(
 #[cfg(windows)]
 pub(super) fn migrate_explicitly() -> Result<(), String> {
     super::settings_generation_maintenance::verify_known_writers_stopped()?;
+    let _maintenance_pins = if crate::paths::current_user_install_uses_local_datastore() { None }
+        else { Some(source_snapshot::pin_machine_maintenance()?) };
     let (root, _pins, scope) = experimental_runtime_root()?;
     match scope {
         StoreScope::Machine => super::settings_generation_acl_windows::provision_or_verify(&root),
@@ -138,6 +140,7 @@ pub(super) fn stage_existing_explicitly(expected_scope: StoreScope) -> Result<()
     if expected_scope == StoreScope::Machine && actual_scope != expected_scope {
         return Err("Settings installation scope does not match the running application; existing data preserved.".into());
     }
+    let _maintenance_pins = if expected_scope == StoreScope::Machine { Some(source_snapshot::pin_machine_maintenance()?) } else { None };
     let root = source_snapshot::known_root(expected_scope)?;
     match std::fs::symlink_metadata(&root) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound && expected_scope == StoreScope::Machine => return Ok(()),
@@ -238,6 +241,7 @@ fn provision_machine_f6_after_selection(root: &Path, scope: StoreScope, create: 
 pub(super) fn install_migration_explicitly() -> Result<(), String> {
     super::settings_generation_maintenance::verify_known_writers_stopped()?;
     let scope = if crate::paths::current_user_install_uses_local_datastore() { StoreScope::CurrentUser } else { StoreScope::Machine };
+    let _maintenance_pins = if scope == StoreScope::Machine { Some(source_snapshot::pin_machine_maintenance()?) } else { None };
     let initial_root = source_snapshot::known_root(scope)?;
     match std::fs::symlink_metadata(&initial_root) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => provision_verified_fresh_install()?,
@@ -258,6 +262,9 @@ pub(super) fn install_migration_explicitly() -> Result<(), String> {
             }
         },
     }
+    // Fresh provisioning can create the root after the first maintenance pin
+    // was acquired. Re-pin it before the remaining F6/settings writes.
+    let _final_maintenance_pins = if scope == StoreScope::Machine { Some(source_snapshot::pin_machine_maintenance()?) } else { None };
     let (root, _pins, scope) = experimental_runtime_root()?;
     provision_machine_f6_after_selection(&root, scope, || {
         let (signing, _) = wincmd_shared::wipe_auth::generate_provisioning_keypair();
