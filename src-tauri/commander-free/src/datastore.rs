@@ -78,7 +78,7 @@ pub(crate) fn settings_generation_lab_status() -> Result<&'static str, String> {
     let (root, _pins, scope) = settings_rotation_trial::experimental_runtime_root()?;
     match settings_rotation_trial::inspect_startup_once(&root, scope)? {
         settings_rotation_trial::StartupView::Legacy => Ok("Legacy settings selected; migration has not run."),
-        settings_rotation_trial::StartupView::Selected(_) => Ok("Protected settings generation selected."),
+        settings_rotation_trial::StartupView::Selected { .. } => Ok("Protected settings generation selected."),
         settings_rotation_trial::StartupView::RecoveryRequired => Err("Settings generation requires authorized recovery; original files were preserved.".into()),
     }
 }
@@ -91,6 +91,8 @@ pub(crate) fn require_selected_settings_lab_startup() -> Result<(), String> {
     let (root, _pins, scope) = settings_rotation_trial::experimental_runtime_root()?;
     settings_rotation_trial::require_selected_startup(
         settings_rotation_trial::inspect_startup_once(&root, scope)?,
+        scope,
+        crate::settings::valid_fresh_machine_settings,
     )
 }
 

@@ -54,6 +54,8 @@ fn fresh_install_selects_encrypted_empty_generation_and_resumes_pending() {
     assert!(owner.read_all().is_err());
     select_fresh_generation(&owner._ownership, root.path(), StoreScope::Machine, &|| Ok(())).unwrap();
     assert!(owner.read_all().unwrap().is_empty());
+    let view = inspect_generation_files(&owner._ownership, &owner.path, &owner.authority, StoreScope::Machine).unwrap();
+    assert!(require_selected_startup(view, StoreScope::Machine, |_| true).is_err());
     let seed = json!({"signing_seed_hex": "c".repeat(64)});
     provision_machine_f6_owned(&owner, || Ok(seed.clone())).unwrap();
     provision_machine_f6_owned(&owner, || panic!("existing key must be retained")).unwrap();
@@ -61,6 +63,8 @@ fn fresh_install_selects_encrypted_empty_generation_and_resumes_pending() {
     provision_fresh_machine_settings_owned(&owner, || Ok(defaults.clone())).unwrap();
     provision_fresh_machine_settings_owned(&owner, || panic!("defaults must not be replaced on retry")).unwrap();
     assert_eq!(owner.read_all().unwrap()["settings"], defaults);
+    let view = inspect_generation_files(&owner._ownership, &owner.path, &owner.authority, StoreScope::Machine).unwrap();
+    assert!(require_selected_startup(view, StoreScope::Machine, |_| true).is_ok());
     assert_eq!(owner.get_or_create_f6(|| panic!("existing key must be returned")).unwrap(), seed);
     assert_eq!(std::fs::read(root.path().join(".settings-cutover-candidate.v1")).unwrap(), candidate);
     assert!(!root.path().join(".install.material").exists());
@@ -161,7 +165,21 @@ fn duplicated_search_fence_is_locked_by_installer_process() {
 
 #[test]
 fn installer_startup_never_falls_back_to_legacy_or_incomplete_generation() {
-    assert!(require_selected_startup(StartupView::Legacy).is_err());
-    assert!(require_selected_startup(StartupView::RecoveryRequired).is_err());
-    assert!(require_selected_startup(StartupView::Selected(BTreeMap::new())).is_ok());
+    let machine = StoreScope::Machine;
+    let valid = |value: &Value| value.get("deviceId").and_then(Value::as_str) == Some("valid-fixture");
+    assert!(require_selected_startup(StartupView::Legacy, machine, valid).is_err());
+    assert!(require_selected_startup(StartupView::RecoveryRequired, machine, valid).is_err());
+    let selected = |sections, fresh| StartupView::Selected { sections, fresh };
+    assert!(require_selected_startup(selected(BTreeMap::new(), true), machine, valid).is_err());
+    assert!(require_selected_startup(selected(BTreeMap::new(), false), machine, valid).is_ok());
+    let mut sections = BTreeMap::from([("settings".into(), json!({"deviceId": "valid-fixture"}))]);
+    assert!(require_selected_startup(selected(sections.clone(), true), machine, valid).is_err());
+    assert!(require_selected_startup(selected(sections.clone(), false), machine, valid).is_ok());
+    sections.insert("F6-KEYSTORE".into(), json!({"signing_seed_hex": "c".repeat(64)}));
+    assert!(require_selected_startup(selected(sections.clone(), true), machine, valid).is_ok());
+    sections.insert("settings".into(), json!({"deviceId": "invalid"}));
+    assert!(require_selected_startup(selected(sections.clone(), true), machine, valid).is_err());
+    sections.insert("settings".into(), json!({}));
+    assert!(require_selected_startup(selected(sections, true), machine, valid).is_err());
+    assert!(require_selected_startup(selected(BTreeMap::new(), true), StoreScope::CurrentUser, valid).is_ok());
 }

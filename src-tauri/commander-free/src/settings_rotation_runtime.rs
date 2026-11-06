@@ -30,7 +30,7 @@ impl ReadOnlySelectedGeneration {
     }
     fn read_all(&self) -> Result<BTreeMap<String, Value>, String> {
         match self.inspect_startup()? {
-            StartupView::Selected(sections) => Ok(sections),
+            StartupView::Selected { sections, .. } => Ok(sections),
             StartupView::Legacy => Err("settings generation has not been selected".into()),
             StartupView::RecoveryRequired => Err("settings generation requires authorized recovery".into()),
         }
@@ -54,7 +54,10 @@ fn inspect_generation_files(guard: &super::settings_generation_ownership::Settin
         },
         Some(AnchorState::Active { .. }) => {
             let bytes = cutover::read_active(guard, &anchor, &file, &|value| verify_scoped_generation(scope, value))?;
-            Ok(StartupView::Selected(open_generation(&bytes).map_err(|error| scope.access_error(error))?.sections))
+            let generation = open_generation(&bytes).map_err(|error| scope.access_error(error))?;
+            let fresh = generation.source_key_digest == source_digest(b"wincommander-fresh-install-v1")
+                && generation.source_sections.is_empty();
+            Ok(StartupView::Selected { sections: generation.sections, fresh })
         },
         Some(AnchorState::Preparing { .. } | AnchorState::Updating { .. }) => Ok(StartupView::RecoveryRequired),
         None => Err("settings cutover anchor is missing; existing data preserved".into()),
@@ -66,7 +69,7 @@ pub(super) fn read_with_legacy(root: &Path, scope: StoreScope, section: &str, le
     let owner = ReadOnlySelectedGeneration::acquire(root, scope)?;
     match owner.inspect_startup()? {
         StartupView::Legacy => legacy(),
-        StartupView::Selected(sections) => Ok(selected_section(sections, section)),
+        StartupView::Selected { sections, .. } => Ok(selected_section(sections, section)),
         StartupView::RecoveryRequired => {
             // Never upgrade in place: release shared ownership before asking
             // for exclusive repair, then re-read the anchor under that guard.
@@ -113,7 +116,7 @@ pub(super) fn write_with_legacy(root: &Path, scope: StoreScope, section: &str, v
     let owner = LockedSelectedGeneration::acquire_for(root, scope)?;
     match inspect_generation_files(&owner._ownership, &owner.path, &owner.authority, scope)? {
         StartupView::Legacy => legacy(),
-        StartupView::Selected(_) => owner.write_section(section, value.clone()),
+        StartupView::Selected { .. } => owner.write_section(section, value.clone()),
         StartupView::RecoveryRequired => Err("settings generation requires authorized recovery".into()),
     }
 }
@@ -144,7 +147,7 @@ pub(super) fn begin_experimental_write() -> Result<RuntimeWriteGuard, String> {
     let owner = LockedSelectedGeneration::acquire_for(&root, scope)?;
     let selected = match inspect_generation_files(&owner._ownership, &owner.path, &owner.authority, owner.scope)? {
         StartupView::Legacy => false,
-        StartupView::Selected(_) => true,
+        StartupView::Selected { .. } => true,
         StartupView::RecoveryRequired => {
             let anchor = ProtectedFileAnchor::new(&root, scope);
             if matches!(anchor.read()?, Some(AnchorState::Updating { .. })) {

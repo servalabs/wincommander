@@ -3,7 +3,7 @@
 #[derive(Debug, PartialEq)]
 pub(super) enum StartupView {
     Legacy,
-    Selected(BTreeMap<String, Value>),
+    Selected { sections: BTreeMap<String, Value>, fresh: bool },
     RecoveryRequired,
 }
 pub(super) fn inspect_startup_once(root: &Path, scope: StoreScope) -> Result<StartupView, String> {
@@ -11,9 +11,18 @@ pub(super) fn inspect_startup_once(root: &Path, scope: StoreScope) -> Result<Sta
 }
 /// The paired installer lab cannot start the desktop on legacy or an
 /// incomplete generation. Retrying setup remains the recovery route.
-pub(super) fn require_selected_startup(view: StartupView) -> Result<(), String> {
+pub(super) fn require_selected_startup(view: StartupView, scope: StoreScope, validate_settings: impl FnOnce(&Value) -> bool) -> Result<(), String> {
     match view {
-        StartupView::Selected(_) => Ok(()),
+        StartupView::Selected { sections, fresh: true } if scope == StoreScope::Machine => {
+            let settings = matching_section(&sections, "settings").and_then(|name| sections.get(name));
+            let f6 = matching_section(&sections, "f6-keystore").and_then(|name| sections.get(name));
+            if settings.is_some_and(validate_settings) && f6.is_some_and(valid_f6) {
+                Ok(())
+            } else {
+                Err("Protected settings setup is incomplete; retry setup. Existing data was preserved.".into())
+            }
+        },
+        StartupView::Selected { .. } => Ok(()),
         _ => Err("Protected settings setup needs to finish; retry setup.".into()),
     }
 }
