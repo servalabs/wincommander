@@ -217,6 +217,13 @@ jobs:
       - name: Test search phase classification in combined app
         working-directory: src-tauri
         run: cargo test --locked -p commander-free --lib --features experimental-encrypted-search,experimental-settings-generation search_migration_cli::tests::fresh_requires_no_legacy_selection_or_recovery_artifacts
+      - name: Test Pro worker quiescence control paths
+        working-directory: src-tauri
+        shell: pwsh
+        run: |
+          $output = cargo test --locked -p commander-free --lib --features experimental-encrypted-search,experimental-settings-generation search_quiescence_ -- --test-threads=1 2>&1 | Out-String
+          Write-Host $output
+          if ($LASTEXITCODE -ne 0 -or $output -notmatch 'test result: ok\. 3 passed; 0 failed; 0 ignored') { throw 'Pro quiescence tests did not all pass.' }
       - name: Build the paired debug desktop executable
         working-directory: src-tauri
         run: cargo build --locked -p commander-free --bin wincommander-free --features experimental-encrypted-search,experimental-settings-generation

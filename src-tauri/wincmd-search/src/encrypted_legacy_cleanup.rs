@@ -73,6 +73,16 @@ fn open_checked(path: &Path) -> io::Result<(std::fs::File, (u32, u32, u32))> {
         || info.nNumberOfLinks != 1 { return Err(refused()); }
     Ok((file, (info.dwVolumeSerialNumber, info.nFileIndexHigh, info.nFileIndexLow)))
 }
+fn validate_empty_lock(path: &Path) -> io::Result<()> {
+    let file = std::fs::OpenOptions::new().read(true)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT).open(path)?;
+    let meta = file.metadata()?; let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    // SAFETY: live file and output buffer.
+    if !meta.is_file() || meta.len() != 0 || meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+        || unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0
+        || info.nNumberOfLinks != 1 { return Err(refused()); }
+    Ok(())
+}
 fn open_scope(path: &Path, delete: bool) -> io::Result<std::fs::File> {
     let access = FILE_GENERIC_READ | FILE_READ_ATTRIBUTES | if delete { DELETE } else { 0 };
     let file = std::fs::OpenOptions::new().read(true).access_mode(access)
@@ -94,11 +104,18 @@ fn read_bounded(file: &mut std::fs::File, limit: usize) -> io::Result<Vec<u8>> {
 pub(crate) fn remove_managed(old: &Path, fence: &crate::encrypted_search_fence::SearchOperationFence) -> io::Result<usize> {
     remove_managed_with_hook(old, fence, || {})
 }
+pub(crate) fn remove_managed_with_service(old: &Path, fence: &crate::encrypted_search_fence::SearchOperationFence, service_pid: u32) -> io::Result<usize> {
+    remove_managed_inner(old, fence, Some(service_pid), || {})
+}
 fn remove_managed_with_hook(old: &Path, fence: &crate::encrypted_search_fence::SearchOperationFence,
     after_validation: impl FnOnce()) -> io::Result<usize> {
+    remove_managed_inner(old, fence, None, after_validation)
+}
+fn remove_managed_inner(old: &Path, fence: &crate::encrypted_search_fence::SearchOperationFence,
+    service_pid: Option<u32>, after_validation: impl FnOnce()) -> io::Result<usize> {
     let parent = old.parent().ok_or_else(refused)?;
     fence.require_exclusive_for(parent)?;
-    crate::encrypted_search_maintenance::verify_known_writers_stopped().map_err(io::Error::other)?;
+    crate::encrypted_search_maintenance::verify_known_writers_except_service(service_pid).map_err(io::Error::other)?;
     let _pins = CheckedDirectory::pin_root_path(old)?;
     let directory = CheckedDirectory::open(old, AccessMode::Writable).map_err(|e| io::Error::other(e.to_string()))?;
     let _writer = directory.acquire_lock_pinned(&tantivy::directory::INDEX_WRITER_LOCK)
@@ -108,7 +125,16 @@ fn remove_managed_with_hook(old: &Path, fence: &crate::encrypted_search_fence::S
     let mut names = Vec::new();
     for entry in entries {
         let name = entry.file_name().into_string().map_err(|_| refused())?;
-        if preserved(&name) { continue; }
+        if preserved(&name) {
+            if name == "scope-v2.dpapi" {
+                use crate::encrypted_key_prototype::{Protector, UserDpapi};
+                let mut file = open_scope(&old.join(&name), false)?;
+                let bytes = read_bounded(&mut file, crate::encrypted_scope::MAX_PROTECTED_SCOPE)?;
+                let clear = UserDpapi.unprotect(&bytes)?;
+                if clear.len() < 8 || !crate::encrypted_scope::same_scope(&clear, &clear[8..]).unwrap_or(false) { return Err(refused()); }
+            } else { validate_empty_lock(&old.join(&name))?; }
+            continue;
+        }
         if !cache_file(&name) { return Err(refused()); }
         names.push(name);
     }
@@ -210,14 +236,16 @@ mod tests {
         std::fs::write(old.join(segment), b"old document content").unwrap();
         std::fs::write(old.join("meta.json"), b"old names").unwrap();
         std::fs::write(old.join(".managed.json"), format!("[\"{segment}\"]")).unwrap();
-        std::fs::write(old.join("scope-v2.dpapi"), b"protected scope").unwrap();
+        let scope = br#"{"version":1,"roots":[],"exclusions":[],"blocked_roots":[]}"#;
+        crate::publish_experimental_scope(&old, scope, |_| Ok(())).unwrap();
+        let protected_scope = std::fs::read(old.join("scope-v2.dpapi")).unwrap();
         let fence = crate::encrypted_search_fence::SearchOperationFence::acquire_exclusive(root.path()).unwrap();
         std::fs::write(old.join("unrelated.txt"), b"keep").unwrap();
         assert!(remove_managed(&old, &fence).is_err());
         assert!(old.join(segment).exists());
         std::fs::remove_file(old.join("unrelated.txt")).unwrap();
         assert_eq!(remove_managed(&old, &fence).unwrap(), 3);
-        assert_eq!(std::fs::read(old.join("scope-v2.dpapi")).unwrap(), b"protected scope");
+        assert_eq!(std::fs::read(old.join("scope-v2.dpapi")).unwrap(), protected_scope);
         assert!(!old.join(segment).exists());
         assert_eq!(remove_managed(&old, &fence).unwrap(), 0);
     }

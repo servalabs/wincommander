@@ -213,6 +213,13 @@ pub async fn content_index_status() -> Result<IndexStatus, String> {
             &plan.protected,
             |engine| Ok(engine.status()),
         )?;
+        #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+        if let Some(message) = global::automatic_cleanup_message() {
+            status.last_error = Some(match status.last_error.take() {
+                Some(existing) => format!("{existing} {message}"),
+                None => message,
+            });
+        }
         for shard in &plan.private {
             let (state, message, count) = private_jobs::state(shard);
             status.indexed_docs += count;
@@ -319,6 +326,7 @@ pub async fn content_reindex() -> Result<(), String> {
 pub async fn content_cleanup_old_cache() -> Result<String, String> {
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     {
+        let _pro = crate::sidecar::quiesce_idle_pro_for_search().await?;
         tokio::task::spawn_blocking(move || {
             let _replacement_lock = IndexReplacementLock::acquire()?;
             let (settings, plan) = prepare(false)?;

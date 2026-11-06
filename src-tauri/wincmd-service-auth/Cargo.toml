@@ -5,12 +5,16 @@ edition = "2021"
 license = "AGPL-3.0-or-later"
 description = "Windows identity verification for the WinCommander service pipe"
 
+[features]
+experimental-search-service-pin = ["dep:sha2"]
+
 [dependencies]
 wincmd-shared = { path = "../wincmd-shared" }
+sha2 = { version = "0.11", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-service = "0.8"
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Pipes", "Win32_System_Threading"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Pipes", "Win32_System_Threading"] }
 
 [target.'cfg(windows)'.dev-dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Security", "Win32_Security_Authorization"] }
