@@ -114,6 +114,7 @@ fn validate_release_modules(salt_bytes: &[u8]) {
 // writes a random salt and matching ciphertext; debug builds do not consume it.
 // The salt is XOR-obfuscated into generated_key.rs so it is not stored verbatim.
 fn main() {
+    println!("cargo:rerun-if-changed=build_service_pin.rs");
     // Do this before the profile branch: a Debug build must be invalidated
     // whenever cleanup.ps1 changes, even though it deliberately does not read
     // or regenerate the release ciphertext.
