@@ -81,6 +81,7 @@ pub(crate) struct PinnedSelectionStore {
 }
 #[cfg(windows)]
 impl PinnedSelectionStore {
+    pub(crate) fn root(&self) -> &std::path::Path { &self.root }
     pub(crate) fn open(root: &std::path::Path) -> io::Result<Self> {
         use crate::read_only::{AccessMode, CheckedDirectory};
         let pins = CheckedDirectory::pin_root_path(root)?;

@@ -32,11 +32,13 @@ jobs:
             'encrypted_search_maintenance::',
             'encrypted_search_fence::',
             'encrypted_migration_transaction::',
+            'encrypted_legacy_cleanup::',
             'experimental_scope_publication_requires_validated_pinned_root',
             'quarantine_requires_selected_cache_and_preserves_legacy_backup',
             'offline_rebuild_selects_encrypted_generation_and_preserves_old_cache',
             'offline_empty_cache_reconciles_with_live_roots_after_restart',
             'staged_index_opens_after_restart_without_moving_old_cache',
+            'verified_cleanup_removes_real_legacy_cache_and_requires_reopen',
             'fresh_install_scope_only_remains_verifiable_on_next_update',
             'missing_selector_with_prior_backup_cannot_be_marked_fresh',
             'interrupted_origin_without_selector_fails_closed_and_preserves_proof',
@@ -80,4 +82,5 @@ jobs:
       - run: bun run encrypt-backend
         working-directory: .
       - run: cargo check --locked -p commander-free --features experimental-encrypted-search
-      - run: cargo test --locked -p commander-free --lib --features experimental-encrypted-search search_migration_cli::tests::fresh_requires_no_legacy_selection_or_recovery_artifacts
+      - run: 'cargo test --locked -p commander-free --lib --features experimental-encrypted-search search_migration_cli::tests::'
+      - run: 'cargo test --locked -p commander-free --lib --features experimental-encrypted-search file_search::runtime_fence::tests::'
