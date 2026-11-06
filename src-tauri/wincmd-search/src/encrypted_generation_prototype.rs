@@ -166,7 +166,7 @@ mod tests {
             assert_eq!(inspect(&mut store, &Stub).unwrap().is_some(), written);
         }
     }
-    #[cfg(windows)]
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     #[test]
     fn dpapi_origin_is_bound_to_generation_and_cannot_be_reclassified() {
         let root = tempfile::tempdir().unwrap();
@@ -192,12 +192,12 @@ mod tests {
 
 /// DPAPI-authenticated origin binds generation, approved creation manifest,
 /// and the original index directory identity. Missing never proves fresh.
-#[cfg(windows)]
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Origin {
     pub id: [u8; 16], pub fresh: bool, pub digest: [u8; 32], pub source: (u32, u32, u32),
 }
-#[cfg(windows)]
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
 pub(crate) fn record_origin(root: &std::path::Path, id: &[u8; 16], fresh: bool,
     digest: &[u8; 32], source: &std::path::Path) -> io::Result<()> {
     use crate::read_only::{AccessMode, CheckedDirectory};
@@ -216,7 +216,7 @@ pub(crate) fn record_origin(root: &std::path::Path, id: &[u8; 16], fresh: bool,
     if read_origin(root)?.as_ref() != Some(&origin) { return Err(invalid()); }
     Ok(())
 }
-#[cfg(windows)]
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
 pub(crate) fn read_origin(root: &std::path::Path) -> io::Result<Option<Origin>> {
     use crate::read_only::{AccessMode, CheckedDirectory};
     use tantivy::directory::error::OpenReadError;
@@ -236,7 +236,7 @@ pub(crate) fn read_origin(root: &std::path::Path) -> io::Result<Option<Origin>> 
     let part = |start| -> io::Result<u32> { Ok(u32::from_le_bytes(plain[start..start + 4].try_into().map_err(|_| invalid())?)) };
     Ok(Some(Origin { id, fresh, digest, source: (part(57)?, part(61)?, part(65)?) }))
 }
-#[cfg(windows)]
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
 pub(crate) fn inspect_origin(root: &std::path::Path, id: &[u8; 16]) -> io::Result<Option<bool>> {
     match read_origin(root)? {
         None => Ok(None),
