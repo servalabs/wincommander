@@ -5,23 +5,11 @@
 // SAFE COPY / SAFE PASTE — context-menu clipboard + copy engine
 // ═══════════════════════════════════════════════════════════════════════
 //
-// Safe Copy (right-click a file/folder) stages and scrubs the selection into a
-// per-user cache, then records ONLY those cleaned cache paths in a small
-// "safe clipboard" JSON and on the Windows file clipboard. Safe Paste
-// (right-click a destination folder) copies each cached source into that
-// folder KEEPING THE EXACT NAME (never renamed — a name collision is skipped,
-// not suffixed), then independently re-scrubs and verifies it before commit.
-// Raw input never becomes a clipboard or destination copy.
-//
-// Explorer invokes Safe Copy through a headless CLI process so it works
-// whether or not the app is already running. When enabled, a native Windows
-// progress dialog reports the Pro scrubber's real file counts without relying
-// on WinCommander's floating notification window. Safe Paste's Explorer entry
-// is also headless, while the in-app command calls the same engine. Both
-// verify the cache again before committing it.
-//
-// The pure logic (cache promotion, resolve_targets) is platform-agnostic and
-// unit-tested; only the named-mutex serialisation is Windows-gated.
+// Experimental forced-upgrade flow: Safe Copy stores protected source paths.
+// Safe Paste reads and scrubs those sources when the user chooses a destination.
+// The Windows clipboard is unchanged. Paste staging contains plaintext and may
+// remain after interruption; a marker blocks retries pending safe recovery.
+// Old plaintext cache files are deliberately preserved and need separate cleanup.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -43,7 +31,7 @@ const CLIP_FILE: &str = "safe-clip-v4.protected";
 const SHELL_PENDING_FILE: &str = ".safe-copy-selection-v4.protected";
 const CACHE_DIR: &str = "safe-clip-cache";
 const CACHE_STAGING_PREFIX: &str = ".wincommander-safe-copy-staging-";
-const SAFE_COPY_CANCELLED: &str = "Safe Copy canceled. The clipboard was not updated.";
+const SAFE_COPY_CANCELLED: &str = "Safe Copy canceled. The protected selection was not updated.";
 // Explorer can invoke a legacy static verb separately for each selected item.
 // Wait for the short burst of launches before scrubbing so the clipboard gets
 // one complete selection rather than the last individual item.
@@ -445,27 +433,10 @@ fn clip_path() -> Result<PathBuf, String> {
     Ok(crate::paths::user_data_dir()?.join(CLIP_FILE))
 }
 
-const PROTECTED_HANDOFF_MAGIC: &[u8] = b"WCSAFE4\0";
-
-fn read_protected<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Option<T>, String> {
-    let bytes = match std::fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(_) => return Err("Safe Copy could not read its protected selection.".into()),
-    };
-    if bytes.len() > 4 * 1024 * 1024 || !bytes.starts_with(PROTECTED_HANDOFF_MAGIC) {
-        return Err("Safe Copy selection is invalid; use Safe Copy again.".into());
-    }
-    let plain = zeroize::Zeroizing::new(crate::datastore::user_dpapi_unprotect(
-        &bytes[PROTECTED_HANDOFF_MAGIC.len()..],
-    )?);
-    serde_json::from_slice(&plain)
-        .map(Some)
-        .map_err(|_| "Safe Copy selection is invalid; use Safe Copy again.".into())
-}
+use crate::safe_clip_handoff::{read_protected, write_json_atomic};
 
 fn read_clip() -> Result<Option<SafeClip>, String> {
-    let clip: Option<SafeClip> = read_protected(&clip_path()?)?;
+    let clip: Option<SafeClip> = crate::safe_clip_handoff::read_protected(&clip_path()?)?;
     if clip.as_ref().is_some_and(|c| c.version != CLIP_VERSION) {
         return Err("Safe Copy selection is outdated; use Safe Copy again.".into());
     }
@@ -473,23 +444,7 @@ fn read_clip() -> Result<Option<SafeClip>, String> {
 }
 
 fn write_clip_atomic(clip: &SafeClip) -> Result<(), String> {
-    write_json_atomic(&clip_path()?, clip, ".safe-clip-v4.tmp")
-}
-
-fn write_json_atomic<T: Serialize>(path: &Path, value: &T, tmp_name: &str) -> Result<(), String> {
-    let parent = path.parent().ok_or("safe-clip path has no parent")?;
-    std::fs::create_dir_all(parent).map_err(|e| format!("create dir: {e}"))?;
-    let bytes =
-        zeroize::Zeroizing::new(serde_json::to_vec(value).map_err(|e| format!("serialize: {e}"))?);
-    let protected = crate::datastore::user_dpapi_protect(&bytes)?;
-    let mut envelope = PROTECTED_HANDOFF_MAGIC.to_vec();
-    envelope.extend_from_slice(&protected);
-    let tmp = parent.join(tmp_name);
-    std::fs::write(&tmp, &envelope).map_err(|e| format!("write protected selection: {e}"))?;
-    std::fs::rename(&tmp, path).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        format!("publish protected selection: {e}")
-    })
+    crate::safe_clip_handoff::write_json_atomic(&clip_path()?, clip, ".safe-clip-v4.tmp")
 }
 
 fn shell_pending_path() -> Result<PathBuf, String> {
@@ -771,10 +726,7 @@ async fn cache_scrubbed_source(
     promote_scrubbed_source(&staged, batch)
 }
 
-/// Scrub `paths` into the Safe Copy cache and record those cache paths. The
-/// shell verb uses one Player-mode launch for a multi-selection. Each request
-/// scrubs into a private staging batch, then briefly locks while publishing a
-/// complete, immutable selection to the clipboard.
+/// Save source paths as a protected selection for the Safe Paste action.
 pub async fn record_sources(paths: &[String]) -> Result<usize, String> {
     let mut progress = if paths.iter().any(|path| !path.trim().is_empty()) {
         SafeCopyProgressSession::begin(paths.len())
@@ -835,6 +787,9 @@ async fn record_sources_inner(
     }
     let _guard = ClipLock::acquire()?;
     ensure_safe_copy_not_cancelled(progress)?;
+    if progress.is_some_and(|session| !session.begin_commit()) {
+        return Err(SAFE_COPY_CANCELLED.to_string());
+    }
     let clip = SafeClip {
         version: CLIP_VERSION,
         sources: filtered,
@@ -1132,7 +1087,7 @@ fn show_safe_copy_instructions() {
     #[cfg(windows)]
     unsafe {
         use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_OK};
-        let text: Vec<u16> = "Selection saved. Right-click the destination and choose Safe Paste. Normal Windows Paste is unchanged. Files are read when pasted.\0".encode_utf16().collect();
+        let text: Vec<u16> = "Selection saved. Right-click the destination and choose Safe Paste. Normal Windows Paste is unchanged. Files are read when pasted. Older Safe Copy cache files may still remain on this computer.\0".encode_utf16().collect();
         let title: Vec<u16> = "WinCommander Safe Copy\0".encode_utf16().collect();
         MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), MB_OK);
     }

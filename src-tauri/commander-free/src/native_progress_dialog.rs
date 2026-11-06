@@ -228,7 +228,7 @@ mod platform {
         /// commit begins. Cancellation wins if it was requested first.
         pub fn begin_commit(&self) -> bool {
             if begin_commit_operation(&self.shared.operation_state) {
-                self.set_phase("Finalizing the clean clipboard…");
+                self.set_phase("Saving the protected selection…");
                 true
             } else {
                 false
@@ -238,7 +238,7 @@ mod platform {
         /// Show the terminal result briefly, then close the native dialog.
         pub fn finish(&self, succeeded: bool, status: impl Into<String>) {
             let fallback = if succeeded {
-                "Safe Copy is ready. You can paste the cleaned files now."
+                "Selection saved. Right-click the destination and choose Safe Paste."
             } else {
                 "Safe Copy could not finish. Please try again."
             };
@@ -275,7 +275,7 @@ mod platform {
     impl Drop for SafeCopyProgressDialog {
         fn drop(&mut self) {
             if self.shared.public_handles.fetch_sub(1, Ordering::AcqRel) == 1 {
-                self.finish(false, "Safe Copy ended before the clipboard was ready.");
+                self.finish(false, "Safe Copy ended before the selection was saved.");
             }
         }
     }
