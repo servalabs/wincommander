@@ -665,19 +665,22 @@ impl SearchEngine {
         use crate::read_only::{AccessMode, CheckedDirectory};
         let _pins = CheckedDirectory::pin_root_path(old)?;
         let mut scope_present = false;
-        let mut lock_present = false;
+        let mut locks = Vec::new();
         for entry in std::fs::read_dir(old)? {
             let name = entry?.file_name();
             if name == std::ffi::OsStr::new("scope-v2.dpapi") && !scope_present { scope_present = true; }
-            else if name == std::ffi::OsStr::new(".tantivy-writer.lock") && !lock_present { lock_present = true; }
+            else if name == std::ffi::OsStr::new(".tantivy-writer.lock") || name == std::ffi::OsStr::new(".tantivy-meta.lock") { locks.push(name); }
             else { return Ok(false); }
         }
         if !scope_present { return Ok(false); }
         let dir = CheckedDirectory::open(old, AccessMode::GuardedReader)?;
-        if lock_present {
-            let lock = dir.atomic_read_bounded(std::path::Path::new(".tantivy-writer.lock"), 1)
-                .map_err(|e| std::io::Error::other(e.to_string()))?;
-            if !lock.is_empty() { return Ok(false); }
+        for lock in locks {
+            use std::os::windows::io::AsRawHandle;
+            use windows_sys::Win32::Storage::FileSystem::{BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle};
+            let file = dir.open_read_pinned(std::path::Path::new(&lock)).map_err(|e| std::io::Error::other(e.to_string()))?;
+            let mut info = BY_HANDLE_FILE_INFORMATION::default();
+            if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0
+                || info.nNumberOfLinks != 1 || file.metadata()?.len() != 0 { return Ok(false); }
         }
         let protected = dir.atomic_read_bounded(std::path::Path::new("scope-v2.dpapi"), crate::encrypted_scope::MAX_PROTECTED_SCOPE)
             .map_err(|e| std::io::Error::other(e.to_string()))?;

@@ -97,17 +97,12 @@ pub(super) fn automatic_cleanup_message() -> Option<String> {
 
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
 fn legacy_data_may_remain(directory: &std::path::Path) -> bool {
-    match std::fs::read_dir(directory) {
+    match std::fs::symlink_metadata(directory) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
         Err(_) => true,
-        Ok(entries) => entries.into_iter().any(|entry| match entry {
-            Err(_) => true,
-            Ok(entry) => !matches!(entry.file_name().to_str(),
-                Some("scope-v2.dpapi" | ".tantivy-writer.lock" | ".tantivy-meta.lock")),
-        }),
+        Ok(_) => !SearchEngine::experimental_scope_only(directory).unwrap_or(false),
     }
 }
-
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
 fn retained_backup_count(parent: &std::path::Path) -> Result<usize, String> {
     let mut count = 0usize;
@@ -124,7 +119,8 @@ mod cleanup_tests {
         let root = tempfile::tempdir().unwrap(); let old = root.path().join("fts");
         assert!(!legacy_data_may_remain(&old));
         std::fs::create_dir(&old).unwrap();
-        std::fs::write(old.join("scope-v2.dpapi"), b"protected").unwrap();
+        let scope = br#"{"version":1,"roots":[],"exclusions":[],"blocked_roots":[]}"#;
+        wincmd_search::publish_experimental_scope(&old, scope, |_| Ok(())).unwrap();
         std::fs::write(old.join(".tantivy-writer.lock"), b"").unwrap();
         assert!(!legacy_data_may_remain(&old));
         std::fs::create_dir(root.path().join(".wincommander-legacy-index-backup-123")).unwrap();
