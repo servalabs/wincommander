@@ -328,6 +328,7 @@ pub async fn content_cleanup_old_cache() -> Result<String, String> {
     {
         let _pro = crate::sidecar::quiesce_idle_pro_for_search().await?;
         tokio::task::spawn_blocking(move || {
+            let _pro = _pro; // Hold until cleanup finishes even if the caller is cancelled.
             let _replacement_lock = IndexReplacementLock::acquire()?;
             let (settings, plan) = prepare(false)?;
             let config = build_index_config(&settings.app.file_search, plan.ordinary)?;
