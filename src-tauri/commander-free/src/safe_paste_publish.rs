@@ -65,4 +65,16 @@ mod tests {
         let contents = std::fs::read(target).unwrap();
         assert!(contents == b"first" || contents == b"second");
     }
+    #[test]
+    fn existing_directory_is_never_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source");
+        let target = dir.path().join("target");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(target.join("keep"), b"keep").unwrap();
+        assert!(move_no_replace(&source, &target).is_err());
+        assert!(source.is_dir());
+        assert_eq!(std::fs::read(target.join("keep")).unwrap(), b"keep");
+    }
 }
