@@ -41,7 +41,9 @@ fn acquire_at(parent: &Path) -> io::Result<SearchBrokerFence> {
         if !meta.is_dir() || meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 { return Err(denied()); }
         pins.push(directory);
     }
-    let file = OpenOptions::new().read(true).write(true).create(true).truncate(false)
+    // The user-side startup owns creation/ACL. SYSTEM must never create a
+    // lock that could exclude that user from future participation.
+    let file = OpenOptions::new().read(true).write(true)
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
         .open(parent.join(".encrypted-search-maintenance.lock"))?;
     let meta = file.metadata()?;
@@ -103,7 +105,9 @@ mod tests {
     use std::{os::windows::io::AsRawHandle, process::{Command, Stdio}, time::{Duration, Instant}};
     fn fixture() -> PathBuf {
         let root = std::env::temp_dir().join(format!("wc-broker-fence-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir(&root).unwrap(); root
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join(".encrypted-search-maintenance.lock"), b"").unwrap();
+        root
     }
     fn open_probe(root: &Path) -> File {
         OpenOptions::new().read(true).write(true).share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
