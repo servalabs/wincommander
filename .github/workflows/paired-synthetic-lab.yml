@@ -1,3 +1,4 @@
+# Disposable public fixtures only; never publish private artifacts.
 name: Paired synthetic lab packaging
 on:
   push:
