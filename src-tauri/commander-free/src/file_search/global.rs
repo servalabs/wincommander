@@ -19,6 +19,8 @@ pub(super) fn with_engine<T>(
     protected: &[PathBuf],
     operation: impl FnOnce(&SearchEngine) -> Result<T, String>,
 ) -> Result<T, String> {
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    super::runtime_fence::require_runtime_fence()?;
     let signature = serde_json::to_string(&(&config, protected)).map_err(|e| e.to_string())?;
     {
         let read = cell().read().map_err(|_| "Search state is unavailable.")?;
@@ -31,6 +33,8 @@ pub(super) fn with_engine<T>(
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     let _replacement = super::locks::IndexReplacementLock::acquire()?;
     let mut write = cell().write().map_err(|_| "Search state is unavailable.")?;
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    super::runtime_fence::require_runtime_fence()?;
     // Another request may have initialized the same configuration while this
     // request waited for the replacement lock.
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
@@ -68,6 +72,28 @@ pub(super) fn with_engine<T>(
     operation(&write.as_ref().ok_or("Search state is unavailable.")?.engine)
 }
 
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
+pub(super) fn cleanup_legacy(config: &IndexConfig, protected: &[PathBuf]) -> Result<(usize, usize), String> {
+    let expected = serde_json::to_string(&(config, protected)).map_err(|e| e.to_string())?;
+    let mut write = cell().write().map_err(|_| "Search state is unavailable.")?;
+    let current = write.as_mut().ok_or("Open search and let it finish indexing before cleanup.")?;
+    if current.signature != expected { return Err("Search settings changed. Reopen search before cleanup.".into()); }
+    let parent = config.index_dir.parent().ok_or("Search location unavailable.")?;
+    // Quiesce the watcher while the shared process lease is still held.
+    current.engine.stop();
+    let result = super::runtime_fence::with_exclusive(|fence| {
+        let mut backup_count = 0usize;
+        for entry in std::fs::read_dir(parent).map_err(|_| "Cannot inspect old search backups.")? {
+            let entry = entry.map_err(|_| "Cannot inspect old search backups.")?;
+            if entry.file_name().to_string_lossy().starts_with(".wincommander-legacy-index-backup-") { backup_count += 1; }
+        }
+        let removed = current.engine.cleanup_legacy_cache_after_reconciliation(fence).map_err(|e| e.to_string())?;
+        Ok((removed, backup_count))
+    });
+    // Cleanup stops its watcher, and even failed maintenance must reopen it.
+    if let Some(old) = write.take() { old.engine.stop(); }
+    result
+}
 pub(super) fn stop() -> Result<(), String> {
     let mut guard = cell().write().map_err(|_| "Search state is unavailable.")?;
     if let Some(old) = guard.take() {

@@ -9,6 +9,8 @@
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
 mod encrypted_search_maintenance;
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+mod encrypted_legacy_cleanup;
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
 #[allow(dead_code)]
 mod encrypted_migration_transaction;
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
@@ -836,6 +838,52 @@ impl SearchEngine {
         }
         store.clear_matching(&transaction)?; Ok(())
     }
+    /// Explicit experimental cleanup for a disposable legacy cache after a
+    /// full reconciliation with authoritative user roots. This is not secure
+    /// erasure and does not remove backups, snapshots or SSD remanence.
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    pub fn cleanup_legacy_cache_after_reconciliation(&mut self,
+        fence: &crate::encrypted_search_fence::SearchOperationFence) -> Result<usize> {
+        let authorized = crate::encrypted_legacy_cleanup::authorized_parent()?;
+        self.cleanup_legacy_cache_inner(fence, &authorized)
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    fn cleanup_legacy_cache_inner(&mut self, fence: &crate::encrypted_search_fence::SearchOperationFence,
+        authorized_parent: &std::path::Path) -> Result<usize> {
+        let old = self.experimental_legacy_path.as_ref()
+            .ok_or_else(|| SearchError::Config("legacy search location unavailable".into()))?;
+        if old.file_name() != Some(std::ffi::OsStr::new("fts")) {
+            return Err(SearchError::Config("legacy search location is not authorized".into()));
+        }
+        let actual_parent = old.parent().ok_or_else(|| SearchError::Config("legacy search location unavailable".into()))?;
+        let _authorized_pins = crate::encrypted_legacy_cleanup::pin_authorized_parent(actual_parent, authorized_parent)?;
+        fence.require_exclusive_for(actual_parent)?;
+        if self.experimental_selection.is_none() || self.experimental_id.is_none() || self.config.roots.is_empty() {
+            return Err(SearchError::Config("A selected index and authoritative search roots are required.".into()));
+        }
+        if self.watcher_invalid.load(Ordering::Acquire) {
+            return Err(SearchError::Config("Search requires recovery before legacy cleanup.".into()));
+        }
+        self.stop();
+        // The caller must reopen after every outcome; never leave a stopped
+        // watcher serving potentially stale results.
+        self.watcher_invalid.store(true, Ordering::Release);
+        let report = self.reconcile_sync(&std::sync::atomic::AtomicBool::new(false), usize::MAX)?;
+        if !report.complete { return Err(SearchError::Config("Search reconciliation is incomplete; old cache retained.".into())); }
+        self.ci.index.reader()?;
+        let old = self.experimental_legacy_path.as_ref()
+            .ok_or_else(|| SearchError::Config("legacy search location unavailable".into()))?;
+        let _old_pins = crate::read_only::CheckedDirectory::pin_root_path(old)?;
+        let selection = self.experimental_selection.as_ref().ok_or_else(|| SearchError::Config("search selection missing".into()))?;
+        let id = self.experimental_id.ok_or_else(|| SearchError::Config("search identity missing".into()))?;
+        let origin = crate::encrypted_generation_prototype::read_origin(selection.root())?
+            .ok_or_else(|| SearchError::Config("legacy search ownership proof missing".into()))?;
+        let actual = crate::encrypted_migration_transaction::Intent::capture([1; 16], id, old)?.identity();
+        if origin.id != id || origin.fresh || origin.source != actual {
+            return Err(SearchError::Config("legacy search ownership could not be verified".into()));
+        }
+        Ok(crate::encrypted_legacy_cleanup::remove_managed(old, fence)?)
+    }
     /// Locate the generation-specific quarantine path for inspection after an
     /// interrupted move. Existence alone is not proof of successful migration.
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
@@ -1585,6 +1633,34 @@ mod tests {
         SearchEngine::verify_fresh_scope_selection(&old, &selection).unwrap();
         // A quarantined-legacy check still requires its expected backup.
         assert!(SearchEngine::verify_quarantined_selection(&old, &selection).is_err());
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    #[test]
+    fn verified_cleanup_removes_real_legacy_cache_and_requires_reopen() {
+        use tantivy::{doc, schema::{Schema, TEXT}};
+        let root = TempDir::new().unwrap();
+        let old = root.path().join("fts"); let data = root.path().join("data"); let selection = root.path().join("selector");
+        fs::create_dir(&old).unwrap(); fs::create_dir(&data).unwrap();
+        fs::write(data.join("doc.txt"), b"livecleanupneedle").unwrap();
+        let mut builder = Schema::builder(); let body = builder.add_text_field("body", TEXT);
+        let index = tantivy::Index::create_in_dir(&old, builder.build()).unwrap();
+        let mut writer = index.writer(50_000_000).unwrap();
+        writer.add_document(doc!(body => "legacyplaintextneedle")).unwrap(); writer.commit().unwrap();
+        drop(writer); drop(index);
+        let scope = br#"{"version":1,"roots":[],"exclusions":[],"blocked_roots":[]}"#;
+        fs::write(old.join("scope-v1.json"), scope).unwrap();
+        publish_experimental_scope(&old, scope, |_| Ok(())).unwrap();
+        let fence = crate::encrypted_search_fence::SearchOperationFence::acquire_exclusive(root.path()).unwrap();
+        SearchEngine::rebuild_offline_and_select(make_config(old.clone(), vec![]), Arc::new(|_| false), &selection, &fence).unwrap();
+        let mut engine = SearchEngine::open_experimental_selected_with_policy(make_config(old.clone(), vec![data]), Arc::new(|_| true), &selection).unwrap();
+        let wrong_parent = TempDir::new().unwrap();
+        assert!(engine.cleanup_legacy_cache_inner(&fence, wrong_parent.path()).is_err());
+        assert!(old.join("meta.json").is_file());
+        assert!(engine.cleanup_legacy_cache_inner(&fence, root.path()).unwrap() > 0);
+        assert!(!old.join("meta.json").exists()); assert!(!old.join("scope-v1.json").exists());
+        assert!(old.join("scope-v2.dpapi").is_file());
+        let query = ContentQuery { terms: "livecleanupneedle".into(), roots: vec![], limit: 10, offset: 0, keyword_only: true };
+        assert!(engine.search(&query).is_err(), "stopped watcher must require reopening");
     }
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     #[test]

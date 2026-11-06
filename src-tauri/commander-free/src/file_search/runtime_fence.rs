@@ -81,3 +81,87 @@ pub(crate) fn acquire() -> Result<SearchOperationFence, String> {
         }
     }
 }
+
+// The application keeps one process-wide shared lease. Search operations check
+// it before using the cached engine. An explicit cleanup briefly swaps it for
+// an exclusive lease while the global engine write lock is held.
+static ACTIVE_RUNTIME_FENCE: std::sync::Mutex<Option<SearchOperationFence>> = std::sync::Mutex::new(None);
+
+pub(crate) fn install_runtime_fence() -> Result<(), String> {
+    let guard = acquire()?;
+    let mut slot = ACTIVE_RUNTIME_FENCE.lock().map_err(|_| "Search maintenance state is unavailable.")?;
+    if slot.is_some() { return Err("Search maintenance state is already initialized.".into()); }
+    *slot = Some(guard); Ok(())
+}
+
+pub(crate) fn require_runtime_fence() -> Result<(), String> {
+    let slot = ACTIVE_RUNTIME_FENCE.lock().map_err(|_| "Search maintenance state is unavailable.")?;
+    if slot.is_some() { Ok(()) } else { Err("Search is unavailable until WinCommander is restarted.".into()) }
+}
+
+pub(crate) fn with_exclusive<T>(operation: impl FnOnce(&SearchOperationFence) -> Result<T, String>) -> Result<T, String> {
+    let parent = verified_parent()?;
+    switch_fence(&ACTIVE_RUNTIME_FENCE,
+        || {
+            let guard = SearchOperationFence::acquire_exclusive(&parent)
+                .map_err(|_| "Close other WinCommander windows before cleaning the old search cache.".to_string())?;
+            let selection = parent.join(".wincommander-encrypted-selection");
+            match std::fs::symlink_metadata(&selection) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
+                Err(_) => return Err("Cannot inspect pending search migration.".into()),
+                Ok(_) => match wincmd_search::SearchEngine::inspect_search_migration(&selection) {
+                    Ok(None) => {},
+                    Ok(Some(_)) => return Err("Finish the pending WinCommander update before cleaning search data.".into()),
+                    Err(_) => return Err("Cannot verify pending search migration.".into()),
+                },
+            }
+            Ok(guard)
+        },
+        acquire, operation)
+}
+
+fn switch_fence<T>(slot: &std::sync::Mutex<Option<SearchOperationFence>>,
+    exclusive: impl FnOnce() -> Result<SearchOperationFence, String>,
+    restore: impl FnOnce() -> Result<SearchOperationFence, String>,
+    operation: impl FnOnce(&SearchOperationFence) -> Result<T, String>) -> Result<T, String> {
+    let mut slot = slot.lock().map_err(|_| "Search maintenance state is unavailable.")?;
+    let shared = slot.take().ok_or("Search is unavailable until WinCommander is restarted.")?;
+    drop(shared);
+    let attempted = (|| { let guard = exclusive()?; operation(&guard) })();
+    // If restoration fails, leave the slot empty so search fails closed.
+    match restore() {
+        Ok(shared) => { *slot = Some(shared); attempted },
+        Err(_) => Err("Search maintenance could not restore its safety lock. Restart WinCommander before searching.".into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn cleanup_handoff_restores_shared_lock_on_success_and_contention() {
+        let root = tempfile::tempdir().unwrap();
+        let slot = std::sync::Mutex::new(Some(SearchOperationFence::acquire_shared(root.path()).unwrap()));
+        let peer = SearchOperationFence::acquire_shared(root.path()).unwrap();
+        let result = switch_fence(&slot,
+            || SearchOperationFence::acquire_exclusive(root.path()).map_err(|e| e.to_string()),
+            || SearchOperationFence::acquire_shared(root.path()).map_err(|e| e.to_string()),
+            |_| Ok(()));
+        assert!(result.is_err()); assert!(slot.lock().unwrap().is_some());
+        drop(peer);
+        let result = switch_fence(&slot,
+            || SearchOperationFence::acquire_exclusive(root.path()).map_err(|e| e.to_string()),
+            || SearchOperationFence::acquire_shared(root.path()).map_err(|e| e.to_string()),
+            |_| Ok(7));
+        assert_eq!(result.unwrap(), 7); assert!(slot.lock().unwrap().is_some());
+    }
+    #[test]
+    fn failed_shared_restoration_leaves_search_fence_inactive() {
+        let root = tempfile::tempdir().unwrap();
+        let slot = std::sync::Mutex::new(Some(SearchOperationFence::acquire_shared(root.path()).unwrap()));
+        let result = switch_fence(&slot,
+            || SearchOperationFence::acquire_exclusive(root.path()).map_err(|e| e.to_string()),
+            || Err("injected restore failure".into()), |_| Ok(()));
+        assert!(result.is_err()); assert!(slot.lock().unwrap().is_none());
+    }
+}
