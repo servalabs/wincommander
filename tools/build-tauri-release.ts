@@ -1,7 +1,7 @@
 import { copyFileSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { assertSharedAssets } from "./check-shared-assets";
-import { pairedSearchTemplate, pairedServiceHash } from "./paired-search-release-contract";
+import { pairedSearchTemplate, pairedServiceHash, requirePairedInstallMode } from "./paired-search-release-contract";
 
 const root = resolve(import.meta.dirname, "..");
 assertSharedAssets(root);
@@ -78,7 +78,7 @@ run(
   "Calculator launcher release build",
 );
 const config = JSON.parse(readFileSync(configPath, "utf8")) as {
-  bundle: { resources: string[]; targets: string | string[]; windows: { nsis: { template: string } } };
+  bundle: { resources: string[]; targets: string | string[]; windows: { nsis: { template: string; installMode: string } } };
 };
 const contextShredResource = "resources/wincommander-context-shred.exe";
 const contextDeleteIconResource = "resources/context-delete.ico";
@@ -101,6 +101,7 @@ config.bundle.resources = [
 // still gets their own settings when they run it without elevation.
 config.bundle.targets = ["nsis"];
 if (pairedSearch) {
+  requirePairedInstallMode(config.bundle.windows.nsis.installMode);
   const originalTemplate = resolve(root, "src-tauri", "commander-free", config.bundle.windows.nsis.template);
   writeFileSync(pairedTemplatePath, pairedSearchTemplate(readFileSync(originalTemplate, "utf8")));
   config.bundle.windows.nsis.template = "nsis/installer.paired.generated.nsi";

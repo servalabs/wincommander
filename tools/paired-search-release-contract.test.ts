@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { pairedSearchTemplate, pairedServiceHash } from "./paired-search-release-contract";
+import { pairedSearchTemplate, pairedServiceHash, requirePairedInstallMode } from "./paired-search-release-contract";
 
 describe("paired search packaging contract", () => {
   test("enables both maintenance defines only with the expected hook", () => {
@@ -10,6 +10,10 @@ describe("paired search packaging contract", () => {
     expect(result).toContain("!define WC_EXPERIMENTAL_SEARCH_FENCE");
     expect(() => pairedSearchTemplate("Unicode true")).toThrow();
     expect(() => pairedSearchTemplate(result)).toThrow();
+  });
+  test("refuses an unsupported machine-wide installer", () => {
+    expect(() => requirePairedInstallMode("perMachine")).toThrow();
+    expect(() => requirePairedInstallMode("currentUser")).not.toThrow();
   });
   test("requires the actual nonzero final service hash", () => {
     const bytes = new TextEncoder().encode("fixture service");

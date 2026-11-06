@@ -19,3 +19,9 @@ export function pairedServiceHash(service: Uint8Array, expected: string): string
   if (actual !== expected.toLowerCase()) throw new Error("Final service bytes do not match the paired SHA-256.");
   return actual;
 }
+
+// Current staging uses the installer user's profile and explicitly supports
+// currentUser only. Do not silently switch an existing machine-wide install.
+export function requirePairedInstallMode(mode: string): void {
+  if (mode !== "currentUser") throw new Error("Paired staging requires a verified current-user installer; machine-wide upgrade is not implemented.");
+}
