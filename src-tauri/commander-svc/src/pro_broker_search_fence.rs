@@ -291,6 +291,26 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
     #[test]
+    #[ignore = "requires a disposable second Windows account and ACL fixture"]
+    fn second_user_token_creates_own_search_fence() {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Security::{LogonUserW, LOGON32_LOGON_INTERACTIVE, LOGON32_PROVIDER_DEFAULT};
+        let username = std::env::var_os("WINCMD_TEST_BROKER_USER").expect("missing fixture account");
+        let password = std::env::var_os("WINCMD_TEST_BROKER_PASSWORD").expect("missing fixture credential");
+        let parent = PathBuf::from(std::env::var_os("WINCMD_TEST_BROKER_PARENT").expect("missing fixture parent"));
+        let wide = |value: &std::ffi::OsStr| value.encode_wide().chain(Some(0)).collect::<Vec<_>>();
+        let user = wide(&username); let pass = wide(&password); let domain = wide(std::ffi::OsStr::new("."));
+        let mut token: HANDLE = std::ptr::null_mut();
+        assert_ne!(unsafe { LogonUserW(user.as_ptr(), domain.as_ptr(), pass.as_ptr(), LOGON32_LOGON_INTERACTIVE, LOGON32_PROVIDER_DEFAULT, &mut token) }, 0);
+        let first = provision_under_token(token, Some(&parent)).unwrap();
+        let second = provision_under_token(token, Some(&parent)).unwrap();
+        unsafe { CloseHandle(token); }
+        let probe = open_probe(&parent);
+        assert!(probe.try_lock().is_err());
+        drop((first, second));
+        probe.try_lock().unwrap();
+    }
+    #[test]
     fn user_token_provisions_disposable_missing_profile_lock() {
         use windows_sys::Win32::{Security::{TOKEN_DUPLICATE, TOKEN_QUERY}, System::Threading::OpenProcessToken};
         let base = std::env::temp_dir().join(format!("wc-broker-token-{}", uuid::Uuid::new_v4()));
