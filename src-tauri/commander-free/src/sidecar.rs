@@ -2296,6 +2296,32 @@ mod tests {
     }
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     #[tokio::test]
+    async fn search_quiescence_survives_cancelled_waiter_until_blocking_work_finishes() {
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let waiter = tokio::spawn(async move {
+            let guard = super::quiesce_idle_pro_for_search().await.unwrap();
+            tokio::task::spawn_blocking(move || {
+                let _guard = guard;
+                ready_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                drop(_guard);
+                done_tx.send(()).unwrap();
+            }).await.unwrap();
+        });
+        ready_rx.await.unwrap();
+        waiter.abort();
+        assert!(waiter.await.unwrap_err().is_cancelled());
+        assert!(super::pool_semaphore().try_acquire().is_err());
+        assert!(super::backup::admit().is_err());
+        release_tx.send(()).unwrap();
+        done_rx.await.unwrap();
+        assert!(super::pool_semaphore().try_acquire().is_ok());
+        assert!(super::backup::admit().is_ok());
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    #[tokio::test]
     async fn search_quiescence_defers_active_backup_and_blocks_new_backup() {
         let active = super::backup::admit().unwrap();
         assert!(super::quiesce_idle_pro_for_search().await.is_err());
