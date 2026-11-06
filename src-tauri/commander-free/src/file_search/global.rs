@@ -108,6 +108,14 @@ fn legacy_data_may_remain(directory: &std::path::Path) -> bool {
     }
 }
 
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
+fn retained_backup_count(parent: &std::path::Path) -> Result<usize, String> {
+    let mut count = 0usize;
+    for entry in std::fs::read_dir(parent).map_err(|_| "Cannot inspect old search backups.")? {
+        if entry.map_err(|_| "Cannot inspect old search backups.")?.file_name().to_string_lossy().starts_with(".wincommander-legacy-index-backup-") { count += 1; }
+    }
+    Ok(count)
+}
 #[cfg(all(test, windows, feature = "experimental-encrypted-search"))]
 mod cleanup_tests {
     use super::*;
@@ -119,6 +127,9 @@ mod cleanup_tests {
         std::fs::write(old.join("scope-v2.dpapi"), b"protected").unwrap();
         std::fs::write(old.join(".tantivy-writer.lock"), b"").unwrap();
         assert!(!legacy_data_may_remain(&old));
+        std::fs::create_dir(root.path().join(".wincommander-legacy-index-backup-123")).unwrap();
+        assert_eq!(retained_backup_count(root.path()).unwrap(), 1);
+        assert!(retained_backup_count(&root.path().join("missing")).is_err());
         std::fs::write(old.join("scope-v1.json"), b"old").unwrap();
         assert!(legacy_data_may_remain(&old));
         std::fs::remove_file(old.join("scope-v1.json")).unwrap();
@@ -137,10 +148,7 @@ fn schedule_legacy_cleanup(config: IndexConfig, protected: Vec<PathBuf>) {
     if !requires_cleanup {
         let message = (|| -> Result<Option<String>, String> {
             let parent = config.index_dir.parent().ok_or("Search location unavailable.")?;
-            let mut count = 0usize;
-            for entry in std::fs::read_dir(parent).map_err(|_| "Cannot inspect old search backups.")? {
-                if entry.map_err(|_| "Cannot inspect old search backups.")?.file_name().to_string_lossy().starts_with(".wincommander-legacy-index-backup-") { count += 1; }
-            }
+            let count = retained_backup_count(parent)?;
             Ok((count > 0).then(|| format!("Old search backups remain in WinCommander storage ({count} folders).")))
         })().unwrap_or_else(|error| Some(error));
         if let Ok(mut slot) = AUTO_CLEANUP_MESSAGE.lock() { *slot = message; }
@@ -176,11 +184,7 @@ pub(super) fn cleanup_legacy(config: &IndexConfig, protected: &[PathBuf]) -> Res
     // Quiesce the watcher while the shared process lease is still held.
     current.engine.stop();
     let result = super::runtime_fence::with_exclusive(|fence| {
-        let mut backup_count = 0usize;
-        for entry in std::fs::read_dir(parent).map_err(|_| "Cannot inspect old search backups.")? {
-            let entry = entry.map_err(|_| "Cannot inspect old search backups.")?;
-            if entry.file_name().to_string_lossy().starts_with(".wincommander-legacy-index-backup-") { backup_count += 1; }
-        }
+        let backup_count = retained_backup_count(parent)?;
         let removed = current.engine.cleanup_legacy_cache_after_reconciliation(fence).map_err(|e| e.to_string())?;
         Ok((removed, backup_count))
     });
