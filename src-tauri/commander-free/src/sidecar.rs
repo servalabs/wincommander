@@ -840,6 +840,7 @@ fn pool_semaphore() -> &'static Semaphore {
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
 pub(crate) struct ProSearchQuiescence {
     _workers: tokio::sync::SemaphorePermit<'static>,
+    _backup: tokio::sync::SemaphorePermit<'static>,
     _agent: tokio::sync::MutexGuard<'static, Option<ProSession>>,
 }
 
@@ -857,6 +858,7 @@ async fn acquire_search_worker_permits(semaphore: &Semaphore, budget: Duration) 
 /// cleanup to fail safely and retry later.
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
 pub(crate) async fn quiesce_idle_pro_for_search() -> Result<ProSearchQuiescence, String> {
+    let backup = backup::admit().map_err(|_| "A Pro backup is active; search cleanup remains pending.".to_string())?;
     let workers = acquire_search_worker_permits(pool_semaphore(), ADMISSION_TIMEOUT).await?;
     let agent = timeout(ADMISSION_TIMEOUT, agent_session_slot().lock()).await
         .map_err(|_| "Pro monitoring is busy; search cleanup remains pending.".to_string())?;
@@ -869,7 +871,7 @@ pub(crate) async fn quiesce_idle_pro_for_search() -> Result<ProSearchQuiescence,
         std::mem::take(&mut *pool)
     };
     stop_pro_sessions(sessions.into_iter().map(|entry| entry.session).collect()).await;
-    Ok(ProSearchQuiescence { _workers: workers, _agent: agent })
+    Ok(ProSearchQuiescence { _workers: workers, _backup: backup, _agent: agent })
 }
 
 /// Compute a Windows named-pipe path from a random suffix. The
@@ -2291,6 +2293,17 @@ mod tests {
         drop(guard);
         assert!(super::pool_semaphore().try_acquire().is_ok());
         unsafe { CloseHandle(process); }
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    #[tokio::test]
+    async fn search_quiescence_defers_active_backup_and_blocks_new_backup() {
+        let active = super::backup::admit().unwrap();
+        assert!(super::quiesce_idle_pro_for_search().await.is_err());
+        drop(active);
+        let guard = super::quiesce_idle_pro_for_search().await.unwrap();
+        assert!(super::backup::admit().is_err());
+        drop(guard);
+        assert!(super::backup::admit().is_ok());
     }
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     #[tokio::test]
