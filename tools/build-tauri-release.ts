@@ -9,6 +9,11 @@ const configPath = resolve(root, "src-tauri", "commander-free", "tauri.conf.json
 const generatedConfigPath = resolve(root, "src-tauri", "commander-free", "tauri.release.generated.json");
 const contextShredBuildPath = resolve(root, "src-tauri", "target", "release", "wincommander-context-shred.exe");
 const pairedSearch = process.argv.includes("--experimental-paired-search-lab");
+if (pairedSearch) {
+  for (const key of ["RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER"]) {
+    if (process.env[key]) throw new Error(`Paired lab build rejects untrusted compiler override: ${key}`);
+  }
+}
 const pairedTemplatePath = resolve(root, "src-tauri", "commander-free", "nsis", "installer.paired.generated.nsi");
 const serviceBuildPath = pairedSearch
   ? resolve(process.env.WINCMD_FENCED_SERVICE_PATH ?? "")
