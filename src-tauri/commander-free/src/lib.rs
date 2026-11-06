@@ -1603,6 +1603,10 @@ pub mod search_migration_cli;
 pub fn run() {
     #[cfg(all(windows, feature = "experimental-settings-generation"))]
     if let Err(message) = datastore::require_selected_settings_lab_startup() {
+        if cli::tauri_runtime_active() {
+            cli::report_settings_lab_startup_failure(message);
+            return;
+        }
         use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
         let text: Vec<u16> = format!("{message}\0").encode_utf16().collect();
         let title: Vec<u16> = "WinCommander\0".encode_utf16().collect();

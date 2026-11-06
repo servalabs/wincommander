@@ -706,6 +706,12 @@ fn run_command(request: RunRequest) -> i32 {
             return 3;
         }
     }
+    // This must precede even the terminal-command acknowledgement: an
+    // incomplete lab setup must never report a command as dispatched.
+    #[cfg(all(windows, feature = "experimental-settings-generation"))]
+    if let Err(message) = crate::datastore::require_selected_settings_lab_startup() {
+        return fail(1, "settings_setup_incomplete", message);
+    }
     let _execution_lock = if description.risk == Risk::ReadOnly {
         None
     } else {
@@ -883,6 +889,18 @@ fn is_terminal_tauri_command(command: &str) -> bool {
 
 pub(crate) fn tauri_runtime_active() -> bool {
     TAURI_RUN_ACTIVE.load(Ordering::SeqCst)
+}
+
+/// Return one machine-readable failure if setup becomes unavailable after the
+/// CLI preflight but before its Tauri runtime starts. Never show a modal here.
+#[cfg(all(windows, feature = "experimental-settings-generation"))]
+pub(crate) fn report_settings_lab_startup_failure(message: String) {
+    if !TAURI_RUN_ACTIVE.swap(false, Ordering::SeqCst) { return; }
+    let id = TAURI_RUN.lock().ok().and_then(|mut slot| slot.take()).map(|spec| spec.id);
+    if !TAURI_RESULT_EMITTED.swap(true, Ordering::SeqCst) {
+        print_json(&json!({"ok": false, "command": id, "error": "settings_setup_incomplete", "message": message}));
+    }
+    TAURI_RUN_EXIT_CODE.store(1, Ordering::SeqCst);
 }
 
 pub(crate) fn tauri_initialization_script() -> Result<String, String> {
