@@ -120,6 +120,8 @@ fn main() {
 
     println!("cargo:rerun-if-env-changed=WINCMD_PRO_SHA256_CURRENT");
     println!("cargo:rerun-if-env-changed=WINCMD_PRO_SHA256_PREVIOUS");
+    println!("cargo:rerun-if-env-changed=WINCMD_FENCED_SERVICE_SHA256");
+    println!("cargo:rerun-if-env-changed=WINCMD_APP_DIR");
 
     // Licence config is embedded via option_env!() in license.rs (release builds
     // ignore the runtime env, F-2). Declare those vars here so cargo recompiles
@@ -128,7 +130,13 @@ fn main() {
     println!("cargo:rerun-if-env-changed=WINCMD_LICENSE_API_BASE");
     println!("cargo:rerun-if-env-changed=LICENSE_API_BASE");
     println!("cargo:rerun-if-env-changed=WINCMD_LICENSE_PUBLIC_KEY");
-    for name in ["WINCMD_PQ_PRO_ED_KEY", "WINCMD_PQ_PRO_MLDSA_KEY", "WINCMD_PQ_PRO_ED_ID", "WINCMD_PQ_PRO_MLDSA_ID", "WINCMD_PQ_PRO_EPOCH"] {
+    for name in [
+        "WINCMD_PQ_PRO_ED_KEY",
+        "WINCMD_PQ_PRO_MLDSA_KEY",
+        "WINCMD_PQ_PRO_ED_ID",
+        "WINCMD_PQ_PRO_MLDSA_ID",
+        "WINCMD_PQ_PRO_EPOCH",
+    ] {
         println!("cargo:rerun-if-env-changed={name}");
     }
     println!("cargo:rerun-if-env-changed=LICENSE_PUBLIC_KEY_B64");
@@ -176,6 +184,24 @@ fn main() {
         "the desktop manifest must retain requestedExecutionLevel=asInvoker"
     );
     let is_development_profile = std::env::var("PROFILE").as_deref() == Ok("debug");
+    if std::env::var_os("CARGO_FEATURE_EXPERIMENTAL_ENCRYPTED_SEARCH").is_some()
+        && !is_development_profile
+        && std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+    {
+        let hash = std::env::var("WINCMD_FENCED_SERVICE_SHA256")
+            .expect("paired encrypted-search release requires the final signed service SHA-256");
+        assert!(
+            hash.len() == 64
+                && hash.bytes().all(|b| b.is_ascii_hexdigit())
+                && hash.bytes().any(|b| b != b'0'),
+            "invalid paired service SHA-256"
+        );
+        assert!(
+            std::env::var("WINCMD_APP_DIR").unwrap_or_else(|_| "WinCommander".into())
+                == "WinCommander",
+            "paired encrypted-search release requires the matching app directory"
+        );
+    }
     if std::env::var_os("CARGO_FEATURE_AUTONOMOUS_TEST").is_some() && !is_development_profile {
         panic!("the autonomous-test feature is restricted to debug test artifacts");
     }
