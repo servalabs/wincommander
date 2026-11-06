@@ -456,6 +456,11 @@ pub fn hello_from_ui(session_token: impl Into<String>) -> crate::Hello {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn search_fence_capability_is_known_and_read_only() {
+        assert!(super::is_known_verb("svc.search.fence_capabilities"));
+        assert_eq!(super::classify_verb("svc.search.fence_capabilities"), super::CapabilityClass::ReadOnly);
+    }
     use super::*;
 
     #[test]
