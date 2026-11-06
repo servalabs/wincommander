@@ -1658,6 +1658,7 @@ mod tests {
         let directory = crate::encrypted_index_prototype::tantivy_trial::TrialDirectory::open_protected(
             &generation, crate::read_only::AccessMode::Writable, &id, true).unwrap();
         let mut manifest = directory.atomic_read(std::path::Path::new("meta.json")).unwrap();
+        let approved_manifest = manifest.clone();
         let digest: [u8; 32] = Sha256::digest(&manifest).into();
         crate::encrypted_generation_prototype::record_origin(&selection, &id, true, &digest, &old).unwrap();
         manifest.push(b' '); // Still JSON, but no longer the approved manifest.
@@ -1665,6 +1666,12 @@ mod tests {
         drop(directory); drop(candidate);
         assert!(SearchEngine::open_or_rebuild_experimental_with_policy(config.clone(), Arc::new(|_| true)).is_err());
         assert!(!selection.join("candidate-proof.v1").exists());
+        // Restore the approved bytes so the next rejection tests directory
+        // identity rather than merely failing on the same changed manifest.
+        let directory = crate::encrypted_index_prototype::tantivy_trial::TrialDirectory::open_protected(
+            &generation, crate::read_only::AccessMode::Writable, &id, true).unwrap();
+        directory.atomic_write(std::path::Path::new("meta.json"), &approved_manifest).unwrap();
+        drop(directory);
         let original = root.path().join("original");
         fs::rename(&old, &original).unwrap(); fs::create_dir(&old).unwrap();
         assert!(SearchEngine::open_or_rebuild_experimental_with_policy(config, Arc::new(|_| true)).is_err());
