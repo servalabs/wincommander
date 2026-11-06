@@ -339,12 +339,10 @@ async fn vault_call_until(
         "[wincommander-svc] vault_call({feature_id}, operation={request_id}): spawning broker helper"
     );
     #[cfg(feature = "experimental-search-broker-fence")]
-    let _pinned_fenced_pro = if matches!(presentation, wincmd_shared::vault_access::VaultPresentation::PerUser) {
-        match search_fence::pin_expected_pro(&fixed_pro_path()) {
-            Ok(file) => Some(file),
-            Err(_) => { zeroize_json(&mut args); return Err(VaultMountReason::BrokerIdentityRejected); },
-        }
-    } else { None };
+    let pinned_fenced_pro = match search_fence::pin_expected_pro(&fixed_pro_path()) {
+        Ok(file) => file,
+        Err(_) => { zeroize_json(&mut args); return Err(VaultMountReason::BrokerIdentityRejected); },
+    };
     #[cfg(feature = "experimental-search-broker-fence")]
     let fence = match presentation {
         wincmd_shared::vault_access::VaultPresentation::PerUser => {
@@ -384,7 +382,8 @@ async fn vault_call_until(
     eprintln!("[wincommander-svc] vault_call({feature_id}, operation={request_id}): broker spawned, waiting for connect");
     let result = async {
         connect_broker_pipe(&pipe, process, deadline).await?;
-        let connected_hash = verified_connected_process_hash(&pipe, process)
+        let connected_hash = verified_connected_process_hash(&pipe, process,
+            #[cfg(feature = "experimental-search-broker-fence")] &pinned_fenced_pro)
             .ok_or(VaultMountReason::BrokerIdentityRejected)?;
         if !hash_matches_fixed_pro(&connected_hash) {
             return Err(VaultMountReason::BrokerIdentityRejected);
@@ -500,6 +499,7 @@ async fn vault_call_until(
 fn verified_connected_process_hash(
     pipe: &tokio::net::windows::named_pipe::NamedPipeServer,
     process: windows_sys::Win32::Foundation::HANDLE,
+    #[cfg(feature = "experimental-search-broker-fence")] pinned: &search_fence::PinnedPro,
 ) -> Option<String> {
     use sha2::{Digest, Sha256};
     use std::io::Read;
@@ -540,6 +540,8 @@ fn verified_connected_process_hash(
         .share_mode(FILE_SHARE_READ | FILE_SHARE_DELETE)
         .open(actual)
         .ok()?;
+    #[cfg(feature = "experimental-search-broker-fence")]
+    if !pinned.matches(&image) { return None; }
     let mut digest = Sha256::new();
     let mut buffer = [0u8; 64 * 1024];
     loop {

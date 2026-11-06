@@ -19,14 +19,27 @@ fn expected_pair<'a>(hash: Option<&'a str>, app: Option<&str>, protocol: Option<
         || app != Some(expected_app) || protocol != Some(FENCE_PROTOCOL) { return Err(denied()); }
     Ok(hash)
 }
-pub(super) fn pin_expected_pro(path: &Path) -> io::Result<File> {
+pub(super) struct PinnedPro { _parents: Vec<File>, file: File }
+impl PinnedPro {
+    pub(super) fn matches(&self, other: &File) -> bool {
+        fn identity(file: &File) -> Option<(u32, u32, u32)> {
+            let mut info = BY_HANDLE_FILE_INFORMATION::default();
+            if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 { return None; }
+            Some((info.dwVolumeSerialNumber, info.nFileIndexHigh, info.nFileIndexLow))
+        }
+        let left = identity(&self.file);
+        left.is_some() && left == identity(other)
+    }
+}
+pub(super) fn pin_expected_pro(path: &Path) -> io::Result<PinnedPro> {
     let expected = expected_pair(option_env!("WINCMD_FENCED_PRO_SHA256"),
         option_env!("WINCMD_FENCED_PRO_APP_DIR"), option_env!("WINCMD_FENCED_PRO_PROTOCOL"))?;
     pin_and_verify(path, expected)
 }
-fn pin_and_verify(path: &Path, expected: &str) -> io::Result<File> {
+fn pin_and_verify(path: &Path, expected: &str) -> io::Result<PinnedPro> {
     use sha2::{Digest, Sha256};
     use std::io::{Read, Seek, SeekFrom};
+    let parents = pin_directories(path.parent().ok_or_else(denied)?)?;
     let mut file = OpenOptions::new().read(true).share_mode(FILE_SHARE_READ)
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT).open(path)?;
     let metadata = file.metadata()?;
@@ -42,7 +55,7 @@ fn pin_and_verify(path: &Path, expected: &str) -> io::Result<File> {
     }
     if !super::bytes_to_hex(&digest.finalize()).eq_ignore_ascii_case(expected) { return Err(denied()); }
     file.seek(SeekFrom::Start(0))?;
-    Ok(file)
+    Ok(PinnedPro { _parents: parents, file })
 }
 fn denied() -> io::Error { io::Error::new(io::ErrorKind::PermissionDenied, "user search fence unavailable") }
 fn user_search_root(token: HANDLE) -> io::Result<PathBuf> {
@@ -211,6 +224,11 @@ mod tests {
         let held = pin_and_verify(&path, &hash).unwrap();
         assert!(std::fs::write(&path, b"replacement").is_err());
         assert!(std::fs::remove_file(&path).is_err());
+        let moved_root = root.with_extension("moved");
+        assert!(std::fs::rename(&root, &moved_root).is_err());
+        let other = OpenOptions::new().read(true).share_mode(FILE_SHARE_READ).open(&path).unwrap();
+        assert!(held.matches(&other));
+        drop(other);
         drop(held);
         assert!(std::fs::remove_file(&path).is_ok());
         let _ = std::fs::remove_dir_all(root);
