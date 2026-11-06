@@ -323,7 +323,7 @@ fn main() {
         len: std::mem::size_of::<Obj>() as u32,
         root: pinned,
         name: &mut uni,
-        flags: 0x40,
+        flags: 0x1040,
         security: std::ptr::null_mut(),
         quality: std::ptr::null_mut(),
     };
