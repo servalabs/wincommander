@@ -64,7 +64,11 @@ pub(super) fn with_engine<T>(
     let engine = {
         // This feature remains disabled until native/recovery/Pro validation.
         SearchEngine::open_or_rebuild_experimental_with_policy(config.clone(), policy)
-            .map_err(|e| e.to_string())?
+            .map_err(|e| {
+                if legacy_data_may_remain(&config.index_dir) {
+                    format!("{e} Old search data may still be present in WinCommander storage.")
+                } else { e.to_string() }
+            })?
     };
     #[cfg(not(all(windows, feature = "experimental-encrypted-search")))]
     let engine = SearchEngine::open_with_policy(config.clone(), policy)
