@@ -205,7 +205,7 @@ pub async fn search_content(
 
 #[tauri::command]
 pub async fn content_index_status() -> Result<IndexStatus, String> {
-    tokio::task::spawn_blocking(move || {
+    let result = tokio::task::spawn_blocking(move || {
         let (settings, plan) = ensure_indexing_started()?;
         let fs = &settings.app.file_search;
         let mut status = global::with_engine(
@@ -231,7 +231,11 @@ pub async fn content_index_status() -> Result<IndexStatus, String> {
         Ok(status)
     })
     .await
-    .map_err(|_| "Index status worker failed.".to_string())?
+    .unwrap_or_else(|_| Err("Index status worker failed.".to_string()));
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    return result.map_err(|_| "SEARCH_PROTECTION_PENDING".to_string());
+    #[cfg(not(all(windows, feature = "experimental-encrypted-search")))]
+    result
 }
 
 #[tauri::command]
