@@ -316,7 +316,7 @@ pub(crate) async fn experimental_search_service_capability(
     match reply {
         wincmd_shared::Envelope::Response(response) if response.request_id == request_id => {
             let value = response.result;
-            if experimental_capability_matches(&value) {
+            if experimental_capability_matches(&value, option_env!("WINCMD_FENCED_PRO_SHA256")) {
                 Ok(pin)
             } else {
                 Err("paired service capability is unavailable".to_string())
@@ -327,11 +327,24 @@ pub(crate) async fn experimental_search_service_capability(
 }
 
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
-fn experimental_capability_matches(value: &Value) -> bool {
+fn experimental_capability_matches(value: &Value, expected_pro: Option<&str>) -> bool {
     // The first paired rollout assumes no earlier release emitted this epoch.
     // Bump it whenever the broker or Pro fence security contract changes. This
     // is not proof against a deliberately copied or replaced old executable.
-    value.get("protocol").and_then(Value::as_u64) == Some(1)
+    let Some(expected_pro) = expected_pro else {
+        return false;
+    };
+    if expected_pro.len() != 64
+        || !expected_pro.bytes().all(|b| b.is_ascii_hexdigit())
+        || !expected_pro.bytes().any(|b| b != b'0')
+    {
+        return false;
+    }
+    value
+        .get("pro_sha256")
+        .and_then(Value::as_str)
+        .is_some_and(|hash| hash.eq_ignore_ascii_case(expected_pro))
+        && value.get("protocol").and_then(Value::as_u64) == Some(1)
         && value.get("epoch").and_then(Value::as_str)
             == Some("wincommander-paired-search-fence-2026-11-v1")
         && value.get("broker_user_fence").and_then(Value::as_bool) == Some(true)
@@ -342,21 +355,32 @@ fn experimental_capability_matches(value: &Value) -> bool {
 #[cfg(all(test, windows, feature = "experimental-encrypted-search"))]
 #[test]
 fn first_rollout_capability_requires_exact_epoch_and_all_fences() {
-    let mut value = serde_json::json!({"protocol":1,"epoch":"wincommander-paired-search-fence-2026-11-v1","broker_user_fence":true,"system_search_disabled":true,"app_dir":"WinCommander"});
-    assert!(experimental_capability_matches(&value));
+    let hash = "a".repeat(64);
+    let mut value = serde_json::json!({"protocol":1,"epoch":"wincommander-paired-search-fence-2026-11-v1","broker_user_fence":true,"system_search_disabled":true,"app_dir":"WinCommander","pro_sha256":hash.clone()});
+    assert!(experimental_capability_matches(&value, Some(&hash)));
+    assert!(!experimental_capability_matches(&value, None));
+    assert!(!experimental_capability_matches(
+        &value,
+        Some(&"0".repeat(64))
+    ));
+    assert!(!experimental_capability_matches(
+        &value,
+        Some(&"b".repeat(64))
+    ));
     for key in [
         "epoch",
         "broker_user_fence",
         "system_search_disabled",
         "protocol",
         "app_dir",
+        "pro_sha256",
     ] {
         let old = value[key].take();
-        assert!(!experimental_capability_matches(&value));
+        assert!(!experimental_capability_matches(&value, Some(&hash)));
         value[key] = old;
     }
     value["epoch"] = serde_json::json!("old-release");
-    assert!(!experimental_capability_matches(&value));
+    assert!(!experimental_capability_matches(&value, Some(&hash)));
 }
 
 #[cfg(windows)]

@@ -125,6 +125,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=WINCMD_PRO_SHA256_CURRENT");
     println!("cargo:rerun-if-env-changed=WINCMD_PRO_SHA256_PREVIOUS");
     println!("cargo:rerun-if-env-changed=WINCMD_FENCED_SERVICE_SHA256");
+    println!("cargo:rerun-if-env-changed=WINCMD_FENCED_PRO_SHA256");
     println!("cargo:rerun-if-env-changed=WINCMD_APP_DIR");
 
     // Licence config is embedded via option_env!() in license.rs (release builds
@@ -193,6 +194,7 @@ fn main() {
         && std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
     {
         let hash = std::env::var("WINCMD_FENCED_SERVICE_SHA256").ok();
+        let pro_hash = std::env::var("WINCMD_FENCED_PRO_SHA256").ok();
         let app_dir = std::env::var("WINCMD_APP_DIR").ok();
         let path = Path::new("resources/wincommander-svc.exe");
         let staged_hash = fs::File::open(path).ok().and_then(|mut file| {
@@ -216,8 +218,13 @@ fn main() {
                     .collect::<String>(),
             )
         });
-        build_service_pin::validate(hash.as_deref(), app_dir.as_deref(), staged_hash.as_deref())
-            .expect("invalid paired search release configuration");
+        build_service_pin::validate(
+            hash.as_deref(),
+            app_dir.as_deref(),
+            staged_hash.as_deref(),
+            pro_hash.as_deref(),
+        )
+        .expect("invalid paired search release configuration");
     }
     if std::env::var_os("CARGO_FEATURE_AUTONOMOUS_TEST").is_some() && !is_development_profile {
         panic!("the autonomous-test feature is restricted to debug test artifacts");
