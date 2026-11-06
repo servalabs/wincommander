@@ -447,6 +447,32 @@ jobs:
           Copy-Item -LiteralPath $env:ComSpec -Destination $resource
           "WINCMD_FENCED_SERVICE_SHA256=$((Get-FileHash -Algorithm SHA256 -LiteralPath $resource).Hash)" >> $env:GITHUB_ENV
           "WINCMD_FENCED_PRO_SHA256=$('b' * 64)" >> $env:GITHUB_ENV
+      - name: Verify Cargo profile and optimization policy
+        shell: pwsh
+        run: |
+          $fixture = Join-Path $env:RUNNER_TEMP 'paired-profile-check'
+          New-Item -ItemType Directory -Path (Join-Path $fixture 'src') -Force | Out-Null
+          '[package]`nname = "paired-profile-check"`nversion = "0.0.0"`nedition = "2021"' -replace '`n', "`n" | Set-Content -Encoding utf8 (Join-Path $fixture 'Cargo.toml')
+          'fn main() {}' | Set-Content -Encoding utf8 (Join-Path $fixture 'src/main.rs')
+          $policy = (Resolve-Path 'src-tauri/commander-free/build_service_pin.rs').Path.Replace('\', '/')
+          @"
+          #[path = r#"$policy"#] mod policy;
+          fn main() {
+              let profile = std::env::var("PROFILE").ok();
+              let opt = std::env::var("OPT_LEVEL").ok();
+              assert!(!policy::lab_guard_required(profile.as_deref(), opt.as_deref()), "LAB_GUARD_REQUIRED");
+          }
+          "@ | Set-Content -Encoding utf8 (Join-Path $fixture 'build.rs')
+          & cargo check --manifest-path "$fixture/Cargo.toml"
+          if ($LASTEXITCODE -ne 0) { throw 'Unoptimized dev fixture failed.' }
+          $env:CARGO_PROFILE_DEV_OPT_LEVEL = '3'
+          $output = & cargo check --manifest-path "$fixture/Cargo.toml" 2>&1 | Out-String
+          Remove-Item Env:CARGO_PROFILE_DEV_OPT_LEVEL
+          if ($LASTEXITCODE -eq 0 -or $output -notmatch 'LAB_GUARD_REQUIRED') { throw 'Optimized dev guard failed.' }
+          $env:CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS = 'true'
+          $output = & cargo check --release --manifest-path "$fixture/Cargo.toml" 2>&1 | Out-String
+          Remove-Item Env:CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS
+          if ($LASTEXITCODE -eq 0 -or $output -notmatch 'LAB_GUARD_REQUIRED') { throw 'Release debug-assertion guard failed.' }
       - name: Reject release builds without lab opt-in even with debug assertions
         working-directory: src-tauri
         shell: pwsh

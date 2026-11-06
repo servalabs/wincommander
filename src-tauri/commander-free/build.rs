@@ -191,7 +191,10 @@ fn main() {
     );
     let is_development_profile = std::env::var("PROFILE").as_deref() == Ok("debug");
     if std::env::var_os("CARGO_FEATURE_EXPERIMENTAL_ENCRYPTED_SEARCH").is_some()
-        && !is_development_profile
+        && build_service_pin::lab_guard_required(
+            std::env::var("PROFILE").ok().as_deref(),
+            std::env::var("OPT_LEVEL").ok().as_deref(),
+        )
     {
         assert!(
             std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
