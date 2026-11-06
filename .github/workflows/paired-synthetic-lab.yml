@@ -102,6 +102,7 @@ jobs:
           }
           if (-not (Test-Path -LiteralPath $selection)) { throw 'Installed app did not create protected search selection.' }
           if ($appProcess.HasExited) { throw "Installed app exited early: $($appProcess.ExitCode)." }
+          "INITIAL_SELECTION_SHA256=$((Get-FileHash -Algorithm SHA256 -LiteralPath $selection).Hash)" >> $env:GITHUB_ENV
           Write-Host 'Installed user process created a protected search candidate.'
       - name: Verify failed upgrade keeps service running
         shell: pwsh
@@ -136,6 +137,7 @@ jobs:
           $service.WaitForStatus('Running', [TimeSpan]::FromSeconds(60))
           $selection = Join-Path $env:LOCALAPPDATA 'WinCommander/file-search/.wincommander-encrypted-selection/candidate-proof.v1'
           if (-not (Test-Path -LiteralPath $selection)) { throw 'Protected search selection disappeared during upgrade.' }
+          if ((Get-FileHash -Algorithm SHA256 -LiteralPath $selection).Hash -ine $env:INITIAL_SELECTION_SHA256) { throw 'Protected search selection changed during upgrade.' }
           Write-Host 'Retry installed and retained the user protected search selection.'
           $app = Join-Path $env:ProgramFiles 'WinCommander/wincommander-free.exe'
           $runtime = Start-Process -FilePath $app -WindowStyle Hidden -PassThru
@@ -147,7 +149,7 @@ jobs:
             if (-not $runtime.HasExited) { $runtime.Kill(); $runtime.WaitForExit() }
           }
           $info = [Diagnostics.ProcessStartInfo]::new()
-          $info.FileName = $app; $info.Arguments = '--search-migration-lab stage'
+          $info.FileName = $app; $info.Arguments = '--search-migration-lab verify-staged'
           $info.UseShellExecute = $false; $info.CreateNoWindow = $true
           $info.RedirectStandardOutput = $true; $info.RedirectStandardError = $true
           $info.EnvironmentVariables['WINCOMMANDER_EXPERIMENTAL_SEARCH_MIGRATION'] = '1'
@@ -155,8 +157,22 @@ jobs:
           try {
             $stdout = $probe.StandardOutput.ReadToEndAsync(); $stderr = $probe.StandardError.ReadToEndAsync()
             if (-not $probe.WaitForExit(60000)) { $probe.Kill(); throw 'Search verification timed out.' }
-            if ($probe.ExitCode -ne 0 -or $stdout.Result.Trim() -notmatch '^WINCOMMANDER_SEARCH_MIGRATION_OUTCOME:(selected|staged reconciliation=pending old-cache=retained)$') {
+            if ($probe.ExitCode -ne 0 -or $stdout.Result.Trim() -notmatch '^WINCOMMANDER_SEARCH_MIGRATION_OUTCOME:(selected|staged old-cache=retained)$') {
               throw "Installed search selection failed verification: $($stderr.Result)"
             }
           } finally { $probe.Dispose() }
           Write-Host 'Restarted installed app and authenticated its protected search selection.'
+          if ((Get-FileHash -Algorithm SHA256 -LiteralPath $selection).Hash -ine $env:INITIAL_SELECTION_SHA256) { throw 'Protected selection changed across restart.' }
+          # Corruption must fail closed; restore exact fixture bytes afterward.
+          $original = [IO.File]::ReadAllBytes($selection)
+          try {
+            [IO.File]::WriteAllBytes($selection, [Text.Encoding]::ASCII.GetBytes('corrupt-fixture'))
+            $probe = [Diagnostics.Process]::Start($info)
+            try {
+              $discardOut = $probe.StandardOutput.ReadToEndAsync(); $discardErr = $probe.StandardError.ReadToEndAsync()
+              if (-not $probe.WaitForExit(60000)) { $probe.Kill(); throw 'Corruption check timed out.' }
+              if ($probe.ExitCode -eq 0) { throw 'Corrupted selection was accepted.' }
+            } finally { $probe.Dispose() }
+          } finally { [IO.File]::WriteAllBytes($selection, $original) }
+          if ((Get-FileHash -Algorithm SHA256 -LiteralPath $selection).Hash -ine $env:INITIAL_SELECTION_SHA256) { throw 'Selection fixture restore failed.' }
+          Write-Host 'Corrupted selection was rejected and the fixture was restored.'
