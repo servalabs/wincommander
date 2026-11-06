@@ -107,24 +107,27 @@ jobs:
           if ($appProcess.HasExited) { throw "Installed app exited early: $($appProcess.ExitCode)." }
           "INITIAL_SELECTION_SHA256=$((Get-FileHash -Algorithm SHA256 -LiteralPath $selection).Hash)" >> $env:GITHUB_ENV
           Write-Host 'Installed user process created a protected search candidate.'
-          # Poll the committed encrypted index without crawling or writing it.
-          # The app remains alive and must itself index the synthetic document.
+          # Stop the app before the probe acquires the exclusive maintenance
+          # fence. The probe only reads; it cannot crawl or reconcile documents.
           $PSNativeCommandUseErrorActionPreference = $false
           $checker = (Resolve-Path 'src-tauri/target/debug/examples/paired_installed_fixture.exe').Path
           $old = Join-Path $parent 'fts'
           $docs = Join-Path $env:USERPROFILE 'Documents'
-          $deadline = [Diagnostics.Stopwatch]::StartNew()
-          do {
+          $result = 1
+          for ($attempt = 1; $attempt -le 6; $attempt++) {
+            Start-Sleep -Seconds 15
+            $appProcess.Refresh()
+            if ($appProcess.HasExited) { throw 'Installed app exited before indexing the synthetic document.' }
+            $appProcess.Kill(); $appProcess.WaitForExit()
             & $checker verify $old $docs 2>$null
             $result = $LASTEXITCODE
             if ($result -eq 0) { break }
-            $appProcess.Refresh()
-            if ($appProcess.HasExited) { throw 'Installed app exited before indexing the synthetic document.' }
-            Start-Sleep -Seconds 2
-          } while ($deadline.Elapsed.TotalSeconds -lt 180)
+            if ($attempt -lt 6) { $appProcess = Start-Process -FilePath $app -WindowStyle Hidden -PassThru }
+          }
           if ($result -ne 0) { throw 'Installed app did not commit the synthetic document to protected search.' }
+          if ((Get-FileHash -Algorithm SHA256 -LiteralPath $selection).Hash -ine $env:INITIAL_SELECTION_SHA256) { throw 'Protected selection changed while checking indexing.' }
           $global:LASTEXITCODE = 0
-          Write-Host 'Read-only query found the synthetic document while the installed app was running.'
+          Write-Host 'Exclusive read-only query found the document committed by the installed app.'
       - name: Verify failed upgrade keeps service running
         shell: pwsh
         run: |
