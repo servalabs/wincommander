@@ -137,3 +137,26 @@ jobs:
           $selection = Join-Path $env:LOCALAPPDATA 'WinCommander/file-search/.wincommander-encrypted-selection/candidate-proof.v1'
           if (-not (Test-Path -LiteralPath $selection)) { throw 'Protected search selection disappeared during upgrade.' }
           Write-Host 'Retry installed and retained the user protected search selection.'
+          $app = Join-Path $env:ProgramFiles 'WinCommander/wincommander-free.exe'
+          $runtime = Start-Process -FilePath $app -WindowStyle Hidden -PassThru
+          try {
+            Start-Sleep -Seconds 10
+            $runtime.Refresh()
+            if ($runtime.HasExited) { throw "Upgraded app failed to restart: $($runtime.ExitCode)." }
+          } finally {
+            if (-not $runtime.HasExited) { $runtime.Kill(); $runtime.WaitForExit() }
+          }
+          $info = [Diagnostics.ProcessStartInfo]::new()
+          $info.FileName = $app; $info.Arguments = '--search-migration-lab stage'
+          $info.UseShellExecute = $false; $info.CreateNoWindow = $true
+          $info.RedirectStandardOutput = $true; $info.RedirectStandardError = $true
+          $info.EnvironmentVariables['WINCOMMANDER_EXPERIMENTAL_SEARCH_MIGRATION'] = '1'
+          $probe = [Diagnostics.Process]::Start($info)
+          try {
+            $stdout = $probe.StandardOutput.ReadToEndAsync(); $stderr = $probe.StandardError.ReadToEndAsync()
+            if (-not $probe.WaitForExit(60000)) { $probe.Kill(); throw 'Search verification timed out.' }
+            if ($probe.ExitCode -ne 0 -or $stdout.Result.Trim() -notmatch '^WINCOMMANDER_SEARCH_MIGRATION_OUTCOME:(selected|staged reconciliation=pending old-cache=retained)$') {
+              throw "Installed search selection failed verification: $($stderr.Result)"
+            }
+          } finally { $probe.Dispose() }
+          Write-Host 'Restarted installed app and authenticated its protected search selection.'
