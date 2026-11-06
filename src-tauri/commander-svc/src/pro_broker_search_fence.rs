@@ -16,6 +16,7 @@ fn expected_pair<'a>(hash: Option<&'a str>, app: Option<&str>, protocol: Option<
     let hash = hash.ok_or_else(denied)?;
     let expected_app = option_env!("WINCMD_APP_DIR").unwrap_or("WinCommander");
     if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || !hash.bytes().any(|byte| byte != b'0')
         || app != Some(expected_app) || protocol != Some(FENCE_PROTOCOL) { return Err(denied()); }
     Ok(hash)
 }
@@ -255,6 +256,7 @@ mod tests {
         assert!(expected_pair(Some(&hash), Some("other"), Some(FENCE_PROTOCOL)).is_err());
         assert!(expected_pair(Some(&hash), Some(app), Some("old-protocol")).is_err());
         assert!(expected_pair(Some("not-a-hash"), Some(app), Some(FENCE_PROTOCOL)).is_err());
+        assert!(expected_pair(Some(&"0".repeat(64)), Some(app), Some(FENCE_PROTOCOL)).is_err());
     }
     #[test]
     fn binary_pin_rejects_wrong_hash_and_denies_replacement() {
