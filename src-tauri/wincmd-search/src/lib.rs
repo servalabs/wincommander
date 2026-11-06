@@ -1724,6 +1724,55 @@ mod tests {
     }
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     #[test]
+    fn readonly_selection_fixture_never_indexes_or_mutates() {
+        let root = TempDir::new().unwrap();
+        let old = root.path().join("legacy");
+        let data = root.path().join("data");
+        let selection = root.path().join("selector");
+        fs::create_dir(&old).unwrap();
+        fs::create_dir(&data).unwrap();
+        fs::create_dir(&selection).unwrap();
+        fs::write(data.join("doc.txt"), b"readonlyfixturecanary").unwrap();
+        let guard = crate::encrypted_search_fence::SearchOperationFence::acquire_exclusive(root.path()).unwrap();
+        let mut candidate = SearchEngine::open_experimental_encrypted_with_policy(
+            make_config(old.clone(), vec![]), Arc::new(|_| false), [73; 16], false,
+        ).unwrap();
+        assert_eq!(candidate.rebuild_experimental_candidate().unwrap().indexed, 0);
+        candidate.select_experimental_candidate(&selection).unwrap();
+        drop(candidate);
+        let generation = root.path().join(format!(".wincommander-encrypted-{}", hex::encode([73; 16])));
+        let query = ContentQuery { terms: "readonlyfixturecanary".into(), roots: vec![data], limit: 10, offset: 0, keyword_only: true };
+        let snapshot = || {
+            let mut files = Vec::new();
+            for directory in [&selection, &generation] {
+                for entry in fs::read_dir(directory).unwrap() {
+                    let path = entry.unwrap().path();
+                    files.push((path.clone(), fs::read(path).unwrap()));
+                }
+            }
+            files.sort_by(|a, b| a.0.cmp(&b.0));
+            files
+        };
+        let before = snapshot();
+        assert!(SearchEngine::experimental_selected_readonly_query(&old, &selection, &query, &guard).unwrap().is_empty());
+        assert!(SearchEngine::experimental_selected_readonly_query(&old, &selection, &query, &guard).unwrap().is_empty());
+        assert_eq!(snapshot(), before);
+        let proof = selection.join("candidate-proof.v1");
+        let held_proof = selection.join("candidate-proof.saved");
+        fs::rename(&proof, &held_proof).unwrap();
+        assert!(SearchEngine::experimental_selected_readonly_query(&old, &selection, &query, &guard).is_err());
+        fs::rename(&held_proof, &proof).unwrap();
+        let key = generation.join("protected-search-key.v1");
+        let held_key = generation.join("protected-search-key.saved");
+        fs::rename(&key, &held_key).unwrap();
+        assert!(SearchEngine::experimental_selected_readonly_query(&old, &selection, &query, &guard).is_err());
+        fs::rename(&held_key, &key).unwrap();
+        assert_eq!(snapshot(), before);
+        assert!(crate::encrypted_search_fence::SearchOperationFence::acquire_shared(root.path()).is_err());
+    }
+
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    #[test]
     fn offline_empty_cache_reconciles_with_live_roots_after_restart() {
         let root = TempDir::new().unwrap();
         let old = root.path().join("legacy");
