@@ -18,6 +18,7 @@
 !endif
 !define WC_SETTINGS_LAB_MAINTENANCE "${__FILEDIR__}\install-settings-generation.ps1"
 Var WCSettingsIdentityConsent
+!include "${__FILEDIR__}\settings-identity-consent.nsh"
 !endif
 !include "TextFunc.nsh"
 !include "StrFunc.nsh"
@@ -368,10 +369,10 @@ FunctionEnd
         Pop $1
         !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "settings-lab-stage" "$0" "$1"
         ${If} $0 == 2
-          MessageBox MB_YESNO|MB_ICONEXCLAMATION|MB_DEFBUTTON2 "WinCommander could not verify whether an older device signing identity exists. A new identity cannot restore the old one; previously provisioned wipe or recovery devices may stop working. Existing files will be kept, but automatic restoration is not available.$\r$\n$\r$\nCreate a new identity and continue setup? Choose No if the previous identity is needed." /SD IDNO IDYES wc_settings_confirm_new_identity
-          !insertmacro WC_PAIRED_ABORT "The identity was not changed and existing files were preserved. Contact support if the previous identity is needed."
-          wc_settings_confirm_new_identity:
-          StrCpy $WCSettingsIdentityConsent 1
+          !insertmacro WC_REQUEST_SETTINGS_IDENTITY_CONSENT
+          ${If} $WCSettingsIdentityConsent != 1
+            !insertmacro WC_PAIRED_ABORT "The identity was not changed and existing files were preserved. Contact support if the previous identity is needed."
+          ${EndIf}
         ${ElseIf} $0 != 0
           !insertmacro WC_PAIRED_ABORT "Settings could not be prepared. Existing settings were preserved."
         ${EndIf}

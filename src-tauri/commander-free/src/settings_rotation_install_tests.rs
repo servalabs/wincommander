@@ -42,6 +42,22 @@ fn recovery_reports_busy_separately_from_unavailable_ownership() {
 }
 
 #[test]
+fn fresh_machine_stage_requires_confirmation_without_touching_source() {
+    let parent = tempfile::tempdir().unwrap();
+    let root = parent.path().join("missing-root");
+    assert!(stage_root_exists(&root, StoreScope::Machine).unwrap_err().starts_with("SETTINGS_IDENTITY_UNVERIFIED:"));
+    assert!(!root.exists());
+    std::fs::create_dir(&root).unwrap();
+    assert!(stage_keyless_store(&root, StoreScope::Machine).unwrap_err().starts_with("SETTINGS_IDENTITY_UNVERIFIED:"));
+    let store = root.join("store"); std::fs::create_dir(&store).unwrap();
+    assert!(stage_keyless_store(&root, StoreScope::Machine).unwrap_err().starts_with("SETTINGS_IDENTITY_UNVERIFIED:"));
+    let existing = store.join("settings.dat"); std::fs::write(&existing, b"existing data").unwrap();
+    let error = stage_keyless_store(&root, StoreScope::Machine).unwrap_err();
+    assert!(!error.starts_with("SETTINGS_IDENTITY_UNVERIFIED:"));
+    assert_eq!(std::fs::read(existing).unwrap(), b"existing data");
+}
+
+#[test]
 #[cfg_attr(windows, ignore = "requires elevated machine-lock ACL provisioning; run explicitly in Windows acceptance")]
 fn staging_retry_recovers_only_authenticated_interrupted_updates() {
     let root = tempfile::tempdir().unwrap(); provision_test_lock(root.path());

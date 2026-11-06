@@ -129,6 +129,25 @@ fn reconcile_stage_owner(owner: &LockedSelectedGeneration) -> Result<bool, Strin
     }
 }
 
+fn stage_root_exists(root: &Path, scope: StoreScope) -> Result<(), String> {
+    match std::fs::symlink_metadata(root) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && scope == StoreScope::Machine => Err(unverified_identity()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err("Original user settings root is missing; no migration was performed.".into()),
+        Err(_) => Err("Cannot inspect settings root; existing data preserved.".into()),
+        Ok(_) => Ok(()),
+    }
+}
+fn stage_keyless_store(root: &Path, scope: StoreScope) -> Result<(), String> {
+    let store = root.join("store");
+    match std::fs::read_dir(&store) {
+        Ok(mut entries) => {
+            if entries.next().is_none() { return if scope == StoreScope::Machine { Err(unverified_identity()) } else { Ok(()) }; }
+            Err("Settings key is missing for existing store; existing data preserved.".into())
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => if scope == StoreScope::Machine { Err(unverified_identity()) } else { Ok(()) },
+        Err(_) => Err("Settings key is missing or store cannot be inspected; existing data preserved.".into()),
+    }
+}
 /// Pre-replacement staging only. It never provisions a cutover anchor or
 /// selects a generation, so the original installation remains authoritative.
 /// User staging additionally requires an expected SID checked by the caller.
@@ -142,12 +161,7 @@ pub(super) fn stage_existing_explicitly(expected_scope: StoreScope) -> Result<()
     }
     let _maintenance_pins = if expected_scope == StoreScope::Machine { Some(source_snapshot::pin_machine_maintenance()?) } else { None };
     let root = source_snapshot::known_root(expected_scope)?;
-    match std::fs::symlink_metadata(&root) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound && expected_scope == StoreScope::Machine => return Err(unverified_identity()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Err("Original user settings root is missing; no migration was performed.".into()),
-        Err(_) => return Err("Cannot inspect settings root; existing data preserved.".into()),
-        Ok(_) => {},
-    }
+    stage_root_exists(&root, expected_scope)?;
     let (root, _pins, scope) = experimental_runtime_root_for(expected_scope)?;
     let _installed_binary = if scope == StoreScope::CurrentUser {
         Some(source_snapshot::pin_user_installed_binary(&root)?)
@@ -156,15 +170,7 @@ pub(super) fn stage_existing_explicitly(expected_scope: StoreScope) -> Result<()
     let key = read_generation_file(&root.join(key_name), 65_536)?;
     let existing_anchor = read_generation_file(&root.join(".settings-cutover-anchor.v1"), 65_536)?;
     if key.is_none() && existing_anchor.is_none() {
-        let store = root.join("store");
-        match std::fs::read_dir(&store) {
-            Ok(mut entries) => {
-                if entries.next().is_none() { return if scope == StoreScope::Machine { Err(unverified_identity()) } else { Ok(()) }; }
-                return Err("Settings key is missing for existing store; existing data preserved.".into());
-            },
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return if scope == StoreScope::Machine { Err(unverified_identity()) } else { Ok(()) },
-            _ => return Err("Settings key is missing or store cannot be inspected; existing data preserved.".into()),
-        }
+        return stage_keyless_store(&root, scope);
     }
     match scope {
         StoreScope::Machine => super::settings_generation_acl_windows::provision_or_verify(&root),
