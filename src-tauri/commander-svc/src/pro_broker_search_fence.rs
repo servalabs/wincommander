@@ -57,16 +57,22 @@ fn acquire_at(parent: &Path, create: bool) -> io::Result<SearchBrokerFence> {
     Ok(SearchBrokerFence { _pins: pins, _file: file })
 }
 pub(super) fn acquire_for_user_token(token: HANDLE, session: u32, sid: &str) -> io::Result<SearchBrokerFence> {
+    if !super::token_matches_authenticated_client(token, session, sid) { return Err(denied()); }
+    provision_under_token(token, None)
+}
+fn provision_under_token(token: HANDLE, fixture_parent: Option<&Path>) -> io::Result<SearchBrokerFence> {
     use windows_sys::Win32::Security::{DuplicateTokenEx, ImpersonateLoggedOnUser, RevertToSelf,
         SecurityImpersonation, TokenImpersonation, TOKEN_IMPERSONATE, TOKEN_QUERY};
-    if !super::token_matches_authenticated_client(token, session, sid) { return Err(denied()); }
     let mut impersonation: HANDLE = std::ptr::null_mut();
     if unsafe { DuplicateTokenEx(token, TOKEN_QUERY | TOKEN_IMPERSONATE, std::ptr::null_mut(),
         SecurityImpersonation, TokenImpersonation, &mut impersonation) } == 0 { return Err(denied()); }
     struct UserToken(HANDLE);
     impl Drop for UserToken { fn drop(&mut self) { unsafe { CloseHandle(self.0); } } }
     let impersonation = UserToken(impersonation);
-    let parent = user_search_root(impersonation.0)?;
+    let parent = match fixture_parent {
+        Some(path) => path.to_path_buf(),
+        None => user_search_root(impersonation.0)?,
+    };
     let app = parent.parent().ok_or_else(denied)?;
     let base = app.parent().ok_or_else(denied)?;
     if unsafe { ImpersonateLoggedOnUser(impersonation.0) } == 0 { return Err(denied()); }
@@ -146,6 +152,22 @@ mod tests {
         assert!(acquire_at(&root, false).is_err());
         assert!(!root.join(".encrypted-search-maintenance.lock").exists());
         let _ = std::fs::remove_dir_all(root);
+    }
+    #[test]
+    fn user_token_provisions_disposable_missing_profile_lock() {
+        use windows_sys::Win32::{Security::{TOKEN_DUPLICATE, TOKEN_QUERY}, System::Threading::OpenProcessToken};
+        let base = std::env::temp_dir().join(format!("wc-broker-token-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&base).unwrap();
+        let parent = base.join("app").join("file-search");
+        let mut token: HANDLE = std::ptr::null_mut();
+        assert_ne!(unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_DUPLICATE | TOKEN_QUERY, &mut token) }, 0);
+        let lease = provision_under_token(token, Some(&parent)).unwrap();
+        unsafe { CloseHandle(token); }
+        let probe = open_probe(&parent);
+        assert!(probe.try_lock().is_err());
+        drop(lease);
+        probe.try_lock().unwrap(); drop(probe);
+        let _ = std::fs::remove_dir_all(base);
     }
     #[test]
     fn broker_lease_excludes_cleanup_and_releases_on_drop() {
