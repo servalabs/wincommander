@@ -9,6 +9,41 @@ use windows_sys::Win32::{Foundation::{CloseHandle, DuplicateHandle, DUPLICATE_SA
     UI::Shell::{FOLDERID_LocalAppData, SHGetKnownFolderPath}};
 
 pub(super) struct SearchBrokerFence { _pins: Vec<File>, _file: File }
+const FENCE_PROTOCOL: &str = "wincommander-search-fence-v1";
+/// The gated service must be built as a pair with one independently reviewed
+/// Pro binary. Missing build pins fail closed rather than trusting Hello claims.
+fn expected_pair<'a>(hash: Option<&'a str>, app: Option<&str>, protocol: Option<&str>) -> io::Result<&'a str> {
+    let hash = hash.ok_or_else(denied)?;
+    let expected_app = option_env!("WINCMD_APP_DIR").unwrap_or("WinCommander");
+    if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || app != Some(expected_app) || protocol != Some(FENCE_PROTOCOL) { return Err(denied()); }
+    Ok(hash)
+}
+pub(super) fn pin_expected_pro(path: &Path) -> io::Result<File> {
+    let expected = expected_pair(option_env!("WINCMD_FENCED_PRO_SHA256"),
+        option_env!("WINCMD_FENCED_PRO_APP_DIR"), option_env!("WINCMD_FENCED_PRO_PROTOCOL"))?;
+    pin_and_verify(path, expected)
+}
+fn pin_and_verify(path: &Path, expected: &str) -> io::Result<File> {
+    use sha2::{Digest, Sha256};
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = OpenOptions::new().read(true).share_mode(FILE_SHARE_READ)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT).open(path)?;
+    let metadata = file.metadata()?;
+    let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+        || unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 || info.nNumberOfLinks != 1 { return Err(denied()); }
+    let mut digest = Sha256::new();
+    let mut block = [0u8; 65536];
+    loop {
+        let read = file.read(&mut block)?;
+        if read == 0 { break; }
+        digest.update(&block[..read]);
+    }
+    if !super::bytes_to_hex(&digest.finalize()).eq_ignore_ascii_case(expected) { return Err(denied()); }
+    file.seek(SeekFrom::Start(0))?;
+    Ok(file)
+}
 fn denied() -> io::Error { io::Error::new(io::ErrorKind::PermissionDenied, "user search fence unavailable") }
 fn user_search_root(token: HANDLE) -> io::Result<PathBuf> {
     if token.is_null() { return Err(denied()); }
@@ -155,6 +190,30 @@ mod tests {
     fn open_probe(root: &Path) -> File {
         OpenOptions::new().read(true).write(true).share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
             .open(root.join(".encrypted-search-maintenance.lock")).unwrap()
+    }
+    #[test]
+    fn paired_pin_requires_exact_protocol_and_app_directory() {
+        let hash = "a".repeat(64);
+        let app = option_env!("WINCMD_APP_DIR").unwrap_or("WinCommander");
+        assert!(expected_pair(Some(&hash), Some(app), Some(FENCE_PROTOCOL)).is_ok());
+        assert!(expected_pair(None, Some(app), Some(FENCE_PROTOCOL)).is_err());
+        assert!(expected_pair(Some(&hash), Some("other"), Some(FENCE_PROTOCOL)).is_err());
+        assert!(expected_pair(Some(&hash), Some(app), Some("old-protocol")).is_err());
+        assert!(expected_pair(Some("not-a-hash"), Some(app), Some(FENCE_PROTOCOL)).is_err());
+    }
+    #[test]
+    fn binary_pin_rejects_wrong_hash_and_denies_replacement() {
+        use sha2::{Digest, Sha256};
+        let root = fixture(); let path = root.join("fenced-pro.exe");
+        std::fs::write(&path, b"reviewed binary").unwrap();
+        let hash = super::super::bytes_to_hex(&Sha256::digest(b"reviewed binary"));
+        assert!(pin_and_verify(&path, &"0".repeat(64)).is_err());
+        let held = pin_and_verify(&path, &hash).unwrap();
+        assert!(std::fs::write(&path, b"replacement").is_err());
+        assert!(std::fs::remove_file(&path).is_err());
+        drop(held);
+        assert!(std::fs::remove_file(&path).is_ok());
+        let _ = std::fs::remove_dir_all(root);
     }
     #[test]
     fn unconfirmed_child_exit_retains_lease() {
