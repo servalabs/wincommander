@@ -160,7 +160,9 @@ fn schedule_legacy_cleanup(config: IndexConfig, protected: Vec<PathBuf>) {
             let count = retained_backup_count(parent)?;
             Ok((count > 0).then(|| format!("Old search backups remain in WinCommander storage ({count} folders).")))
         })().unwrap_or_else(|error| Some(error));
+        let has_notice = message.is_some();
         if let Ok(mut slot) = AUTO_CLEANUP_MESSAGE.lock() { *slot = message; }
+        if has_notice { super::notify_search_protection_pending(); }
         return;
     }
     if AUTO_CLEANUP_STARTED.swap(true, Ordering::AcqRel) { return; }
@@ -183,14 +185,20 @@ fn schedule_legacy_cleanup(config: IndexConfig, protected: Vec<PathBuf>) {
         let message = match outcome {
             Ok((_, 0)) => None,
             Ok((_, count)) => Some(format!("Old search backups remain in WinCommander storage ({count} folders).")),
-            Err(error) => Some(format!("Old search data could not be cleaned: {error}")),
+            Err(error) => {
+                crate::log_message("warn", &format!("[FileSearch] old search data cleanup failed: {error}"));
+                Some("Old search data could not be cleaned and may still be on this PC. Try again after restarting WinCommander.".into())
+            },
         };
+        let has_notice = message.is_some();
         if let Ok(mut slot) = AUTO_CLEANUP_MESSAGE.lock() { *slot = message; }
         AUTO_CLEANUP_STARTED.store(false, Ordering::Release);
+        if has_notice { super::notify_search_protection_pending(); }
     });
     if spawned.is_err() {
         AUTO_CLEANUP_STARTED.store(false, Ordering::Release);
         if let Ok(mut slot) = AUTO_CLEANUP_MESSAGE.lock() { *slot = Some("Old search data cleanup could not start.".into()); }
+        super::notify_search_protection_pending();
     }
 }
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]

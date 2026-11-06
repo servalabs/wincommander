@@ -143,11 +143,15 @@ pub(crate) fn start_background_indexing() {
             "warn",
             &format!("[FileSearch] could not start background index: {error}"),
         );
+        #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+        notify_search_protection_pending();
     }
 }
 
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
 fn notify_search_protection_pending() {
+    static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if WARNED.swap(true, std::sync::atomic::Ordering::AcqRel) { return; }
     use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONWARNING, MB_OK};
     let title: Vec<u16> = "WinCommander search data\0".encode_utf16().collect();
     let message: Vec<u16> = "Search data protection could not finish. Older search data may still be on this PC. Open Search Files for status and try restarting WinCommander.\0".encode_utf16().collect();
