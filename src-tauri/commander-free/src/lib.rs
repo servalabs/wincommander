@@ -1604,7 +1604,7 @@ pub fn run() {
     #[cfg(all(windows, feature = "experimental-settings-generation"))]
     if let Err(message) = datastore::require_selected_settings_lab_startup() {
         if cli::tauri_runtime_active() {
-            cli::report_settings_lab_startup_failure(message);
+            cli::report_cli_startup_failure("settings_setup_incomplete", message);
             return;
         }
         use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
@@ -1619,6 +1619,10 @@ pub fn run() {
     match file_search::install_runtime_fence() {
         Ok(()) => {},
         Err(message) => {
+            if cli::tauri_runtime_active() {
+                cli::report_cli_startup_failure("search_setup_incomplete", message);
+                return;
+            }
             use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
             let text: Vec<u16> = format!("{message}\0").encode_utf16().collect();
             let title: Vec<u16> = "WinCommander\0".encode_utf16().collect();
@@ -1627,6 +1631,7 @@ pub fn run() {
         }
     };
     let cli_mode = cli::tauri_runtime_active();
+    if cli_mode { cli::acknowledge_terminal_after_startup_guards(); }
     startup_trace::init();
     startup_trace::pre_window_milestone("process_start");
     dev_startup_trace("process start");

@@ -732,23 +732,6 @@ fn run_command(request: RunRequest) -> i32 {
         }));
         return 0;
     }
-    // `lockdown` and `full_lockdown` launch their cleanup worker and then tear
-    // the process down, so no IPC completion ever arrives — and Tauri's
-    // `App::run` exits the process directly rather than returning, so nothing
-    // after `crate::run()` executes either. Emit the acknowledgement here,
-    // while stdout is still certainly ours, or automation gets no JSON at all.
-    // It acknowledges the dispatch, never the outcome: verify the wipe
-    // independently.
-    if entry.transport == Transport::Tauri && is_terminal_tauri_command(&entry.name) {
-        TAURI_RESULT_EMITTED.store(true, Ordering::SeqCst);
-        print_json(&json!({
-            "ok": true,
-            "command": description.id,
-            "result": { "detached": true, "processExitRequested": true }
-        }));
-        use std::io::Write;
-        let _ = std::io::stdout().flush();
-    }
     let wait_deadline = (description.risk == Risk::ReadOnly).then_some(request.timeout_ms);
     match entry.transport {
         Transport::BackendScript => match backend_params(&request.params) {
@@ -891,16 +874,26 @@ pub(crate) fn tauri_runtime_active() -> bool {
     TAURI_RUN_ACTIVE.load(Ordering::SeqCst)
 }
 
-/// Return one machine-readable failure if setup becomes unavailable after the
-/// CLI preflight but before its Tauri runtime starts. Never show a modal here.
-#[cfg(all(windows, feature = "experimental-settings-generation"))]
-pub(crate) fn report_settings_lab_startup_failure(message: String) {
+/// Report a startup failure without displaying a modal to headless callers.
+#[cfg(all(windows, any(feature = "experimental-settings-generation", feature = "experimental-encrypted-search")))]
+pub(crate) fn report_cli_startup_failure(kind: &str, message: String) {
     if !TAURI_RUN_ACTIVE.swap(false, Ordering::SeqCst) { return; }
     let id = TAURI_RUN.lock().ok().and_then(|mut slot| slot.take()).map(|spec| spec.id);
     if !TAURI_RESULT_EMITTED.swap(true, Ordering::SeqCst) {
-        print_json(&json!({"ok": false, "command": id, "error": "settings_setup_incomplete", "message": message}));
+        print_json(&json!({"ok": false, "command": id, "error": kind, "message": message}));
     }
     TAURI_RUN_EXIT_CODE.store(1, Ordering::SeqCst);
+}
+
+/// Terminal commands need a receipt before the handler tears the process
+/// down, but only after every early desktop readiness gate has passed.
+pub(crate) fn acknowledge_terminal_after_startup_guards() {
+    let spec = TAURI_RUN.lock().ok().and_then(|slot| slot.clone());
+    let Some(spec) = spec else { return; };
+    if !is_terminal_tauri_command(&spec.command) || TAURI_RESULT_EMITTED.swap(true, Ordering::SeqCst) { return; }
+    print_json(&json!({"ok": true, "command": spec.id, "result": {"detached": true, "processExitRequested": true}}));
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
 }
 
 pub(crate) fn tauri_initialization_script() -> Result<String, String> {
