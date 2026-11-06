@@ -96,6 +96,12 @@ impl ContentIndex {
         Self::open_mode(dir, AccessMode::Writable, Some((index_id, existing)))
     }
 
+    /// Open an already-created encrypted generation without permitting writes.
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    pub(crate) fn open_experimental_encrypted_readonly(dir: &Path, index_id: [u8; 16]) -> Result<Self> {
+        Self::open_mode(dir, AccessMode::GuardedReader, Some((index_id, true)))
+    }
+
     fn open_mode(dir: &Path, mode: AccessMode, protected: Option<([u8; 16], bool)>) -> Result<Self> {
         let read_only = mode != AccessMode::Writable;
         // The ordinary path retains its existing initialization behavior.
