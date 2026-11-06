@@ -188,15 +188,21 @@ mod tests {
     fn plaintext_scope_survives_when_protected_scope_is_missing_or_invalid() {
         let root = tempfile::tempdir().unwrap(); let old = root.path().join("fts");
         std::fs::create_dir(&old).unwrap();
-        std::fs::write(old.join("scope-v1.json"), b"private roots").unwrap();
+        let prior = br#"{"version":1,"roots":["private"],"exclusions":[],"blocked_roots":[]}"#;
+        std::fs::write(old.join("scope-v1.json"), prior).unwrap();
         std::fs::write(old.join("meta.json"), b"old metadata").unwrap();
         std::fs::write(old.join(".managed.json"), b"[]").unwrap();
         let fence = crate::encrypted_search_fence::SearchOperationFence::acquire_exclusive(root.path()).unwrap();
         assert!(remove_managed(&old, &fence).is_err());
-        assert_eq!(std::fs::read(old.join("scope-v1.json")).unwrap(), b"private roots");
+        assert_eq!(std::fs::read(old.join("scope-v1.json")).unwrap(), prior);
         std::fs::write(old.join("scope-v2.dpapi"), b"invalid").unwrap();
         assert!(remove_managed(&old, &fence).is_err());
         assert_eq!(std::fs::read(old.join("meta.json")).unwrap(), b"old metadata");
+        std::fs::remove_file(old.join("scope-v2.dpapi")).unwrap();
+        let changed = br#"{"version":1,"roots":[],"exclusions":[],"blocked_roots":[]}"#;
+        crate::publish_experimental_scope(&old, changed, |_| Ok(())).unwrap();
+        assert!(remove_managed(&old, &fence).is_err());
+        assert_eq!(std::fs::read(old.join("scope-v1.json")).unwrap(), prior);
     }
     #[test]
     fn hardlinked_cache_candidate_is_never_deleted() {
