@@ -2,7 +2,8 @@
 // The fixture uses an explicit protected DACL granting Users W,RX and SYSTEM
 // and Administrators full control. The second handle requests 0x116, matching the
 // write mask observed on this machine's ProgramData. A separate read handle
-// retains FILE_SHARE_READ|FILE_SHARE_WRITE without FILE_SHARE_DELETE.
+// retains FILE_SHARE_READ|FILE_SHARE_WRITE without FILE_SHARE_DELETE by default;
+// --deny-write instead shares reads only.
 // --restricted impersonates a LUA token with maximum privileges disabled and
 // asserts Users is enabled and Administrators is disabled. This is not a
 // separate signed-in user and does not reproduce the complete product path.
@@ -33,19 +34,24 @@ fn wide(path: &std::path::Path) -> Vec<u16> { path.as_os_str().encode_wide().cha
 fn main() {
     let mut args = std::env::args_os().skip(1);
     let root = PathBuf::from(args.next().expect("supply a new disposable D: fixture directory"));
-    let restricted = args.next().is_some_and(|value| value == "--restricted");
-    assert!(args.next().is_none(), "unexpected argument");
+    let flags: Vec<_> = args.collect();
+    assert!(flags.iter().all(|value| value == "--restricted" || value == "--deny-write"), "unexpected argument");
+    let restricted = flags.iter().any(|value| value == "--restricted");
+    let deny_write = flags.iter().any(|value| value == "--deny-write");
     let base = std::fs::canonicalize(r"D:\_cargo-target\settings-actual-user-temp-20261106").expect("fixture base unavailable");
     let parent = root.parent().and_then(|p| std::fs::canonicalize(p).ok()).expect("fixture parent unavailable");
     assert_eq!(parent, base, "fixture must be a direct child of the disposable base");
     assert!(root.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("reparse-fixture-")), "invalid fixture name");
     assert!(!root.exists(), "fixture path must not already exist");
     std::fs::create_dir(&root).expect("create fixture root");
-    let source = root.join("source"); let target = root.join("target");
-    std::fs::create_dir(&source).unwrap(); std::fs::create_dir(&target).unwrap();
-    let status = std::process::Command::new(r"C:\Windows\System32\icacls.exe")
-        .arg(&source).args(["/inheritance:r", "/grant:r", "*S-1-5-32-544:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-545:(OI)(CI)(W,RX)"]).status().unwrap();
-    assert!(status.success(), "cannot grant fixture Users the requested rights");
+    let source = root.join("source"); let target = root.join("target"); let readcase = root.join("readcase");
+    std::fs::create_dir(&source).unwrap(); std::fs::create_dir(&target).unwrap(); std::fs::create_dir(&readcase).unwrap();
+    std::fs::write(readcase.join("settings.dat"), b"fixture settings").unwrap();
+    for dir in [&source, &readcase] {
+        let status = std::process::Command::new(r"C:\Windows\System32\icacls.exe")
+            .arg(dir).args(["/inheritance:r", "/grant:r", "*S-1-5-32-544:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-545:(OI)(CI)(W,RX)"]).status().unwrap();
+        assert!(status.success(), "cannot grant fixture Users the requested rights");
+    }
     let mut token: Handle = std::ptr::null_mut(); let mut limited: Handle = std::ptr::null_mut();
     if restricted {
         assert_ne!(unsafe { OpenProcessToken(GetCurrentProcess(), 0x000e, &mut token) }, 0, "open token: {}", unsafe { GetLastError() });
@@ -64,10 +70,25 @@ fn main() {
         unsafe { LocalFree(sid); }
         assert_ne!(is_user, 0, "restricted effective token lacks the Users group");
     }
-    // Mirror migration's pinned read handle: no delete sharing, but writes
-    // may still be shared. Keep it open during the second handle's mutation.
-    let pinned = unsafe { CreateFileW(wide(&source).as_ptr(), 0x8000_0000, 3, std::ptr::null(), 3, 0x0220_0000, std::ptr::null_mut()) };
+    if deny_write {
+        let reader_pin = unsafe { CreateFileW(wide(&readcase).as_ptr(), 0x8000_0000, 1, std::ptr::null(), 3, 0x0220_0000, std::ptr::null_mut()) };
+        assert_ne!(reader_pin as isize, -1, "read fixture pin failed: {}", unsafe { GetLastError() });
+        assert_eq!(std::fs::read(readcase.join("settings.dat")).unwrap(), b"fixture settings");
+        let create_while_pinned = std::fs::write(readcase.join("new-child.dat"), b"created");
+        println!("child_create_under_deny_write_pin={}", create_while_pinned.is_ok());
+        unsafe { CloseHandle(reader_pin); }
+        let writer = unsafe { CreateFileW(wide(&source).as_ptr(), 0x116, 7, std::ptr::null(), 3, 0x0220_0000, std::ptr::null_mut()) };
+        assert_ne!(writer as isize, -1, "existing writer fixture failed: {}", unsafe { GetLastError() });
+        let attempted = unsafe { CreateFileW(wide(&source).as_ptr(), 0x8000_0000, 1, std::ptr::null(), 3, 0x0220_0000, std::ptr::null_mut()) };
+        let error = unsafe { GetLastError() };
+        assert_eq!(attempted as isize, -1, "pin unexpectedly succeeded while writer was open");
+        assert_eq!(error, 32, "unexpected pin failure");
+        unsafe { CloseHandle(writer); }
+    }
+    // Keep the first pin open while the second handle attempts mutation.
+    let pinned = unsafe { CreateFileW(wide(&source).as_ptr(), 0x8000_0000, if deny_write { 1 } else { 3 }, std::ptr::null(), 3, 0x0220_0000, std::ptr::null_mut()) };
     assert_ne!(pinned as isize, -1, "fixture pin failed: {}", unsafe { GetLastError() });
+    assert_eq!(std::fs::read_dir(&source).unwrap().count(), 0);
     let substitute = format!("\\??\\{}", target.display());
     let substitute_bytes: Vec<u8> = substitute.encode_utf16().flat_map(u16::to_le_bytes).collect();
     let print_bytes: Vec<u8> = target.as_os_str().encode_wide().flat_map(u16::to_le_bytes).collect();
@@ -82,12 +103,18 @@ fn main() {
     data.extend_from_slice(&substitute_bytes); data.extend_from_slice(&[0, 0]);
     data.extend_from_slice(&print_bytes); data.extend_from_slice(&[0, 0]);
     let handle = unsafe { CreateFileW(wide(&source).as_ptr(), 0x116, 7, std::ptr::null(), 3, 0x0220_0000, std::ptr::null_mut()) };
-    assert_ne!(handle as isize, -1, "fixture open failed: {}", unsafe { GetLastError() });
+    if handle as isize == -1 {
+        let error = unsafe { GetLastError() };
+        unsafe { CloseHandle(pinned); }
+        if restricted { assert_ne!(unsafe { RevertToSelf() }, 0); unsafe { CloseHandle(limited); CloseHandle(token); } }
+        println!("restricted={} deny_write={} read_ok=true mutation_open_error={} fixture={}", restricted, deny_write, error, root.display());
+        return;
+    }
     let mut returned = 0;
     let result = unsafe { DeviceIoControl(handle, 0x0009_00a4, data.as_ptr().cast(), data.len() as u32,
         std::ptr::null_mut(), 0, &mut returned, std::ptr::null_mut()) };
     let error = if result == 0 { unsafe { GetLastError() } } else { 0 };
     unsafe { CloseHandle(handle); CloseHandle(pinned); }
     if restricted { assert_ne!(unsafe { RevertToSelf() }, 0); unsafe { CloseHandle(limited); CloseHandle(token); } }
-    println!("restricted={} set_reparse={} windows_error={} fixture={}", restricted, result != 0, error, root.display());
+    println!("restricted={} deny_write={} read_ok=true set_reparse={} windows_error={} fixture={}", restricted, deny_write, result != 0, error, root.display());
 }

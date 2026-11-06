@@ -33,22 +33,32 @@ pub(super) struct Snapshot {
     sections: Vec<Section>,
 }
 
-pub(super) fn pin_directories(path: &Path) -> Result<Vec<File>, String> {
+fn pin_one_directory(path: &Path, share: u32) -> Result<File, String> {
+    let file = OpenOptions::new().read(true).share_mode(share)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path).map_err(|_| UNAVAILABLE)?;
+    let metadata = file.metadata().map_err(|_| UNAVAILABLE)?;
+    if !metadata.is_dir() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(UNAVAILABLE.into());
+    }
+    Ok(file)
+}
+fn pin_directories_with_share(path: &Path, share: u32) -> Result<Vec<File>, String> {
     if !path.is_absolute() { return Err(UNAVAILABLE.into()); }
     let mut ancestors: Vec<_> = path.ancestors().collect();
     ancestors.reverse();
     let mut pins = Vec::with_capacity(ancestors.len());
     for ancestor in ancestors {
-        let file = OpenOptions::new().read(true).share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
-            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
-            .open(ancestor).map_err(|_| UNAVAILABLE)?;
-        let metadata = file.metadata().map_err(|_| UNAVAILABLE)?;
-        if !metadata.is_dir() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-            return Err(UNAVAILABLE.into());
-        }
-        pins.push(file);
+        // Do not deny write sharing on the volume root: doing so can disrupt
+        // unrelated system activity. The volume root remains an explicitly
+        // trusted boundary and is still pinned without delete sharing.
+        let ancestor_share = if ancestor.parent().is_none() { FILE_SHARE_READ | FILE_SHARE_WRITE } else { share };
+        pins.push(pin_one_directory(ancestor, ancestor_share)?);
     }
     Ok(pins)
+}
+pub(super) fn pin_directories(path: &Path) -> Result<Vec<File>, String> {
+    pin_directories_with_share(path, FILE_SHARE_READ | FILE_SHARE_WRITE)
 }
 
 // Both directory trees stay pinned by the returned handles. This detects a
@@ -61,10 +71,10 @@ fn live_base(scope: StoreScope) -> Result<PathBuf, String> {
     }.map_err(|_| UNAVAILABLE)?;
     Ok(PathBuf::from(value))
 }
-fn pin_matching_paths(trusted: &Path, live: &Path) -> Result<Vec<File>, String> {
+fn pin_matching_paths_with_share(trusted: &Path, live: &Path, share: u32) -> Result<Vec<File>, String> {
     use windows_sys::Win32::Storage::FileSystem::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION};
-    let mut trusted_pins = pin_directories(trusted)?;
-    let live_pins = pin_directories(live)?;
+    let mut trusted_pins = pin_directories_with_share(trusted, share)?;
+    let live_pins = pin_directories_with_share(live, share)?;
     let mut first = BY_HANDLE_FILE_INFORMATION::default();
     let mut second = BY_HANDLE_FILE_INFORMATION::default();
     let a = trusted_pins.last().ok_or(UNAVAILABLE)?;
@@ -79,6 +89,33 @@ fn pin_matching_paths(trusted: &Path, live: &Path) -> Result<Vec<File>, String> 
     }
     trusted_pins.extend(live_pins);
     Ok(trusted_pins)
+}
+fn pin_matching_paths(trusted: &Path, live: &Path) -> Result<Vec<File>, String> {
+    pin_matching_paths_with_share(trusted, live, FILE_SHARE_READ | FILE_SHARE_WRITE)
+}
+
+/// Short-lived, installer-only pin. It denies new write/delete opens on the
+/// known/live ancestors and an already existing root. This does not block
+/// child creation, old writers using other paths, or uncooperative code.
+/// A conflicting open fails visibly; never hold these handles in app runtime.
+fn machine_maintenance_parent(root: &Path) -> Result<&Path, String> {
+    let parent = root.parent().ok_or(UNAVAILABLE)?;
+    if parent.parent().is_none() { return Err("WinCommander settings cannot be migrated from a volume root; existing data was preserved.".into()); }
+    Ok(parent)
+}
+pub(super) fn pin_machine_maintenance() -> Result<Vec<File>, String> {
+    let root = known_root(StoreScope::Machine)?;
+    let live = live_base(StoreScope::Machine)?;
+    let parent = machine_maintenance_parent(&root)?;
+    let mut pins = pin_matching_paths_with_share(parent, &live, FILE_SHARE_READ)
+        .map_err(|_| "WinCommander settings are busy or unavailable; close other applications and retry setup.")?;
+    match fs::symlink_metadata(&root) {
+        Ok(_) => pins.extend(pin_matching_paths_with_share(&root, &live.join(crate::paths::APP_DIR_NAME), FILE_SHARE_READ)
+            .map_err(|_| "WinCommander settings are busy or unavailable; close other applications and retry setup.")?),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+        Err(_) => return Err(UNAVAILABLE.into()),
+    }
+    Ok(pins)
 }
 /// Pin matching product roots once they exist.
 pub(super) fn pin_matching_roots(trusted: &Path, scope: StoreScope) -> Result<Vec<File>, String> {

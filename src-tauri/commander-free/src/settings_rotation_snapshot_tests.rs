@@ -16,6 +16,44 @@ fn fixture(root: &Path) -> [u8; 32] {
 }
 
 #[test]
+fn maintenance_pin_allows_child_reads_and_rejects_directory_write_handles() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("settings.dat"), b"preserved").unwrap();
+    let open_writer = || OpenOptions::new().access_mode(0x116).share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT).open(dir.path());
+    let writer = open_writer().unwrap();
+    assert!(pin_one_directory(dir.path(), FILE_SHARE_READ).is_err());
+    drop(writer);
+    let pin = pin_one_directory(dir.path(), FILE_SHARE_READ).unwrap();
+    assert_eq!(fs::read(dir.path().join("settings.dat")).unwrap(), b"preserved");
+    assert!(open_writer().is_err());
+    drop(pin);
+    assert!(open_writer().is_ok());
+}
+
+#[test]
+fn newly_created_root_can_be_repinned_before_provisioning() {
+    let parent = tempfile::tempdir().unwrap();
+    let parent_pin = pin_one_directory(parent.path(), FILE_SHARE_READ).unwrap();
+    let root = parent.path().join("new-product-root");
+    fs::create_dir(&root).unwrap();
+    let root_pin = pin_one_directory(&root, FILE_SHARE_READ).unwrap();
+    let open_writer = || OpenOptions::new().access_mode(0x116).share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT).open(&root);
+    assert!(open_writer().is_err());
+    fs::write(root.join("settings.dat"), b"fixture").unwrap();
+    assert_eq!(fs::read(root.join("settings.dat")).unwrap(), b"fixture");
+    drop(root_pin); drop(parent_pin);
+    assert!(open_writer().is_ok());
+}
+
+#[test]
+fn maintenance_rejects_product_root_directly_under_volume_root() {
+    assert!(machine_maintenance_parent(Path::new(r"D:\WinCommander")).is_err());
+    assert_eq!(machine_maintenance_parent(Path::new(r"D:\ProgramData\WinCommander")).unwrap(), Path::new(r"D:\ProgramData"));
+}
+
+#[test]
 fn enumerates_all_sections_and_holds_the_key_and_files() {
     let dir = tempfile::tempdir().unwrap();
     fixture(dir.path());
