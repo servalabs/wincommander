@@ -43,6 +43,42 @@ fn recovery_reports_busy_separately_from_unavailable_ownership() {
 
 #[test]
 #[cfg_attr(windows, ignore = "requires elevated machine-lock ACL provisioning; run explicitly in Windows acceptance")]
+fn staging_retry_recovers_only_authenticated_interrupted_updates() {
+    let root = tempfile::tempdir().unwrap(); provision_test_lock(root.path());
+    let anchor = fixture_anchor(root.path(), StoreScope::Machine);
+    let owner = LockedSelectedGeneration::acquire(root.path()).unwrap();
+    assert!(!reconcile_stage_owner(&owner).unwrap());
+    select_fresh_generation(&owner._ownership, root.path(), StoreScope::Machine, &|| Ok(())).unwrap();
+    let old = owner.read_reconciled().unwrap();
+    let next = updated_generation(&old, "settings", json!({"fixture": "updated"})).unwrap();
+    let pending = AnchorState::Updating { prior: cutover::digest(&old), next: cutover::digest(&next) };
+
+    anchor.write(&pending).unwrap();
+    assert!(reconcile_stage_owner(&owner).unwrap());
+    assert_eq!(anchor.read().unwrap(), Some(AnchorState::Active { digest: cutover::digest(&old) }));
+    assert_eq!(owner.read_reconciled().unwrap(), old);
+
+    anchor.write(&pending).unwrap();
+    std::fs::write(&owner.path, &next).unwrap();
+    assert!(reconcile_stage_owner(&owner).unwrap());
+    assert_eq!(anchor.read().unwrap(), Some(AnchorState::Active { digest: cutover::digest(&next) }));
+    assert_eq!(owner.read_reconciled().unwrap(), next);
+
+    anchor.write(&pending).unwrap();
+    std::fs::write(&owner.path, b"unrelated or corrupt").unwrap();
+    assert!(reconcile_stage_owner(&owner).is_err());
+    assert_eq!(anchor.read().unwrap(), Some(pending));
+    assert_eq!(std::fs::read(&owner.path).unwrap(), b"unrelated or corrupt");
+    let matching_corrupt = AnchorState::Updating {
+        prior: cutover::digest(&next), next: cutover::digest(b"unrelated or corrupt"),
+    };
+    anchor.write(&matching_corrupt).unwrap();
+    assert!(reconcile_stage_owner(&owner).is_err());
+    assert_eq!(anchor.read().unwrap(), Some(matching_corrupt));
+}
+
+#[test]
+#[cfg_attr(windows, ignore = "requires elevated machine-lock ACL provisioning; run explicitly in Windows acceptance")]
 fn fresh_install_selects_encrypted_empty_generation_and_resumes_pending() {
     let root = tempfile::tempdir().unwrap();
     provision_test_lock(root.path());

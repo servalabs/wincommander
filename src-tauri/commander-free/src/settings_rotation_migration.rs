@@ -112,6 +112,21 @@ pub(super) fn migrate_explicitly() -> Result<(), String> {
         })
 }
 
+// An interrupted post-selection write is safe to resolve under the same
+// exclusive lock and authenticated journal used by the installer itself.
+// Initial selection still requires a freshly verified legacy snapshot.
+fn reconcile_stage_owner(owner: &LockedSelectedGeneration) -> Result<bool, String> {
+    let root = owner.path.parent().ok_or("settings root unavailable")?;
+    let anchor = ProtectedFileAnchor::new(root, owner.scope);
+    match anchor.read()? {
+        Some(AnchorState::Active { .. } | AnchorState::Updating { .. }) => {
+            owner.read_reconciled()?;
+            Ok(true)
+        },
+        Some(AnchorState::Legacy | AnchorState::Preparing { .. }) | None => Ok(false),
+    }
+}
+
 /// Pre-replacement staging only. It never provisions a cutover anchor or
 /// selects a generation, so the original installation remains authoritative.
 /// User staging additionally requires an expected SID checked by the caller.
@@ -136,7 +151,8 @@ pub(super) fn stage_existing_explicitly(expected_scope: StoreScope) -> Result<()
     } else { None };
     let key_name = match scope { StoreScope::Machine => ".install.material", StoreScope::CurrentUser => ".user-store.material" };
     let key = read_generation_file(&root.join(key_name), 65_536)?;
-    if key.is_none() {
+    let existing_anchor = read_generation_file(&root.join(".settings-cutover-anchor.v1"), 65_536)?;
+    if key.is_none() && existing_anchor.is_none() {
         let store = root.join("store");
         match std::fs::read_dir(&store) {
             Ok(mut entries) => {
@@ -153,11 +169,7 @@ pub(super) fn stage_existing_explicitly(expected_scope: StoreScope) -> Result<()
     }.map_err(|_| "Cannot provision settings lock; existing data preserved.")?;
     let owner = LockedSelectedGeneration::acquire_for(&root, scope)?;
     let anchor = ProtectedFileAnchor::new(&root, scope);
-    match anchor.read()? {
-        Some(AnchorState::Active { .. }) => { owner.read_reconciled()?; return Ok(()); },
-        Some(AnchorState::Updating { .. }) => return Err("Settings update requires recovery; existing data preserved.".into()),
-        Some(AnchorState::Legacy | AnchorState::Preparing { .. }) | None => {},
-    }
+    if reconcile_stage_owner(&owner)? { return Ok(()); }
     let mut snapshot = match scope {
         StoreScope::Machine => source_snapshot::Snapshot::capture_machine()?,
         StoreScope::CurrentUser => source_snapshot::Snapshot::capture_user_from_verified_helper()?,
