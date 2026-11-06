@@ -223,7 +223,7 @@ jobs:
         run: |
           $output = cargo test --locked -p commander-free --lib --features experimental-encrypted-search,experimental-settings-generation search_quiescence_ -- --test-threads=1 2>&1 | Out-String
           Write-Host $output
-          if ($LASTEXITCODE -ne 0 -or $output -notmatch 'test result: ok\. 4 passed; 0 failed; 0 ignored') { throw 'Pro quiescence tests did not all pass.' }
+          if ($LASTEXITCODE -ne 0 -or $output -notmatch 'test result: ok\. 5 passed; 0 failed; 0 ignored') { throw 'Pro quiescence tests did not all pass.' }
       - name: Build the paired debug desktop executable
         working-directory: src-tauri
         run: cargo build --locked -p commander-free --bin wincommander-free --features experimental-encrypted-search,experimental-settings-generation
