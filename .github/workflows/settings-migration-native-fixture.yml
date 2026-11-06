@@ -198,7 +198,7 @@ jobs:
           Remove-Item Env:WINCMD_TEST_SELECTED
   paired-app-check:
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
@@ -217,3 +217,31 @@ jobs:
       - name: Test search phase classification in combined app
         working-directory: src-tauri
         run: cargo test --locked -p commander-free --lib --features experimental-encrypted-search,experimental-settings-generation search_migration_cli::tests::fresh_requires_no_legacy_selection_or_recovery_artifacts
+      - name: Build the paired debug desktop executable
+        working-directory: src-tauri
+        run: cargo build --locked -p commander-free --bin wincommander-free --features experimental-encrypted-search,experimental-settings-generation
+      - name: Smoke test the real executable in a disposable user profile
+        shell: pwsh
+        run: |
+          $root = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)) 'WinCommander'
+          if (Test-Path -LiteralPath $root) { throw 'Runner profile is not empty; fixture refuses to use it.' }
+          New-Item -ItemType Directory -Path $root | Out-Null
+          $exe = Join-Path $root 'wincommander-free.exe'
+          Copy-Item -LiteralPath 'src-tauri/target/debug/wincommander-free.exe' -Destination $exe
+          foreach ($phase in @('stage', 'verify-staged')) {
+            $info = [Diagnostics.ProcessStartInfo]::new()
+            $info.FileName = $exe
+            $info.Arguments = "--search-migration-lab $phase"
+            $info.UseShellExecute = $false
+            $info.CreateNoWindow = $true
+            $info.RedirectStandardOutput = $true
+            $info.RedirectStandardError = $true
+            $info.EnvironmentVariables['WINCOMMANDER_EXPERIMENTAL_SEARCH_MIGRATION'] = '1'
+            $process = [Diagnostics.Process]::Start($info)
+            try {
+              $stdout = $process.StandardOutput.ReadToEndAsync()
+              $stderr = $process.StandardError.ReadToEndAsync()
+              if (-not $process.WaitForExit(60000)) { $process.Kill(); $process.WaitForExit(); throw "App CLI timed out: $phase" }
+              if ($process.ExitCode -ne 0 -or $stdout.Result.Trim() -cne 'WINCOMMANDER_SEARCH_MIGRATION_OUTCOME:fresh') { throw "App CLI failed: $phase ($($stderr.Result))" }
+            } finally { $process.Dispose() }
+          }
