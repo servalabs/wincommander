@@ -1,4 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+pub fn lab_guard_required(profile: Option<&str>, opt_level: Option<&str>) -> bool {
+    profile != Some("debug") || opt_level != Some("0")
+}
+
 pub fn lab_build_enabled(value: Option<&str>) -> bool {
     value == Some("1")
 }
@@ -37,7 +41,15 @@ pub fn validate(
 
 #[cfg(test)]
 mod tests {
-    use super::{lab_build_enabled, validate};
+    use super::{lab_build_enabled, lab_guard_required, validate};
+    #[test]
+    fn optimized_dev_and_all_release_profiles_require_guard() {
+        assert!(!lab_guard_required(Some("debug"), Some("0")));
+        assert!(lab_guard_required(Some("debug"), Some("3")));
+        assert!(lab_guard_required(Some("release"), Some("0")));
+        assert!(lab_guard_required(Some("release"), Some("3")));
+        assert!(lab_guard_required(None, None));
+    }
     #[test]
     fn paired_release_requires_explicit_lab_opt_in() {
         assert!(lab_build_enabled(Some("1")));
