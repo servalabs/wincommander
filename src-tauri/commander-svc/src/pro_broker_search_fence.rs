@@ -102,6 +102,17 @@ struct Process(HANDLE);
 impl Process { fn wait(&self) -> u32 { unsafe { WaitForSingleObject(self.0, INFINITE) } } }
 unsafe impl Send for Process {}
 impl Drop for Process { fn drop(&mut self) { unsafe { CloseHandle(self.0); } } }
+/// Retain a lease until service exit if OS process termination cannot be
+/// confirmed; a leaked lease is safer than allowing cleanup under a live child.
+fn preserve_if_unconfirmed<T>(lease: T, confirmed: bool) {
+    if !confirmed { std::mem::forget(lease); }
+}
+fn stop_child_or_preserve(slot: &Arc<Mutex<Option<SearchBrokerFence>>>, process: HANDLE) {
+    unsafe { TerminateProcess(process, 1); }
+    let confirmed = unsafe { WaitForSingleObject(process, 5_000) } == WAIT_OBJECT_0;
+    preserve_if_unconfirmed(Arc::clone(slot), confirmed);
+    unsafe { CloseHandle(process); }
+}
 /// Move the exact held lock to a supervisor waiting on a duplicate child handle.
 /// Failure kills and waits for the child while the original lock is still held.
 pub(super) fn hold_until_process_exit(fence: SearchBrokerFence, process: HANDLE) -> io::Result<()> {
@@ -110,7 +121,7 @@ pub(super) fn hold_until_process_exit(fence: SearchBrokerFence, process: HANDLE)
     let mut duplicate: HANDLE = std::ptr::null_mut();
     let current = unsafe { GetCurrentProcess() };
     if unsafe { DuplicateHandle(current, process, current, &mut duplicate, 0, 0, DUPLICATE_SAME_ACCESS) } == 0 {
-        unsafe { TerminateProcess(process, 1); WaitForSingleObject(process, INFINITE); CloseHandle(process); }
+        stop_child_or_preserve(&slot, process);
         return Err(denied());
     }
     let handle = Process(duplicate);
@@ -124,7 +135,7 @@ pub(super) fn hold_until_process_exit(fence: SearchBrokerFence, process: HANDLE)
         drop(clone);
     });
     if worker.is_err() {
-        unsafe { TerminateProcess(process, 1); WaitForSingleObject(process, INFINITE); CloseHandle(process); }
+        stop_child_or_preserve(&slot, process);
         return Err(denied());
     }
     drop(slot);
@@ -144,6 +155,17 @@ mod tests {
     fn open_probe(root: &Path) -> File {
         OpenOptions::new().read(true).write(true).share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
             .open(root.join(".encrypted-search-maintenance.lock")).unwrap()
+    }
+    #[test]
+    fn unconfirmed_child_exit_retains_lease() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct DropProbe(Arc<AtomicUsize>);
+        impl Drop for DropProbe { fn drop(&mut self) { self.0.fetch_add(1, Ordering::SeqCst); } }
+        let count = Arc::new(AtomicUsize::new(0));
+        preserve_if_unconfirmed(DropProbe(Arc::clone(&count)), false);
+        assert_eq!(count.load(Ordering::SeqCst), 0);
+        preserve_if_unconfirmed(DropProbe(Arc::clone(&count)), true);
+        assert_eq!(count.load(Ordering::SeqCst), 1);
     }
     #[test]
     fn broker_does_not_create_a_missing_user_lock() {
