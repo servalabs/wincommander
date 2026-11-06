@@ -665,19 +665,22 @@ impl SearchEngine {
         use crate::read_only::{AccessMode, CheckedDirectory};
         let _pins = CheckedDirectory::pin_root_path(old)?;
         let mut scope_present = false;
-        let mut lock_present = false;
+        let mut locks = Vec::new();
         for entry in std::fs::read_dir(old)? {
             let name = entry?.file_name();
             if name == std::ffi::OsStr::new("scope-v2.dpapi") && !scope_present { scope_present = true; }
-            else if name == std::ffi::OsStr::new(".tantivy-writer.lock") && !lock_present { lock_present = true; }
+            else if name == std::ffi::OsStr::new(".tantivy-writer.lock") || name == std::ffi::OsStr::new(".tantivy-meta.lock") { locks.push(name); }
             else { return Ok(false); }
         }
         if !scope_present { return Ok(false); }
         let dir = CheckedDirectory::open(old, AccessMode::GuardedReader)?;
-        if lock_present {
-            let lock = dir.atomic_read_bounded(std::path::Path::new(".tantivy-writer.lock"), 1)
-                .map_err(|e| std::io::Error::other(e.to_string()))?;
-            if !lock.is_empty() { return Ok(false); }
+        for lock in locks {
+            use std::os::windows::io::AsRawHandle;
+            use windows_sys::Win32::Storage::FileSystem::{BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle};
+            let file = dir.open_read_pinned(std::path::Path::new(&lock)).map_err(|e| std::io::Error::other(e.to_string()))?;
+            let mut info = BY_HANDLE_FILE_INFORMATION::default();
+            if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0
+                || info.nNumberOfLinks != 1 || file.metadata()?.len() != 0 { return Ok(false); }
         }
         let protected = dir.atomic_read_bounded(std::path::Path::new("scope-v2.dpapi"), crate::encrypted_scope::MAX_PROTECTED_SCOPE)
             .map_err(|e| std::io::Error::other(e.to_string()))?;
@@ -838,6 +841,11 @@ impl SearchEngine {
         }
         store.clear_matching(&transaction)?; Ok(())
     }
+    /// Read-only early check; cleanup repeats this under the exclusive fence.
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    pub fn check_legacy_cleanup_readiness() -> Result<()> {
+        crate::encrypted_search_maintenance::verify_known_writers_stopped().map_err(SearchError::Config)
+    }
     /// Explicit experimental cleanup for a disposable legacy cache after a
     /// full reconciliation with authoritative user roots. This is not secure
     /// erasure and does not remove backups, snapshots or SSD remanence.
@@ -850,6 +858,20 @@ impl SearchEngine {
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     fn cleanup_legacy_cache_inner(&mut self, fence: &crate::encrypted_search_fence::SearchOperationFence,
         authorized_parent: &std::path::Path) -> Result<usize> {
+        self.cleanup_legacy_cache_inner_with_service(fence, authorized_parent, None)
+    }
+    /// The caller must authenticate the service capability and retain its
+    /// verified process and image handles throughout this operation.
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    pub fn cleanup_legacy_cache_with_fenced_service(&mut self, fence: &crate::encrypted_search_fence::SearchOperationFence,
+        service_pid: u32) -> Result<usize> {
+        if service_pid == 0 { return Err(SearchError::Config("Invalid service identity".into())); }
+        let authorized = crate::encrypted_legacy_cleanup::authorized_parent()?;
+        self.cleanup_legacy_cache_inner_with_service(fence, &authorized, Some(service_pid))
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    fn cleanup_legacy_cache_inner_with_service(&mut self, fence: &crate::encrypted_search_fence::SearchOperationFence,
+        authorized_parent: &std::path::Path, service_pid: Option<u32>) -> Result<usize> {
         let old = self.experimental_legacy_path.as_ref()
             .ok_or_else(|| SearchError::Config("legacy search location unavailable".into()))?;
         if old.file_name() != Some(std::ffi::OsStr::new("fts")) {
@@ -882,7 +904,10 @@ impl SearchEngine {
         if origin.id != id || origin.fresh || origin.source != actual {
             return Err(SearchError::Config("legacy search ownership could not be verified".into()));
         }
-        Ok(crate::encrypted_legacy_cleanup::remove_managed(old, fence)?)
+        Ok(match service_pid {
+            Some(pid) => crate::encrypted_legacy_cleanup::remove_managed_with_service(old, fence, pid)?,
+            None => crate::encrypted_legacy_cleanup::remove_managed(old, fence)?,
+        })
     }
     /// Locate the generation-specific quarantine path for inspection after an
     /// interrupted move. Existence alone is not proof of successful migration.

@@ -264,6 +264,101 @@ async fn call_via_with_timeout(
     }
 }
 
+/// Experimental evidence only. The caller must retain the pin through cleanup;
+/// this alone does not establish that a previously running process mapped the
+/// currently pinned image, nor does it fence older processes.
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
+#[allow(dead_code)]
+pub(crate) async fn experimental_search_service_capability(
+) -> Result<wincmd_service_auth::search_service_pin::PinnedSearchService, String> {
+    use tokio::time::timeout;
+    let expected = wincmd_service_auth::search_service_pin::release_digest(option_env!(
+        "WINCMD_FENCED_SERVICE_SHA256"
+    ))
+    .map_err(|_| "paired service digest is missing or invalid".to_string())?;
+    let (mut client, token, peer) = open_authenticated_service_session(
+        wincmd_shared::svc::SVC_PIPE_NAME,
+        "svc.search.fence_capabilities",
+    )
+    .await?;
+    let pin = peer
+        .ok_or_else(|| "service identity was not verified".to_string())?
+        .pin_search_service(&expected)
+        .map_err(|_| "service image could not be pinned".to_string())?;
+    let request_id = next_request_id();
+    let request = wincmd_shared::Envelope::Request(wincmd_shared::Request {
+        request_id,
+        feature_id: "svc.search.fence_capabilities".to_string(),
+        diagnostic_operation_id: None,
+        args: serde_json::json!({}),
+    })
+    .sign(&token);
+    timeout(
+        SVC_TRANSPORT_TIMEOUT,
+        wincmd_shared::write_envelope(&mut client, &request),
+    )
+    .await
+    .map_err(|_| "capability request timed out".to_string())?
+    .map_err(|_| "capability request failed".to_string())?;
+    let reply = timeout(
+        SVC_TRANSPORT_TIMEOUT,
+        wincmd_shared::read_envelope(&mut client),
+    )
+    .await
+    .map_err(|_| "capability reply timed out".to_string())?
+    .map_err(|_| "capability reply failed".to_string())?;
+    if !matches!(reply, wincmd_shared::Envelope::Signed(_)) {
+        return Err("unsigned capability reply".to_string());
+    }
+    let reply = reply
+        .verify_and_unwrap(&token)
+        .map_err(|_| "invalid capability signature".to_string())?;
+    match reply {
+        wincmd_shared::Envelope::Response(response) if response.request_id == request_id => {
+            let value = response.result;
+            if experimental_capability_matches(&value) {
+                Ok(pin)
+            } else {
+                Err("paired service capability is unavailable".to_string())
+            }
+        }
+        _ => Err("invalid capability response".to_string()),
+    }
+}
+
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
+fn experimental_capability_matches(value: &Value) -> bool {
+    // The first paired rollout assumes no earlier release emitted this epoch.
+    // Bump it whenever the broker or Pro fence security contract changes. This
+    // is not proof against a deliberately copied or replaced old executable.
+    value.get("protocol").and_then(Value::as_u64) == Some(1)
+        && value.get("epoch").and_then(Value::as_str)
+            == Some("wincommander-paired-search-fence-2026-11-v1")
+        && value.get("broker_user_fence").and_then(Value::as_bool) == Some(true)
+        && value.get("system_search_disabled").and_then(Value::as_bool) == Some(true)
+        && value.get("app_dir").and_then(Value::as_str) == Some("WinCommander")
+}
+
+#[cfg(all(test, windows, feature = "experimental-encrypted-search"))]
+#[test]
+fn first_rollout_capability_requires_exact_epoch_and_all_fences() {
+    let mut value = serde_json::json!({"protocol":1,"epoch":"wincommander-paired-search-fence-2026-11-v1","broker_user_fence":true,"system_search_disabled":true,"app_dir":"WinCommander"});
+    assert!(experimental_capability_matches(&value));
+    for key in [
+        "epoch",
+        "broker_user_fence",
+        "system_search_disabled",
+        "protocol",
+        "app_dir",
+    ] {
+        let old = value[key].take();
+        assert!(!experimental_capability_matches(&value));
+        value[key] = old;
+    }
+    value["epoch"] = serde_json::json!("old-release");
+    assert!(!experimental_capability_matches(&value));
+}
+
 #[cfg(windows)]
 fn unverified_management_reply(feature_id: &str, fallback: String) -> String {
     // A malformed receipt cannot prove whether a written folder mutation ran.
