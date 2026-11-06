@@ -72,6 +72,7 @@ fn expected_cli_registry() -> BTreeMap<String, bool> {
     let mut registry =
         registered_handlers(include_str!("lib.rs")).expect("handler registry parses");
     for internal in [
+        "content_cleanup_old_cache",
         "mark_tauri_cli_ready",
         "complete_tauri_cli",
         "startup_window_ready",
