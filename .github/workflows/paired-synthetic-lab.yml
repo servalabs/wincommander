@@ -112,7 +112,8 @@ jobs:
           }
           if (-not (Test-Path -LiteralPath $selection)) { throw 'Installed app did not create protected search selection.' }
           if ($appProcess.HasExited) { throw "Installed app exited early: $($appProcess.ExitCode)." }
-          "INITIAL_SELECTION_SHA256=$((Get-FileHash -Algorithm SHA256 -LiteralPath $selection).Hash)" >> $env:GITHUB_ENV
+          $initialSelectionHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $selection).Hash
+          "INITIAL_SELECTION_SHA256=$initialSelectionHash" >> $env:GITHUB_ENV
           Write-Host 'Installed user process created a protected search candidate.'
           # Stop the app before the probe acquires the exclusive maintenance
           # fence. The probe only reads; it cannot crawl or reconcile documents.
@@ -132,7 +133,7 @@ jobs:
             if ($attempt -lt 6) { $appProcess = Start-Process -FilePath $app -WindowStyle Hidden -PassThru }
           }
           if ($result -ne 0) { throw 'Installed app did not commit the synthetic document to protected search.' }
-          if ((Get-FileHash -Algorithm SHA256 -LiteralPath $selection).Hash -ine $env:INITIAL_SELECTION_SHA256) { throw 'Protected selection changed while checking indexing.' }
+          if ((Get-FileHash -Algorithm SHA256 -LiteralPath $selection).Hash -ine $initialSelectionHash) { throw 'Protected selection changed while checking indexing.' }
           $global:LASTEXITCODE = 0
           Write-Host 'Exclusive read-only query found the document committed by the installed app.'
       - name: Verify failed upgrade keeps service running
