@@ -254,6 +254,13 @@ jobs:
       - name: Test search phase classification in combined app
         working-directory: src-tauri
         run: cargo test --locked -p commander-free --lib --features experimental-encrypted-search,experimental-settings-generation search_migration_cli::tests::fresh_requires_no_legacy_selection_or_recovery_artifacts
+      - name: Test paired Pro digest capability validation
+        working-directory: src-tauri
+        shell: pwsh
+        run: |
+          $output = cargo test --locked -p commander-free --lib --features experimental-encrypted-search,experimental-settings-generation first_rollout_capability_requires_exact_epoch_and_all_fences -- --test-threads=1 2>&1 | Out-String
+          Write-Host $output
+          if ($LASTEXITCODE -ne 0 -or $output -notmatch 'test result: ok\. 1 passed; 0 failed; 0 ignored') { throw 'Paired capability test did not pass.' }
       - name: Test Pro worker quiescence control paths
         working-directory: src-tauri
         shell: pwsh

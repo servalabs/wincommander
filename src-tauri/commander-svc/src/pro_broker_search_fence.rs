@@ -16,6 +16,7 @@ fn expected_pair<'a>(hash: Option<&'a str>, app: Option<&str>, protocol: Option<
     let hash = hash.ok_or_else(denied)?;
     let expected_app = option_env!("WINCMD_APP_DIR").unwrap_or("WinCommander");
     if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || !hash.bytes().any(|byte| byte != b'0')
         || app != Some(expected_app) || protocol != Some(FENCE_PROTOCOL) { return Err(denied()); }
     Ok(hash)
 }
@@ -24,12 +25,14 @@ pub(super) fn capability() -> serde_json::Value {
         option_env!("WINCMD_FENCED_PRO_APP_DIR"), option_env!("WINCMD_FENCED_PRO_PROTOCOL"))
 }
 fn capability_for(hash: Option<&str>, app: Option<&str>, protocol: Option<&str>) -> serde_json::Value {
-    let paired = expected_pair(hash, app, protocol).is_ok();
+    let validated_hash = expected_pair(hash, app, protocol).ok();
+    let paired = validated_hash.is_some();
     serde_json::json!({
         "protocol": 1,
         "epoch": "wincommander-paired-search-fence-2026-11-v1",
         "broker_user_fence": paired,
         "system_search_disabled": paired,
+        "pro_sha256": validated_hash,
         "app_dir": option_env!("WINCMD_APP_DIR").unwrap_or("WinCommander"),
     })
 }
@@ -235,11 +238,13 @@ mod tests {
         let valid = capability_for(Some(&hash), Some(app), Some(FENCE_PROTOCOL));
         assert_eq!(valid["broker_user_fence"], true);
         assert_eq!(valid["system_search_disabled"], true);
+        assert_eq!(valid["pro_sha256"], hash);
         for invalid in [capability_for(None, Some(app), Some(FENCE_PROTOCOL)),
             capability_for(Some(&hash), Some("other"), Some(FENCE_PROTOCOL)),
             capability_for(Some(&hash), Some(app), Some("other"))] {
             assert_eq!(invalid["broker_user_fence"], false);
             assert_eq!(invalid["system_search_disabled"], false);
+            assert!(invalid["pro_sha256"].is_null());
         }
     }
     #[test]
@@ -251,6 +256,7 @@ mod tests {
         assert!(expected_pair(Some(&hash), Some("other"), Some(FENCE_PROTOCOL)).is_err());
         assert!(expected_pair(Some(&hash), Some(app), Some("old-protocol")).is_err());
         assert!(expected_pair(Some("not-a-hash"), Some(app), Some(FENCE_PROTOCOL)).is_err());
+        assert!(expected_pair(Some(&"0".repeat(64)), Some(app), Some(FENCE_PROTOCOL)).is_err());
     }
     #[test]
     fn binary_pin_rejects_wrong_hash_and_denies_replacement() {
@@ -259,7 +265,10 @@ mod tests {
         std::fs::write(&path, b"reviewed binary").unwrap();
         let hash = super::super::bytes_to_hex(&Sha256::digest(b"reviewed binary"));
         assert!(pin_and_verify(&path, &"0".repeat(64)).is_err());
-        let held = pin_and_verify(&path, &hash).unwrap();
+        let app = option_env!("WINCMD_APP_DIR").unwrap_or("WinCommander");
+        let advertised = capability_for(Some(&hash), Some(app), Some(FENCE_PROTOCOL));
+        let advertised_hash = advertised["pro_sha256"].as_str().unwrap();
+        let held = pin_and_verify(&path, advertised_hash).unwrap();
         assert!(std::fs::write(&path, b"replacement").is_err());
         assert!(std::fs::remove_file(&path).is_err());
         let moved_root = root.with_extension("moved");
