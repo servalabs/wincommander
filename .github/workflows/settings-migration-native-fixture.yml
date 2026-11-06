@@ -245,3 +245,28 @@ jobs:
               if ($process.ExitCode -ne 0 -or $stdout.Result.Trim() -cne 'WINCOMMANDER_SEARCH_MIGRATION_OUTCOME:fresh') { throw "App CLI failed: $phase ($($stderr.Result))" }
             } finally { $process.Dispose() }
           }
+      - name: Stage a disposable legacy index with the real executable
+        shell: pwsh
+        run: |
+          $root = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)) 'WinCommander'
+          $old = Join-Path $root 'file-search/fts'
+          Push-Location src-tauri
+          try { cargo run --locked -p wincmd-search --example seed_legacy_fixture -- $old; if ($LASTEXITCODE -ne 0) { throw 'Legacy cache fixture could not be created.' } } finally { Pop-Location }
+          $manifest = Join-Path $old 'meta.json'
+          $before = (Get-FileHash -Algorithm SHA256 -LiteralPath $manifest).Hash
+          $exe = Join-Path $root 'wincommander-free.exe'
+          foreach ($phase in @('stage', 'verify-staged')) {
+            $info = [Diagnostics.ProcessStartInfo]::new()
+            $info.FileName = $exe; $info.Arguments = "--search-migration-lab $phase"
+            $info.UseShellExecute = $false; $info.CreateNoWindow = $true
+            $info.RedirectStandardOutput = $true; $info.RedirectStandardError = $true
+            $info.EnvironmentVariables['WINCOMMANDER_EXPERIMENTAL_SEARCH_MIGRATION'] = '1'
+            $process = [Diagnostics.Process]::Start($info)
+            try {
+              $stdout = $process.StandardOutput.ReadToEndAsync(); $stderr = $process.StandardError.ReadToEndAsync()
+              if (-not $process.WaitForExit(120000)) { $process.Kill(); $process.WaitForExit(); throw "App CLI timed out: $phase" }
+              $expected = if ($phase -eq 'stage') { 'WINCOMMANDER_SEARCH_MIGRATION_OUTCOME:staged reconciliation=pending old-cache=retained' } else { 'WINCOMMANDER_SEARCH_MIGRATION_OUTCOME:staged old-cache=retained' }
+              if ($process.ExitCode -ne 0 -or $stdout.Result.Trim() -cne $expected) { throw "App CLI failed: $phase ($($stderr.Result))" }
+            } finally { $process.Dispose() }
+          }
+          if ((Get-FileHash -Algorithm SHA256 -LiteralPath $manifest).Hash -ne $before) { throw 'Legacy search manifest changed during staging.' }
