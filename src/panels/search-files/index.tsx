@@ -63,7 +63,7 @@ export default function SearchFilesPanel() {
       await invoke("content_recover_interrupted_cache");
       setRecoveryNotice("Interrupted search data was kept. Search will retry the protected rebuild.");
     } catch {
-      setRecoveryNotice("Search recovery could not finish. Close other WinCommander windows and try again. Your existing search data was kept.");
+      setRecoveryNotice("Search recovery could not finish. Existing search data was kept. Close other WinCommander windows and retry; further recovery may be needed.");
     } finally {
       setRecoveringIndex(false);
     }
@@ -405,7 +405,7 @@ export default function SearchFilesPanel() {
         onToggle={() => setShowIndexSettings((value) => !value)}
         indexStatus={content.indexStatus}
         indexDisplayError={indexDisplayError}
-        searchProtectionPending={content.searchProtectionPending}
+        interruptedSearchCandidate={content.interruptedSearchCandidate}
         recoveringIndex={recoveringIndex}
         recoveryNotice={recoveryNotice}
         onRecoverIndex={recoverIndex}

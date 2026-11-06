@@ -531,9 +531,11 @@ impl SearchEngine {
         for entry in std::fs::read_dir(parent)? {
             let name = entry?.file_name();
             let name = name.to_string_lossy();
-            if (fresh && name.starts_with(".wincommander-legacy-index-backup-"))
-                || name.strip_prefix(".wincommander-encrypted-").is_some_and(|id| id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit())) {
+            if fresh && name.starts_with(".wincommander-legacy-index-backup-") {
                 return Err(SearchError::Config("Prior encrypted search data needs recovery; existing files were retained.".into()));
+            }
+            if name.strip_prefix(".wincommander-encrypted-").is_some_and(|id| id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit())) {
+                return Err(SearchError::Config("SEARCH_INTERRUPTED_CANDIDATE".into()));
             }
         }
         let mut identity = [0u8; 16];
@@ -1883,7 +1885,7 @@ mod tests {
             let result = SearchEngine::open_or_rebuild_experimental_with_policy(
                 make_config(old.clone(), vec![]), Arc::new(|_| true),
             );
-            assert!(matches!(result, Err(SearchError::Config(message)) if message.contains("needs recovery")));
+            assert!(matches!(result, Err(SearchError::Config(message)) if message == "SEARCH_INTERRUPTED_CANDIDATE"));
             assert_eq!(fs::read(old.join("meta.json")).unwrap(), b"legacy index");
             assert_eq!(fs::read(orphan.join("retained")).unwrap(), b"candidate data");
             assert_eq!(fs::read_dir(root.path()).unwrap().filter_map(|entry| {

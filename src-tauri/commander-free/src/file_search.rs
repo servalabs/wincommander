@@ -248,7 +248,7 @@ pub async fn content_index_status() -> Result<IndexStatus, String> {
     .await
     .unwrap_or_else(|_| Err("Index status worker failed.".to_string()));
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
-    return result.map_err(|_| "SEARCH_PROTECTION_PENDING".to_string());
+    return result.map_err(|error| if error == "SEARCH_INTERRUPTED_CANDIDATE" { error } else { "SEARCH_PROTECTION_PENDING".to_string() });
     #[cfg(not(all(windows, feature = "experimental-encrypted-search")))]
     result
 }

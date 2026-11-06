@@ -6,6 +6,9 @@ import type { Chunk, ContentHit, ContentQueryArgs } from "../types/wincmd-search
 import { pathWithinRoots } from "./searchPrivacy";
 
 export function indexStatusErrorMessage(error: unknown): string {
+  if (String(error) === "SEARCH_INTERRUPTED_CANDIDATE") {
+    return "An interrupted search rebuild needs recovery. Your previous search data was kept.";
+  }
   if (String(error) === "SEARCH_PROTECTION_PENDING") {
     return "Search data protection could not finish. Older search data may still be on this PC; retry after restarting WinCommander.";
   }
