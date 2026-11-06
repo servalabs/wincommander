@@ -65,7 +65,9 @@ pub(super) fn with_engine<T>(
         // This feature remains disabled until native/recovery/Pro validation.
         SearchEngine::open_or_rebuild_experimental_with_policy(config.clone(), policy)
             .map_err(|e| {
-                if legacy_data_may_remain(&config.index_dir) {
+                let backups_may_remain = config.index_dir.parent().map(retained_backup_count)
+                    .map(|result| result.map(|count| count > 0).unwrap_or(true)).unwrap_or(true);
+                if legacy_data_may_remain(&config.index_dir) || backups_may_remain {
                     format!("{e} Old search data may still be present in WinCommander storage.")
                 } else { e.to_string() }
             })?
