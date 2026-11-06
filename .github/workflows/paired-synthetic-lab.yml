@@ -129,6 +129,26 @@ jobs:
           } finally {
             if (-not $fake.HasExited) { $fake.Kill(); $fake.WaitForExit() }
           }
+          # The service can also launch this disposable cmd.exe as a core-pipe
+          # child. It cannot speak Pro's protocol; stop only this fixture image.
+          $pin = [IO.File]::Open($fakePro, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+          try {
+            $sha = [Security.Cryptography.SHA256]::Create()
+            try { $digest = [Convert]::ToHexString($sha.ComputeHash($pin)) } finally { $sha.Dispose() }
+            if ($digest -ine $env:WINCMD_FENCED_PRO_SHA256) { throw 'Synthetic Pro image changed before fixture cleanup.' }
+            $owned = @(Get-CimInstance -ClassName Win32_Process -Filter "Name='wincommander-pro.exe'" | Where-Object {
+              $_.ExecutablePath -and [string]::Equals([IO.Path]::GetFullPath($_.ExecutablePath), [IO.Path]::GetFullPath($fakePro), [StringComparison]::OrdinalIgnoreCase)
+            })
+            foreach ($entry in $owned) {
+              $process = [Diagnostics.Process]::GetProcessById([int]$entry.ProcessId)
+              try {
+                if (-not [string]::Equals([IO.Path]::GetFullPath($process.MainModule.FileName), [IO.Path]::GetFullPath($fakePro), [StringComparison]::OrdinalIgnoreCase)) { throw 'Synthetic process identity changed.' }
+                if ([Math]::Abs(($process.StartTime.ToUniversalTime() - $entry.CreationDate.ToUniversalTime()).TotalMilliseconds) -gt 1000) { throw 'Synthetic process ID was reused.' }
+                $process.Kill()
+                if (-not $process.WaitForExit(15000)) { throw 'Synthetic Pro process did not exit.' }
+              } finally { $process.Dispose() }
+            }
+          } finally { $pin.Dispose() }
       - name: Retry upgrade and verify service
         shell: pwsh
         run: |
