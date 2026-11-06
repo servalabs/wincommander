@@ -13,6 +13,9 @@
 !ifndef WC_PAIRED_SEARCH_RELEASE
 !error "Settings migration lab requires paired search maintenance"
 !endif
+!ifdef WC_EXPERIMENTAL_USER_STAGE_ONLY
+!error "Machine settings migration lab cannot use the original-user staging installer"
+!endif
 !define WC_SETTINGS_LAB_MAINTENANCE "${__FILEDIR__}\install-settings-generation.ps1"
 !endif
 !include "TextFunc.nsh"
@@ -572,6 +575,18 @@ FunctionEnd
     !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "service-start" "$0" "$1"
     Abort "WinCommander could not start its machine service."
   ${EndIf}
+  !ifdef WC_PAIRED_SETTINGS_LAB
+    ; A successful start request does not mean the service actually reached
+    ; RUNNING. Do not claim the settings upgrade completed until it does.
+    !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
+    nsExec::ExecToStack /TIMEOUT=150000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-paired-service.ps1" -Action Restore'
+    Pop $0
+    Pop $1
+    !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "settings-lab-service-running" "$0" "$1"
+    ${If} $0 != 0
+      Abort "WinCommander service did not start. Existing settings were preserved; retry setup."
+    ${EndIf}
+  !endif
 
   !insertmacro WC_CONFIGURE_ELEVATED_LAUNCHERS
 
