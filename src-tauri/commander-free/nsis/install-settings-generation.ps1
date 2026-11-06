@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$ExecutablePath,
-    [ValidateSet("stage", "install")][string]$Action = "stage"
+    [ValidateSet("stage", "install", "new-identity")][string]$Action = "stage"
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -11,7 +11,12 @@ try {
     # Child-only opt-in. The binary fails closed if it was built without the
     # experimental feature, if maintenance checks fail, or if data is ambiguous.
     $env:WINCOMMANDER_EXPERIMENTAL_SETTINGS_GENERATION = '1'
-    & $resolved --settings-generation-lab $Action --offline-confirmed
+    if ($Action -eq 'new-identity') {
+        & $resolved --settings-generation-lab new-machine-identity --offline-confirmed --confirm-new-identity
+    } else {
+        & $resolved --settings-generation-lab $Action --offline-confirmed
+    }
+    if ($LASTEXITCODE -eq 2) { exit 2 }
     if ($LASTEXITCODE -ne 0) { throw "Settings maintenance returned exit code $LASTEXITCODE." }
 }
 catch {

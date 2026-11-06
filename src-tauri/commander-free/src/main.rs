@@ -63,7 +63,10 @@ fn main() {
                 .expect("matched settings generation lab command");
             match outcome {
                 Ok(message) => { println!("{message}"); std::process::exit(0); }
-                Err(message) => { eprintln!("{message}"); std::process::exit(1); }
+                Err(message) => {
+                    let code = if message.starts_with("SETTINGS_IDENTITY_UNVERIFIED:") { 2 } else { 1 };
+                    eprintln!("{message}"); std::process::exit(code);
+                }
             }
         }
         #[cfg(not(feature = "experimental-settings-generation"))]

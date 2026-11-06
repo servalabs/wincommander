@@ -17,6 +17,7 @@
 !error "Machine settings migration lab cannot use the original-user staging installer"
 !endif
 !define WC_SETTINGS_LAB_MAINTENANCE "${__FILEDIR__}\install-settings-generation.ps1"
+Var WCSettingsIdentityConsent
 !endif
 !include "TextFunc.nsh"
 !include "StrFunc.nsh"
@@ -358,6 +359,7 @@ FunctionEnd
       ${EndIf}
       !ifdef WC_PAIRED_SETTINGS_LAB
         ; Stage only: original settings and F6 identity remain authoritative.
+        StrCpy $WCSettingsIdentityConsent 0
         File /oname=$PLUGINSDIR\wincommander-settings-lab.exe "${MAINBINARYSRCPATH}"
         File /oname=$PLUGINSDIR\wincommander-settings-lab.ps1 "${WC_SETTINGS_LAB_MAINTENANCE}"
         !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
@@ -365,7 +367,12 @@ FunctionEnd
         Pop $0
         Pop $1
         !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "settings-lab-stage" "$0" "$1"
-        ${If} $0 != 0
+        ${If} $0 == 2
+          MessageBox MB_YESNO|MB_ICONEXCLAMATION|MB_DEFBUTTON2 "WinCommander could not verify whether an older device signing identity exists. A new identity cannot restore the old one; previously provisioned wipe or recovery devices may stop working. Existing files will be kept, but automatic restoration is not available.$\r$\n$\r$\nCreate a new identity and continue setup? Choose No if the previous identity is needed." /SD IDNO IDYES wc_settings_confirm_new_identity
+          !insertmacro WC_PAIRED_ABORT "The identity was not changed and existing files were preserved. Contact support if the previous identity is needed."
+          wc_settings_confirm_new_identity:
+          StrCpy $WCSettingsIdentityConsent 1
+        ${ElseIf} $0 != 0
           !insertmacro WC_PAIRED_ABORT "Settings could not be prepared. Existing settings were preserved."
         ${EndIf}
       !endif
@@ -563,6 +570,24 @@ FunctionEnd
     Pop $0
     Pop $1
     !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "settings-lab-select" "$0" "$1"
+    ${If} $0 == 2
+      ${If} $WCSettingsIdentityConsent != 1
+        Abort "The device identity requires confirmation. Setup is incomplete and WinCommander may not start. Existing files were preserved; retry setup to review the choice."
+      ${EndIf}
+      !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
+      nsExec::ExecToStack /TIMEOUT=600000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-settings-lab.ps1" -ExecutablePath "$INSTDIR\wincommander-free.exe" -Action new-identity'
+      Pop $0
+      Pop $1
+      !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "settings-lab-new-identity" "$0" "$1"
+      ${If} $0 != 0
+        Abort "Setup is incomplete and WinCommander may not start. A new identity may have been created; close WinCommander and Pro in all Windows sessions and retry setup to check. Existing files were preserved."
+      ${EndIf}
+      !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
+      nsExec::ExecToStack /TIMEOUT=600000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-settings-lab.ps1" -ExecutablePath "$INSTDIR\wincommander-free.exe" -Action install'
+      Pop $0
+      Pop $1
+      !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "settings-lab-select-retry" "$0" "$1"
+    ${EndIf}
     ${If} $0 != 0
       Abort "Protected settings could not be selected. Existing settings were preserved; retry setup before starting WinCommander."
     ${EndIf}

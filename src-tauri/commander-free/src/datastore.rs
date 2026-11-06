@@ -109,6 +109,10 @@ pub(crate) fn settings_generation_lab_install() -> Result<(), String> {
     settings_rotation_trial::install_migration_explicitly()
 }
 #[cfg(all(windows, feature = "experimental-settings-generation"))]
+pub(crate) fn settings_generation_lab_create_new_identity() -> Result<(), String> {
+    settings_rotation_trial::create_new_machine_identity_explicitly()
+}
+#[cfg(all(windows, feature = "experimental-settings-generation"))]
 pub(crate) fn settings_generation_lab_stage() -> Result<(), String> {
     settings_rotation_trial::stage_existing_explicitly(settings_rotation_trial::StoreScope::Machine)
 }

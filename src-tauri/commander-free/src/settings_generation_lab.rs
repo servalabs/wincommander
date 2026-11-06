@@ -3,7 +3,7 @@
 //! The offline acknowledgement does not fence old executables; independently
 //! enforced maintenance mode remains required before deployment.
 #[derive(Debug, PartialEq, Eq)]
-enum Action { Status, Fresh, Migrate, Install, Stage, StageUser(String) }
+enum Action { Status, Fresh, Migrate, Install, Stage, NewIdentity, StageUser(String) }
 fn parse(args: &[String], enabled: bool) -> Option<Result<Action, &'static str>> {
     if args.first().map(String::as_str) != Some("--settings-generation-lab") { return None; }
     if !enabled { return Some(Err("Settings migration lab is disabled; no data changed.")); }
@@ -13,6 +13,7 @@ fn parse(args: &[String], enabled: bool) -> Option<Result<Action, &'static str>>
         ["--settings-generation-lab", "migrate", "--offline-confirmed"] => Ok(Action::Migrate),
         ["--settings-generation-lab", "install", "--offline-confirmed"] => Ok(Action::Install),
         ["--settings-generation-lab", "stage", "--offline-confirmed"] => Ok(Action::Stage),
+        ["--settings-generation-lab", "new-machine-identity", "--offline-confirmed", "--confirm-new-identity"] => Ok(Action::NewIdentity),
         ["--settings-generation-lab", "stage-user", "--offline-confirmed", "--expected-user-sid", sid] if !sid.is_empty() => Ok(Action::StageUser((*sid).to_owned())),
         _ => Err("Use status, or fresh/migrate/install/stage with --offline-confirmed. Existing data was preserved."),
     })
@@ -30,6 +31,7 @@ pub fn run(args: &[String]) -> Option<Result<&'static str, String>> {
         Action::Migrate => crate::datastore::settings_generation_lab_migrate().map(|_| "Protected settings generation prepared; original files retained."),
         Action::Install => crate::datastore::settings_generation_lab_install().map(|_| "Protected settings setup complete; original files retained."),
         Action::Stage => crate::datastore::settings_generation_lab_stage().map(|_| "Settings preflight complete; original store remains active."),
+        Action::NewIdentity => crate::datastore::settings_generation_lab_create_new_identity().map(|_| "A new machine identity was created; previous identities were not recovered."),
         Action::StageUser(sid) => crate::datastore::settings_generation_lab_stage_user(&sid).map(|_| "User settings preflight complete; original store remains active."),
     })
 }
@@ -67,6 +69,9 @@ mod tests {
         assert!(parse(&args(&["--settings-generation-lab", "install"]), true).unwrap().is_err());
         assert_eq!(parse(&args(&["--settings-generation-lab", "install", "--offline-confirmed"]), true).unwrap(), Ok(Action::Install));
         assert!(parse(&args(&["--settings-generation-lab", "stage"]), true).unwrap().is_err());
+        assert!(parse(&args(&["--settings-generation-lab", "new-machine-identity", "--offline-confirmed"]), true).unwrap().is_err());
+        assert!(parse(&args(&["--settings-generation-lab", "new-machine-identity", "--confirm-new-identity"]), true).unwrap().is_err());
+        assert_eq!(parse(&args(&["--settings-generation-lab", "new-machine-identity", "--offline-confirmed", "--confirm-new-identity"]), true).unwrap(), Ok(Action::NewIdentity));
         assert_eq!(parse(&args(&["--settings-generation-lab", "stage", "--offline-confirmed"]), true).unwrap(), Ok(Action::Stage));
     }
 }

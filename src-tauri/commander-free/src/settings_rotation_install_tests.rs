@@ -93,7 +93,8 @@ fn fresh_install_selects_encrypted_empty_generation_and_resumes_pending() {
     let view = inspect_generation_files(&owner._ownership, &owner.path, &owner.authority, StoreScope::Machine).unwrap();
     assert!(require_selected_startup(view, StoreScope::Machine, |_| true).is_err());
     let seed = json!({"signing_seed_hex": "c".repeat(64)});
-    provision_machine_f6_owned(&owner, || Ok(seed.clone())).unwrap();
+    assert!(provision_machine_f6_owned(&owner, || panic!("new identity requires confirmation")).is_err());
+    owner.create_new_f6_confirmed(|| Ok(seed.clone())).unwrap();
     provision_machine_f6_owned(&owner, || panic!("existing key must be retained")).unwrap();
     let defaults = json!({"deviceId": "fresh-device", "policy": {}});
     provision_fresh_machine_settings_owned(&owner, || Ok(defaults.clone())).unwrap();
@@ -145,6 +146,34 @@ fn migrated_generation_without_settings_is_not_treated_as_fresh() {
     let before = owner.read_all().unwrap();
     provision_fresh_machine_settings_owned(&owner, || panic!("migrated source must never receive fresh defaults")).unwrap();
     assert_eq!(owner.read_all().unwrap(), before);
+}
+
+#[test]
+#[cfg_attr(windows, ignore = "requires elevated machine-lock ACL provisioning; run explicitly in Windows acceptance")]
+fn migration_without_machine_f6_does_not_generate_an_unverified_identity() {
+    let root = tempfile::tempdir().unwrap(); provision_test_lock(root.path());
+    let old = [42; 32]; let input = sections(&old);
+    let candidate = prepare(&old, &input).unwrap();
+    assert!(verify_f6_creation_authority(&open_generation(&candidate).unwrap()).is_err());
+    let owner = LockedSelectedGeneration::acquire(root.path()).unwrap();
+    let anchor = ProtectedFileAnchor::new(root.path(), StoreScope::Machine);
+    cutover::provision_first_migration(&owner._ownership, &anchor, root.path(), &|| verify_source(&candidate, &old, &input)).unwrap();
+    stage_and_select(&owner._ownership, &anchor, root.path(), || Ok(candidate.clone()), &|bytes| verify_source(bytes, &old, &input)).unwrap();
+    let before = owner.read_reconciled().unwrap();
+    let error = provision_machine_f6_owned(&owner, || panic!("unverified identity must not be generated")).unwrap_err();
+    assert!(error.contains("identity could not be verified"));
+    assert!(owner.write_section("f6-keystore", json!({"signing_seed_hex": "c".repeat(64)})).is_err());
+    assert_eq!(owner.read_reconciled().unwrap(), before);
+    #[cfg(windows)] {
+        let runtime = RuntimeWriteGuard { owner, _root_pins: Vec::new(), selected: true };
+        assert!(runtime.get_or_create_f6(|| panic!("runtime must not generate an unverified identity")).is_err());
+        assert!(runtime.write("f6-keystore", &json!({"signing_seed_hex": "c".repeat(64)})).is_err());
+        assert_eq!(runtime.owner.read_reconciled().unwrap(), before);
+        let new_identity = json!({"signing_seed_hex": "e".repeat(64)});
+        assert_eq!(runtime.owner.create_new_f6_confirmed(|| Ok(new_identity.clone())).unwrap(), new_identity);
+        assert!(runtime.owner.create_new_f6_confirmed(|| panic!("must never replace an existing identity")).is_err());
+        assert_eq!(runtime.owner.read_all().unwrap()["f6-keystore"], new_identity);
+    }
 }
 
 #[test]

@@ -279,11 +279,32 @@ impl LockedSelectedGeneration {
     }
 
     pub(super) fn write_section(&self, section: &str, value: Value) -> Result<(), String> {
+        if section.eq_ignore_ascii_case("f6-keystore") { verify_machine_f6_creation_authority(self)?; }
+        self.write_section_inner(section, value)
+    }
+
+    fn write_section_inner(&self, section: &str, value: Value) -> Result<(), String> {
         let current = self.read_reconciled()?;
         let candidate = updated_generation(&current, section, value)?;
         let root = self.path.parent().ok_or("settings root unavailable")?;
         let anchor = ProtectedFileAnchor::new(root, self.scope);
         let file = SelectedFile::new(root);
         cutover::update(&self._ownership, &anchor, &file, &candidate, &|bytes| verify_scoped_generation(self.scope, bytes))
+    }
+
+    /// Explicit offline recovery only: never replace an existing identity.
+    fn create_new_f6_confirmed(&self, create: impl FnOnce() -> Result<Value, String>) -> Result<Value, String> {
+        if self.scope != StoreScope::Machine { return Err("Machine identity recovery requires the machine settings store.".into()); }
+        let generation = open_generation(&self.read_reconciled()?)?;
+        if generation.f6_initialized || matching_section(&generation.sections, "f6-keystore").is_some() {
+            return Err("A device signing identity already exists; it was not replaced.".into());
+        }
+        let value = create()?;
+        if !valid_f6(&value) { return Err("New device signing identity is invalid.".into()); }
+        self.write_section_inner("f6-keystore", value.clone())?;
+        let committed = self.read_all()?;
+        let name = matching_section(&committed, "f6-keystore").ok_or("New device signing identity was not committed")?;
+        if committed[name] != value { return Err("New device signing identity did not verify".into()); }
+        Ok(value)
     }
 }

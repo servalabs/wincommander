@@ -134,10 +134,12 @@ impl RuntimeWriteGuard {
     pub(super) fn selected(&self) -> bool { self.selected }
     pub(super) fn get_or_create_f6(&self, create: impl FnOnce() -> Result<Value, String>) -> Result<Value, String> {
         if !self.selected { return Err("settings generation is not selected".into()); }
+        verify_machine_f6_creation_authority(&self.owner)?;
         self.owner.get_or_create_f6(create)
     }
     pub(super) fn write(&self, section: &str, value: &Value) -> Result<(), String> {
         if !self.selected { return Err("settings generation is not selected".into()); }
+        if section.eq_ignore_ascii_case("f6-keystore") { verify_machine_f6_creation_authority(&self.owner)?; }
         self.owner.write_section(section, value.clone())
     }
 }

@@ -143,7 +143,7 @@ pub(super) fn stage_existing_explicitly(expected_scope: StoreScope) -> Result<()
     let _maintenance_pins = if expected_scope == StoreScope::Machine { Some(source_snapshot::pin_machine_maintenance()?) } else { None };
     let root = source_snapshot::known_root(expected_scope)?;
     match std::fs::symlink_metadata(&root) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound && expected_scope == StoreScope::Machine => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && expected_scope == StoreScope::Machine => return Err(unverified_identity()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Err("Original user settings root is missing; no migration was performed.".into()),
         Err(_) => return Err("Cannot inspect settings root; existing data preserved.".into()),
         Ok(_) => {},
@@ -159,10 +159,10 @@ pub(super) fn stage_existing_explicitly(expected_scope: StoreScope) -> Result<()
         let store = root.join("store");
         match std::fs::read_dir(&store) {
             Ok(mut entries) => {
-                if entries.next().is_none() { return Ok(()); }
+                if entries.next().is_none() { return if scope == StoreScope::Machine { Err(unverified_identity()) } else { Ok(()) }; }
                 return Err("Settings key is missing for existing store; existing data preserved.".into());
             },
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return if scope == StoreScope::Machine { Err(unverified_identity()) } else { Ok(()) },
             _ => return Err("Settings key is missing or store cannot be inspected; existing data preserved.".into()),
         }
     }
@@ -172,7 +172,7 @@ pub(super) fn stage_existing_explicitly(expected_scope: StoreScope) -> Result<()
     }.map_err(|_| "Cannot provision settings lock; existing data preserved.")?;
     let owner = LockedSelectedGeneration::acquire_for(&root, scope)?;
     let anchor = ProtectedFileAnchor::new(&root, scope);
-    if reconcile_stage_owner(&owner)? { return Ok(()); }
+    if reconcile_stage_owner(&owner)? { return verify_machine_f6_creation_authority(&owner); }
     let mut snapshot = match scope {
         StoreScope::Machine => source_snapshot::Snapshot::capture_machine()?,
         StoreScope::CurrentUser => source_snapshot::Snapshot::capture_user_from_verified_helper()?,
@@ -194,14 +194,50 @@ pub(super) fn stage_existing_explicitly(expected_scope: StoreScope) -> Result<()
         if cutover::digest(&candidate) != next { return Err("Settings stage does not match pending recovery; originals preserved.".into()); }
     }
     super::settings_generation_maintenance::verify_known_writers_stopped()?;
-    snapshot.verify_generation(&candidate)
+    snapshot.verify_generation(&candidate)?;
+    verify_f6_creation_authority(&open_generation(&candidate)?)
 }
 
 /// Under machine install authority, initialize F6 only when the authenticated
 /// generation proves it has never existed. This permits standard-user reads
 /// without granting users the machine settings write lock.
+fn verify_machine_f6_creation_authority(owner: &LockedSelectedGeneration) -> Result<(), String> {
+    let generation = open_generation(&owner.read_reconciled()?)?;
+    verify_f6_creation_authority(&generation)
+}
+fn unverified_identity() -> String {
+    "SETTINGS_IDENTITY_UNVERIFIED: The existing device signing identity could not be verified. Existing data was preserved. Automatic restoration is not available; a new identity requires explicit confirmation.".into()
+}
+fn verify_f6_creation_authority(generation: &Generation) -> Result<(), String> {
+    if generation.scope != StoreScope::Machine { return Ok(()); }
+    if matching_section(&generation.sections, "f6-keystore").is_none() {
+        return Err(unverified_identity());
+    }
+    Ok(())
+}
+
+/// Explicit, offline administrator action. The caller must explain that a
+/// newly generated identity cannot recover a previous per-user identity.
+#[cfg(windows)]
+pub(super) fn create_new_machine_identity_explicitly() -> Result<(), String> {
+    super::settings_generation_maintenance::verify_known_writers_stopped()?;
+    if crate::paths::current_user_install_uses_local_datastore() {
+        return Err("Machine identity recovery requires a machine installation.".into());
+    }
+    let _maintenance = source_snapshot::pin_machine_maintenance()?;
+    let (root, _pins, scope) = experimental_runtime_root_for(StoreScope::Machine)?;
+    let owner = LockedSelectedGeneration::acquire_for(&root, scope)?;
+    super::settings_generation_maintenance::verify_known_writers_stopped()?;
+    owner.create_new_f6_confirmed(|| {
+        let (signing, _) = wincmd_shared::wipe_auth::generate_provisioning_keypair();
+        let seed = zeroize::Zeroizing::new(wincmd_shared::wipe_auth::signing_key_to_bytes(&signing));
+        Ok(serde_json::json!({"signing_seed_hex": hex::encode(&*seed)}))
+    }).map(|_| ())
+}
+
 fn provision_machine_f6_owned(owner: &LockedSelectedGeneration, create: impl FnOnce() -> Result<Value, String>) -> Result<(), String> {
     if owner.scope != StoreScope::Machine { return Ok(()); }
+    verify_machine_f6_creation_authority(owner)?;
     owner.get_or_create_f6(create).map(|_| ())
 }
 

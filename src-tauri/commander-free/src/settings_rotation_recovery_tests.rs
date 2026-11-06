@@ -190,25 +190,27 @@ fn invalid_preexisting_or_initialized_f6_fails_closed() {
 
 #[test]
 #[cfg_attr(windows, ignore = "requires elevated machine-lock ACL provisioning; run explicitly in Windows acceptance")]
-fn f6_shared_read_rechecks_and_concurrent_creators_return_one_winner() {
+fn f6_confirmed_concurrent_creators_preserve_one_winner() {
     use std::sync::{Arc, Barrier, atomic::{AtomicUsize, Ordering}};
     let root = tempfile::tempdir().unwrap(); provision_test_lock(root.path());
-    let old = [42; 32]; let input = sections(&old); let candidate = prepare(&old, &input).unwrap();
-    fixture_anchor(root.path(), StoreScope::Machine); fixture_select(root.path(), StoreScope::Machine, &candidate, &old, &input);
+    fixture_anchor(root.path(), StoreScope::Machine);
+    let initial_owner = LockedSelectedGeneration::acquire(root.path()).unwrap();
+    select_fresh_generation(&initial_owner._ownership, root.path(), StoreScope::Machine, &|| Ok(())).unwrap();
+    drop(initial_owner);
     let barrier = Arc::new(Barrier::new(2)); let created = Arc::new(AtomicUsize::new(0));
     let workers: Vec<_> = (1..=2).map(|index| {
         let path = root.path().to_path_buf(); let barrier = barrier.clone(); let created = created.clone();
         std::thread::spawn(move || {
             barrier.wait();
-            read_f6_or_create(&path, StoreScope::Machine, || panic!("no legacy fallback"), || {
-                let owner = (0..15).find_map(|_| LockedSelectedGeneration::acquire(&path).ok()).ok_or("could not acquire ownership")?;
-                owner.get_or_create_f6(|| { created.fetch_add(1, Ordering::SeqCst); Ok(json!({"signing_seed_hex":format!("{index:02x}").repeat(32)})) })
-            }).unwrap()
+            let owner = (0..15).find_map(|_| LockedSelectedGeneration::acquire(&path).ok()).ok_or("could not acquire ownership")?;
+            owner.create_new_f6_confirmed(|| { created.fetch_add(1, Ordering::SeqCst); Ok(json!({"signing_seed_hex":format!("{index:02x}").repeat(32)})) })
         })
     }).collect();
-    let values: Vec<_> = workers.into_iter().map(|w| w.join().unwrap()).collect();
-    assert_eq!(values[0], values[1]); assert_eq!(created.load(Ordering::SeqCst), 1);
-    assert_eq!(read_f6_or_create(root.path(), StoreScope::Machine, || panic!("no legacy fallback"), || panic!("existing key needs no writer")).unwrap(), values[0]);
+    let results: Vec<_> = workers.into_iter().map(|w| w.join().unwrap()).collect();
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(created.load(Ordering::SeqCst), 1);
+    let winner = results.into_iter().find_map(Result::ok).unwrap();
+    assert_eq!(read_f6_or_create(root.path(), StoreScope::Machine, || panic!("no legacy fallback"), || panic!("existing key needs no writer")).unwrap(), winner);
     let owner = LockedSelectedGeneration::try_open(root.path()).unwrap();
     assert!(owner.write_section("f6-keystore", json!({"signing_seed_hex":"ff".repeat(32)})).is_err());
 }
