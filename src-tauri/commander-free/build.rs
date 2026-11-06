@@ -5,6 +5,7 @@ use aes_gcm::{
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
+mod build_service_pin;
 
 const SHARED_SCHEDULER: &str = "../wincmd-shared/scripts/auto-erase.ps1";
 
@@ -188,19 +189,10 @@ fn main() {
         && !is_development_profile
         && std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
     {
-        let hash = std::env::var("WINCMD_FENCED_SERVICE_SHA256")
-            .expect("paired encrypted-search release requires the final signed service SHA-256");
-        assert!(
-            hash.len() == 64
-                && hash.bytes().all(|b| b.is_ascii_hexdigit())
-                && hash.bytes().any(|b| b != b'0'),
-            "invalid paired service SHA-256"
-        );
-        assert!(
-            std::env::var("WINCMD_APP_DIR").unwrap_or_else(|_| "WinCommander".into())
-                == "WinCommander",
-            "paired encrypted-search release requires the matching app directory"
-        );
+        let hash = std::env::var("WINCMD_FENCED_SERVICE_SHA256").ok();
+        let app_dir = std::env::var("WINCMD_APP_DIR").ok();
+        build_service_pin::validate(hash.as_deref(), app_dir.as_deref())
+            .expect("invalid paired search release configuration");
     }
     if std::env::var_os("CARGO_FEATURE_AUTONOMOUS_TEST").is_some() && !is_development_profile {
         panic!("the autonomous-test feature is restricted to debug test artifacts");
