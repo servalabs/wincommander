@@ -71,6 +71,13 @@ jobs:
           if ($hash -ine $env:WINCMD_FENCED_SERVICE_SHA256) { throw 'Extracted service hash does not match paired build input.' }
           Write-Host 'Disposable installer contains the expected synthetic guarded service.'
 
+      - name: Test fenced read-only protected search verification
+        working-directory: src-tauri
+        shell: pwsh
+        run: |
+          $output = cargo test --locked -p wincmd-search --features experimental-encrypted-search offline_empty_cache_reconciles_with_live_roots_after_restart -- --test-threads=1 2>&1 | Out-String
+          Write-Host $output
+          if ($LASTEXITCODE -ne 0 -or $output -notmatch 'test result: ok\. 1 passed; 0 failed; 0 ignored') { throw 'Fenced read-only search verification test failed.' }
       - name: Seed disposable legacy search cache
         shell: pwsh
         run: |
