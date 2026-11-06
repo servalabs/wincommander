@@ -9,9 +9,9 @@ export function pairedServiceHash(service: Uint8Array, expected: string): string
   return actual;
 }
 
-export function pairedSearchTemplate(template: string): string {
+export function pairedSearchTemplate(template: string, settingsLab = false): string {
   if (!template.includes('!include "{{installer_hooks}}"') || template.includes('!define WC_PAIRED_SEARCH_RELEASE')) {
     throw new Error("Unexpected NSIS template; paired writer checks cannot be bound.");
   }
-  return '!define WC_PAIRED_SEARCH_RELEASE\n' + template;
+  return '!define WC_PAIRED_SEARCH_RELEASE\n' + (settingsLab ? '!define WC_PAIRED_SETTINGS_LAB\n' : '') + template;
 }

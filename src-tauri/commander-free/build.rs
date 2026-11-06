@@ -124,6 +124,7 @@ fn main() {
 
     println!("cargo:rerun-if-env-changed=WINCMD_PRO_SHA256_CURRENT");
     println!("cargo:rerun-if-env-changed=WINCMD_PRO_SHA256_PREVIOUS");
+    println!("cargo:rerun-if-env-changed=WINCMD_SETTINGS_LAB_AUTOROUTE");
     println!("cargo:rerun-if-env-changed=WINCMD_PAIRED_LAB_BUILD");
     println!("cargo:rerun-if-env-changed=WINCMD_FENCED_SERVICE_SHA256");
     println!("cargo:rerun-if-env-changed=WINCMD_FENCED_PRO_SHA256");
@@ -190,6 +191,15 @@ fn main() {
         "the desktop manifest must retain requestedExecutionLevel=asInvoker"
     );
     let is_development_profile = std::env::var("PROFILE").as_deref() == Ok("debug");
+    if std::env::var("WINCMD_SETTINGS_LAB_AUTOROUTE").as_deref() == Ok("1") {
+        assert!(
+            std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+                && std::env::var_os("CARGO_FEATURE_EXPERIMENTAL_SETTINGS_GENERATION").is_some()
+                && std::env::var_os("CARGO_FEATURE_EXPERIMENTAL_ENCRYPTED_SEARCH").is_some()
+                && std::env::var("WINCMD_PAIRED_LAB_BUILD").as_deref() == Ok("1"),
+            "automatic settings routing is restricted to paired Windows lab builds"
+        );
+    }
     if std::env::var_os("CARGO_FEATURE_EXPERIMENTAL_ENCRYPTED_SEARCH").is_some()
         && build_service_pin::lab_guard_required(
             std::env::var("PROFILE").ok().as_deref(),

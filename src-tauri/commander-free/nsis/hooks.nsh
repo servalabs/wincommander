@@ -9,6 +9,12 @@
 !error "Search maintenance fencing requires the gated current-user staging installer"
 !endif
 !endif
+!ifdef WC_PAIRED_SETTINGS_LAB
+!ifndef WC_PAIRED_SEARCH_RELEASE
+!error "Settings migration lab requires paired search maintenance"
+!endif
+!define WC_SETTINGS_LAB_MAINTENANCE "${__FILEDIR__}\install-settings-generation.ps1"
+!endif
 !include "TextFunc.nsh"
 !include "StrFunc.nsh"
 ${Using:StrFunc} StrStr
@@ -347,6 +353,19 @@ FunctionEnd
       ${If} $0 != 0
         !insertmacro WC_PAIRED_ABORT "Close WinCommander Pro in all Windows sessions and retry the update."
       ${EndIf}
+      !ifdef WC_PAIRED_SETTINGS_LAB
+        ; Stage only: original settings and F6 identity remain authoritative.
+        File /oname=$PLUGINSDIR\wincommander-settings-lab.exe "${MAINBINARYSRCPATH}"
+        File /oname=$PLUGINSDIR\wincommander-settings-lab.ps1 "${WC_SETTINGS_LAB_MAINTENANCE}"
+        !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
+        nsExec::ExecToStack /TIMEOUT=600000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-settings-lab.ps1" -ExecutablePath "$PLUGINSDIR\wincommander-settings-lab.exe" -Action stage'
+        Pop $0
+        Pop $1
+        !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "settings-lab-stage" "$0" "$1"
+        ${If} $0 != 0
+          !insertmacro WC_PAIRED_ABORT "Settings could not be prepared. Existing settings were preserved."
+        ${EndIf}
+      !endif
     !else
       !insertmacro WC_STOP_OWNED_SERVICE_OR_ABORT "preinstall" ""
     !endif
@@ -506,6 +525,18 @@ FunctionEnd
     !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "service-payload" "missing" "${WC_SERVICE_PAYLOAD}"
     Abort "The WinCommander service payload is missing; the installation was not completed."
   wc_service_payload_ok:
+  !ifdef WC_PAIRED_SETTINGS_LAB
+    ; The new desktop has been copied but the old service is still stopped.
+    ; Re-read and authenticate the source before selecting the new generation.
+    !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
+    nsExec::ExecToStack /TIMEOUT=600000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-settings-lab.ps1" -ExecutablePath "$INSTDIR\wincommander-free.exe" -Action install'
+    Pop $0
+    Pop $1
+    !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "settings-lab-select" "$0" "$1"
+    ${If} $0 != 0
+      Abort "Protected settings could not be selected. Existing settings were preserved; retry setup before starting WinCommander."
+    ${EndIf}
+  !endif
   ; Stop the existing service before replacing its owned executable. The
   ; separately entitled Pro helper is installed on demand and is never bundled
   ; into, replaced by, or required for a Free installer update.

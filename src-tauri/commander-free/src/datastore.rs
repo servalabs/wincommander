@@ -688,9 +688,17 @@ pub fn load(section: &str) -> Result<Value, String> {
 #[cfg(all(windows, feature = "experimental-settings-generation"))]
 pub(crate) fn experimental_generation_routing_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    // No build automatically switches storage while interruption-safe cutover
-    // and installer recovery remain unverified.
-    *ENABLED.get_or_init(|| std::env::var_os("WINCOMMANDER_EXPERIMENTAL_SETTINGS_GENERATION").is_some_and(|value| value == "1"))
+    // Automatic routing is restricted to explicitly opted-in lab builds. The
+    // installer must complete migration before starting the new application.
+    *ENABLED.get_or_init(|| generation_lab_routing_requested(
+        option_env!("WINCMD_SETTINGS_LAB_AUTOROUTE"),
+        std::env::var_os("WINCOMMANDER_EXPERIMENTAL_SETTINGS_GENERATION").as_deref(),
+    ))
+}
+
+#[cfg(any(test, all(windows, feature = "experimental-settings-generation")))]
+fn generation_lab_routing_requested(build_opt_in: Option<&str>, runtime_opt_in: Option<&std::ffi::OsStr>) -> bool {
+    build_opt_in == Some("1") || runtime_opt_in.is_some_and(|value| value == "1")
 }
 
 fn load_legacy(section: &str) -> Result<Value, String> {
@@ -1207,6 +1215,15 @@ pub fn log_decrypt_line(line: &str) -> Option<(String, String)> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn settings_generation_routing_requires_explicit_lab_opt_in() {
+        use std::ffi::OsStr;
+        assert!(!super::generation_lab_routing_requested(None, None));
+        assert!(!super::generation_lab_routing_requested(Some("true"), Some(OsStr::new("0"))));
+        assert!(super::generation_lab_routing_requested(Some("1"), None));
+        assert!(super::generation_lab_routing_requested(None, Some(OsStr::new("1"))));
+    }
+
     #[cfg(windows)]
     #[test]
     fn settings_writes_require_the_current_protected_material() {

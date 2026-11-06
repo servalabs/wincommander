@@ -9,6 +9,11 @@ const configPath = resolve(root, "src-tauri", "commander-free", "tauri.conf.json
 const generatedConfigPath = resolve(root, "src-tauri", "commander-free", "tauri.release.generated.json");
 const contextShredBuildPath = resolve(root, "src-tauri", "target", "release", "wincommander-context-shred.exe");
 const pairedSearch = process.argv.includes("--experimental-paired-search-lab");
+const pairedSettings = process.argv.includes("--experimental-paired-settings-lab");
+if (pairedSettings && !pairedSearch) throw new Error("Settings migration lab requires the paired search lab build.");
+if (!pairedSettings && process.env.WINCMD_SETTINGS_LAB_AUTOROUTE) {
+  throw new Error("Settings autorouting requires the explicit paired settings lab option.");
+}
 if (pairedSearch) {
   for (const key of ["RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER"]) {
     if (process.env[key]) throw new Error(`Paired lab build rejects untrusted compiler override: ${key}`);
@@ -57,6 +62,7 @@ const releaseBuildEnv = {
   RUSTFLAGS: rustflags,
   CARGO_PROFILE_RELEASE_LTO: "false",
   ...(pairedSearch ? { WINCMD_PAIRED_LAB_BUILD: "1" } : {}),
+  ...(pairedSettings ? { WINCMD_SETTINGS_LAB_AUTOROUTE: "1" } : {}),
 };
 
 function run(command: string[], label: string) {
@@ -108,7 +114,7 @@ config.bundle.resources = [
 config.bundle.targets = ["nsis"];
 if (pairedSearch) {
   const originalTemplate = resolve(root, "src-tauri", "commander-free", config.bundle.windows.nsis.template);
-  writeFileSync(pairedTemplatePath, pairedSearchTemplate(readFileSync(originalTemplate, "utf8")));
+  writeFileSync(pairedTemplatePath, pairedSearchTemplate(readFileSync(originalTemplate, "utf8"), pairedSettings));
   config.bundle.windows.nsis.template = "nsis/installer.paired.generated.nsi";
 }
 
@@ -120,7 +126,7 @@ copyFileSync(calculatorBuildPath, stagedCalculatorPath);
 writeFileSync(generatedConfigPath, `${JSON.stringify(config, null, 2)}\n`);
 try {
   run(["bun", "x", "--package", "@tauri-apps/cli@2.12.4", "tauri", "build", "--config", generatedConfigPath,
-    ...(pairedSearch ? ["--features", "experimental-encrypted-search"] : [])], "Tauri release bundle");
+    ...(pairedSearch ? ["--features", pairedSettings ? "experimental-encrypted-search,experimental-settings-generation" : "experimental-encrypted-search"] : [])], "Tauri release bundle");
   if (pairedSearch) pairedServiceHash(readFileSync(stagedServicePath), process.env.WINCMD_FENCED_SERVICE_SHA256 ?? "");
 } finally {
   rmSync(generatedConfigPath, { force: true });

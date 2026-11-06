@@ -6,6 +6,8 @@ describe("paired search packaging contract", () => {
   test("binds paired writer checks to the installer template", () => {
     const template = '!include "{{installer_hooks}}"';
     expect(pairedSearchTemplate(template)).toContain("!define WC_PAIRED_SEARCH_RELEASE");
+    expect(pairedSearchTemplate(template)).not.toContain("!define WC_PAIRED_SETTINGS_LAB");
+    expect(pairedSearchTemplate(template, true)).toContain("!define WC_PAIRED_SETTINGS_LAB");
     expect(() => pairedSearchTemplate("missing hook")).toThrow();
     expect(() => pairedSearchTemplate(pairedSearchTemplate(template))).toThrow();
   });
