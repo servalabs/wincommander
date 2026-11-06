@@ -79,17 +79,18 @@ pub(super) fn cleanup_legacy(config: &IndexConfig, protected: &[PathBuf]) -> Res
     let current = write.as_mut().ok_or("Open search and let it finish indexing before cleanup.")?;
     if current.signature != expected { return Err("Search settings changed. Reopen search before cleanup.".into()); }
     let parent = config.index_dir.parent().ok_or("Search location unavailable.")?;
-    let mut backup_count = 0usize;
-    for entry in std::fs::read_dir(parent).map_err(|_| "Cannot inspect old search backups.")? {
-        let entry = entry.map_err(|_| "Cannot inspect old search backups.")?;
-        if entry.file_name().to_string_lossy().starts_with(".wincommander-legacy-index-backup-") { backup_count += 1; }
-    }
     let result = super::runtime_fence::with_exclusive(|fence| {
-        current.engine.cleanup_legacy_cache_after_reconciliation(fence).map_err(|e| e.to_string())
+        let mut backup_count = 0usize;
+        for entry in std::fs::read_dir(parent).map_err(|_| "Cannot inspect old search backups.")? {
+            let entry = entry.map_err(|_| "Cannot inspect old search backups.")?;
+            if entry.file_name().to_string_lossy().starts_with(".wincommander-legacy-index-backup-") { backup_count += 1; }
+        }
+        let removed = current.engine.cleanup_legacy_cache_after_reconciliation(fence).map_err(|e| e.to_string())?;
+        Ok((removed, backup_count))
     });
     // Cleanup stops its watcher, and even failed maintenance must reopen it.
     if let Some(old) = write.take() { old.engine.stop(); }
-    result.map(|removed| (removed, backup_count))
+    result
 }
 pub(super) fn stop() -> Result<(), String> {
     let mut guard = cell().write().map_err(|_| "Search state is unavailable.")?;

@@ -324,7 +324,7 @@ pub async fn content_cleanup_old_cache() -> Result<String, String> {
             let (settings, plan) = prepare(false)?;
             let config = build_index_config(&settings.app.file_search, plan.ordinary)?;
             let (removed, backups) = global::cleanup_legacy(&config, &plan.protected)?;
-            Ok(format!("Removed {removed} old search-cache files. {backups} plaintext backup folders remain. Search will reopen and reconcile on the next request. Deletion does not guarantee secure erasure from SSDs or backups."))
+            Ok(format!("Removed {removed} old search-cache files. {backups} retained search backup folders were found in WinCommander search storage. Search will reopen and reconcile on the next request. Deletion does not guarantee secure erasure from SSDs or backups."))
         }).await.map_err(|_| "Search cleanup worker failed.".to_string())?
     }
     #[cfg(not(all(windows, feature = "experimental-encrypted-search")))]
