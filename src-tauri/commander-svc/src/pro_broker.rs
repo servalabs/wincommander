@@ -19,6 +19,15 @@ mod root_acl;
 #[path = "pro_broker_prepare.rs"]
 mod prepare;
 
+/// Describes the gated build contract; the client must separately authenticate
+/// this exact running service image against its trusted release pin.
+pub(crate) fn search_fence_capabilities() -> serde_json::Value {
+    #[cfg(all(windows, feature = "experimental-search-broker-fence"))]
+    { search_fence::capability() }
+    #[cfg(not(all(windows, feature = "experimental-search-broker-fence")))]
+    { serde_json::json!({"protocol": 1, "broker_user_fence": false, "system_search_disabled": false, "app_dir": option_env!("WINCMD_APP_DIR").unwrap_or("WinCommander")}) }
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct HashAcceptance {
     current: Option<String>,

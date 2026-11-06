@@ -857,6 +857,7 @@ async fn dispatch_verb(
                 handle_vault_list_authorized(vault_access, vault_mount, peer)
             }
         }
+        "svc.search.fence_capabilities" => Ok(crate::pro_broker::search_fence_capabilities()),
         "svc.vault.capabilities" => {
             Ok(serde_json::json!({ "can_manage_policy": caller_privileged }))
         }

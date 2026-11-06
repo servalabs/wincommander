@@ -19,6 +19,16 @@ fn expected_pair<'a>(hash: Option<&'a str>, app: Option<&str>, protocol: Option<
         || app != Some(expected_app) || protocol != Some(FENCE_PROTOCOL) { return Err(denied()); }
     Ok(hash)
 }
+pub(super) fn capability() -> serde_json::Value {
+    let paired = expected_pair(option_env!("WINCMD_FENCED_PRO_SHA256"),
+        option_env!("WINCMD_FENCED_PRO_APP_DIR"), option_env!("WINCMD_FENCED_PRO_PROTOCOL")).is_ok();
+    serde_json::json!({
+        "protocol": 1,
+        "broker_user_fence": paired,
+        "system_search_disabled": paired,
+        "app_dir": option_env!("WINCMD_APP_DIR").unwrap_or("WinCommander"),
+    })
+}
 pub(super) struct PinnedPro { _parents: Vec<File>, file: File }
 impl PinnedPro {
     pub(super) fn matches(&self, other: &File) -> bool {
@@ -203,6 +213,15 @@ mod tests {
     fn open_probe(root: &Path) -> File {
         OpenOptions::new().read(true).write(true).share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
             .open(root.join(".encrypted-search-maintenance.lock")).unwrap()
+    }
+    #[test]
+    fn capability_is_false_when_pair_inputs_are_missing() {
+        if option_env!("WINCMD_FENCED_PRO_SHA256").is_none() {
+            let capability = capability();
+            assert_eq!(capability["protocol"], 1);
+            assert_eq!(capability["broker_user_fence"], false);
+            assert_eq!(capability["system_search_disabled"], false);
+        }
     }
     #[test]
     fn paired_pin_requires_exact_protocol_and_app_directory() {
