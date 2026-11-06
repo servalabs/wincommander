@@ -14,7 +14,7 @@ const MAX_FILES: usize = 8192;
 const MAX_MANIFEST: usize = 4 * 1024 * 1024;
 fn refused() -> io::Error { io::Error::new(io::ErrorKind::PermissionDenied, "legacy search cleanup refused") }
 fn cache_file(name: &str) -> bool {
-    if matches!(name, "meta.json" | "schema.version" | ".managed.json") { return true; }
+    if matches!(name, "meta.json" | "schema.version" | ".managed.json" | "scope-v1.json") { return true; }
     let parts: Vec<&str> = name.split('.').collect();
     if !(parts.len() == 2 || parts.len() == 3) || parts[0].len() != 32
         || !parts[0].bytes().all(|b| b.is_ascii_hexdigit()) { return false; }
@@ -56,6 +56,15 @@ pub(crate) fn remove_managed(old: &Path, fence: &crate::encrypted_search_fence::
         names.push(name);
     }
     if names.is_empty() { return Ok(0); }
+    if names.iter().any(|name| name == "scope-v1.json") {
+        use crate::encrypted_key_prototype::{Protector, UserDpapi};
+        let protected = directory.atomic_read_bounded(Path::new("scope-v2.dpapi"), crate::encrypted_scope::MAX_PROTECTED_SCOPE)
+            .map_err(|e| io::Error::other(e.to_string()))?;
+        let clear = UserDpapi.unprotect(&protected)?;
+        if clear.len() < 8 || !crate::encrypted_scope::same_scope(&clear, &clear[8..]).unwrap_or(false) {
+            return Err(refused());
+        }
+    }
     let manifest = directory.atomic_read_bounded(Path::new(".managed.json"), MAX_MANIFEST)
         .map_err(|e| io::Error::other(e.to_string()))?;
     let listed: Vec<String> = serde_json::from_slice(&manifest).map_err(|_| refused())?;
@@ -67,7 +76,7 @@ pub(crate) fn remove_managed(old: &Path, fence: &crate::encrypted_search_fence::
         managed.insert(name);
     }
     for name in &names {
-        if !matches!(name.as_str(), "meta.json" | "schema.version" | ".managed.json") && !managed.contains(name) { return Err(refused()); }
+        if !matches!(name.as_str(), "meta.json" | "schema.version" | ".managed.json" | "scope-v1.json") && !managed.contains(name) { return Err(refused()); }
     }
     // Preflight all candidates before any mutation, recording their identities.
     let mut candidates = Vec::new();

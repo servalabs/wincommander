@@ -847,15 +847,27 @@ impl SearchEngine {
         if self.experimental_selection.is_none() || self.experimental_id.is_none() || self.config.roots.is_empty() {
             return Err(SearchError::Config("A selected index and authoritative search roots are required.".into()));
         }
-        self.stop();
         if self.watcher_invalid.load(Ordering::Acquire) {
             return Err(SearchError::Config("Search requires recovery before legacy cleanup.".into()));
         }
+        self.stop();
+        // The caller must reopen after every outcome; never leave a stopped
+        // watcher serving potentially stale results.
+        self.watcher_invalid.store(true, Ordering::Release);
         let report = self.reconcile_sync(&std::sync::atomic::AtomicBool::new(false), usize::MAX)?;
         if !report.complete { return Err(SearchError::Config("Search reconciliation is incomplete; old cache retained.".into())); }
         self.ci.index.reader()?;
         let old = self.experimental_legacy_path.as_ref()
             .ok_or_else(|| SearchError::Config("legacy search location unavailable".into()))?;
+        let _old_pins = crate::read_only::CheckedDirectory::pin_root_path(old)?;
+        let selection = self.experimental_selection.as_ref().ok_or_else(|| SearchError::Config("search selection missing".into()))?;
+        let id = self.experimental_id.ok_or_else(|| SearchError::Config("search identity missing".into()))?;
+        let origin = crate::encrypted_generation_prototype::read_origin(selection.root())?
+            .ok_or_else(|| SearchError::Config("legacy search ownership proof missing".into()))?;
+        let actual = crate::encrypted_migration_transaction::Intent::capture([1; 16], id, old)?.identity();
+        if origin.id != id || origin.fresh || origin.source != actual {
+            return Err(SearchError::Config("legacy search ownership could not be verified".into()));
+        }
         Ok(crate::encrypted_legacy_cleanup::remove_managed(old, fence)?)
     }
     /// Locate the generation-specific quarantine path for inspection after an
