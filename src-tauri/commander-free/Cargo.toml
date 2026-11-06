@@ -202,6 +202,8 @@ windows = { version = "=0.61.3", features = [
   "Win32_UI_Shell_Common",
 ] }
 windows-sys = { version = "0.61", features = [
+  "Wdk_Foundation",
+  "Wdk_Storage_FileSystem",
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
   # TaskDialogIndirect provides the native Safe Copy progress window.
