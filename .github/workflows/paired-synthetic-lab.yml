@@ -107,6 +107,24 @@ jobs:
           if ($appProcess.HasExited) { throw "Installed app exited early: $($appProcess.ExitCode)." }
           "INITIAL_SELECTION_SHA256=$((Get-FileHash -Algorithm SHA256 -LiteralPath $selection).Hash)" >> $env:GITHUB_ENV
           Write-Host 'Installed user process created a protected search candidate.'
+          # Poll the committed encrypted index without crawling or writing it.
+          # The app remains alive and must itself index the synthetic document.
+          $PSNativeCommandUseErrorActionPreference = $false
+          $checker = (Resolve-Path 'src-tauri/target/debug/examples/paired_installed_fixture.exe').Path
+          $old = Join-Path $parent 'fts'
+          $docs = Join-Path $env:USERPROFILE 'Documents'
+          $deadline = [Diagnostics.Stopwatch]::StartNew()
+          do {
+            & $checker verify $old $docs 2>$null
+            $result = $LASTEXITCODE
+            if ($result -eq 0) { break }
+            $appProcess.Refresh()
+            if ($appProcess.HasExited) { throw 'Installed app exited before indexing the synthetic document.' }
+            Start-Sleep -Seconds 2
+          } while ($deadline.Elapsed.TotalSeconds -lt 180)
+          if ($result -ne 0) { throw 'Installed app did not commit the synthetic document to protected search.' }
+          $global:LASTEXITCODE = 0
+          Write-Host 'Read-only query found the synthetic document while the installed app was running.'
       - name: Verify failed upgrade keeps service running
         shell: pwsh
         run: |
@@ -216,4 +234,4 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Migrated synthetic document was not searchable.' }
           } finally { Pop-Location }
           if ((Get-FileHash -Algorithm SHA256 -LiteralPath $selection).Hash -ine $env:INITIAL_SELECTION_SHA256) { throw 'Search verification replaced the selected generation.' }
-          Write-Host 'Synthetic document was searchable after reopening the protected generation.'
+          Write-Host 'Read-only query found the document again after restarting the installed app.'
