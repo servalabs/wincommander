@@ -152,6 +152,9 @@ fn move_to_sibling_with_hook(old: &Path, destination_name: &str, fence: &crate::
     let legacy = CheckedDirectory::open(old, AccessMode::Writable).map_err(|e| io::Error::other(e.to_string()))?;
     let writer = legacy.acquire_lock_pinned(&tantivy::directory::INDEX_WRITER_LOCK)
         .map_err(|e| io::Error::other(e.to_string()))?;
+    // MmapDirectory may retain a Windows directory watcher handle that denies
+    // renames. The independent writer lock remains held through the handoff.
+    drop(legacy);
     // Allow our delete-capable handle to open, then verify it is exactly the
     // pinned object. Parent pins remain held across this narrow transition.
     drop(old_pins);
