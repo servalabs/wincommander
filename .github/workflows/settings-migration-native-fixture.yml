@@ -288,4 +288,4 @@ jobs:
         run: |
           $output = cargo test --locked -p commander-svc --bin wincommander-svc --features experimental-search-broker-fence pro_broker::search_fence::tests -- --test-threads=1 2>&1 | Out-String
           Write-Host $output
-          if ($LASTEXITCODE -ne 0 -or $output -notmatch 'test result: ok\. 3 passed; 0 failed; 0 ignored') { throw 'Broker lease tests did not pass.' }
+          if ($LASTEXITCODE -ne 0 -or $output -notmatch 'test result: ok\. 4 passed; 0 failed; 0 ignored') { throw 'Broker lease tests did not pass.' }
