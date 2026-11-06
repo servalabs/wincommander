@@ -123,6 +123,13 @@ mod cleanup_tests {
         wincmd_search::publish_experimental_scope(&old, scope, |_| Ok(())).unwrap();
         std::fs::write(old.join(".tantivy-writer.lock"), b"").unwrap();
         assert!(!legacy_data_may_remain(&old));
+        std::fs::write(old.join(".tantivy-writer.lock"), b"not empty").unwrap();
+        assert!(legacy_data_may_remain(&old));
+        std::fs::write(old.join(".tantivy-writer.lock"), b"").unwrap();
+        let protected = std::fs::read(old.join("scope-v2.dpapi")).unwrap();
+        std::fs::write(old.join("scope-v2.dpapi"), b"invalid").unwrap();
+        assert!(legacy_data_may_remain(&old));
+        std::fs::write(old.join("scope-v2.dpapi"), protected).unwrap();
         std::fs::create_dir(root.path().join(".wincommander-legacy-index-backup-123")).unwrap();
         assert_eq!(retained_backup_count(root.path()).unwrap(), 1);
         assert!(retained_backup_count(&root.path().join("missing")).is_err());
