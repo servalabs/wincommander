@@ -111,6 +111,34 @@ jobs:
           "@ | Set-Content -Encoding ascii -LiteralPath $fixture
           & $nsis $fixture
           if ($LASTEXITCODE -ne 0) { throw 'Gated NSIS hook fixture failed to compile.' }
+      - name: Compile paired machine installer hook and test writer checks
+        shell: pwsh
+        run: |
+          ./tools/test-known-pro-writers.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Known Pro writer fixture failed.' }
+          $nsis = Join-Path ${env:ProgramFiles(x86)} 'NSIS/makensis.exe'
+          $hook = (Resolve-Path 'src-tauri/commander-free/nsis/hooks.nsh').Path
+          $payload = Join-Path $env:WINDIR 'System32/cmd.exe'
+          $output = Join-Path $env:RUNNER_TEMP 'paired-hook-fixture.exe'
+          $fixture = Join-Path $env:RUNNER_TEMP 'paired-hook-fixture.nsi'
+          @"
+          Unicode true
+          Name "Paired hook fixture"
+          OutFile "$output"
+          InstallDir "`$PROGRAMFILES\WinCommander"
+          RequestExecutionLevel user
+          !include "LogicLib.nsh"
+          !define INSTALLMODE "perMachine"
+          !define MAINBINARYSRCPATH "$payload"
+          !define WC_PAIRED_SEARCH_RELEASE
+          !include "$hook"
+          Section
+          !insertmacro NSIS_HOOK_PREINSTALL
+          !insertmacro NSIS_HOOK_POSTINSTALL
+          SectionEnd
+          "@ | Set-Content -Encoding ascii -LiteralPath $fixture
+          & $nsis $fixture
+          if ($LASTEXITCODE -ne 0) { throw 'Paired NSIS hook fixture failed to compile.' }
       - name: Exercise service state transitions without changing real services
         shell: pwsh
         run: ./tools/test-settings-stage-service.ps1

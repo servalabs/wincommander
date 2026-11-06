@@ -8,7 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openFolderPicker } from "@tauri-apps/plugin-dialog";
 import { useAppState } from "../context/AppContext";
-import { buildContentQueryArgs, chunksToText, contentHitToDisplayRow } from "@/lib/contentSearch";
+import { buildContentQueryArgs, chunksToText, contentHitToDisplayRow, indexStatusErrorMessage } from "@/lib/contentSearch";
 import { mergeIndexedRoots, removeIndexedRoot } from "@/lib/searchFilesPanel";
 import type { ContentDisplayRow } from "@/lib/contentSearch";
 import type { Chunk, ContentHit, IndexStatus } from "@/types/wincmd-search";
@@ -230,10 +230,10 @@ export function useContentIndex(query: string, filterTokens: string): ContentInd
           if (!searchInFlight.current) setSearchRefresh((value) => value + 1);
         }
         id = setTimeout(poll, s.is_indexing ? 3000 : 15000);
-      } catch {
+      } catch (error) {
         if (!cancelled) {
           setIndexStatus(null);
-          setIndexStatusError("Index status is unavailable. Check that your indexed volumes are accessible, then retry.");
+          setIndexStatusError(indexStatusErrorMessage(error));
           id = setTimeout(poll, 3000);
         }
       }

@@ -1,7 +1,7 @@
 import { copyFileSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { assertSharedAssets } from "./check-shared-assets";
-import { pairedSearchTemplate, pairedServiceHash } from "./paired-search-release-contract";
+import { pairedServiceHash, pairedSearchTemplate } from "./paired-search-release-contract";
 
 const root = resolve(import.meta.dirname, "..");
 assertSharedAssets(root);
@@ -9,10 +9,10 @@ const configPath = resolve(root, "src-tauri", "commander-free", "tauri.conf.json
 const generatedConfigPath = resolve(root, "src-tauri", "commander-free", "tauri.release.generated.json");
 const contextShredBuildPath = resolve(root, "src-tauri", "target", "release", "wincommander-context-shred.exe");
 const pairedSearch = process.argv.includes("--experimental-paired-search");
+const pairedTemplatePath = resolve(root, "src-tauri", "commander-free", "nsis", "installer.paired.generated.nsi");
 const serviceBuildPath = pairedSearch
   ? resolve(process.env.WINCMD_FENCED_SERVICE_PATH ?? "")
   : resolve(root, "src-tauri", "target", "release", "wincommander-svc.exe");
-const pairedTemplatePath = resolve(root, "src-tauri", "commander-free", "nsis", "installer.paired.generated.nsi");
 if (pairedSearch && !process.env.WINCMD_FENCED_SERVICE_PATH) {
   throw new Error("Paired build requires the final signed guarded service path.");
 }
@@ -114,7 +114,7 @@ copyFileSync(calculatorBuildPath, stagedCalculatorPath);
 writeFileSync(generatedConfigPath, `${JSON.stringify(config, null, 2)}\n`);
 try {
   run(["bun", "x", "--package", "@tauri-apps/cli@2.12.4", "tauri", "build", "--config", generatedConfigPath,
-    ...(pairedSearch ? ["--features", "experimental-encrypted-search,experimental-settings-generation"] : [])], "Tauri release bundle");
+    ...(pairedSearch ? ["--features", "experimental-encrypted-search"] : [])], "Tauri release bundle");
   if (pairedSearch) pairedServiceHash(readFileSync(stagedServicePath), process.env.WINCMD_FENCED_SERVICE_SHA256 ?? "");
 } finally {
   rmSync(generatedConfigPath, { force: true });
