@@ -20,8 +20,6 @@ use std::sync::{Arc, Mutex, OnceLock};
 // Explorer only recognises a file copy as a `CF_HDROP` file-list on the
 // Windows clipboard. The paths supplied below are always scrubbed cache paths,
 // never the user-selected originals.
-#[cfg(windows)]
-use clipboard_win::{formats::FileList, Clipboard, Setter};
 
 // Version 3 stores paths below the scrubbed cache rather than raw selections,
 // and expands selected-folder roots into their scrubbed immediate children.
@@ -29,8 +27,8 @@ use clipboard_win::{formats::FileList, Clipboard, Setter};
 const CLIP_VERSION: u32 = 4;
 const CLIP_FILE: &str = "safe-clip-v4.protected";
 const SHELL_PENDING_FILE: &str = ".safe-copy-selection-v4.protected";
+#[cfg(test)]
 const CACHE_DIR: &str = "safe-clip-cache";
-const CACHE_STAGING_PREFIX: &str = ".wincommander-safe-copy-staging-";
 const SAFE_COPY_CANCELLED: &str = "Safe Copy canceled. The protected selection was not updated.";
 // Explorer can invoke a legacy static verb separately for each selected item.
 // Wait for the short burst of launches before scrubbing so the clipboard gets
@@ -490,68 +488,10 @@ fn take_settled_shell_selection(force: bool) -> Result<Option<(Vec<String>, u128
     Ok(Some((pending.sources, pending.first_queued_at_ms)))
 }
 
-/// Mirror the scrubbed cache entries onto the Windows file clipboard. This is
-/// a *copy* operation, never cut. `SafeClip` is deliberately not reconstructed
-/// from this mutable system clipboard when Safe Paste runs.
-///
-/// Keeping this small Win32 boundary here means the headless Explorer verb and
-/// the in-app command have identical clipboard behaviour.
-#[cfg(windows)]
-fn publish_windows_file_clipboard(paths: &[String]) -> Result<(), String> {
-    let native_result: Result<(), String> = (|| {
-        let clipboard = Clipboard::new_attempts(10)
-            .map_err(|error| format!("could not open the clipboard: {error}"))?;
-        clipboard_win::empty()
-            .map_err(|error| format!("could not clear the clipboard: {error}"))?;
-
-        let path_refs: Vec<&str> = paths.iter().map(String::as_str).collect();
-        FileList
-            .write_clipboard(&path_refs)
-            .map_err(|error| format!("could not place files on the clipboard: {error}"))?;
-        let drop_effect = clipboard_win::register_format("Preferred DropEffect")
-            .ok_or_else(|| "could not register the Explorer copy format".to_string())?;
-        clipboard_win::raw::set_without_clear(drop_effect.get(), &1_u32.to_le_bytes())
-            .map_err(|error| format!("could not set the clipboard copy operation: {error}"))?;
-        // Explicitly close before returning from this headless process. This
-        // matters for Explorer verbs, which have no Tauri window/message loop.
-        drop(clipboard);
-        let readback: Vec<String> = clipboard_win::get_clipboard(FileList)
-            .map_err(|error| format!("could not read back the file clipboard: {error}"))?;
-        if readback.len() != paths.len()
-            || !readback
-                .iter()
-                .zip(paths)
-                .all(|(actual, expected)| paths_equal(actual, expected))
-        {
-            return Err("file clipboard readback did not match the cleaned selection".into());
-        }
-        Ok(())
-    })();
-
-    // `FileList::write_clipboard` uses SetClipboardData(CF_HDROP) with a
-    // movable HGLOBAL, transferring ownership to Windows. That data remains
-    // available after this short-lived Explorer process exits. Do not replace
-    // it with an OLE/WPF clipboard owner: if that helper exits before Explorer
-    // requests delayed-rendered data, the file list disappears from clipboard.
-    native_result
-}
-
-#[cfg(not(windows))]
-fn publish_windows_file_clipboard(_paths: &[String]) -> Result<(), String> {
-    // Safe Copy is an Explorer integration. Keeping this a no-op allows the
-    // pure copy-plan tests to run on non-Windows builders.
-    Ok(())
-}
-
-fn cache_root() -> Result<PathBuf, String> {
-    let root = crate::paths::user_data_dir()?.join(CACHE_DIR);
-    std::fs::create_dir_all(&root).map_err(|error| format!("create Safe Copy cache: {error}"))?;
-    Ok(root)
-}
-
 /// Return the batch directory only when every source is a direct, expected
 /// cache leaf. This prevents a legacy/tampered JSON record from ever becoming
 /// a `CF_HDROP` list of arbitrary original files.
+#[cfg(test)]
 fn cache_batch_for_clip(clip: &SafeClip, root: &Path) -> Option<PathBuf> {
     if clip.version != CLIP_VERSION || clip.sources.is_empty() {
         return None;
@@ -585,40 +525,12 @@ fn cache_batch_for_clip(clip: &SafeClip, root: &Path) -> Option<PathBuf> {
     batch
 }
 
-fn remove_old_cache_batches(root: &Path, keep: &Path) {
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        // Concurrent Safe Copy requests scrub into hidden staging folders
-        // outside the published-batch lock. Never remove another request's
-        // in-flight clean cache while committing this one.
-        let is_active_staging = path
-            .file_name()
-            .is_some_and(|name| name.to_string_lossy().starts_with(CACHE_STAGING_PREFIX));
-        if is_active_staging {
-            continue;
-        }
-        if path != keep && path.is_dir() {
-            if let Err(error) = std::fs::remove_dir_all(&path) {
-                crate::log_message(
-                    "warn",
-                    &format!(
-                        "[SafeCopy] could not remove expired scrub cache {}: {error}",
-                        path.display()
-                    ),
-                );
-            }
-        }
-    }
-}
-
 /// Promote a tree that has already been copied, scrubbed, and verified.
 /// Direct children of a selected folder become individual cache entries, so
 /// paste places them in the destination without an unwanted wrapper folder.
 /// Descendant folders are left intact. The returned paths are cache leaves
 /// safe for CF_HDROP.
+#[cfg(test)]
 fn promote_scrubbed_source(staged: &Path, batch: &Path) -> Result<Vec<PathBuf>, String> {
     let mut entries = if staged.is_dir() {
         std::fs::read_dir(staged)
@@ -649,80 +561,6 @@ fn promote_scrubbed_source(staged: &Path, batch: &Path) -> Result<Vec<PathBuf>, 
         cached.push(cached_path);
     }
     Ok(cached)
-}
-
-/// Copy one raw source into an unpublished staging directory, scrub every
-/// file, validate the report, and atomically promote only cleaned entries into
-/// the cache batch. A selected folder is flattened by one level only after
-/// the entire staged tree has passed scrub validation.
-async fn cache_scrubbed_source(
-    source: &Path,
-    batch: &Path,
-    decoys: &HashSet<PathBuf>,
-    progress: Option<&SafeCopyProgressSession>,
-) -> Result<Vec<PathBuf>, String> {
-    ensure_safe_copy_not_cancelled(progress)?;
-    let name = source
-        .file_name()
-        .ok_or_else(|| "Safe Copy source has no file name".to_string())?;
-    if !source.exists() {
-        return Err(format!(
-            "Safe Copy source no longer exists: {}",
-            source.display()
-        ));
-    }
-
-    let staging = tempfile::Builder::new()
-        .prefix(".wincommander-safe-copy-")
-        .tempdir_in(batch)
-        .map_err(|error| format!("Safe Copy could not create a scrub staging area: {error}"))?;
-    let staged = staging.path().join(name);
-    let decoy_skip = |path: &Path| {
-        decoys
-            .iter()
-            .any(|decoy| paths_equal(&decoy.to_string_lossy(), &path.to_string_lossy()))
-    };
-    let skipped_decoys = copy_tree(source, &staged, &decoy_skip)
-        .map_err(|error| format!("Safe Copy could not stage {}: {error}", source.display()))?;
-    ensure_safe_copy_not_cancelled(progress)?;
-    if skipped_decoys > 0 {
-        return Err("Safe Copy refused a protected decoy inside the selection".into());
-    }
-
-    let mut files = Vec::new();
-    staged_files(&staged, &mut files)
-        .map_err(|error| format!("Safe Copy could not inspect its staged selection: {error}"))?;
-    if !files.is_empty() {
-        let scrub_output_dirs: HashSet<PathBuf> = files
-            .iter()
-            .filter_map(|file| file.parent().map(|parent| parent.join("_scrubbed")))
-            .filter(|path| path.is_dir())
-            .collect();
-        ensure_safe_copy_not_cancelled(progress)?;
-        let report_result = crate::file_metadata::scrub_metadata_paths_headless(
-            files
-                .iter()
-                .map(|path| path.to_string_lossy().to_string())
-                .collect(),
-            Some(crate::file_metadata::ScrubOptions {
-                output_dir: None,
-                dry_run: false,
-                recursive: false,
-                paranoid: crate::file_metadata::ParanoidOptions::default(),
-                replace_originals: true,
-            }),
-        )
-        .await;
-        ensure_safe_copy_not_cancelled(progress)?;
-        let report = report_result?;
-        validate_scrub_report(&report, files.len()).map_err(|detail| {
-            format!("Safe Copy scrub failed; originals were not placed on the clipboard: {detail}")
-        })?;
-        cleanup_new_scrub_output_dirs(&files, &scrub_output_dirs)?;
-    }
-
-    ensure_safe_copy_not_cancelled(progress)?;
-    promote_scrubbed_source(&staged, batch)
 }
 
 /// Save source paths as a protected selection for the Safe Paste action.
@@ -868,25 +706,6 @@ impl SafeCopyProgressSession {
         Some(Self { dialog })
     }
 
-    fn set_selection(&self, selected_index: usize, selected_total: usize) {
-        let mut active = lock_safe_copy_progress();
-        let Some(current) = active.as_mut() else {
-            return;
-        };
-        if !Arc::ptr_eq(&current.dialog, &self.dialog) {
-            return;
-        }
-        current.selected_index = selected_index;
-        current.selected_total = selected_total;
-        self.dialog.set_phase(format!(
-            "Preparing selected item {selected_index} of {selected_total}…"
-        ));
-    }
-
-    fn set_phase(&self, status: impl Into<String>) {
-        self.dialog.set_phase(status);
-    }
-
     fn is_cancelled(&self) -> bool {
         self.dialog.is_cancelled()
     }
@@ -923,8 +742,6 @@ impl SafeCopyProgressSession {
         None
     }
 
-    fn set_selection(&self, _selected_index: usize, _selected_total: usize) {}
-    fn set_phase(&self, _status: impl Into<String>) {}
     fn is_cancelled(&self) -> bool {
         false
     }
