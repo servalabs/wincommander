@@ -100,7 +100,21 @@ pub(crate) fn require_runtime_fence() -> Result<(), String> {
 pub(crate) fn with_exclusive<T>(operation: impl FnOnce(&SearchOperationFence) -> Result<T, String>) -> Result<T, String> {
     let parent = verified_parent()?;
     switch_fence(&ACTIVE_RUNTIME_FENCE,
-        || SearchOperationFence::acquire_exclusive(&parent).map_err(|_| "Close other WinCommander windows before cleaning the old search cache.".to_string()),
+        || {
+            let guard = SearchOperationFence::acquire_exclusive(&parent)
+                .map_err(|_| "Close other WinCommander windows before cleaning the old search cache.".to_string())?;
+            let selection = parent.join(".wincommander-encrypted-selection");
+            match std::fs::symlink_metadata(&selection) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
+                Err(_) => return Err("Cannot inspect pending search migration.".into()),
+                Ok(_) => match wincmd_search::SearchEngine::inspect_search_migration(&selection) {
+                    Ok(None) => {},
+                    Ok(Some(_)) => return Err("Finish the pending WinCommander update before cleaning search data.".into()),
+                    Err(_) => return Err("Cannot verify pending search migration.".into()),
+                },
+            }
+            Ok(guard)
+        },
         acquire, operation)
 }
 

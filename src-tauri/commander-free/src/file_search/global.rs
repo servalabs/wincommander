@@ -79,6 +79,8 @@ pub(super) fn cleanup_legacy(config: &IndexConfig, protected: &[PathBuf]) -> Res
     let current = write.as_mut().ok_or("Open search and let it finish indexing before cleanup.")?;
     if current.signature != expected { return Err("Search settings changed. Reopen search before cleanup.".into()); }
     let parent = config.index_dir.parent().ok_or("Search location unavailable.")?;
+    // Quiesce the watcher while the shared process lease is still held.
+    current.engine.stop();
     let result = super::runtime_fence::with_exclusive(|fence| {
         let mut backup_count = 0usize;
         for entry in std::fs::read_dir(parent).map_err(|_| "Cannot inspect old search backups.")? {
