@@ -339,6 +339,13 @@ async fn vault_call_until(
         "[wincommander-svc] vault_call({feature_id}, operation={request_id}): spawning broker helper"
     );
     #[cfg(feature = "experimental-search-broker-fence")]
+    let _pinned_fenced_pro = if matches!(presentation, wincmd_shared::vault_access::VaultPresentation::PerUser) {
+        match search_fence::pin_expected_pro(&fixed_pro_path()) {
+            Ok(file) => Some(file),
+            Err(_) => { zeroize_json(&mut args); return Err(VaultMountReason::BrokerIdentityRejected); },
+        }
+    } else { None };
+    #[cfg(feature = "experimental-search-broker-fence")]
     let fence = match presentation {
         wincmd_shared::vault_access::VaultPresentation::PerUser => {
             let result = match caller_token {
