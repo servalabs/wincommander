@@ -30,7 +30,7 @@ fn user_search_root(token: HANDLE) -> io::Result<PathBuf> {
     if !matches!(components.next(), Some(std::path::Component::Normal(_))) || components.next().is_some() { return Err(denied()); }
     Ok(base.join(app).join("file-search"))
 }
-fn acquire_at(parent: &Path) -> io::Result<SearchBrokerFence> {
+fn pin_directories(parent: &Path) -> io::Result<Vec<File>> {
     if !parent.is_absolute() { return Err(denied()); }
     let mut ancestors: Vec<_> = parent.ancestors().collect(); ancestors.reverse();
     let mut pins = Vec::new();
@@ -41,9 +41,12 @@ fn acquire_at(parent: &Path) -> io::Result<SearchBrokerFence> {
         if !meta.is_dir() || meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 { return Err(denied()); }
         pins.push(directory);
     }
-    // The user-side startup owns creation/ACL. SYSTEM must never create a
-    // lock that could exclude that user from future participation.
-    let file = OpenOptions::new().read(true).write(true)
+    Ok(pins)
+}
+fn acquire_at(parent: &Path, create: bool) -> io::Result<SearchBrokerFence> {
+    let pins = pin_directories(parent)?;
+    // Creation is permitted only while impersonating the authenticated user.
+    let file = OpenOptions::new().read(true).write(true).create(create).truncate(false)
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
         .open(parent.join(".encrypted-search-maintenance.lock"))?;
     let meta = file.metadata()?;
@@ -54,8 +57,31 @@ fn acquire_at(parent: &Path) -> io::Result<SearchBrokerFence> {
     Ok(SearchBrokerFence { _pins: pins, _file: file })
 }
 pub(super) fn acquire_for_user_token(token: HANDLE, session: u32, sid: &str) -> io::Result<SearchBrokerFence> {
+    use windows_sys::Win32::Security::{DuplicateTokenEx, ImpersonateLoggedOnUser, RevertToSelf,
+        SecurityImpersonation, TokenImpersonation, TOKEN_IMPERSONATE, TOKEN_QUERY};
     if !super::token_matches_authenticated_client(token, session, sid) { return Err(denied()); }
-    acquire_at(&user_search_root(token)?)
+    let mut impersonation: HANDLE = std::ptr::null_mut();
+    if unsafe { DuplicateTokenEx(token, TOKEN_QUERY | TOKEN_IMPERSONATE, std::ptr::null_mut(),
+        SecurityImpersonation, TokenImpersonation, &mut impersonation) } == 0 { return Err(denied()); }
+    struct UserToken(HANDLE);
+    impl Drop for UserToken { fn drop(&mut self) { unsafe { CloseHandle(self.0); } } }
+    let impersonation = UserToken(impersonation);
+    let parent = user_search_root(impersonation.0)?;
+    let app = parent.parent().ok_or_else(denied)?;
+    let base = app.parent().ok_or_else(denied)?;
+    if unsafe { ImpersonateLoggedOnUser(impersonation.0) } == 0 { return Err(denied()); }
+    struct RevertGuard;
+    impl Drop for RevertGuard { fn drop(&mut self) { if unsafe { RevertToSelf() } == 0 { std::process::abort(); } } }
+    let revert = RevertGuard;
+    let result = (|| {
+        let _base_pins = pin_directories(base)?;
+        match std::fs::create_dir(app) { Ok(()) => {}, Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}, Err(e) => return Err(e) }
+        let _app_pins = pin_directories(app)?;
+        match std::fs::create_dir(&parent) { Ok(()) => {}, Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}, Err(e) => return Err(e) }
+        acquire_at(&parent, true)
+    })();
+    drop(revert);
+    result
 }
 pub(super) fn acquire_for_session(session: u32, sid: &str) -> io::Result<SearchBrokerFence> {
     use windows_sys::Win32::System::RemoteDesktop::WTSQueryUserToken;
@@ -117,14 +143,14 @@ mod tests {
     fn broker_does_not_create_a_missing_user_lock() {
         let root = fixture();
         std::fs::remove_file(root.join(".encrypted-search-maintenance.lock")).unwrap();
-        assert!(acquire_at(&root).is_err());
+        assert!(acquire_at(&root, false).is_err());
         assert!(!root.join(".encrypted-search-maintenance.lock").exists());
         let _ = std::fs::remove_dir_all(root);
     }
     #[test]
     fn broker_lease_excludes_cleanup_and_releases_on_drop() {
         let root = fixture();
-        let lease = acquire_at(&root).unwrap();
+        let lease = acquire_at(&root, false).unwrap();
         let probe = open_probe(&root);
         assert!(probe.try_lock().is_err());
         drop(lease);
@@ -135,7 +161,7 @@ mod tests {
     #[test]
     fn broker_lease_survives_request_owner_until_child_exits() {
         let root = fixture();
-        let lease = acquire_at(&root).unwrap();
+        let lease = acquire_at(&root, false).unwrap();
         let mut child = Command::new("powershell.exe").args(["-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 30"]).stdout(Stdio::null()).spawn().unwrap();
         hold_until_process_exit(lease, child.as_raw_handle()).unwrap();
         let probe = open_probe(&root);

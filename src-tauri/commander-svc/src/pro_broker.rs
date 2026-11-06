@@ -344,9 +344,12 @@ async fn vault_call_until(
             let result = match caller_token {
                 Some(token) => search_fence::acquire_for_user_token(token, target_session_id, caller_sid),
                 None if per_user_wts_fallback_allowed(feature_id) => search_fence::acquire_for_session(target_session_id, caller_sid),
-                None => return Err(VaultMountReason::BrokerUnavailable),
+                None => Err(std::io::Error::other("missing authenticated user token")),
             };
-            Some(result.map_err(|_| VaultMountReason::BrokerUnavailable)?)
+            match result {
+                Ok(fence) => Some(fence),
+                Err(_) => { zeroize_json(&mut args); return Err(VaultMountReason::BrokerUnavailable); },
+            }
         }
         // SYSTEM helper scope is different. Do not claim user-profile fencing.
         wincmd_shared::vault_access::VaultPresentation::Machine => None,
@@ -366,8 +369,10 @@ async fn vault_call_until(
     if let Some(fence) = fence {
         // A dedicated supervisor owns the lease until OS-confirmed child exit,
         // even if this async request is cancelled after the process was started.
-        search_fence::hold_until_process_exit(fence, process)
-            .map_err(|_| VaultMountReason::BrokerUnavailable)?;
+        if search_fence::hold_until_process_exit(fence, process).is_err() {
+            zeroize_json(&mut args);
+            return Err(VaultMountReason::BrokerUnavailable);
+        }
     }
     eprintln!("[wincommander-svc] vault_call({feature_id}, operation={request_id}): broker spawned, waiting for connect");
     let result = async {
