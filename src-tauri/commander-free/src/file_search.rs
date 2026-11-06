@@ -3,7 +3,7 @@
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
 pub(crate) mod runtime_fence;
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
-pub(crate) use runtime_fence::acquire as acquire_runtime_fence;
+pub(crate) use runtime_fence::install_runtime_fence;
 mod defaults;
 mod global;
 mod locks;
@@ -311,6 +311,24 @@ pub async fn content_reindex() -> Result<(), String> {
     })
     .await
     .map_err(|_| "Index rebuild worker failed.".to_string())?
+}
+
+/// Explicit opt-in, feature-gated maintenance. The result reports retained
+/// plaintext backups separately; deletion is not secure erasure on SSDs.
+#[tauri::command]
+pub async fn content_cleanup_old_cache() -> Result<String, String> {
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    {
+        tokio::task::spawn_blocking(move || {
+            let _replacement_lock = IndexReplacementLock::acquire()?;
+            let (settings, plan) = prepare(false)?;
+            let config = build_index_config(&settings.app.file_search, plan.ordinary)?;
+            let (removed, backups) = global::cleanup_legacy(&config, &plan.protected)?;
+            Ok(format!("Removed {removed} old search-cache files. {backups} plaintext backup folders remain. Search will reopen and reconcile on the next request. Deletion does not guarantee secure erasure from SSDs or backups."))
+        }).await.map_err(|_| "Search cleanup worker failed.".to_string())?
+    }
+    #[cfg(not(all(windows, feature = "experimental-encrypted-search")))]
+    { Err("Search cleanup is not available in this version.".into()) }
 }
 
 #[tauri::command]

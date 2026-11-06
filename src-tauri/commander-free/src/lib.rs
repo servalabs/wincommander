@@ -1606,8 +1606,8 @@ pub fn run() {
     // Keep the cooperating user-profile launch fence for this process lifetime.
     // The installer helper runs through a separate early CLI entrypoint.
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
-    let _search_runtime_fence = match file_search::acquire_runtime_fence() {
-        Ok(fence) => fence,
+    match file_search::install_runtime_fence() {
+        Ok(()) => {},
         Err(message) => {
             use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
             let text: Vec<u16> = format!("{message}\0").encode_utf16().collect();
@@ -3069,6 +3069,7 @@ pub fn run() {
             file_search::content_rescan,
             file_search::content_reindex,
             file_search::content_get_doc,
+            file_search::content_cleanup_old_cache,
             backend::get_file_icon_data,
             backend::open_path,
             backend::open_event_log,

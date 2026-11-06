@@ -79,3 +79,38 @@ pub(crate) fn acquire() -> Result<SearchOperationFence, String> {
         }
     }
 }
+
+// The application keeps one process-wide shared lease. Search operations check
+// it before using the cached engine. An explicit cleanup briefly swaps it for
+// an exclusive lease while the global engine write lock is held.
+static ACTIVE_RUNTIME_FENCE: std::sync::Mutex<Option<SearchOperationFence>> = std::sync::Mutex::new(None);
+
+pub(crate) fn install_runtime_fence() -> Result<(), String> {
+    let guard = acquire()?;
+    let mut slot = ACTIVE_RUNTIME_FENCE.lock().map_err(|_| "Search maintenance state is unavailable.")?;
+    if slot.is_some() { return Err("Search maintenance state is already initialized.".into()); }
+    *slot = Some(guard); Ok(())
+}
+
+pub(crate) fn require_runtime_fence() -> Result<(), String> {
+    let slot = ACTIVE_RUNTIME_FENCE.lock().map_err(|_| "Search maintenance state is unavailable.")?;
+    if slot.is_some() { Ok(()) } else { Err("Search is unavailable until WinCommander is restarted.".into()) }
+}
+
+pub(crate) fn with_exclusive<T>(operation: impl FnOnce(&SearchOperationFence) -> Result<T, String>) -> Result<T, String> {
+    let mut slot = ACTIVE_RUNTIME_FENCE.lock().map_err(|_| "Search maintenance state is unavailable.")?;
+    let shared = slot.take().ok_or("Search is unavailable until WinCommander is restarted.")?;
+    drop(shared);
+    let attempted = (|| {
+        let parent = verified_parent()?;
+        let exclusive = SearchOperationFence::acquire_exclusive(&parent)
+            .map_err(|_| "Close other WinCommander windows before cleaning the old search cache.")?;
+        operation(&exclusive)
+    })();
+    // Restoration is required even after cleanup fails. If it cannot be
+    // obtained, leave the slot empty so future search operations fail closed.
+    match acquire() {
+        Ok(shared) => { *slot = Some(shared); attempted },
+        Err(_) => Err("Search maintenance could not restore its safety lock. Restart WinCommander before searching.".into()),
+    }
+}
