@@ -8,7 +8,7 @@ assertSharedAssets(root);
 const configPath = resolve(root, "src-tauri", "commander-free", "tauri.conf.json");
 const generatedConfigPath = resolve(root, "src-tauri", "commander-free", "tauri.release.generated.json");
 const contextShredBuildPath = resolve(root, "src-tauri", "target", "release", "wincommander-context-shred.exe");
-const pairedSearch = process.argv.includes("--experimental-paired-search");
+const pairedSearch = process.argv.includes("--experimental-paired-search-lab");
 const pairedTemplatePath = resolve(root, "src-tauri", "commander-free", "nsis", "installer.paired.generated.nsi");
 const serviceBuildPath = pairedSearch
   ? resolve(process.env.WINCMD_FENCED_SERVICE_PATH ?? "")
@@ -51,6 +51,7 @@ const releaseBuildEnv = {
   ...process.env,
   RUSTFLAGS: rustflags,
   CARGO_PROFILE_RELEASE_LTO: "false",
+  ...(pairedSearch ? { WINCMD_PAIRED_LAB_BUILD: "1" } : {}),
 };
 
 function run(command: string[], label: string) {
