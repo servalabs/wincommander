@@ -390,6 +390,17 @@ impl SearchEngine {
     /// The candidate is retained, not treated as a complete search index.
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     pub fn preserve_interrupted_search_candidate(old: &std::path::Path, fence: &crate::encrypted_search_fence::SearchOperationFence) -> Result<std::path::PathBuf> {
+        Self::preserve_interrupted_search_candidate_inner(old, fence, None)
+    }
+    /// The caller must authenticate and retain the paired service process for
+    /// the entire operation; a PID alone is not evidence of authorization.
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    pub fn preserve_interrupted_search_candidate_with_service(old: &std::path::Path, fence: &crate::encrypted_search_fence::SearchOperationFence, service_pid: u32) -> Result<std::path::PathBuf> {
+        if service_pid == 0 { return Err(SearchError::Config("invalid verified service process".into())); }
+        Self::preserve_interrupted_search_candidate_inner(old, fence, Some(service_pid))
+    }
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    fn preserve_interrupted_search_candidate_inner(old: &std::path::Path, fence: &crate::encrypted_search_fence::SearchOperationFence, service_pid: Option<u32>) -> Result<std::path::PathBuf> {
         use crate::encrypted_generation_prototype::{inspect, PinnedSelectionStore, UserProtector};
         let parent = old.parent().ok_or_else(|| SearchError::Config("invalid search parent".into()))?;
         if !old.is_absolute() { return Err(SearchError::Config("invalid search parent".into())); }
@@ -420,7 +431,10 @@ impl SearchEngine {
         }
         let (candidate, id) = candidate.ok_or_else(|| SearchError::Config("Interrupted search candidate not found.".into()))?;
         let name = format!(".wincommander-orphaned-index-{id}");
-        Ok(crate::encrypted_legacy_quarantine::move_to_sibling(&candidate, &name, fence, None)?)
+        Ok(match service_pid {
+            Some(pid) => crate::encrypted_legacy_quarantine::move_to_sibling_with_service(&candidate, &name, fence, pid)?,
+            None => crate::encrypted_legacy_quarantine::move_to_sibling(&candidate, &name, fence, None)?,
+        })
     }
     /// Experimental application entry point. A missing selector starts a new
     /// encrypted cache; a present but invalid selector is always an error.

@@ -355,6 +355,24 @@ pub async fn content_reindex() -> Result<(), String> {
     .map_err(|_| "Index rebuild worker failed.".to_string())?
 }
 
+/// Explicitly preserve an interrupted encrypted-search candidate before retry.
+#[tauri::command]
+pub async fn content_recover_interrupted_cache() -> Result<String, String> {
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    {
+        let pro = crate::sidecar::quiesce_idle_pro_for_search().await?;
+        let service = crate::svc_client::experimental_search_service_capability().await?;
+        tokio::task::spawn_blocking(move || {
+            let _pro = pro;
+            let _replacement_lock = IndexReplacementLock::acquire()?;
+            global::preserve_interrupted_candidate(&service)?;
+            Ok("Interrupted search data was preserved. Open search to rebuild its protected index.".to_string())
+        }).await.map_err(|_| "Search recovery worker failed.".to_string())?
+    }
+    #[cfg(not(all(windows, feature = "experimental-encrypted-search")))]
+    { Err("Search recovery is not available in this version.".into()) }
+}
+
 /// Explicit opt-in, feature-gated maintenance. The result reports retained
 /// plaintext backups separately; deletion is not secure erasure on SSDs.
 #[tauri::command]

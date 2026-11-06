@@ -207,6 +207,19 @@ fn schedule_legacy_cleanup(config: IndexConfig, protected: Vec<PathBuf>) {
 pub(super) fn cleanup_legacy(config: &IndexConfig, protected: &[PathBuf]) -> Result<(usize, usize), String> {
     cleanup_legacy_with_service(config, protected, None)
 }
+/// The replacement lock and Pro admission guard are held by the caller.
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
+pub(super) fn preserve_interrupted_candidate(service: &wincmd_service_auth::search_service_pin::PinnedSearchService) -> Result<(), String> {
+    let mut write = cell().write().map_err(|_| "Search state is unavailable.")?;
+    if let Some(old) = write.take() { old.engine.stop(); }
+    let parent = super::runtime_fence::verified_parent()?;
+    super::runtime_fence::with_exclusive(|fence| {
+        let pid = service.running_pid().map_err(|_| "The verified WinCommander service changed during recovery.")?;
+        SearchEngine::preserve_interrupted_search_candidate_with_service(&parent.join("fts"), fence, pid)
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    })
+}
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
 fn cleanup_legacy_with_service(config: &IndexConfig, protected: &[PathBuf], service: Option<&wincmd_service_auth::search_service_pin::PinnedSearchService>) -> Result<(usize, usize), String> {
     let expected = serde_json::to_string(&(config, protected)).map_err(|e| e.to_string())?;
