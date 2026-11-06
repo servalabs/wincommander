@@ -25,7 +25,10 @@ pub(super) fn with_engine<T>(
     {
         let read = cell().read().map_err(|_| "Search state is unavailable.")?;
         if let Some(current) = read.as_ref().filter(|c| c.signature == signature) {
-            return operation(&current.engine);
+            let result = operation(&current.engine);
+            #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+            { drop(read); schedule_legacy_cleanup(config.clone(), protected.to_vec()); }
+            return result;
         }
     }
     // Match other replacement paths: take the process mutex before the
@@ -39,7 +42,9 @@ pub(super) fn with_engine<T>(
     // request waited for the replacement lock.
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     if let Some(current) = write.as_ref().filter(|c| c.signature == signature) {
-        return operation(&current.engine);
+        let result = operation(&current.engine);
+        drop(write); schedule_legacy_cleanup(config.clone(), protected.to_vec());
+        return result;
     }
     if let Some(old) = write.take() {
         old.engine.stop();
@@ -73,7 +78,7 @@ pub(super) fn with_engine<T>(
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     {
         drop(write);
-        if result.is_ok() { schedule_legacy_cleanup(config, protected.to_vec()); }
+        schedule_legacy_cleanup(config, protected.to_vec());
     }
     result
 }
@@ -82,6 +87,8 @@ pub(super) fn with_engine<T>(
 static AUTO_CLEANUP_STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
 static AUTO_CLEANUP_MESSAGE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
+static AUTO_CLEANUP_LAST: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
 
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
 pub(super) fn automatic_cleanup_message() -> Option<String> {
@@ -122,11 +129,27 @@ mod cleanup_tests {
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
 fn schedule_legacy_cleanup(config: IndexConfig, protected: Vec<PathBuf>) {
     use std::sync::atomic::Ordering;
-    // A protected scope and Tantivy lock alone contain no old index data.
+    if AUTO_CLEANUP_STARTED.load(Ordering::Acquire) { return; }
+    let Ok(mut last) = AUTO_CLEANUP_LAST.lock() else { return; };
+    if last.is_some_and(|when| when.elapsed() < std::time::Duration::from_secs(60)) { return; }
+    *last = Some(std::time::Instant::now()); drop(last);
     let requires_cleanup = legacy_data_may_remain(&config.index_dir);
-    if !requires_cleanup || AUTO_CLEANUP_STARTED.swap(true, Ordering::AcqRel) { return; }
+    if !requires_cleanup {
+        let message = (|| -> Result<Option<String>, String> {
+            let parent = config.index_dir.parent().ok_or("Search location unavailable.")?;
+            let mut count = 0usize;
+            for entry in std::fs::read_dir(parent).map_err(|_| "Cannot inspect old search backups.")? {
+                if entry.map_err(|_| "Cannot inspect old search backups.")?.file_name().to_string_lossy().starts_with(".wincommander-legacy-index-backup-") { count += 1; }
+            }
+            Ok((count > 0).then(|| format!("Old search backups remain in WinCommander storage ({count} folders).")))
+        })().unwrap_or_else(|error| Some(error));
+        if let Ok(mut slot) = AUTO_CLEANUP_MESSAGE.lock() { *slot = message; }
+        return;
+    }
+    if AUTO_CLEANUP_STARTED.swap(true, Ordering::AcqRel) { return; }
     let spawned = std::thread::Builder::new().name("search-legacy-cleanup".into()).spawn(move || {
         let outcome = (|| {
+            SearchEngine::check_legacy_cleanup_readiness().map_err(|e| e.to_string())?;
             let _replacement = super::locks::IndexReplacementLock::acquire()?;
             cleanup_legacy(&config, &protected)
         })();
@@ -136,8 +159,10 @@ fn schedule_legacy_cleanup(config: IndexConfig, protected: Vec<PathBuf>) {
             Err(error) => Some(format!("Old search data could not be cleaned: {error}")),
         };
         if let Ok(mut slot) = AUTO_CLEANUP_MESSAGE.lock() { *slot = message; }
+        AUTO_CLEANUP_STARTED.store(false, Ordering::Release);
     });
     if spawned.is_err() {
+        AUTO_CLEANUP_STARTED.store(false, Ordering::Release);
         if let Ok(mut slot) = AUTO_CLEANUP_MESSAGE.lock() { *slot = Some("Old search data cleanup could not start.".into()); }
     }
 }

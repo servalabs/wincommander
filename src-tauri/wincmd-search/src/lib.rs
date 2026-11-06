@@ -838,6 +838,11 @@ impl SearchEngine {
         }
         store.clear_matching(&transaction)?; Ok(())
     }
+    /// Read-only early check; cleanup repeats this under the exclusive fence.
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    pub fn check_legacy_cleanup_readiness() -> Result<()> {
+        crate::encrypted_search_maintenance::verify_known_writers_stopped().map_err(SearchError::Config)
+    }
     /// Explicit experimental cleanup for a disposable legacy cache after a
     /// full reconciliation with authoritative user roots. This is not secure
     /// erasure and does not remove backups, snapshots or SSD remanence.
