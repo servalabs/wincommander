@@ -76,9 +76,11 @@ jobs:
           $parent = Join-Path $env:LOCALAPPDATA 'WinCommander/file-search'
           $old = Join-Path $parent 'fts'
           if (Test-Path -LiteralPath $parent) { throw 'Runner profile is not empty.' }
+          $docs = Join-Path $env:USERPROFILE 'Documents'
+          if ([string]::IsNullOrWhiteSpace($docs)) { throw 'Runner Documents path unavailable.' }
           Push-Location src-tauri
           try {
-            cargo run --locked -p wincmd-search --example seed_legacy_fixture -- $old
+            cargo run --locked -p wincmd-search --features experimental-encrypted-search --example paired_installed_fixture -- seed $old $docs
             if ($LASTEXITCODE -ne 0) { throw 'Legacy index fixture could not be created.' }
           } finally { Pop-Location }
           if (-not (Test-Path -LiteralPath (Join-Path $old 'meta.json'))) { throw 'Legacy index fixture is missing.' }
@@ -115,6 +117,7 @@ jobs:
           Copy-Item -LiteralPath $env:ComSpec -Destination $fakePro
           $fake = Start-Process -FilePath $fakePro -ArgumentList '/c ping -n 180 127.0.0.1 >nul' -WindowStyle Hidden -PassThru
           try {
+            Write-Host "Synthetic Pro process ID: $($fake.Id)"
             Start-Sleep -Seconds 2
             if ($fake.HasExited) { throw 'Synthetic Pro process did not remain active.' }
             $setup = Start-Process -FilePath $installer -ArgumentList '/S' -WindowStyle Hidden -PassThru
@@ -130,9 +133,17 @@ jobs:
         shell: pwsh
         run: |
           $installer = @(Get-ChildItem -File 'src-tauri/target/release/bundle/nsis/*.exe')[0].FullName
+          Write-Host 'Pro processes before retry:'
+          Get-CimInstance -ClassName Win32_Process -Filter "Name='wincommander-pro.exe'" | Select-Object ProcessId, ParentProcessId, ExecutablePath, CommandLine | Format-List | Out-String | Write-Host
           $setup = Start-Process -FilePath $installer -ArgumentList '/S' -WindowStyle Hidden -PassThru
           if (-not $setup.WaitForExit(300000)) { $setup.Kill(); throw 'Retry setup timed out.' }
-          if ($setup.ExitCode -ne 0) { throw "Upgrade retry failed: $($setup.ExitCode)." }
+          if ($setup.ExitCode -ne 0) {
+            $log = Join-Path $env:ProgramFiles 'WinCommander/installer-lifecycle.log'
+            if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log | Write-Host }
+            Write-Host 'Pro processes after failed retry:'
+            Get-CimInstance -ClassName Win32_Process -Filter "Name='wincommander-pro.exe'" | Select-Object ProcessId, ParentProcessId, ExecutablePath, CommandLine | Format-List | Out-String | Write-Host
+            throw "Upgrade retry failed: $($setup.ExitCode)."
+          }
           $service = Get-Service WinCommanderSvc -ErrorAction Stop
           $service.WaitForStatus('Running', [TimeSpan]::FromSeconds(60))
           $selection = Join-Path $env:LOCALAPPDATA 'WinCommander/file-search/.wincommander-encrypted-selection/candidate-proof.v1'
@@ -176,3 +187,12 @@ jobs:
           } finally { [IO.File]::WriteAllBytes($selection, $original) }
           if ((Get-FileHash -Algorithm SHA256 -LiteralPath $selection).Hash -ine $env:INITIAL_SELECTION_SHA256) { throw 'Selection fixture restore failed.' }
           Write-Host 'Corrupted selection was rejected and the fixture was restored.'
+          $docs = Join-Path $env:USERPROFILE 'Documents'
+          $old = Join-Path $env:LOCALAPPDATA 'WinCommander/file-search/fts'
+          Push-Location src-tauri
+          try {
+            cargo run --locked -p wincmd-search --features experimental-encrypted-search --example paired_installed_fixture -- verify $old $docs
+            if ($LASTEXITCODE -ne 0) { throw 'Migrated synthetic document was not searchable.' }
+          } finally { Pop-Location }
+          if ((Get-FileHash -Algorithm SHA256 -LiteralPath $selection).Hash -ine $env:INITIAL_SELECTION_SHA256) { throw 'Search verification replaced the selected generation.' }
+          Write-Host 'Synthetic document was searchable after reopening the protected generation.'
