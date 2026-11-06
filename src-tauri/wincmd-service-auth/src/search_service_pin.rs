@@ -161,6 +161,10 @@ mod tests {
         std::fs::write(&path, b"fixture").unwrap();
         assert!(pin_file(&path, &[0; 32]).is_err());
         let expected: [u8; 32] = Sha256::digest(b"fixture").into();
+        let alias = root.join("alias.exe");
+        std::fs::hard_link(&path, &alias).unwrap();
+        assert!(pin_file(&path, &expected).is_err());
+        std::fs::remove_file(alias).unwrap();
         let guard = pin_file(&path, &expected).unwrap();
         assert!(std::fs::write(&path, b"changed").is_err());
         assert!(std::fs::remove_file(&path).is_err());
