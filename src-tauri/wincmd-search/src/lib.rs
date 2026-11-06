@@ -472,14 +472,15 @@ impl SearchEngine {
                 else { Self::experimental_scope_only(&config.index_dir)? }
             },
         };
-        if fresh {
-            for entry in std::fs::read_dir(parent)? {
-                let name = entry?.file_name();
-                let name = name.to_string_lossy();
-                if name.starts_with(".wincommander-legacy-index-backup-")
-                    || name.strip_prefix(".wincommander-encrypted-").is_some_and(|id| id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit())) {
-                    return Err(SearchError::Config("Prior encrypted search data needs recovery; no fresh origin was created.".into()));
-                }
+        // An interrupted rebuild may have created a large encrypted candidate
+        // before it could publish an origin. Refuse to accumulate a new one on
+        // each restart, including when a legacy index is still present.
+        for entry in std::fs::read_dir(parent)? {
+            let name = entry?.file_name();
+            let name = name.to_string_lossy();
+            if (fresh && name.starts_with(".wincommander-legacy-index-backup-"))
+                || name.strip_prefix(".wincommander-encrypted-").is_some_and(|id| id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit())) {
+                return Err(SearchError::Config("Prior encrypted search data needs recovery; existing files were retained.".into()));
             }
         }
         let mut identity = [0u8; 16];
@@ -1780,6 +1781,32 @@ mod tests {
         let after_indexing = snapshot();
         assert_eq!(SearchEngine::experimental_selected_readonly_query(&old, &selection, &query, &guard).unwrap().len(), 1);
         assert_eq!(snapshot(), after_indexing);
+    }
+
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    #[test]
+    fn interrupted_candidate_with_legacy_index_requires_recovery() {
+        let root = TempDir::new().unwrap();
+        let old = root.path().join("legacy");
+        fs::create_dir(&old).unwrap();
+        fs::write(old.join("meta.json"), b"legacy index").unwrap();
+        let orphan = root.path().join(format!(".wincommander-encrypted-{}", "ab".repeat(16)));
+        fs::create_dir(&orphan).unwrap();
+        fs::write(orphan.join("retained"), b"candidate data").unwrap();
+        for _ in 0..2 {
+            let result = SearchEngine::open_or_rebuild_experimental_with_policy(
+                make_config(old.clone(), vec![]), Arc::new(|_| true),
+            );
+            assert!(matches!(result, Err(SearchError::Config(message)) if message.contains("needs recovery")));
+            assert_eq!(fs::read(old.join("meta.json")).unwrap(), b"legacy index");
+            assert_eq!(fs::read(orphan.join("retained")).unwrap(), b"candidate data");
+            assert_eq!(fs::read_dir(root.path()).unwrap().filter_map(|entry| {
+                let name = entry.ok()?.file_name();
+                let name = name.to_string_lossy();
+                name.strip_prefix(".wincommander-encrypted-")
+                    .filter(|id| id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit())).map(|_| ())
+            }).count(), 1);
+        }
     }
 
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
