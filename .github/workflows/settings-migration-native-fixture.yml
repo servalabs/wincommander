@@ -207,6 +207,15 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
           bun-version: 1.4.3
+      - name: Test paired release input contract
+        shell: pwsh
+        run: |
+          bun test tools/paired-search-release-contract.test.ts
+          if ($LASTEXITCODE -ne 0) { throw 'Paired packaging contract tests failed.' }
+          rustc --test src-tauri/commander-free/build_service_pin.rs -o "$env:RUNNER_TEMP/service-pin-tests.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not compile staged service hash fixture.' }
+          & "$env:RUNNER_TEMP/service-pin-tests.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'Staged service hash fixture failed.' }
       - name: Install locked frontend dependencies
         run: bun install --frozen-lockfile
       - name: Generate encrypted backend assets

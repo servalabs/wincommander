@@ -85,6 +85,13 @@ jobs:
         working-directory: .
       - run: bun run encrypt-backend
         working-directory: .
+      - name: Test paired release input validation
+        shell: pwsh
+        run: |
+          rustc --edition 2021 --test commander-free/build_service_pin.rs -o "$env:RUNNER_TEMP/paired-release-input-test.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "$env:RUNNER_TEMP/paired-release-input-test.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - run: cargo check --locked -p commander-free --features experimental-encrypted-search
       - run: 'cargo test --locked -p commander-free --lib --features experimental-encrypted-search search_migration_cli::tests::'
       - run: 'cargo test --locked -p commander-free --lib --features experimental-encrypted-search file_search::runtime_fence::tests::'

@@ -4,7 +4,9 @@ use aes_gcm::{
 };
 use sha2::{Digest, Sha256};
 use std::fs;
+use std::io::Read;
 use std::path::Path;
+mod build_service_pin;
 
 const SHARED_SCHEDULER: &str = "../wincmd-shared/scripts/auto-erase.ps1";
 
@@ -113,6 +115,8 @@ fn validate_release_modules(salt_bytes: &[u8]) {
 // writes a random salt and matching ciphertext; debug builds do not consume it.
 // The salt is XOR-obfuscated into generated_key.rs so it is not stored verbatim.
 fn main() {
+    println!("cargo:rerun-if-changed=build_service_pin.rs");
+    println!("cargo:rerun-if-changed=resources/wincommander-svc.exe");
     // Do this before the profile branch: a Debug build must be invalidated
     // whenever cleanup.ps1 changes, even though it deliberately does not read
     // or regenerate the release ciphertext.
@@ -120,6 +124,8 @@ fn main() {
 
     println!("cargo:rerun-if-env-changed=WINCMD_PRO_SHA256_CURRENT");
     println!("cargo:rerun-if-env-changed=WINCMD_PRO_SHA256_PREVIOUS");
+    println!("cargo:rerun-if-env-changed=WINCMD_FENCED_SERVICE_SHA256");
+    println!("cargo:rerun-if-env-changed=WINCMD_APP_DIR");
 
     // Licence config is embedded via option_env!() in license.rs (release builds
     // ignore the runtime env, F-2). Declare those vars here so cargo recompiles
@@ -128,7 +134,13 @@ fn main() {
     println!("cargo:rerun-if-env-changed=WINCMD_LICENSE_API_BASE");
     println!("cargo:rerun-if-env-changed=LICENSE_API_BASE");
     println!("cargo:rerun-if-env-changed=WINCMD_LICENSE_PUBLIC_KEY");
-    for name in ["WINCMD_PQ_PRO_ED_KEY", "WINCMD_PQ_PRO_MLDSA_KEY", "WINCMD_PQ_PRO_ED_ID", "WINCMD_PQ_PRO_MLDSA_ID", "WINCMD_PQ_PRO_EPOCH"] {
+    for name in [
+        "WINCMD_PQ_PRO_ED_KEY",
+        "WINCMD_PQ_PRO_MLDSA_KEY",
+        "WINCMD_PQ_PRO_ED_ID",
+        "WINCMD_PQ_PRO_MLDSA_ID",
+        "WINCMD_PQ_PRO_EPOCH",
+    ] {
         println!("cargo:rerun-if-env-changed={name}");
     }
     println!("cargo:rerun-if-env-changed=LICENSE_PUBLIC_KEY_B64");
@@ -176,6 +188,37 @@ fn main() {
         "the desktop manifest must retain requestedExecutionLevel=asInvoker"
     );
     let is_development_profile = std::env::var("PROFILE").as_deref() == Ok("debug");
+    if std::env::var_os("CARGO_FEATURE_EXPERIMENTAL_ENCRYPTED_SEARCH").is_some()
+        && !is_development_profile
+        && std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+    {
+        let hash = std::env::var("WINCMD_FENCED_SERVICE_SHA256").ok();
+        let app_dir = std::env::var("WINCMD_APP_DIR").ok();
+        let path = Path::new("resources/wincommander-svc.exe");
+        let staged_hash = fs::File::open(path).ok().and_then(|mut file| {
+            if !file.metadata().ok()?.is_file() {
+                return None;
+            }
+            let mut hasher = Sha256::new();
+            let mut buffer = [0u8; 65536];
+            loop {
+                let n = file.read(&mut buffer).ok()?;
+                if n == 0 {
+                    break;
+                }
+                hasher.update(&buffer[..n]);
+            }
+            Some(
+                hasher
+                    .finalize()
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>(),
+            )
+        });
+        build_service_pin::validate(hash.as_deref(), app_dir.as_deref(), staged_hash.as_deref())
+            .expect("invalid paired search release configuration");
+    }
     if std::env::var_os("CARGO_FEATURE_AUTONOMOUS_TEST").is_some() && !is_development_profile {
         panic!("the autonomous-test feature is restricted to debug test artifacts");
     }
