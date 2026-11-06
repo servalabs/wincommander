@@ -8,4 +8,3 @@ export function pairedServiceHash(service: Uint8Array, expected: string): string
   if (actual !== expected.toLowerCase()) throw new Error("Final service bytes do not match the paired SHA-256.");
   return actual;
 }
-
