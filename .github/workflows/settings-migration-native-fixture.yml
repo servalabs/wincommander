@@ -322,9 +322,9 @@ jobs:
       - name: Exercise a disposable SCM service stop and restore
         shell: pwsh
         run: |
-          cargo build --locked -p commander-svc --example disposable_scm_fixture
+          cargo build --locked -p commander-svc --example disposable_scm_fixture --example disposable_watchdog_fixture
           if ($LASTEXITCODE -ne 0) { throw 'Disposable SCM host did not build.' }
-          $name = 'WCSearchFixture' + [Guid]::NewGuid().ToString('N').Substring(0, 8)
+          $name = 'WinCommanderSearchTestFixture' + [Guid]::NewGuid().ToString('N').Substring(0, 8)
           if (Get-Service -Name $name -ErrorAction SilentlyContinue) { throw 'Disposable service name already exists.' }
           $exe = (Resolve-Path 'target/debug/examples/disposable_scm_fixture.exe').Path
           $helper = Join-Path $env:RUNNER_TEMP ($name + '.ps1')
@@ -342,6 +342,28 @@ jobs:
             if ($LASTEXITCODE -ne 0 -or (Get-Service -Name $name).Status -ne 'Stopped') { throw 'Fixture did not stop.' }
             & pwsh -NoProfile -NonInteractive -File $helper -Action Restore
             if ($LASTEXITCODE -ne 0 -or (Get-Service -Name $name).Status -ne 'Running') { throw 'Fixture did not restore.' }
+            # Test-only watchdog simulation; no product watchdog is implied.
+            $marker = Join-Path $env:RUNNER_TEMP ($name + '.state')
+            $ready = Join-Path $env:RUNNER_TEMP ($name + '.ready')
+            $stream = [IO.File]::Open($marker, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+            try { $bytes = [Text.Encoding]::UTF8.GetBytes("original=running`n"); $stream.Write($bytes, 0, $bytes.Length); $stream.Flush($true) } finally { $stream.Dispose() }
+            $parent = Start-Process -FilePath 'pwsh' -ArgumentList '-NoProfile','-NonInteractive','-Command','Start-Sleep -Seconds 120' -WindowStyle Hidden -PassThru
+            $watchdog = $null
+            try {
+              $watchdogExe = (Resolve-Path 'target/debug/examples/disposable_watchdog_fixture.exe').Path
+              $watchdog = Start-Process -FilePath $watchdogExe -ArgumentList @($parent.Id, $name, "`"$marker`"", "`"$ready`"") -WindowStyle Hidden -PassThru
+              $clock = [Diagnostics.Stopwatch]::StartNew()
+              while (-not (Test-Path -LiteralPath $ready) -and $clock.Elapsed.TotalSeconds -lt 20 -and -not $watchdog.HasExited) { Start-Sleep -Milliseconds 100; $watchdog.Refresh() }
+              if (-not (Test-Path -LiteralPath $ready)) { throw 'Fixture watchdog did not become ready.' }
+              Stop-Service -Name $name
+              (Get-Service -Name $name).WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30))
+              $parent.Kill(); $parent.WaitForExit()
+              if (-not $watchdog.WaitForExit(45000) -or $watchdog.ExitCode -ne 0) { throw 'Fixture watchdog failed to restore service.' }
+              if ((Get-Service -Name $name).Status -ne 'Running' -or (Test-Path -LiteralPath $marker)) { throw 'Fixture watchdog did not finish recovery.' }
+            } finally {
+              if (-not $parent.HasExited) { $parent.Kill(); $parent.WaitForExit() }
+              if ($watchdog -and -not $watchdog.HasExited) { $watchdog.Kill(); $watchdog.WaitForExit() }
+            }
             $global:LASTEXITCODE = 0
           } finally {
             if ($created) {
