@@ -9,6 +9,8 @@
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
 mod encrypted_search_maintenance;
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+mod encrypted_legacy_cleanup;
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
 #[allow(dead_code)]
 mod encrypted_migration_transaction;
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
@@ -835,6 +837,26 @@ impl SearchEngine {
             _ => return Err(SearchError::Config("search migration paths changed; recovery required".into())),
         }
         store.clear_matching(&transaction)?; Ok(())
+    }
+    /// Explicit experimental cleanup for a disposable legacy cache after a
+    /// full reconciliation with authoritative user roots. This is not secure
+    /// erasure and does not remove backups, snapshots or SSD remanence.
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    pub fn cleanup_legacy_cache_after_reconciliation(&mut self,
+        fence: &crate::encrypted_search_fence::SearchOperationFence) -> Result<usize> {
+        if self.experimental_selection.is_none() || self.experimental_id.is_none() || self.config.roots.is_empty() {
+            return Err(SearchError::Config("A selected index and authoritative search roots are required.".into()));
+        }
+        self.stop();
+        if self.watcher_invalid.load(Ordering::Acquire) {
+            return Err(SearchError::Config("Search requires recovery before legacy cleanup.".into()));
+        }
+        let report = self.reconcile_sync(&std::sync::atomic::AtomicBool::new(false), usize::MAX)?;
+        if !report.complete { return Err(SearchError::Config("Search reconciliation is incomplete; old cache retained.".into())); }
+        self.ci.index.reader()?;
+        let old = self.experimental_legacy_path.as_ref()
+            .ok_or_else(|| SearchError::Config("legacy search location unavailable".into()))?;
+        Ok(crate::encrypted_legacy_cleanup::remove_managed(old, fence)?)
     }
     /// Locate the generation-specific quarantine path for inspection after an
     /// interrupted move. Existence alone is not proof of successful migration.
