@@ -1784,6 +1784,14 @@ mod tests {
 
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
     #[test]
+    fn disposable_migration_with_stubbed_writer_check() {
+        crate::encrypted_search_maintenance::with_test_writers_stopped(
+            offline_empty_cache_reconciles_with_live_roots_after_restart,
+        );
+    }
+
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    #[test]
     fn offline_empty_cache_reconciles_with_live_roots_after_restart() {
         let root = TempDir::new().unwrap();
         let old = root.path().join("legacy");
