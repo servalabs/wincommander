@@ -153,6 +153,7 @@ pub fn is_known_verb(feature_id: &str) -> bool {
             | "svc.vault.list_authorized"
             | "svc.vault.drive_letters"
             | "svc.vault.capabilities"
+            | "svc.search.fence_capabilities"
             | "svc.vault.reconcile_access_groups"
             | "svc.vault.get_access_directory"
             | "svc.vault.save_access_directory"
@@ -401,7 +402,8 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         | "svc.vault.get_policy"
         | "svc.vault.get_status"
         | "svc.vault.apply_owner_fragment"
-        | "svc.vault.capabilities" => CapabilityClass::ReadOnly,
+        | "svc.vault.capabilities"
+        | "svc.search.fence_capabilities" => CapabilityClass::ReadOnly,
 
         // The principal directory contains local account/SID information.
         // It is therefore a local-administrator management read, rather
