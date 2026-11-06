@@ -251,7 +251,9 @@ impl SearchEngine {
         // after restart when this engine no longer has their in-memory paths.
         for entry in std::fs::read_dir(parent)? {
             let entry = entry?;
-            if entry.file_name().to_string_lossy().starts_with(".wincommander-legacy-index-backup-") {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with(".wincommander-legacy-index-backup-") || name.starts_with(".wincommander-orphaned-index-") {
                 config.skip_paths.push(entry.path());
             }
         }
@@ -382,6 +384,43 @@ impl SearchEngine {
         let generation = parent.join(format!(".wincommander-encrypted-{}", hex::encode(selected.index_id)));
         let index = ContentIndex::open_experimental_encrypted_readonly(&generation, selected.index_id)?;
         index.search_keyword(query)
+    }
+    /// Explicit offline recovery for one interrupted pre-origin candidate.
+    /// The caller must hold the exclusive operation fence and stop old writers.
+    /// The candidate is retained, not treated as a complete search index.
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    pub fn preserve_interrupted_search_candidate(old: &std::path::Path, fence: &crate::encrypted_search_fence::SearchOperationFence) -> Result<std::path::PathBuf> {
+        use crate::encrypted_generation_prototype::{inspect, PinnedSelectionStore, UserProtector};
+        let parent = old.parent().ok_or_else(|| SearchError::Config("invalid search parent".into()))?;
+        if !old.is_absolute() { return Err(SearchError::Config("invalid search parent".into())); }
+        fence.require_exclusive_for(parent)?;
+        let _pins = crate::read_only::CheckedDirectory::pin_root_path(parent)?;
+        let selection = parent.join(".wincommander-encrypted-selection");
+        let mut store = PinnedSelectionStore::open(&selection)?;
+        if inspect(&mut store, &UserProtector)?.is_some()
+            || crate::encrypted_generation_prototype::read_origin(&selection)?.is_some() {
+            return Err(SearchError::Config("Search selection or recovery proof exists; interrupted candidate was retained.".into()));
+        }
+        drop(store);
+        let mut candidate = None;
+        for entry in std::fs::read_dir(parent)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with(".wincommander-orphaned-index-") {
+                return Err(SearchError::Config("A preserved search candidate already exists; recovery is required.".into()));
+            }
+            if let Some(id) = name.strip_prefix(".wincommander-encrypted-") {
+                if id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    if candidate.replace((entry.path(), id.to_ascii_lowercase())).is_some() {
+                        return Err(SearchError::Config("Multiple interrupted search candidates require recovery.".into()));
+                    }
+                }
+            }
+        }
+        let (candidate, id) = candidate.ok_or_else(|| SearchError::Config("Interrupted search candidate not found.".into()))?;
+        let name = format!(".wincommander-orphaned-index-{id}");
+        Ok(crate::encrypted_legacy_quarantine::move_to_sibling(&candidate, &name, fence, None)?)
     }
     /// Experimental application entry point. A missing selector starts a new
     /// encrypted cache; a present but invalid selector is always an error.
@@ -1781,6 +1820,39 @@ mod tests {
         let after_indexing = snapshot();
         assert_eq!(SearchEngine::experimental_selected_readonly_query(&old, &selection, &query, &guard).unwrap().len(), 1);
         assert_eq!(snapshot(), after_indexing);
+    }
+
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    #[test]
+    fn interrupted_candidate_is_preserved_before_retry() {
+        crate::encrypted_search_maintenance::with_test_writers_stopped(|| {
+            let root = TempDir::new().unwrap();
+            let old = root.path().join("legacy");
+            fs::create_dir(&old).unwrap();
+            fs::write(old.join("meta.json"), b"original").unwrap();
+            fs::create_dir(root.path().join(".wincommander-encrypted-selection")).unwrap();
+            let orphan = root.path().join(format!(".wincommander-encrypted-{}", "ab".repeat(16)));
+            fs::create_dir(&orphan).unwrap();
+            fs::write(orphan.join("partial"), b"retained").unwrap();
+            let guard = crate::encrypted_search_fence::SearchOperationFence::acquire_exclusive(root.path()).unwrap();
+            let proof = root.path().join(".wincommander-encrypted-selection").join("candidate-proof.v1");
+            fs::write(&proof, b"invalid selection").unwrap();
+            assert!(SearchEngine::preserve_interrupted_search_candidate(&old, &guard).is_err());
+            assert_eq!(fs::read(orphan.join("partial")).unwrap(), b"retained");
+            fs::remove_file(&proof).unwrap();
+            let saved = SearchEngine::preserve_interrupted_search_candidate(&old, &guard).unwrap();
+            assert!(!orphan.exists());
+            assert_eq!(fs::read(saved.join("partial")).unwrap(), b"retained");
+            assert_eq!(fs::read(old.join("meta.json")).unwrap(), b"original");
+            assert!(SearchEngine::preserve_interrupted_search_candidate(&old, &guard).is_err());
+            drop(guard);
+            let live = SearchEngine::open_or_rebuild_experimental_with_policy(
+                make_config(old.clone(), vec![]), Arc::new(|_| true),
+            ).unwrap();
+            live.stop();
+            assert_eq!(fs::read(saved.join("partial")).unwrap(), b"retained");
+            assert_eq!(fs::read(old.join("meta.json")).unwrap(), b"original");
+        });
     }
 
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]

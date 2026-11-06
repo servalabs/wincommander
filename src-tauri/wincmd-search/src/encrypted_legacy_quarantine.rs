@@ -104,7 +104,7 @@ pub(crate) fn restore_expected(old: &Path, index_id: &[u8; 16], fence: &crate::e
     move_to_sibling(&parent.join(backup_name(index_id)?), name, fence, Some(expected))
 }
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
-fn move_to_sibling(old: &Path, destination_name: &str, fence: &crate::encrypted_search_fence::SearchOperationFence, expected: Option<(u32, u32, u32)>) -> io::Result<PathBuf> {
+pub(crate) fn move_to_sibling(old: &Path, destination_name: &str, fence: &crate::encrypted_search_fence::SearchOperationFence, expected: Option<(u32, u32, u32)>) -> io::Result<PathBuf> {
     move_to_sibling_with_hook(old, destination_name, fence, expected, || {})
 }
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]

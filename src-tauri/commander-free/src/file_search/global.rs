@@ -113,7 +113,9 @@ fn legacy_data_may_remain(directory: &std::path::Path) -> bool {
 fn retained_backup_count(parent: &std::path::Path) -> Result<usize, String> {
     let mut count = 0usize;
     for entry in std::fs::read_dir(parent).map_err(|_| "Cannot inspect old search backups.")? {
-        if entry.map_err(|_| "Cannot inspect old search backups.")?.file_name().to_string_lossy().starts_with(".wincommander-legacy-index-backup-") { count += 1; }
+        let name = entry.map_err(|_| "Cannot inspect old search backups.")?.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with(".wincommander-legacy-index-backup-") || name.starts_with(".wincommander-orphaned-index-") { count += 1; }
     }
     Ok(count)
 }
