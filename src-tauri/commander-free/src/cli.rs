@@ -760,6 +760,19 @@ fn run_command(request: RunRequest) -> i32 {
 
 fn run_backend(command: String, params: HashMap<String, String>, timeout_ms: Option<u64>) -> i32 {
     let command_id = format!("backend:{command}");
+    // Backend CLI commands use their own Tauri builder and do not pass through
+    // the desktop startup gate. Keep installer maintenance entrypoints outside
+    // this route so an incomplete lab setup can still be recovered.
+    #[cfg(all(windows, feature = "experimental-settings-generation"))]
+    if let Err(message) = crate::datastore::require_selected_settings_lab_startup() {
+        print_json(&json!({
+            "ok": false,
+            "command": command_id,
+            "error": "settings_setup_incomplete",
+            "message": message,
+        }));
+        return 1;
+    }
     let output_id = command_id.clone();
     let execution_code = Arc::new(AtomicI32::new(9));
     let result_code = execution_code.clone();
