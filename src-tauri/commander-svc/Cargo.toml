@@ -23,6 +23,8 @@ name = "wincommander-svc"
 path = "src/main.rs"
 
 [features]
+# Isolated user-token broker search fencing; not enabled in production.
+experimental-search-broker-fence = []
 # Compile-only migration work; this does not enable issuance or cache writes.
 experimental-pq-licence = ["dep:wincmd-pq-experiment", "dep:rustls", "dep:rustls-platform-verifier", "dep:bytes"]
 

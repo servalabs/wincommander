@@ -7,6 +7,10 @@
 #[path = "../../runtime-support/pro_update_guard.rs"]
 mod update_guard;
 
+#[cfg(all(windows, feature = "experimental-search-broker-fence"))]
+#[path = "pro_broker_search_fence.rs"]
+mod search_fence;
+
 #[cfg(windows)]
 #[path = "pro_broker_acl.rs"]
 mod root_acl;
@@ -334,6 +338,19 @@ async fn vault_call_until(
     eprintln!(
         "[wincommander-svc] vault_call({feature_id}, operation={request_id}): spawning broker helper"
     );
+    #[cfg(feature = "experimental-search-broker-fence")]
+    let fence = match presentation {
+        wincmd_shared::vault_access::VaultPresentation::PerUser => {
+            let result = match caller_token {
+                Some(token) => search_fence::acquire_for_user_token(token, target_session_id, caller_sid),
+                None if per_user_wts_fallback_allowed(feature_id) => search_fence::acquire_for_session(target_session_id, caller_sid),
+                None => return Err(VaultMountReason::BrokerUnavailable),
+            };
+            Some(result.map_err(|_| VaultMountReason::BrokerUnavailable)?)
+        }
+        // SYSTEM helper scope is different. Do not claim user-profile fencing.
+        wincmd_shared::vault_access::VaultPresentation::Machine => None,
+    };
     let process = spawn_pro_for_presentation(
         target_session_id,
         caller_sid,
@@ -345,6 +362,13 @@ async fn vault_call_until(
         &session_token,
     )
     .map_err(broker_transport_reason)?;
+    #[cfg(feature = "experimental-search-broker-fence")]
+    if let Some(fence) = fence {
+        // A dedicated supervisor owns the lease until OS-confirmed child exit,
+        // even if this async request is cancelled after the process was started.
+        search_fence::hold_until_process_exit(fence, process)
+            .map_err(|_| VaultMountReason::BrokerUnavailable)?;
+    }
     eprintln!("[wincommander-svc] vault_call({feature_id}, operation={request_id}): broker spawned, waiting for connect");
     let result = async {
         connect_broker_pipe(&pipe, process, deadline).await?;
