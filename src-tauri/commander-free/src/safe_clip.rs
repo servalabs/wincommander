@@ -29,6 +29,9 @@ use std::path::{Path, PathBuf};
 
 #[path = "safe_paste_publish.rs"]
 mod safe_paste_publish;
+#[cfg(all(test, windows))]
+#[path = "safe_paste_handle_probe_tests.rs"]
+mod safe_paste_handle_probe_tests;
 #[cfg(windows)]
 use std::sync::{Arc, Mutex, OnceLock};
 
