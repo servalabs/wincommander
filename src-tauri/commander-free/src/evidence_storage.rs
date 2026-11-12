@@ -395,7 +395,7 @@ pub(super) fn read_only_status(
         }
         Err(error) => return Err(format!("Cannot inspect evidence ledger: {error}")),
     };
-    let mut needs_review = ledger.history_gap_unverified || ledger.clear_pending;
+    let mut needs_review = ledger.history_gap_unverified || ledger.clear_pending || ledger.clear_scope.is_some();
     match fs::symlink_metadata(failure_marker) {
         Ok(_) => needs_review = true,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -432,8 +432,8 @@ pub(super) fn read_with_machine_source(
         return Err("Old protected evidence requires manual recovery; original preserved".into());
     }
     let mut ledger = read(path, &|| Ok(None), key_path, persist)?;
-    if ledger.clear_pending {
-        return Err("Evidence clear was interrupted; retry clear before using the timeline".into());
+    if ledger.clear_pending || ledger.clear_scope.is_some() {
+        return Err("Evidence clear was interrupted or inconsistent; retry clear before using the timeline".into());
     }
     if !ledger.skip_future_imports || ledger.machine_source_digest.is_some() {
         let source = machine_snapshot(machine_source)?;
@@ -601,6 +601,28 @@ mod tests {
         let ledger: Ledger = serde_json::from_str(raw).unwrap();
         assert!(!ledger.clear_pending);
         assert!(ledger.clear_scope.is_none());
+    }
+
+    #[test]
+    fn inconsistent_clear_scope_never_reimports_legacy_evidence() {
+        let dir = tempfile::tempdir().unwrap();
+        let protected = dir.path().join("protected");
+        let machine = dir.path().join("machine");
+        let key = dir.path().join("key");
+        let failure_marker = dir.path().join("no-failure-marker");
+        let mut ledger = Ledger::default();
+        ledger.clear_scope = Some(ClearScope {
+            user: "user-a".into(), machine: machine.clone(), profile: None,
+            machine_snapshot: None, profile_snapshot: None,
+        });
+        write(&protected, &key, &ledger, &crate::datastore_io::atomic_write).unwrap();
+        let old = format!("{}\n", serde_json::to_string(&entry()).unwrap());
+        fs::write(&machine, &old).unwrap();
+        assert!(read_with_machine_source(&protected, &machine, &|| Ok(None), &key,
+            &crate::datastore_io::atomic_write).err().unwrap().contains("inconsistent"));
+        assert!(read_only_status(&protected, &machine, &|| Ok(None), &key, &failure_marker,
+            &crate::datastore_io::atomic_write).unwrap());
+        assert_eq!(fs::read_to_string(&machine).unwrap(), old);
     }
 
     #[test]
