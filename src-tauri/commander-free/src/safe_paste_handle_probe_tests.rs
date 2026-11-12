@@ -19,6 +19,74 @@
             .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
             .open(path).unwrap()
     }
+
+    #[test]
+    fn existing_writer_prevents_exclusive_stage_pin() {
+        use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_DELETE;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("item");
+        std::fs::write(&path, b"synthetic").unwrap();
+        let writer = OpenOptions::new().write(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .open(&path).unwrap();
+        let pin = OpenOptions::new().access_mode(FILE_GENERIC_READ | DELETE)
+            .share_mode(FILE_SHARE_READ)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT).open(&path);
+        assert!(pin.is_err(), "a pre-existing writer must prevent this pin");
+        drop(writer);
+        drop(pin_stage(&path));
+    }
+
+    /// LAB ONLY: an existing writable section may outlive its file handle.
+    /// Record whether it blocks the proposed pin or can change pinned bytes;
+    /// neither outcome proves a scrubber or namespace boundary is secure.
+    #[test]
+    #[ignore = "requires an explicitly authorized disposable Windows fixture"]
+    fn mapped_writer_against_stage_pin_diagnostic() {
+        use std::{ffi::c_void, ptr};
+        use windows_sys::Win32::{Foundation::CloseHandle, Storage::FileSystem::FILE_SHARE_DELETE};
+
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn CreateFileMappingW(file: *mut c_void, security: *const c_void, protect: u32,
+                maximum_high: u32, maximum_low: u32, name: *const u16) -> *mut c_void;
+            fn MapViewOfFile(mapping: *mut c_void, access: u32, offset_high: u32,
+                offset_low: u32, count: usize) -> *mut c_void;
+            fn UnmapViewOfFile(address: *const c_void) -> i32;
+        }
+        struct Mapping { handle: *mut c_void, view: *mut c_void }
+        impl Drop for Mapping {
+            fn drop(&mut self) { unsafe { UnmapViewOfFile(self.view); CloseHandle(self.handle); } }
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("item");
+        std::fs::write(&path, b"original").unwrap();
+        let writer = OpenOptions::new().read(true).write(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .open(&path).unwrap();
+        let handle = unsafe { CreateFileMappingW(writer.as_raw_handle(), ptr::null(), 4, 0, 0, ptr::null()) };
+        assert!(!handle.is_null(), "CreateFileMappingW failed: {}", std::io::Error::last_os_error());
+        let view = unsafe { MapViewOfFile(handle, 2, 0, 0, 0) };
+        if view.is_null() { unsafe { CloseHandle(handle); } panic!("MapViewOfFile failed: {}", std::io::Error::last_os_error()); }
+        let mapping = Mapping { handle, view };
+        drop(writer);
+
+        let pin = OpenOptions::new().access_mode(FILE_GENERIC_READ | DELETE)
+            .share_mode(FILE_SHARE_READ)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT).open(&path);
+        match pin {
+            Err(error) => eprintln!("mapped writer blocked the pin: {error}"),
+            Ok(owner) => {
+                unsafe { *mapping.view.cast::<u8>() = b'X'; }
+                let after = std::fs::read(&path).unwrap();
+                eprintln!("pin succeeded; mapped write changed content: {}", after[0] == b'X');
+                assert_eq!(after[0], b'X', "mapped view and file should describe the same fixture");
+                drop(owner);
+            }
+        }
+        drop(mapping);
+    }
     fn rename_handle_to(stage: &File, parent: &File, name: &OsStr) -> Result<(), i32> {
         let name: Vec<u16> = name.encode_wide().collect();
         assert!(!name.is_empty() && !name.iter().any(|c| matches!(*c, 0 | 47 | 58 | 92)));
