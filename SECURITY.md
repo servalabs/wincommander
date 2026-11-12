@@ -372,6 +372,8 @@ The older Safe Paste handoff prototype is also retained in history only; it is
 not the current implementation or an established confinement boundary.
 Sanitized snapshots of older vault dismount and build drafts are likewise
 retained in history; they do not replace the current vault implementation.
+Incomplete DLP and Fleet reporting source snapshots are retained in history
+with sensitive fixture files omitted; they are not operational release trees.
 
 ## Local maintenance
 
