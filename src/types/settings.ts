@@ -19,6 +19,7 @@ import type { CapabilityBundle, Density } from './persona';
 // ═══════════════════════════════════════════════════════════════════════
 
 export interface SystemState {
+  argus?: { dlp: { enabled: boolean; running: boolean } };
   device: DeviceIdentifiers;
   privacy: PrivacySettings;
   tweaks: TweakSettings;

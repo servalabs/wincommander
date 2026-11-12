@@ -1666,7 +1666,7 @@ pub struct AssignGroupRequest {
 pub struct ArgusSignal {
     pub window_start: String,
     pub window_end: String,
-    /// High-level category: "dlp_exfil" | "tamper" | "print" | "removable_media" | "tripwire" | "access"
+    /// High-level category: "dlp_exfil" | "dlp_content" | "tamper" | "print" | "removable_media" | "tripwire" | "access" | "session_assurance"
     pub kind: String,
     /// Sub-type label within the kind (no PII — e.g. "usb_large_transfer").
     pub class: String,
@@ -1692,7 +1692,7 @@ pub struct ArgusSignal {
 #[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
 #[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
 pub struct ArgusKindBucket {
-    /// High-level category: "dlp_exfil" | "tamper" | "print" | "removable_media" | "tripwire" | "access".
+    /// High-level category: "dlp_exfil" | "dlp_content" | "tamper" | "print" | "removable_media" | "tripwire" | "access" | "session_assurance".
     pub kind: String,
     /// Single sub-type label shared by every signal in the bucket, or `None`
     /// when the kind spans multiple classes (mixed → collapse to kind level).

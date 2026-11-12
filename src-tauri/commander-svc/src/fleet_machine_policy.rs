@@ -466,6 +466,11 @@ impl FleetMachinePolicy {
 
     /// A missing trust record is distinct from a provisioned machine whose
     /// first signed policy has not arrived. Never map store failure to false.
+    pub fn read_current<T>(&self,read:impl FnOnce(bool,Option<&PolicyEnvelope>)->Result<T,&'static str>)->Result<T,&'static str> {
+        let guard=self.state.lock().map_err(|_|"store_unavailable")?;
+        read(guard.record.is_some(),guard.record.as_ref().and_then(|record|record.policy.as_ref()))
+    }
+
     pub fn trust_and_policy(&self) -> Result<(bool, Option<PolicyEnvelope>), &'static str> {
         let guard = self.state.lock().map_err(|_| "store_unavailable")?;
         Ok(match &guard.record {
@@ -549,6 +554,7 @@ mod tests {
             config: None,
             shield: None,
             shield_revision: 0,
+            clipboard_guard_enabled: false,
             signature: String::new(),
             signer_key: binding.signer_key,
         };

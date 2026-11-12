@@ -66,6 +66,9 @@ fn prepare(current: &AppSettings, epoch: &Epoch) -> Result<AppSettings, String> 
     if !wincmd_shared::fleet::verify_signature_b64(pinned, &message, signature) {
         return Err("config push signature verification failed".into());
     }
+    if super::parse_epoch_policy_subtrees(&epoch.config).any_malformed() {
+        return Err("fleet content policy is invalid".into());
+    }
     if epoch.version <= current.policy.master_config_version.unwrap_or(0) {
         return Err("Config epoch is not newer than the committed policy".into());
     }
@@ -76,7 +79,11 @@ fn prepare(current: &AppSettings, epoch: &Epoch) -> Result<AppSettings, String> 
         candidate.ideal = super::SystemState::default();
     }
     let mut value = serde_json::to_value(&candidate).map_err(|e| e.to_string())?;
-    merge_json(&mut value, &serde_json::json!({"ideal": &epoch.config}));
+    let mut desired = epoch.config.clone();
+    if let Some(object) = desired.as_object_mut() {
+        for key in ["contentRules", "clipboardGuard", "inkReceipt"] { object.remove(key); }
+    }
+    merge_json(&mut value, &serde_json::json!({"ideal": desired}));
     candidate =
         serde_json::from_value(value).map_err(|e| format!("Invalid policy configuration: {e}"))?;
     candidate.policy.locked_paths = epoch.locked_paths.clone();

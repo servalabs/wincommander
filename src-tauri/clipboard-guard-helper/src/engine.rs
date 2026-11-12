@@ -13,6 +13,9 @@ use wincmd_clip_rules::{Action, CooldownLedger, Emit, RuleId, Severity, Verdict}
 use crate::policy::{ActivePolicy, PolicySource, PolicyStore};
 use crate::read::MAX_CLIPBOARD_READ_BYTES;
 
+mod content;
+pub use content::ContentObservation;
+
 /// What one `observe()` call decided.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MatchOutcome {
@@ -256,9 +259,11 @@ mod tests {
             cooldown_seconds: 60,
             snoozable: true,
             locked: false,
+            options: Default::default(),
         };
         store
-            .install(&ClipboardPolicyResponse {
+            .install(&ClipboardPolicyResponse { reporting_binding:None,
+                content_rules: None,
                 policy_version: 1,
                 rules: vec![rule],
             })
@@ -287,9 +292,11 @@ mod tests {
             cooldown_seconds: 60,
             snoozable: true,
             locked: false,
+            options: Default::default(),
         };
         store
-            .install(&ClipboardPolicyResponse {
+            .install(&ClipboardPolicyResponse { reporting_binding:None,
+                content_rules: None,
                 policy_version: 1,
                 rules: vec![rule],
             })
@@ -324,9 +331,11 @@ mod tests {
             cooldown_seconds: 60,
             snoozable: true,
             locked: false,
+            options: Default::default(),
         };
         store
-            .install(&ClipboardPolicyResponse {
+            .install(&ClipboardPolicyResponse { reporting_binding:None,
+                content_rules: None,
                 policy_version: 1,
                 rules: vec![rule],
             })
@@ -407,9 +416,11 @@ mod tests {
             cooldown_seconds: 60,
             snoozable: true,
             locked: false,
+            options: Default::default(),
         };
         store
-            .install(&ClipboardPolicyResponse {
+            .install(&ClipboardPolicyResponse { reporting_binding:None,
+                content_rules: None,
                 policy_version: 1,
                 rules: vec![rule],
             })
@@ -450,6 +461,7 @@ mod tests {
             cooldown_seconds: 60,
             snoozable: true,
             locked: false,
+            options: Default::default(),
         };
         let fleet = Rule {
             id: RuleId::new("22222222222222222222222222222222").unwrap(),
@@ -466,15 +478,18 @@ mod tests {
             cooldown_seconds: 60,
             snoozable: false,
             locked: true,
+            options: Default::default(),
         };
         store
-            .install_local(&ClipboardPolicyResponse {
+            .install_local(&ClipboardPolicyResponse { reporting_binding:None,
+                content_rules: None,
                 policy_version: 1,
                 rules: vec![local],
             })
             .unwrap();
         store
-            .install_fleet(&ClipboardPolicyResponse {
+            .install_fleet(&ClipboardPolicyResponse { reporting_binding:None,
+                content_rules: None,
                 policy_version: 9,
                 rules: vec![fleet],
             })
@@ -517,6 +532,7 @@ mod tests {
             cooldown_seconds: 60,
             snoozable: true,
             locked: false,
+            options: Default::default(),
         };
         let mut fleet = local.clone();
         fleet.id = RuleId::new("22222222222222222222222222222222").unwrap();
@@ -527,13 +543,15 @@ mod tests {
         fleet.actions = vec![Action::ReportFleet];
         fleet.severity = Severity::High;
         store
-            .install_local(&ClipboardPolicyResponse {
+            .install_local(&ClipboardPolicyResponse { reporting_binding:None,
+                content_rules: None,
                 policy_version: 1,
                 rules: vec![local],
             })
             .unwrap();
         store
-            .install_fleet(&ClipboardPolicyResponse {
+            .install_fleet(&ClipboardPolicyResponse { reporting_binding:None,
+                content_rules: None,
                 policy_version: 1,
                 rules: vec![fleet],
             })

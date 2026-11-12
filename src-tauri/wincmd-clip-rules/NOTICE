@@ -1,0 +1,61 @@
+Third-party attribution
+
+Gitleaks v8.24.3 secret rule data, adapted to Rust regex syntax (unescaped
+literal braces are escaped), ASCII RE2 classes and content-only matching.
+Source: https://github.com/gitleaks/gitleaks/tree/v8.24.3
+Pinned source SHA-256:
+8f393899dbdc67e4eae580909e496acab9cf3a75aacfb6fac56b6eb16bb9e051
+The path-only pkcs12-file rule is excluded; path-conditioned rules ship off.
+No live credential validation is performed.
+
+MIT License
+
+Copyright (c) 2019 Zachary Rice
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+PII recognizer patterns and validation approach adapted from Presidio.
+Source: https://github.com/microsoft/presidio/tree/fbe0ef4f29124bc3a3ab8a6562276dd9cfb269fd
+Spain DNI/NIE use the es_nif_recognizer.py and es_nie_recognizer.py
+mod-23 approach, with stricter eight-digit DNI and XYZ-prefix NIE shapes.
+Checksum algorithms are public standards. This implementation does not bundle
+Presidio's NLP runtime or claim its recognizer coverage.
+
+The MIT License (MIT)
+
+Copyright (c) Presidio Contributors.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

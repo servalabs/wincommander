@@ -8960,6 +8960,16 @@
       ]
     },
     {
+      "id": "tauri:get_content_detector_catalog",
+      "name": "get_content_detector_catalog",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useContentDetectors.ts"
+      ]
+    },
+    {
       "id": "tauri:get_context_menu_status",
       "name": "get_context_menu_status",
       "transport": "tauri",
@@ -11872,6 +11882,16 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/panels/privacy/LockdownWordsSection.tsx"
+      ]
+    },
+    {
+      "id": "tauri:test_local_content_rules",
+      "name": "test_local_content_rules",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useContentDetectors.ts"
       ]
     },
     {

@@ -19,22 +19,16 @@ pub struct RuleSetLimits {
     pub max_enabled_rules: usize,
     /// Max byte length of a `Phrase.value` or `Regex.pattern` string.
     pub max_pattern_bytes: usize,
-    /// The clipboard-text read cap. NOT enforced by this crate — it's a
-    /// contract on the caller, who must truncate (via
-    /// `truncate_for_match`) before calling `CompiledRuleSet::evaluate`.
+    /// Input cap enforced by scan(), cutting at a UTF-8 boundary.
     pub max_text_bytes: usize,
     /// Per-rule compiled-regex-program byte bound, passed to both
     /// `RegexBuilder::size_limit` (NFA build size) and
     /// `RegexBuilder::dfa_size_limit` (lazy-DFA search-time cache) — see
     /// `compile.rs` for why one number governs both.
     pub regex_size_limit: usize,
-    /// Summed bound across every regex-backed rule in the set (custom
-    /// `Regex` rules AND regex-backed `Builtin` rules alike). The `regex`
-    /// crate doesn't expose a compiled program's actual byte size after a
-    /// successful build, so this is enforced by charging each successful
-    /// compile its full `regex_size_limit` allowance against a running
-    /// total — conservative (never under-counts worst-case memory), not
-    /// exact.
+    /// Compiled regex and shared prefilter budget. Custom regexes are charged
+    /// their full per-rule allowance; fixed catalog programs use the regex
+    /// engine's memory accounting, allowing the shipped catalog within 8 MiB.
     pub regex_total_size_limit: usize,
 }
 
@@ -71,6 +65,8 @@ impl Default for RuleSetLimits {
 // alone. Adjacent tagging has no such restriction.
 #[serde(tag = "kind", content = "params", rename_all = "snake_case")]
 pub enum MatchKind {
+    /// A compiled-in detector catalog identifier, validated during compile.
+    Detector(String),
     /// A literal substring match.
     Phrase { value: String, case_sensitive: bool },
     /// A Rust `regex`-compiled pattern. No lookahead/lookbehind — see
@@ -96,6 +92,8 @@ pub enum MatchKind {
 #[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
 #[serde(rename_all = "camelCase")]
 pub struct Rule {
+    #[serde(default, flatten)]
+    pub options: crate::RuleOptions,
     pub id: RuleId,
     /// Bumped by the author on every edit — carried into `Verdict` so a
     /// consumer can tell whether a match was produced under the rule

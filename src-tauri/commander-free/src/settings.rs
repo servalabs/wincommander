@@ -162,6 +162,8 @@ pub struct BitLockerStatus {
 #[serde(rename_all = "camelCase")]
 pub struct SystemState {
     #[serde(default)]
+    pub argus: ArgusSettings,
+    #[serde(default)]
     pub device: DeviceIdentifiers,
     #[serde(default)]
     pub privacy: PrivacySettings,
@@ -180,6 +182,19 @@ pub struct SystemState {
     /// Security diagnostics — driver-health / Device-Manager check (#6).
     #[serde(default)]
     pub security: SecuritySettings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ArgusSettings {
+    pub dlp: ArgusDlpSettings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ArgusDlpSettings {
+    pub enabled: bool,
+    pub running: bool,
 }
 
 // ── Security diagnostics ─────────────────────────────────────────────
@@ -3709,6 +3724,7 @@ enum SubtreeOutcome {
 #[derive(Debug, Clone, Copy)]
 struct ParsedEpochSubtrees {
     clipboard_guard: SubtreeOutcome,
+    content_rules: SubtreeOutcome,
     ink_receipt: SubtreeOutcome,
 }
 
@@ -3718,12 +3734,14 @@ impl ParsedEpochSubtrees {
     /// subtree behaves exactly as it always has.
     fn is_no_op(&self) -> bool {
         matches!(self.clipboard_guard, SubtreeOutcome::Absent)
+            && matches!(self.content_rules, SubtreeOutcome::Absent)
             && matches!(self.ink_receipt, SubtreeOutcome::Absent)
     }
 
     /// At least one PRESENT subtree failed its shape check.
     fn any_malformed(&self) -> bool {
         matches!(self.clipboard_guard, SubtreeOutcome::Malformed)
+            || matches!(self.content_rules, SubtreeOutcome::Malformed)
             || matches!(self.ink_receipt, SubtreeOutcome::Malformed)
     }
 }
@@ -3741,6 +3759,13 @@ fn parse_epoch_policy_subtrees(config: &serde_json::Value) -> ParsedEpochSubtree
             Err(_) => SubtreeOutcome::Malformed,
         },
     };
+    let content_rules = match config.get("contentRules") {
+        None => SubtreeOutcome::Absent,
+        Some(value) => match serde_json::from_value::<wincmd_clip_rules::ContentRulesSubtree>(value.clone()) {
+            Ok(subtree) if wincmd_clip_rules::compile_content_rules(&subtree).is_ok() => SubtreeOutcome::Valid,
+            _ => SubtreeOutcome::Malformed,
+        },
+    };
     let ink_receipt = match config.get("inkReceipt") {
         None => SubtreeOutcome::Absent,
         Some(v) => {
@@ -3753,6 +3778,7 @@ fn parse_epoch_policy_subtrees(config: &serde_json::Value) -> ParsedEpochSubtree
     };
     ParsedEpochSubtrees {
         clipboard_guard,
+        content_rules,
         ink_receipt,
     }
 }
@@ -3893,13 +3919,30 @@ fn spawn_clipboard_guard_epoch_relay(
     });
 }
 
+pub(crate) fn relay_committed_content_epoch(epoch: &wincmd_shared::fleet::ConfigEpoch) -> Result<(), String> {
+    let settings=read_settings()?;
+    if epoch.version != i64::from(settings.policy.master_config_version.unwrap_or(0)) { return Ok(()); }
+    let pinned=settings.policy.fleet_signing_key.as_deref().ok_or("Fleet signing key is unavailable")?;
+    let preimage=wincmd_shared::fleet::epoch_preimage(&wincmd_shared::fleet::EpochSigningInput {
+        version:epoch.version,config:&epoch.config_json,locked_paths:&epoch.locked_paths,
+        managed:epoch.managed,target_kind:&epoch.target_kind,target_id:epoch.target_id.as_deref(),
+    });
+    if epoch.signer_key != pinned || !wincmd_shared::fleet::verify_signature_b64(pinned,&preimage,&epoch.signature) {
+        return Err("Fleet content epoch signature is invalid".into());
+    }
+    spawn_clipboard_guard_epoch_relay(&epoch.config_json,epoch.version,&epoch.locked_paths,epoch.managed,
+        Some(&epoch.target_kind),epoch.target_id.as_deref(),&epoch.signature,pinned);
+    Ok(())
+}
+
 /// Extend a JUST-VERIFIED epoch's handling with the Clipboard Guard / Ink
 /// Receipt subtrees and relay to commander-svc over the real `wincmd-svc`
 /// pipe. Only ever reachable from [`spawn_clipboard_guard_epoch_relay`] in
 /// production — see that function's doc comment for the "verified before
 /// use" precondition.
 async fn handle_clipboard_guard_epoch_subtrees(args: InstallEpochArgs) {
-    handle_clipboard_guard_epoch_subtrees_via(wincmd_shared::svc::SVC_PIPE_NAME, args).await
+    handle_clipboard_guard_epoch_subtrees_via(wincmd_shared::svc::SVC_PIPE_NAME, args).await;
+    let _ = crate::paste_monitor::refresh_managed_clipboard_guard_rules().await;
 }
 
 /// Same as [`handle_clipboard_guard_epoch_subtrees`], but with the target

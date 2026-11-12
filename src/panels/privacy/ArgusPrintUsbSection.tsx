@@ -136,10 +136,9 @@ export default function ArgusPrintUsbSection() {
 
   if (!canUse('paid')) {
     return (
-      <SectionCard title="Print & Removable Media Monitor" icon="print" headerRight={<Tag minimal intent="none" className="font-mono text-[10px] flex-shrink-0">PRO</Tag>}>
+      <SectionCard title="Print Monitor" icon="print" headerRight={<Tag minimal intent="none" className="font-mono text-[10px] flex-shrink-0">PRO</Tag>}>
         <p className="text-xs text-[var(--shield-text-subtle)] opacity-50">
-          Detect print jobs and USB mass-storage attach events — page counts and device
-          classes only. Requires Pro.
+          Detect print jobs using aggregate page counts. Requires Pro.
         </p>
       </SectionCard>
     );
@@ -148,14 +147,13 @@ export default function ArgusPrintUsbSection() {
   // ── Render ─────────────────────────────────────────────────────────────
 
   return (
-    <SectionCard title="Print & Removable Media Monitor" icon="print" headerRight={statusPill} armed={isRunning}>
+    <SectionCard title="Print Monitor" icon="print" headerRight={statusPill} armed={isRunning}>
       {/* ── Collector controls ── */}
       {(
         <div className="flex flex-col gap-3">
           <p className="text-xs text-[var(--shield-text-subtle)] text-pretty max-w-[360px]">
-            Detects print jobs (page count only) and USB mass-storage device attachments.
-            Document names, printer names, and filenames are never recorded - only the
-            aggregate page count and device-class label reach the fleet.
+            Detects print jobs using page counts only. USB attachment and receipt reconciliation
+            are unavailable in this collector. Document content and printer names stay local.
           </p>
           {/* Start / Stop row */}
           <div className="flex items-center gap-3 flex-wrap">
@@ -163,7 +161,7 @@ export default function ArgusPrintUsbSection() {
               checked={isRunning}
               disabled={monitorBusy || statusLoading}
               onChange={(e) => void toggleCollector((e.target as HTMLInputElement).checked)}
-              label="Print &amp; USB monitoring active"
+              label="Print monitoring active"
             />
             <Button
               icon="refresh"

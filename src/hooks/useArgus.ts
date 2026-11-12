@@ -21,6 +21,13 @@ import { invoke } from "@tauri-apps/api/core";
 export interface ArgusCollectorStatus {
   running: boolean;
   startedAt: string | null;
+  per_category_counts?: Record<string, number>;
+  per_channel_counts?: Record<string, number>;
+  coverage_skipped?: number;
+  content_enabled?: boolean;
+  content_policy_version?: number;
+  usbAvailable?: boolean;
+  reconciliationAvailable?: boolean;
 }
 
 /** App-usage monitor status. Also carries the poll interval. */

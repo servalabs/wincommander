@@ -1020,7 +1020,10 @@ async fn install_service_shield_policy(
 ) -> Result<(), String> {
     let args = serde_json::json!({"policy": envelope});
     match crate::svc_client::call("svc.fleet.install_policy", args.clone()).await {
-        Ok(_) => return Ok(()),
+        Ok(_) => {
+            crate::paste_monitor::set_content_reporting_identity(envelope);
+            return Ok(());
+        }
         Err(error) if service_policy_not_provisioned(&error) => {}
         Err(error) => return Err(error),
     }
@@ -1044,6 +1047,7 @@ async fn install_service_shield_policy(
     }
     crate::svc_client::call("svc.fleet.provision_trust", proof).await?;
     crate::svc_client::call("svc.fleet.install_policy", args).await?;
+    crate::paste_monitor::set_content_reporting_identity(envelope);
     Ok(())
 }
 
@@ -1059,7 +1063,11 @@ async fn refresh_cached_service_shield_policy(resp: &Value) -> Result<(), String
     refresh_cached_service_shield_policy_with(
         resp,
         crate::settings::read_settings,
-        |envelope, pinned| async move { install_service_shield_policy(&envelope, &pinned).await },
+        |envelope, pinned| async move {
+            install_service_shield_policy(&envelope, &pinned).await?;
+            if let Some(epoch)=envelope.config.as_ref() { crate::settings::relay_committed_content_epoch(epoch)?; }
+            Ok(())
+        },
     ).await
 }
 
@@ -3155,14 +3163,16 @@ fn should_report_required_device_alert(settings: &crate::settings::AppSettings) 
 /// silently discard the match.
 pub async fn fleet_report_clipboard_event(
     report: ClipboardEventReport,
+    fleet_binding: Option<String>,
 ) -> Result<serde_json::Value, String> {
     crate::license::require_service_feature("fleet")?;
     let settings = crate::settings::read_settings()?;
     if !settings.app.fleet.enabled {
         return Err("Fleet is not enabled on this device.".to_string());
     }
-    let args = serde_json::to_value(report)
+    let mut args = serde_json::to_value(report)
         .map_err(|_| "Clipboard event could not be encoded".to_string())?;
+    args["fleet_binding"] = serde_json::json!(fleet_binding);
     crate::sidecar::dispatch_paid_command("fleet_agent_clipboard_event", args).await
 }
 
@@ -3335,6 +3345,7 @@ mod tests {
             config: None,
             shield: None,
             shield_revision: 9,
+            clipboard_guard_enabled: false,
             signer_key: signer,
             signature: String::new(),
         };

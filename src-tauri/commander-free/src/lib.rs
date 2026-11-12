@@ -71,6 +71,7 @@ mod inactivity_timer;
 mod investigator_install;
 mod license;
 mod local_clipboard_rules;
+mod content_detector_commands;
 mod log;
 mod machine_settings;
 mod malware_scan;
@@ -2542,6 +2543,8 @@ pub fn run() {
             paste_monitor::get_paste_monitor_categories,
             paste_monitor::set_local_clipboard_guard_rules,
             paste_monitor::get_local_clipboard_guard_rules,
+            content_detector_commands::get_content_detector_catalog,
+            content_detector_commands::test_local_content_rules,
             local_clipboard_rules::load_local_clipboard_guard_rules,
             local_clipboard_rules::save_local_clipboard_guard_rules,
             paste_monitor::get_managed_clipboard_guard_rules,

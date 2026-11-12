@@ -21,6 +21,7 @@ pub fn id(seed: u8) -> RuleId {
 /// the returned struct when a test needs to (e.g. `cooldown_seconds`).
 pub fn rule(seed: u8, priority: u16, matcher: MatchKind) -> Rule {
     Rule {
+        options: Default::default(),
         id: id(seed),
         revision: 1,
         name: format!("test rule {seed}"),

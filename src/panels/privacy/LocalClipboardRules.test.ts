@@ -14,6 +14,7 @@ function validRule(): Rule {
   return {
     id: "0e8f1a2b-3c4d-5e6f-7a8b-9c0d1e2f3a4b",
     revision: 1,
+    keywords: [], context: [], threshold: 50, channels: ["clipboard"], allowList: [], channelActions: [],
     name: "Local invoice marker",
     enabled: true,
     priority: 100,
