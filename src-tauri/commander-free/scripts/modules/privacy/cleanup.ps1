@@ -811,7 +811,10 @@ function Get-FleetForensicProjection {
         $text = ([string]$Value) -replace '[\r\n\t]+', ' '
         $text = $text.Trim()
         if ($text.Length -gt $MaxLength) {
-            return $text.Substring(0, $MaxLength) + '…'
+            # Keep the marker inside the limit without splitting a UTF-16 surrogate pair.
+            $length = [Math]::Max(0, $MaxLength - 1)
+            if ($length -gt 0 -and [char]::IsHighSurrogate($text[$length - 1])) { $length-- }
+            return $text.Substring(0, $length) + [string][char]0x2026
         }
         return $text
     }
