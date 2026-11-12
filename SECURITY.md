@@ -365,6 +365,10 @@ matching key. Data in other Windows profiles or on disconnected storage may
 also depend on it; checking the current profile cannot establish that all
 such data is safe.
 
+Earlier local-key and desktop security drafts are retained in Git history for
+continued work. Their presence in branch ancestry does not mean every draft
+behavior is implemented or validated in the current source tree.
+
 ## Local maintenance
 
 Local maintenance scans do not establish that every byte on a volume was
