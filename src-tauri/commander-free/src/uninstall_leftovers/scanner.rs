@@ -16,9 +16,9 @@ use uuid::Uuid;
 
 pub(super) fn scan_leftovers(
     cancelled: &AtomicBool,
-) -> (UninstallLeftoverScan, HashMap<String, CachedFolder>) {
+) -> Result<(UninstallLeftoverScan, HashMap<String, CachedFolder>), String> {
     let installed = installed_app_evidence();
-    let running = running_app_evidence();
+    let running = running_app_evidence()?;
     let mut public = Vec::new();
     let mut cached = HashMap::new();
     let mut scanned = 0;
@@ -85,7 +85,7 @@ pub(super) fn scan_leftovers(
         }
     }
     public.sort_by_key(|entry| std::cmp::Reverse(entry.bytes));
-    (
+    Ok((
         UninstallLeftoverScan {
             entries: public,
             scanned_folders: scanned,
@@ -94,7 +94,7 @@ pub(super) fn scan_leftovers(
             truncated,
         },
         cached,
-    )
+    ))
 }
 
 fn app_data_roots() -> Vec<(PathBuf, &'static str)> {
