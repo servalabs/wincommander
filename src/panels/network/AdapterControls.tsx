@@ -3,7 +3,7 @@ import { Button, Classes, Dialog, Icon } from "@/components/ui/bp";
 import { useAppState } from "../../context/AppContext";
 import { isPrivilegedWriteBlocked, MACHINE_SCOPE_ELEVATION_MESSAGE } from "../../lib/machineScopeElevation";
 import type { PhysicalNetworkAdapter } from "../../hooks/useBackend";
-import { adapterMacDescription, formatAdapterMac, type AdapterAction } from "./adapterState";
+import { adapterMacDescription, formatAdapterMac, isInactiveAdapter, type AdapterAction } from "./adapterState";
 import { useAdapterInventory } from "./useAdapterInventory";
 
 export default function AdapterControls() {
@@ -12,7 +12,29 @@ export default function AdapterControls() {
     const { inventory, error, loading, busyId, operationMessage, refresh, change } = useAdapterInventory();
     const [pending, setPending] = useState<{ adapter: PhysicalNetworkAdapter; action: AdapterAction } | null>(null);
     const adapters = inventory?.adapters ?? [];
+    const visibleAdapters = adapters.filter(adapter => !isInactiveAdapter(adapter.status));
+    const inactiveRecovery = adapters.filter(adapter => isInactiveAdapter(adapter.status) && adapter.recoveryPending);
     const disabled = needsElevation || !!busyId || !!error || !inventory;
+
+    const renderAdapter = (adapter: PhysicalNetworkAdapter) => (
+        <div key={adapter.id} className={`adapter-row ${adapter.status === "Up" ? "adapter-row--active" : "adapter-row--inactive"}`} style={{ flexWrap: "wrap" }}>
+            <Icon icon={adapter.kind === "wifi" ? "cell-tower" : "globe-network"} size={16} />
+            <div className="adapter-row__identity">
+                <div className="flex items-center gap-2"><span className="font-mono text-xs font-bold">{adapter.name}</span><span className="adapter-status-chip">{adapter.status || "Unknown"}</span></div>
+                <div className="text-xs">Current: {formatAdapterMac(adapter.currentMac)}</div>
+                <div className="text-xs">Permanent: {formatAdapterMac(adapter.factoryMac)}</div>
+                {adapter.configuredMac && <div className="text-xs">Configured: {formatAdapterMac(adapter.configuredMac)}</div>}
+                <div className="text-xs text-[var(--color-text-muted)]">{adapterMacDescription(adapter)}</div>
+                {adapter.configuredMode === "rotate-on-launch" && <div className="text-xs">Legacy rotation setting detected. Automatic rotation is unavailable; use a one-time change or restore.</div>}
+            </div>
+            <div className="flex flex-wrap gap-1">
+                <Button small disabled={disabled || !!adapter.recoveryPending || !!adapter.configurationError} onClick={() => setPending({ adapter, action: "randomize" })}>Randomize once</Button>
+                <Button small disabled={disabled || !!adapter.recoveryPending || !!adapter.configurationError} onClick={() => setPending({ adapter, action: "factory" })}>Restore factory</Button>
+                {adapter.recoveryPending && <Button small intent="warning" disabled={disabled} onClick={() => setPending({ adapter, action: "recover" })}>Undo interrupted change</Button>}
+            </div>
+            {busyId === adapter.id && <p role="status" className="text-xs">Applying and verifying…</p>}
+        </div>
+    );
 
     return (
         <section className="merged-segment merged-segment--adapters">
@@ -20,36 +42,20 @@ export default function AdapterControls() {
                 <Icon icon="globe-network" size={11} />
                 <span className="merged-segment__title">Network Adapters</span>
                 <span className="merged-segment__count">{error ? "Unavailable" : inventory ? `${adapters.filter(a => a.status === "Up").length} up` : "—"}</span>
-                <Button small minimal icon="refresh" disabled={loading || !!busyId} onClick={() => void refresh()}>Refresh</Button>
+                <Button small minimal icon="refresh" aria-label="Refresh network adapters" title="Refresh network adapters" disabled={loading || !!busyId} onClick={() => void refresh()} />
             </header>
-            <p className="merged-segment__blurb">Change the address visible to your local network. Driver support varies; this does not prevent all tracking.</p>
             <div className="merged-segment__body">
                 {needsElevation && <p role="alert" className="text-xs">{MACHINE_SCOPE_ELEVATION_MESSAGE}</p>}
                 {error && <p role="alert" className="text-xs">{error} {inventory && "The list below is the last successful snapshot."}</p>}
                 {loading && !inventory && <p role="status" className="text-xs">Reading Windows adapters…</p>}
-                {inventory?.checkedAt && <p className="text-xs text-[var(--color-text-muted)]">Last checked: {new Date(inventory.checkedAt).toLocaleTimeString()}</p>}
                 {!error && inventory && adapters.length === 0 && <p className="text-xs">No physical network adapters are present.</p>}
-                {!error && adapters.length > 0 && adapters.every(a => a.status !== "Up") && <p className="text-xs">Adapters are present; none currently has an active link.</p>}
+                {!error && adapters.length > 0 && adapters.every(a => isInactiveAdapter(a.status)) && <p className="text-xs">Adapters are present; none currently has an active link.</p>}
+                {inactiveRecovery.map(adapter => <div key={adapter.id} role="alert" className="flex flex-wrap items-center gap-2 text-xs">
+                    <span>{adapter.name}: an interrupted address change needs recovery.</span>
+                    <Button small intent="warning" disabled={disabled} onClick={() => setPending({ adapter, action: "recover" })}>Undo interrupted change</Button>
+                </div>)}
                 <div className="adapter-list">
-                    {adapters.map(adapter => (
-                        <div key={adapter.id} className={`adapter-row ${adapter.status === "Up" ? "adapter-row--active" : "adapter-row--inactive"}`} style={{ flexWrap: "wrap" }}>
-                            <Icon icon={adapter.kind === "wifi" ? "cell-tower" : "globe-network"} size={16} />
-                            <div className="adapter-row__identity">
-                                <div className="flex items-center gap-2"><span className="font-mono text-xs font-bold">{adapter.name}</span><span className="adapter-status-chip">{adapter.status}</span></div>
-                                <div className="text-xs">Current: {formatAdapterMac(adapter.currentMac)}</div>
-                                <div className="text-xs">Permanent: {formatAdapterMac(adapter.factoryMac)}</div>
-                                {adapter.configuredMac && <div className="text-xs">Configured: {formatAdapterMac(adapter.configuredMac)}</div>}
-                                <div className="text-xs text-[var(--color-text-muted)]">{adapterMacDescription(adapter)}</div>
-                                {adapter.configuredMode === "rotate-on-launch" && <div className="text-xs">Legacy rotation setting detected. Automatic rotation is unavailable; use a one-time change or restore.</div>}
-                            </div>
-                            <div className="flex flex-wrap gap-1">
-                                <Button small disabled={disabled || !!adapter.recoveryPending || !!adapter.configurationError} onClick={() => setPending({ adapter, action: "randomize" })}>Randomize once</Button>
-                                <Button small disabled={disabled || !!adapter.recoveryPending || !!adapter.configurationError} onClick={() => setPending({ adapter, action: "factory" })}>Restore factory</Button>
-                                {adapter.recoveryPending && <Button small intent="warning" disabled={disabled} onClick={() => setPending({ adapter, action: "recover" })}>Undo interrupted change</Button>}
-                            </div>
-                            {busyId === adapter.id && <p role="status" className="text-xs">Applying and verifying…</p>}
-                        </div>
-                    ))}
+                    {visibleAdapters.map(renderAdapter)}
                 </div>
                 {operationMessage && <p role="status" className="text-xs mt-2">{operationMessage}</p>}
             </div>

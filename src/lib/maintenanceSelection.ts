@@ -32,10 +32,14 @@ export function getRetainedFileId(group: DuplicateGroup, policy: DuplicateKeepPo
   return group.files[0]?.id;
 }
 
+export function canRemoveDuplicateFile(groups: DuplicateGroup[], id: string, policy: DuplicateKeepPolicy, overrides: Record<string, string> = {}): boolean {
+  return groups.some(group => group.files.some(file => file.id === id && file.removable === true) && getRetainedFileId(group, policy, overrides) !== id);
+}
+
 export function selectDuplicateCopies(groups: DuplicateGroup[], policy: DuplicateKeepPolicy, overrides: Record<string, string> = {}): Set<string> {
   return new Set(groups.flatMap((group) => {
     const retainedId = getRetainedFileId(group, policy, overrides);
-    return group.files.filter((file) => file.id !== retainedId).map((file) => file.id);
+    return group.files.filter((file) => file.id !== retainedId && file.removable === true).map((file) => file.id);
   }));
 }
 

@@ -74,14 +74,14 @@
 }
 
 .server-model-toggle button.active {
-  background: var(--color-bg-elevated);
-  color: var(--color-text-primary);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.16);
+  background: #047857;
+  color: #ffffff;
+  box-shadow: inset 0 0 0 1px #34d399, 0 1px 3px rgba(0, 0, 0, 0.3);
 }
 
-.server-model-toggle button.active.pro {
-  background: #10b981;
-  color: #ffffff;
+.server-model-toggle button:focus-visible {
+  outline: 2px solid #6ee7b7;
+  outline-offset: 2px;
 }
 
 .server-feature-strip {

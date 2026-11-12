@@ -11,6 +11,17 @@ const category = ALL_CATEGORIES.find(item => item.id === "walFiles")!;
 const limited = { files: [], total: 0, coverage: "limited" };
 
 describe("cleanup coverage presentation", () => {
+  test("Amcache snapshot details explain their point-in-time coverage", () => {
+    const amcache = ALL_CATEGORIES.find(item => item.id === "amcache")!;
+    const note = "This inventory comes from a temporary disk snapshot. Recent activity may not yet be recorded by Windows.";
+    const raw = { entries: [{ category: "InventoryApplication", count: 1, sample: [{ id: "example", name: "Example" }] }], total: 1, status: "complete", partial: false, coverage: "limited", coverageNote: note, source: "snapshot" };
+    const result = readCleanupScanResult(amcache, { success: true, data: raw });
+    expect(result.count).toBe(1);
+    for (const mode of ["simple", "advanced"] as const) {
+      const html = renderToStaticMarkup(<CleanupDisplayDetails category={amcache} mode={mode} count={result.count} items={result.items} rawData={result.raw} clearing={false} clearLabel="Clear" onClose={() => {}} onClear={() => {}} />);
+      expect(html).toContain(note);
+    }
+  });
   test("unavailable inventory explains its cause and cannot be cleared", () => {
     const amcache = ALL_CATEGORIES.find(item => item.id === "amcache")!;
     const message = "Windows has not exposed a readable application inventory.";

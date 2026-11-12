@@ -177,7 +177,7 @@ export function summarizeCleanupGroups(count: number, groups: Array<{ count: num
   if (count === 0 && groups.some(group => object(group.rawData) && group.rawData.coverage === "limited")) {
     if (id === "remoteAccessLogs" || id === "gameLauncherLogs") return { ...base, count, state: "empty", message: "No logs found in selected locations", nextStep: "Other products and custom locations were not checked." };
     if (["credentialManager", "gitActivity", "wslData"].includes(id ?? "")) return { ...base, count, state: "empty", message: "No records found in checked sources", nextStep: "Review Scan scope for the sources included." };
-    return { ...base, count, state: "limited", message: "No items found in checked locations", nextStep: "This scan covers selected locations only." };
+    return { ...base, count, state: "limited", message: "No items found in checked locations", nextStep: "" };
   }
   if (count === 0) return { ...base, count, state: "empty", message: "No items found", nextStep: "No action is needed from this scan." };
   return { ...base, count, state: "found", message: `${count} ${count === 1 ? "item" : "items"} reported`, nextStep: "Review the account breakdown before clearing." };
@@ -241,7 +241,7 @@ export function summarizeCleanupResult(input: { id: string; count: number; items
   if (input.count === 0 && hasLimitedCleanupCoverage(input.id, raw)) {
     if (input.id === "remoteAccessLogs" || input.id === "gameLauncherLogs") return { ...base, state: "empty", message: "No logs found in selected locations", nextStep: "Other products and custom locations were not checked." };
     if (["credentialManager", "gitActivity", "wslData"].includes(input.id)) return { ...base, state: "empty", message: "No records found in checked sources", nextStep: "Review Scan scope for the sources included." };
-    return { ...base, state: "limited", message: "No items found in checked locations", nextStep: "This scan covers selected locations only." };
+    return { ...base, state: "limited", message: "No items found in checked locations", nextStep: "" };
   }
   if (input.count === 0) return { ...base, state: "empty", message: "No items found", nextStep: "No action is needed from this scan." };
   return { ...base, state: "found", message: `${input.count} ${cleanupCountUnit(input.id, input.count)} found`, nextStep: "Review details before clearing." };

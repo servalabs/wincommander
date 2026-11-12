@@ -10,7 +10,7 @@ import EmptyState from "../../components/shared/EmptyState";
 import { firewallConfirmCopy } from "../../lib/firewallAuditCopy";
 import { summarizeFirewallAudit, type FirewallAction } from "../../lib/firewallAuditView";
 import { DangerConfirmDialog } from "./DangerConfirmDialog";
-import { InfoPopover, InfoTip } from "./InfoTip";
+import { InfoPopover } from "./InfoTip";
 import { FirewallRemediationReport } from "./FirewallRemediationReport";
 import { FirewallRulesTable } from "./FirewallRulesTable";
 import { MaintenanceNotice, TableSkeleton } from "./MaintenanceNotice";
@@ -37,24 +37,53 @@ export function FirewallAuditCard({ firewall }: { firewall: ReturnType<typeof us
           <div className="min-w-0">
             <CardTitle className="flex items-center gap-1.5">
               Firewall audit
-              <InfoTip
-                label="What this audit looks for"
-                content={
-                  <span>
-                    <strong>What it flags:</strong> third-party rules that allow all traffic, or
-                    are switched off when they should be blocking something.{" "}
-                    <strong>Never touched:</strong> Windows, Microsoft, Defender, and WinCommander's
-                    own rules.
-                  </span>
-                }
-              />
             </CardTitle>
             <CardDescription className="mt-1">
               Reviews the firewall rules other software has added, and tells you which ones are worth
               a decision.
             </CardDescription>
           </div>
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            {audit && !firewall.auditing && rules.length > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={firewall.busy || selectedCount === 0}
+                      onClick={() => request("enable")}
+                    >
+                      <Icon
+                        icon={firewall.applying === "enable" ? "refresh" : "tick"}
+                        className={firewall.applying === "enable" ? "animate-spin" : undefined}
+                      />
+                      Enable ({selectedCount})
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={firewall.busy || selectedCount === 0}
+                      onClick={() => request("disable")}
+                    >
+                      <Icon
+                        icon={firewall.applying === "disable" ? "refresh" : "disable"}
+                        className={firewall.applying === "disable" ? "animate-spin" : undefined}
+                      />
+                      Disable ({selectedCount})
+                    </Button>
+                    <Button
+                      variant="danger"
+                      size="sm"
+                      disabled={firewall.busy || selectedCount === 0}
+                      onClick={() => request("remove")}
+                    >
+                      <Icon
+                        icon={firewall.applying === "remove" ? "refresh" : "trash"}
+                        className={firewall.applying === "remove" ? "animate-spin" : undefined}
+                      />
+                      Remove ({selectedCount})
+                    </Button>
+                  </div>
+            )}
             {audit && !firewall.busy ? (
               <Button
                 variant="ghost"
@@ -66,7 +95,7 @@ export function FirewallAuditCard({ firewall }: { firewall: ReturnType<typeof us
                 <Icon icon="refresh" />
               </Button>
             ) : null}
-            <InfoPopover title="Firewall audit">
+            <InfoPopover iconOnly title="Firewall audit">
               <p>
                 <strong className="text-[var(--text)]">What it flags:</strong> rules that allow
                 traffic for every program, and rules meant to block something but switched off — a
@@ -138,18 +167,16 @@ export function FirewallAuditCard({ firewall }: { firewall: ReturnType<typeof us
 
         {audit && !firewall.auditing && summary ? (
           <>
-            <MaintenanceNotice tone={summary.intent} headline={summary.headline}>
-              {summary.detail}
-            </MaintenanceNotice>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="min-w-0 flex-1"><MaintenanceNotice tone={summary.intent} headline={summary.headline}>
+                {summary.detail}
+              </MaintenanceNotice></div>
+              {selectedCount > 0 ? <Badge tone="accent">{selectedCount} selected</Badge> : null}
+              {audit.cancelled ? <Badge tone="warning">partial</Badge> : null}
+            </div>
 
             {rules.length > 0 ? (
               <>
-                <div className="flex flex-wrap items-center gap-2">
-                  <Badge tone="neutral">{rules.length} to review</Badge>
-                  {selectedCount > 0 ? <Badge tone="accent">{selectedCount} selected</Badge> : null}
-                  {audit.cancelled ? <Badge tone="warning">partial</Badge> : null}
-                </div>
-
                 <FirewallRulesTable
                   rules={rules}
                   selected={firewall.selected}
@@ -158,51 +185,7 @@ export function FirewallAuditCard({ firewall }: { firewall: ReturnType<typeof us
                   onSetSelection={firewall.setSelection}
                 />
 
-                <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border)] pt-3">
-                  <p className="text-[11px] leading-relaxed text-[var(--text-mute)]">
-                    {selectedCount === 0
-                      ? "Select the rules you don't recognise. Disabling is reversible; removing is not."
-                      : "A full firewall backup is exported before any change."}
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={firewall.busy || selectedCount === 0}
-                      onClick={() => request("enable")}
-                    >
-                      <Icon
-                        icon={firewall.applying === "enable" ? "refresh" : "tick"}
-                        className={firewall.applying === "enable" ? "animate-spin" : undefined}
-                      />
-                      Enable ({selectedCount})
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={firewall.busy || selectedCount === 0}
-                      onClick={() => request("disable")}
-                    >
-                      <Icon
-                        icon={firewall.applying === "disable" ? "refresh" : "disable"}
-                        className={firewall.applying === "disable" ? "animate-spin" : undefined}
-                      />
-                      Disable ({selectedCount})
-                    </Button>
-                    <Button
-                      variant="danger"
-                      size="sm"
-                      disabled={firewall.busy || selectedCount === 0}
-                      onClick={() => request("remove")}
-                    >
-                      <Icon
-                        icon={firewall.applying === "remove" ? "refresh" : "trash"}
-                        className={firewall.applying === "remove" ? "animate-spin" : undefined}
-                      />
-                      Remove ({selectedCount})
-                    </Button>
-                  </div>
-                </div>
+
               </>
             ) : null}
           </>

@@ -447,9 +447,9 @@ pub struct AppPreferences {
     /// Panic hotkey that triggers immediate lockdown (e.g. "Ctrl+Shift+Q")
     #[serde(default = "default_panic_hotkey")]
     pub panic_hotkey: String,
-    /// Seconds the sidebar Lockdown button counts down before firing (3–30).
-    /// Frontend reads/writes this (LockdownTimerRow); Rust doesn't consume it,
-    /// but the field MUST exist or patch_settings_cmd's serialize→merge→
+    /// Seconds the sidebar Lockdown button counts down before firing (3–86400).
+    /// Read by the frontend and trusted lockdown gate; the field must exist so
+    /// patch_settings_cmd's serialize→merge→
     /// deserialize round-trip silently drops it (same bug as ramdisk_autostart).
     #[serde(default = "default_lockdown_timer_sec")]
     pub lockdown_timer_sec: u32,
@@ -573,6 +573,9 @@ pub struct AppPreferences {
     /// Hidden actions remain reachable from their own panels.
     #[serde(default)]
     pub hidden_sidebar_actions: Vec<String>,
+    /// Advisor is hidden until explicitly enabled in Secret Settings.
+    #[serde(default)]
+    pub show_advisor_action: bool,
     /// When true, notifications are also suppressed while panels are locked
     /// (Borrowed-PC mode active). Requires hideNotificationBell=false to take
     /// effect independently.
@@ -1025,6 +1028,7 @@ impl Default for AppPreferences {
                 .iter()
                 .map(|action| action.to_string())
                 .collect(),
+            show_advisor_action: false,
             mute_notifications_when_locked: false,
             permanently_hidden_panels: Some(
                 DEFAULT_PERMANENTLY_HIDDEN_PANELS

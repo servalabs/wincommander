@@ -117,6 +117,14 @@ fn validate_release_modules(salt_bytes: &[u8]) {
 fn main() {
     println!("cargo:rerun-if-changed=build_service_pin.rs");
     println!("cargo:rerun-if-changed=resources/wincommander-svc.exe");
+    #[cfg(feature = "amcache-snapshot-experimental")]
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        cc::Build::new().cpp(true).file("src/amcache_snapshot.cpp").compile("amcache_snapshot");
+        println!("cargo:rerun-if-changed=src/amcache_snapshot.cpp");
+        println!("cargo:rustc-link-lib=VssApi");
+        println!("cargo:rustc-link-lib=Ole32");
+        println!("cargo:rustc-link-lib=OleAut32");
+    }
     // Do this before the profile branch: a Debug build must be invalidated
     // whenever cleanup.ps1 changes, even though it deliberately does not read
     // or regenerate the release ciphertext.

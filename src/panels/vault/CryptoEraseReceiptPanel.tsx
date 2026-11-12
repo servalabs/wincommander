@@ -9,6 +9,7 @@
 import { useState } from "react";
 import { Button, Callout, Icon, Tooltip } from "@/components/ui/bp";
 import {
+  displayEraseDetail,
   formatReceiptForClipboard,
   receiptEscrowAdvice,
   receiptFacts,
@@ -80,7 +81,7 @@ export default function CryptoEraseReceiptPanel({
         ))}
       </div>
 
-      <p className="crypto-erase-receipt-detail">{receipt.detail}</p>
+      <p className="crypto-erase-receipt-detail">{displayEraseDetail(receipt.detail)}</p>
 
       {escrow && (
         <Callout intent="danger" title="One step is still outstanding">

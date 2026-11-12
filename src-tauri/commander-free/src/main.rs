@@ -94,6 +94,27 @@ fn main() {
             std::process::exit(1);
         }
     }
+    // This private helper never accepts a caller-selected path. Handle even a
+    // malformed invocation here, before GUI startup and before COM is initialized.
+    if args.first().map(String::as_str) == Some("--internal-amcache-scan") {
+        if args.len() != 1 { std::process::exit(2); }
+        match wincommander_lib::run_internal_amcache_scan() {
+            Ok(result) => {
+                use std::io::Write;
+                // Bound the data passed through PowerShell's redirected pipe.
+                let result = serde_json::to_vec(&result).ok().filter(|data| data.len() <= 64 * 1024 * 1024);
+                let written = result.map(|data| {
+                    let mut stdout = std::io::stdout().lock();
+                    stdout.write_all(&data).and_then(|_| stdout.write_all(b"\n"))
+                });
+                std::process::exit(if matches!(written, Some(Ok(()))) { 0 } else { 1 });
+            }
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        }
+    }
     if args.as_slice() == ["--hide-recovery-listener"] {
         wincommander_lib::run_hide_recovery_listener();
         return;

@@ -118,7 +118,8 @@ describe("summarizeFirewallAudit", () => {
     );
     expect(summary.intent).toBe("warning");
     expect(summary.headline).toContain("2 of 3");
-    expect(summary.detail).toContain("disabling is reversible");
+    expect(summary.detail).toContain("enable intended blocks");
+    expect(summary.detail).toContain("Disabling is reversible");
   });
 
   it("calls a list of only narrow allows housekeeping, not security", () => {

@@ -450,7 +450,7 @@ describe("redesign surface copy guardrails", () => {
     expect(panel).toContain('"installer-actions-row"');
     expect(panel).toContain('text="SELECT ALL"');
     expect(panel).toContain('text="CLEAR"');
-    expect(panel).toContain("UPDATE<br />ALL");
+    expect(panel).toContain("UPDATE<br />WINGET APPS");
     expect(panel).toContain('<TabsTrigger value="not-installed">Not Installed (');
     expect(panel).toContain('<TabsTrigger value="updates">Updates</TabsTrigger>');
     expect(panel).toContain('<TabsTrigger value="installed">Installed (');

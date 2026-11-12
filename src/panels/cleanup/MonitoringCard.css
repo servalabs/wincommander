@@ -1,0 +1,17 @@
+.monitoring-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); gap: 8px; }
+.monitoring-card { display: grid; gap: 10px; min-width: 0; padding: 12px; border: 1px solid var(--color-border); border-radius: var(--radius-lg); background: var(--color-bg-card); }
+.monitoring-card__header { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.monitoring-card__icon { display: grid; place-items: center; width: 34px; height: 34px; flex: none; border-radius: var(--radius-md); color: var(--color-accent); background: var(--color-accent-dim); }
+.monitoring-card__title { display: flex; flex: 1; flex-direction: column; min-width: 0; gap: 2px; }
+.monitoring-card__title strong { color: var(--color-text-primary); font-size: 13px; }
+.monitoring-card__title span { color: var(--color-text-muted); font-size: 11px; }
+.monitoring-card__info { display: grid; place-items: center; width: 32px; height: 32px; flex: none; border: 0; border-radius: var(--radius-md); color: var(--color-text-muted); background: transparent; cursor: pointer; }
+.monitoring-card__info:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.monitoring-card__body { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; min-width: 0; }
+.monitoring-card__status { display: flex; flex: 1 1 12rem; flex-direction: column; gap: 3px; min-width: 0; font-size: 12px; color: var(--color-text-primary); }
+.monitoring-card__status span { color: var(--color-text-muted); font-size: 11px; }
+.monitoring-card__status--partial strong, .monitoring-card__status--unavailable strong { color: var(--color-warning); }
+.monitoring-card__status--error strong { color: var(--color-danger); }
+.monitoring-card__preview { display: flex; flex: 2 1 18rem; flex-wrap: wrap; gap: 4px; min-width: 0; margin: 0; padding: 0; list-style: none; }
+.monitoring-card__preview li { min-width: 0; max-width: 100%; padding: 3px 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: var(--radius-sm); background: var(--color-bg-tertiary); color: var(--color-text-muted); font-size: 11px; }
+.monitoring-card__actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 6px; }
