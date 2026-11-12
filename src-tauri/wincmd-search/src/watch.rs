@@ -114,6 +114,68 @@ pub fn watch_roots(
     Ok(watcher)
 }
 
+// Kept behind an opt-in feature until all writers and restart recovery use
+// the same guard. A full queue is never mistaken for a complete event stream.
+#[cfg(feature = "experimental-space-guard")]
+fn dispatch_bounded(
+    result: notify::Result<Event>,
+    skip_paths: &[PathBuf],
+    exclusions: &GlobSet,
+    max_file_bytes: u64,
+    tx: &mpsc::SyncSender<FsEventAction>,
+    guard: &std::sync::Mutex<crate::space_guard::SpaceGuard>,
+) {
+    let mut state = match guard.lock() {
+        Ok(state) => state,
+        Err(poisoned) => {
+            poisoned.into_inner().require_reconciliation();
+            return;
+        }
+    };
+    let event = match result {
+        Ok(event) if !event.need_rescan() => event,
+        _ => {
+            state.require_reconciliation();
+            return;
+        }
+    };
+    let Some(action) = apply_fs_event(&event, skip_paths, exclusions, max_file_bytes) else {
+        // Directory changes, renames and unknown events can invalidate more
+        // than one indexed file. Avoid treating them as a complete stream.
+        if !matches!(event.kind, EventKind::Access(_))
+            && event.paths.iter().any(|path| !path_is_skipped(path, skip_paths) && !path_is_excluded(path, exclusions))
+        {
+            state.require_reconciliation();
+        }
+        return;
+    };
+    state.note_change();
+    if let Err(mpsc::TrySendError::Full(_)) = tx.try_send(action) {
+        state.require_reconciliation();
+    }
+}
+
+#[cfg(feature = "experimental-space-guard")]
+pub(crate) fn watch_roots_bounded(
+    roots: &[PathBuf],
+    skip_paths: Vec<PathBuf>,
+    exclusions: GlobSet,
+    max_file_bytes: u64,
+    tx: mpsc::SyncSender<FsEventAction>,
+    guard: std::sync::Arc<std::sync::Mutex<crate::space_guard::SpaceGuard>>,
+) -> Result<RecommendedWatcher> {
+    let mut watcher = notify::recommended_watcher(move |result| {
+        dispatch_bounded(result, &skip_paths, &exclusions, max_file_bytes, &tx, &guard);
+    }).map_err(|e| SearchError::Io(std::io::Error::other(e.to_string())))?;
+    for root in roots {
+        // Unlike the existing watcher, a partially registered watcher cannot
+        // claim its event stream is complete.
+        watcher.watch(root, RecursiveMode::Recursive)
+            .map_err(|e| SearchError::Io(std::io::Error::other(e.to_string())))?;
+    }
+    Ok(watcher)
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -135,6 +197,26 @@ mod tests {
 
     fn no_exclusions() -> GlobSet {
         crate::crawler::build_globset(&[]).unwrap()
+    }
+
+    #[cfg(feature = "experimental-space-guard")]
+    #[test]
+    fn bounded_overflow_and_watcher_errors_require_reconciliation() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("document.txt");
+        fs::write(&file, b"hello").unwrap();
+        let (tx, rx) = mpsc::sync_channel(1);
+        let guard = std::sync::Mutex::new(crate::space_guard::SpaceGuard::default());
+        let event = || make_event(EventKind::Create(CreateKind::File), &file);
+        dispatch_bounded(Ok(event()), &[], &no_exclusions(), u64::MAX, &tx, &guard);
+        assert!(guard.lock().unwrap().reconciliation_started().is_none());
+        dispatch_bounded(Ok(event()), &[], &no_exclusions(), u64::MAX, &tx, &guard);
+        let token = guard.lock().unwrap().reconciliation_started().unwrap();
+        assert!(rx.try_recv().is_ok());
+        dispatch_bounded(Ok(event()), &[], &no_exclusions(), u64::MAX, &tx, &guard);
+        assert!(!guard.lock().unwrap().reconciliation_finished(token, true, Ok(u64::MAX)));
+        dispatch_bounded(Err(notify::Error::generic("watcher failure")), &[], &no_exclusions(), u64::MAX, &tx, &guard);
+        assert!(guard.lock().unwrap().reconciliation_started().is_some());
     }
 
     // ── Create → Upsert ──────────────────────────────────────────────

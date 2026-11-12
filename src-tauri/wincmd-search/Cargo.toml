@@ -6,12 +6,16 @@ rust-version = "1.93.1"
 license = "AGPL-3.0-or-later"
 description = "Full-text file-content search for WinCommander (Free tier)"
 
+[features]
+experimental-space-guard = []
+
 [dependencies]
 tantivy       = "0.27"
 lopdf         = "0.46"   # >=0.42 fixes RUSTSEC-2026-0187 (stack overflow on nested PDFs)
 calamine      = "0.38"
 quick-xml     = "0.42"   # >=0.42 fixes RUSTSEC-2026-0194/0195 (OOXML DoS)
 globset       = "0.4"
+fs4           = "0.13.1"
 zip           = "9.3"
 notify        = "8"
 once_cell     = "1"
