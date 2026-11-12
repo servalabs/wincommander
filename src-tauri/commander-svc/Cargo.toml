@@ -25,6 +25,8 @@ path = "src/main.rs"
 [features]
 # Isolated user-token broker search fencing; not enabled in production.
 experimental-search-broker-fence = []
+# Explicit isolated recovery rehearsal only; production builds omit this.
+fleet-recovery-lab = []
 # Compile-only migration work; this does not enable issuance or cache writes.
 experimental-pq-licence = ["dep:wincmd-pq-experiment", "dep:rustls", "dep:rustls-platform-verifier", "dep:bytes"]
 
@@ -71,6 +73,7 @@ windows-service = "0.8"
 windows-sys = { version = "0.61", features = [
   "Win32_System_Registry",
   "Win32_Foundation",
+  "Win32_System_Time",
   "Win32_Security",
   "Win32_Security_Authorization",
   "Win32_Security_Authentication_Identity",
@@ -88,6 +91,7 @@ windows-sys = { version = "0.61", features = [
   "Win32_NetworkManagement_NetManagement",
   "Win32_Storage_FileSystem",
   "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
   "Win32_System_Com",
 ] }
 windows = { version = "0.62", features = [

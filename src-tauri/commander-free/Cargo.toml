@@ -31,6 +31,8 @@ test = false
 # Both experiments remain independently opt-in.
 experimental-settings-generation = []
 experimental-encrypted-search = ["wincmd-search/experimental-encrypted-search", "wincmd-service-auth/experimental-search-service-pin"]
+# Explicit isolated recovery rehearsal only; production builds omit this.
+fleet-recovery-lab = []
 # Portable single-exe edition. Gates the trial out (the most-copyable build has
 # nothing to farm) and packaging differences. Persistent state is already
 # machine-wide (%ProgramData%) regardless of this flag.

@@ -72,6 +72,11 @@ mod reconciler;
 // only its internal `WindowsPolicyFs`/`windows_acl` submodule is
 // `#[cfg(windows)]`-gated. See `policy_store.rs`'s module doc.
 mod diagnostics;
+mod fleet_identity_handoff;
+mod fleet_recovery_candidate;
+mod fleet_recovery_credential;
+mod fleet_recovery_transport;
+mod fleet_recovery_leave;
 mod fleet_credential;
 mod fleet_machine_policy;
 mod policy_store;
@@ -413,6 +418,7 @@ async fn run(mut stop_rx: Option<tokio::sync::watch::Receiver<bool>>) {
     tokio::spawn(fleet_transport::run());
     #[cfg(feature = "experimental-pq-licence")]
     tokio::spawn(licence_activation_intent::recovery_loop());
+    tokio::spawn(pipe::fleet_handoff_confirmation::run_automatic_recovery_contact());
     // Pro can extract the engine after this service has already started.
     // Poll only the fixed payload: the helper is private, accepts no renderer
     // arguments, and fails closed until its signer/ownership/ACL checks pass.

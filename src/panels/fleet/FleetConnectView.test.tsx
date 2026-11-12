@@ -56,6 +56,13 @@ test("another Windows profile sees active retry, terminal failure, then recovere
     assert.match(host.querySelector('.fleet-connect-badge').textContent, /Linked/);
     assert.ok(!connect());
     assert.ok(!host.textContent.includes('enrollment rejected'));
+    status = { ...status, pendingApproval: true, admissionFingerprint: 'a'.repeat(64) };
+    await poll();
+    assert.match(host.textContent, /Device identity fingerprint/);
+    assert.ok(host.textContent.includes('a'.repeat(64)));
+    status = { ...status, admissionFingerprint: null };
+    await poll();
+    assert.match(host.textContent, /fingerprint is unavailable/);
     assert.ok(calls.every(command => ['fleet_status', 'fleet_machine_trust_status', 'fleet_service_contact_status'].includes(command)));
     await act(async () => { root.unmount(); });
     assert.equal(timers.size, 0);
