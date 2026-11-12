@@ -397,3 +397,5 @@ Local operation history is a clearable display aid, not a trusted audit log.
 Use the normal public issue process for public Free bugs that do not disclose a
 security weakness, private implementation, customer data, credentials, or
 internal infrastructure. When unsure, email the security address.
+
+Two additional historical Fleet and Shield source variants are preserved in inactive history. Other snapshot files were omitted; this does not enable or complete Fleet recovery.
