@@ -118,7 +118,7 @@ pub(super) fn publish_new(stage: &File, parent: &File, name: &OsStr) -> Result<(
         NtSetInformationFile(stage.as_raw_handle(), &mut status, info.cast(), bytes as u32, FileRenameInformation)
     };
     if result < 0 { return Err("settings publication was not confirmed; preserve both paths for recovery".into()); }
-    stage.sync_all().map_err(|_| "settings publication outcome uncertain; preserve both paths for recovery".into())?;
+    stage.sync_all().map_err(|_| "settings publication outcome uncertain; preserve both paths for recovery".to_string())?;
     Ok(())
 }
 
