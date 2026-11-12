@@ -252,15 +252,18 @@ async fn handle(req: Request<Incoming>) -> Result<Response<Full<Bytes>>, hyper::
         }
     }
 
+    // Verify and dispatch against one registry snapshot. A route replaced while
+    // a request is in flight must never accept its predecessor's secret.
+    let state = STATE.lock().unwrap();
+    if !state.routes.contains_key(&path) {
+        return Ok(reply(StatusCode::NOT_FOUND, "no route"));
+    }
     let signature = match sig_header {
         Some(s) => s,
         None => return Ok(reply(StatusCode::UNAUTHORIZED, "missing signature")),
     };
-    // Verify and dispatch against one registry snapshot. A route replaced while
-    // a request is in flight must never accept its predecessor's secret.
-    let state = STATE.lock().unwrap();
     let status = dispatch_authenticated(&state, &path, &body_bytes, &signature);
-    Ok(reply(status, if status == StatusCode::OK { "ok" } else { "not authorized" }))
+    Ok(reply(status, if status == StatusCode::OK { "ok" } else { "bad signature" }))
 }
 
 fn dispatch_authenticated(state: &ServerState, path: &str, body: &[u8], signature: &str) -> StatusCode {
