@@ -160,7 +160,7 @@ mod win32 {
             .open(pipe_name)
             .map_err(|_| SvcError::Unavailable)?;
 
-        let token = random_session_token();
+        let token = random_session_token()?;
         let _verified_peer = wincmd_service_auth::verify_service_peer(&client)
             .map_err(|_| SvcError::Forbidden("untrusted_service_peer".into()))?;
         let hello = Envelope::Hello(hello_from_ui(token.clone()));
@@ -215,12 +215,11 @@ mod win32 {
         }
     }
 
-    fn random_session_token() -> String {
-        use rand::rngs::OsRng;
-        use rand::RngCore;
+    fn random_session_token() -> Result<String, SvcError> {
+        use rand::{rngs::SysRng, TryRng};
         let mut buf = [0u8; 32];
-        OsRng.fill_bytes(&mut buf);
-        buf.iter().map(|b| format!("{b:02x}")).collect()
+        SysRng.try_fill_bytes(&mut buf).map_err(|_| SvcError::Unavailable)?;
+        Ok(buf.iter().map(|b| format!("{b:02x}")).collect())
     }
 
     #[cfg(test)]
