@@ -370,6 +370,8 @@ continued work. Their presence in branch ancestry does not mean every draft
 behavior is implemented or validated in the current source tree.
 The older Safe Paste handoff prototype is also retained in history only; it is
 not the current implementation or an established confinement boundary.
+Sanitized snapshots of older vault dismount and build drafts are likewise
+retained in history; they do not replace the current vault implementation.
 
 ## Local maintenance
 
