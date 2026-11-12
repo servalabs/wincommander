@@ -359,7 +359,11 @@ evidence that all existing local data is encrypted.
 Clearing the application log removes its history; retain any history needed for
 troubleshooting before clearing it. A safe migration and visible status flow
 remain to be implemented. Do not delete key material to retry: older settings,
-logs and diagnostic data may need that same key.
+logs and diagnostic data may need that same key. If a settings key is missing,
+preserve the existing settings, logs and backups, and seek help restoring the
+matching key. Data in other Windows profiles or on disconnected storage may
+also depend on it; checking the current profile cannot establish that all
+such data is safe.
 
 ## Local maintenance
 
