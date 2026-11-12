@@ -1,0 +1,240 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    ptr,
+};
+use windows_sys::Win32::{
+    Foundation::{CloseHandle, LocalFree},
+    Security::{
+        Authorization::ConvertSidToStringSidW, GetTokenInformation, TokenUser, TOKEN_QUERY,
+        TOKEN_USER,
+    },
+    System::{
+        SystemInformation::GetWindowsDirectoryW,
+        Threading::{GetCurrentProcess, OpenProcessToken},
+    },
+};
+use winreg::{enums::HKEY_LOCAL_MACHINE, RegKey};
+
+const UNAVAILABLE: &str = "user profile locations could not be verified";
+const OTHER_PROFILE: &str = "another user profile is protected";
+
+fn current_sid() -> Result<String, &'static str> {
+    let mut token = ptr::null_mut();
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+        return Err(UNAVAILABLE);
+    }
+    let mut bytes = 0;
+    unsafe {
+        GetTokenInformation(token, TokenUser, ptr::null_mut(), 0, &mut bytes);
+    }
+    let mut data = vec![0usize; (bytes as usize).div_ceil(std::mem::size_of::<usize>())];
+    let ok = bytes != 0
+        && unsafe {
+            GetTokenInformation(
+                token,
+                TokenUser,
+                data.as_mut_ptr().cast(),
+                bytes,
+                &mut bytes,
+            )
+        } != 0;
+    unsafe {
+        CloseHandle(token);
+    }
+    if !ok {
+        return Err(UNAVAILABLE);
+    }
+    let sid = unsafe { (*data.as_ptr().cast::<TOKEN_USER>()).User.Sid };
+    let mut value = ptr::null_mut();
+    if unsafe { ConvertSidToStringSidW(sid, &mut value) } == 0 || value.is_null() {
+        return Err(UNAVAILABLE);
+    }
+    let mut length = 0;
+    unsafe {
+        while *value.add(length) != 0 {
+            length += 1;
+        }
+    }
+    let result = String::from_utf16(unsafe { std::slice::from_raw_parts(value, length) })
+        .map_err(|_| UNAVAILABLE);
+    unsafe {
+        LocalFree(value.cast());
+    }
+    result
+}
+
+fn resolve_profile_string(value: &str, windows_dir: &Path) -> Result<PathBuf, &'static str> {
+    let normalized = value.to_ascii_lowercase();
+    let path =
+        if normalized.starts_with("%systemroot%\\") || normalized.starts_with("%systemroot%/") {
+            windows_dir.join(&value[13..])
+        } else if value.contains('%') {
+            return Err(UNAVAILABLE);
+        } else {
+            PathBuf::from(value)
+        };
+    if !path.is_absolute() || path.to_string_lossy().contains('%') {
+        return Err(UNAVAILABLE);
+    }
+    Ok(path)
+}
+
+fn expand_path(value: &str) -> Result<PathBuf, &'static str> {
+    let mut buffer = vec![0u16; 32768];
+    let length = unsafe { GetWindowsDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) } as usize;
+    if length == 0 || length >= buffer.len() {
+        return Err(UNAVAILABLE);
+    }
+    let windows_dir = String::from_utf16(&buffer[..length]).map_err(|_| UNAVAILABLE)?;
+    let path = resolve_profile_string(value, Path::new(&windows_dir))?;
+    fs::canonicalize(path).map_err(|_| UNAVAILABLE)
+}
+
+fn profiles() -> Result<(String, Vec<(String, PathBuf)>), &'static str> {
+    let sid = current_sid()?;
+    let key = RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList")
+        .map_err(|_| UNAVAILABLE)?;
+    let mut paths = Vec::new();
+    for name in key.enum_keys() {
+        let name = name.map_err(|_| UNAVAILABLE)?;
+        if !name.starts_with("S-1-") {
+            continue;
+        }
+        let subkey = key.open_subkey(&name).map_err(|_| UNAVAILABLE)?;
+        let path: String = subkey
+            .get_value("ProfileImagePath")
+            .map_err(|_| UNAVAILABLE)?;
+        paths.push((name, expand_path(&path)?));
+    }
+    if !paths
+        .iter()
+        .any(|(profile_sid, _)| profile_sid.eq_ignore_ascii_case(&sid))
+    {
+        return Err(UNAVAILABLE);
+    }
+    Ok((sid, paths))
+}
+
+fn contains(path: &Path, root: &Path) -> bool {
+    let path = path.to_string_lossy().replace('/', "\\").to_lowercase();
+    let root = root
+        .to_string_lossy()
+        .replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_lowercase();
+    path == root
+        || path
+            .strip_prefix(&root)
+            .is_some_and(|suffix| suffix.starts_with('\\'))
+}
+
+fn classify(
+    path: &Path,
+    current_sid: &str,
+    profiles: &[(String, PathBuf)],
+) -> Result<(), &'static str> {
+    if profiles.is_empty()
+        || !profiles
+            .iter()
+            .any(|(sid, _)| sid.eq_ignore_ascii_case(current_sid))
+    {
+        return Err(UNAVAILABLE);
+    }
+    if profiles
+        .iter()
+        .any(|(sid, root)| !sid.eq_ignore_ascii_case(current_sid) && contains(path, root))
+    {
+        return Err(OTHER_PROFILE);
+    }
+    Ok(())
+}
+
+pub(super) struct Snapshot(Result<(String, Vec<(String, PathBuf)>), &'static str>);
+
+impl Snapshot {
+    pub(super) fn load() -> Self {
+        Self(profiles())
+    }
+
+    pub(super) fn check(&self, path: &Path) -> Result<(), &'static str> {
+        let (sid, paths) = self.0.as_ref().map_err(|error| *error)?;
+        classify(path, sid, paths)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn redirected_other_profile_on_another_drive_is_protected() {
+        let profiles = vec![
+            ("mine".into(), PathBuf::from(r"C:\Users\Me")),
+            ("other".into(), PathBuf::from(r"D:\Redirected\Alice")),
+        ];
+        assert_eq!(
+            classify(
+                Path::new(r"d:\redirected\ALICE\shared\report.pdf"),
+                "mine",
+                &profiles
+            ),
+            Err(OTHER_PROFILE)
+        );
+        assert_eq!(
+            classify(
+                Path::new(r"D:\Redirected\Alice-archive\report.pdf"),
+                "mine",
+                &profiles
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            classify(
+                Path::new(r"C:\Users\Me\Documents\report.pdf"),
+                "mine",
+                &profiles
+            ),
+            Ok(())
+        );
+    }
+    #[test]
+    fn unavailable_or_unmatched_profile_inventory_fails_closed() {
+        assert_eq!(
+            classify(Path::new(r"D:\data\report.pdf"), "mine", &[]),
+            Err(UNAVAILABLE)
+        );
+        assert_eq!(
+            classify(
+                Path::new(r"D:\data\report.pdf"),
+                "missing",
+                &[("other".into(), PathBuf::from(r"D:\Users\Other"))]
+            ),
+            Err(UNAVAILABLE)
+        );
+    }
+    #[test]
+    fn per_user_and_unrecognized_environment_variables_fail_closed() {
+        let windows = Path::new(r"C:\Windows");
+        assert_eq!(
+            resolve_profile_string(r"%USERPROFILE%\Documents", windows),
+            Err(UNAVAILABLE)
+        );
+        assert_eq!(
+            resolve_profile_string(r"D:\Users\%USERNAME%", windows),
+            Err(UNAVAILABLE)
+        );
+        assert_eq!(
+            resolve_profile_string(r"%SystemRoot%\System32", windows).unwrap(),
+            windows.join("System32")
+        );
+    }
+    #[test]
+    fn live_registry_includes_the_current_account() {
+        let (sid, paths) = profiles().expect("profile inventory must be readable for removal");
+        assert!(paths
+            .iter()
+            .any(|(entry, _)| entry.eq_ignore_ascii_case(&sid)));
+    }
+}
