@@ -2854,7 +2854,9 @@ const AUTOMATIC_RECOVERY_RESULTS_READY:bool=cfg!(feature="fleet-recovery-lab");
 /// Service-owned observation continues after restart without exposing the
 /// credential to the desktop. Disabled until the full recovery flow is tested.
 pub(crate) async fn run_automatic_recovery_contact() {
-    if !AUTOMATIC_RECOVERY_CONTACT_READY { return; }
+    // Automatic recovery remains unavailable until signed v2 admission is integrated.
+    const SIGNED_V2_RECOVERY_ADMISSION_READY: bool = false;
+    if !SIGNED_V2_RECOVERY_ADMISSION_READY || !AUTOMATIC_RECOVERY_CONTACT_READY { return; }
     let mut last_late_id:Option<String>=None;
     loop {
         if let Ok(store)=crate::fleet_machine_policy::system_store() {

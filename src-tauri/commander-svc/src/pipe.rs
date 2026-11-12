@@ -3845,15 +3845,17 @@ fn vault_group_update_error(error: crate::vault_access::VaultError) -> VerbError
 }
 
 // Enabled only after the complete recovery path and native consent are validated.
-const OPERATOR_PIN_READY: bool = cfg!(feature="fleet-recovery-lab");
-const RECOVERY_RESUME_READY: bool = cfg!(feature="fleet-recovery-lab");
-const RECOVERY_STAGE_READY: bool = cfg!(feature="fleet-recovery-lab");
-const RECOVERY_HANDOFF_READY: bool = cfg!(feature="fleet-recovery-lab");
-const RECOVERY_FINISH_READY: bool = cfg!(feature="fleet-recovery-lab");
-const RECOVERY_CONTACT_READY: bool = cfg!(feature="fleet-recovery-lab");
-const RECOVERY_EXECUTION_READY: bool = cfg!(feature="fleet-recovery-lab");
-const RECOVERY_STOP_READY: bool = cfg!(feature="fleet-recovery-lab");
-const RECOVERY_UPGRADE_READY: bool = cfg!(feature="fleet-recovery-lab");
+// Signed Windows v2 recovery admission is not yet integrated; keep every recovery verb unavailable.
+const RECOVERY_V2_ADMISSION_READY: bool = false;
+const OPERATOR_PIN_READY: bool = RECOVERY_V2_ADMISSION_READY && cfg!(feature="fleet-recovery-lab");
+const RECOVERY_RESUME_READY: bool = RECOVERY_V2_ADMISSION_READY && cfg!(feature="fleet-recovery-lab");
+const RECOVERY_STAGE_READY: bool = RECOVERY_V2_ADMISSION_READY && cfg!(feature="fleet-recovery-lab");
+const RECOVERY_HANDOFF_READY: bool = RECOVERY_V2_ADMISSION_READY && cfg!(feature="fleet-recovery-lab");
+const RECOVERY_FINISH_READY: bool = RECOVERY_V2_ADMISSION_READY && cfg!(feature="fleet-recovery-lab");
+const RECOVERY_CONTACT_READY: bool = RECOVERY_V2_ADMISSION_READY && cfg!(feature="fleet-recovery-lab");
+const RECOVERY_EXECUTION_READY: bool = RECOVERY_V2_ADMISSION_READY && cfg!(feature="fleet-recovery-lab");
+const RECOVERY_STOP_READY: bool = RECOVERY_V2_ADMISSION_READY && cfg!(feature="fleet-recovery-lab");
+const RECOVERY_UPGRADE_READY: bool = RECOVERY_V2_ADMISSION_READY && cfg!(feature="fleet-recovery-lab");
 fn handle_recovery_stop(verb:&str,args:serde_json::Value,exact_pro:bool,peer:Option<&AuthenticatedPipePeer>)->Result<serde_json::Value,VerbError> {
     if !RECOVERY_STOP_READY { return Err(VerbError::new("recovery_unavailable","Fleet recovery is unavailable")); }
     if !exact_pro { return Err(VerbError::new("forbidden","authenticated Pro helper required")); }
