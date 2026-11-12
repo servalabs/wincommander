@@ -61,9 +61,9 @@ interface Props {
 }
 
 const ORDERED_GROUPS: DestructGroup[] = [
-  "systemCleaner",
   "privacyTraces",
   "deepDfir",
+  "systemCleaner",
   "privacyClean",
 ];
 
@@ -301,6 +301,7 @@ export default function LockdownConfigSection(props: Props = {}) {
                 onClick={addShredFolder}
               />
             </div>
+            {shredFolders.length === 0 && <div className="sd-remove-users-empty">No folders selected.</div>}
             {shredFolders.length > 0 && (
               <div className="sd-shred-folders-list">
                 {shredFolders.map((p) => (

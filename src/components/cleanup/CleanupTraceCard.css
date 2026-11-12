@@ -71,3 +71,10 @@
 .cleanup-run-once-button--fill {
   width: 100%;
 }
+
+.cleanup-action-grid .cleanup-run-once-button {
+  min-height: 34px;
+  padding: 0 12px;
+  font-size: 11px;
+  color: var(--color-text-primary);
+}

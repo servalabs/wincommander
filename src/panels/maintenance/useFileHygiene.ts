@@ -161,7 +161,7 @@ export function useFileHygiene() {
 
   const select = useCallback((id: string) => {
     if (busy) return;
-    if (tool === "duplicates" && !duplicateScan?.groups.some((group) => group.files.some((file) => file.id === id) && getRetainedFileId(group, keepPolicy, retainedFiles) !== id)) return;
+    if (tool === "duplicates" && !duplicateScan?.groups.some((group) => group.files.some((file) => file.id === id && file.removable === true) && getRetainedFileId(group, keepPolicy, retainedFiles) !== id)) return;
     setSelected((current) => {
       const next = new Set(current);
       if (next.has(id)) next.delete(id);

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 mod index;
+#[cfg(windows)]
+mod profile_policy;
 mod safety;
 mod scan;
 mod scope;

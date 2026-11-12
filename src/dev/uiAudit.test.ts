@@ -138,15 +138,15 @@ describe("UI audit fixture", () => {
       users: Array<{ name: string; sid: string; isCurrent: boolean }>;
     };
     const policy = uiAuditDirectResponse("get_vault_access_policy") as {
-      entries: Array<{ label: string; grants: unknown[] }>;
+      entries: Array<{ entry: { label: string; grants: unknown[] } }>;
     };
     const authorized = uiAuditDirectResponse("vault_list_authorized_entries") as Array<{ entry_id: string }>;
 
     expect(users.users).toHaveLength(2);
     expect(users.users.find((user) => user.isCurrent)?.sid).toBe("S-1-5-21-1000-1000-1000-1001");
     expect(uiAuditDirectResponse("get_vault_access_capabilities")).toEqual({ can_manage_policy: true });
-    expect(policy.entries[0]).toMatchObject({ label: "Team documents" });
-    expect(policy.entries[0]?.grants).toHaveLength(2);
+    expect(policy.entries[0]?.entry).toMatchObject({ label: "Team documents" });
+    expect(policy.entries[0]?.entry.grants).toHaveLength(2);
     expect(authorized).toEqual([{ entry_id: "audit-team-vault", label: "Team documents", access: "write", presentation: "machine", container_kind: "standard", mount_state: "unmounted", drive_letter: null }]);
   });
 

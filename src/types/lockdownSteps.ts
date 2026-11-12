@@ -174,7 +174,7 @@ export const DESTRUCT_STEPS: readonly DestructStepDef[] = [
   // These steps destroy the encryption master key; the drive becomes permanently unreadable.
   // NOT included in any preset. Must be enabled individually in self-destruct settings.
   { id: "bitlocker_erase",         label: "BitLocker Key Erase",      command: clearCommand("BitLockerKeyProtectors"),  group: "privacyClean", defaultEnabled: false },
-  { id: "veracrypt_header_destroy", label: "VeraCrypt Header Destroy",  command: commandId("Destroy-", "VeraCrypt", "Header"),       group: "privacyClean", defaultEnabled: false },
+  { id: "veracrypt_header_destroy", label: "Encrypted Container Header Destroy",  command: commandId("Destroy-", "VeraCrypt", "Header"),       group: "privacyClean", defaultEnabled: false },
 
   // Selective account removal (IRREVERSIBLE; default OFF). Pro securely wipes
   // each selected local account's profile then deletes the account. Usernames

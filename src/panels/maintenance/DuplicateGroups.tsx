@@ -85,15 +85,14 @@ function DuplicateGroupRows({ group, tools, open, onOpenChange, groupRef }: { gr
       {group.files.slice(0, visibleCount).map((file) => {
         const retained = retainedId === file.id;
         const displayPath = toExplorerDisplayPath(file.path) ?? "Location unavailable";
-        // Older already-running backends do not include `removable`; treat the
-        // missing field as an ordinary reviewable file until the next rebuild.
-        const protectedForReview = file.removable === false;
+        const protectedForReview = file.removable !== true;
+        const profile = displayPath.match(/(?:^|[\\/])Users[\\/]([^\\/]+)/i)?.[1];
         return <div key={file.id} className="duplicate-member" data-retained={retained || undefined}>
           <CheckboxControl checked={tools.selected.has(file.id)} disabled={tools.busy || retained || protectedForReview} ariaLabel={`${tools.selected.has(file.id) ? "Deselect" : "Select"} ${file.name} at ${displayPath}`} onChange={() => tools.select(file.id)} />
-          <span className="duplicate-member-location"><strong>{file.name}</strong><small title={displayPath}>{displayPath} · {formatModified(file.modified)}</small></span>
+          <span className="duplicate-member-location"><strong>{file.name}</strong><small title={displayPath}>{displayPath} · {formatModified(file.modified)}{profile ? ` · Profile folder: ${profile}` : " · Profile not identified"}</small></span>
           <span className="duplicate-member-size">{formatBytes(file.size)}</span>
           <Button size="sm" variant="ghost" disabled={tools.busy} aria-label={`Open ${file.name} in Explorer`} onClick={() => void tools.openDuplicate(file.id)}><Icon icon="folder-open" size={14} /> Open</Button>
-          {protectedForReview ? <Badge tone="neutral">Protected · review only</Badge> : retained ? <Badge tone="success">Kept copy</Badge> : <Button size="sm" variant="ghost" disabled={tools.busy} aria-label={`Keep ${file.name} at ${displayPath}`} onClick={() => tools.keepFile(group.id, file.id)}>Keep selected</Button>}
+          {protectedForReview ? <span title="Application files, application data, files in other user profiles, or unknown locations cannot be removed here."><Badge tone="neutral">Protected · review only</Badge></span> : retained ? <Badge tone="success">Kept copy</Badge> : <Button size="sm" variant="ghost" disabled={tools.busy} aria-label={`Keep ${file.name} at ${displayPath}`} onClick={() => tools.keepFile(group.id, file.id)}>Keep selected</Button>}
         </div>;
       })}
       {group.files.length > visibleCount && <Button size="sm" variant="ghost" onClick={() => setVisibleCount((count) => count + 50)}>Inspect more copies ({group.files.length - visibleCount} remaining)</Button>}

@@ -38,7 +38,7 @@ function HowItWorks() {
           </p>
           <strong>The two methods differ</strong>
           <p>
-            <em>VeraCrypt</em> — the volume header holds the only copy of the master key. It gets
+            <em>Encrypted containers</em> — the volume header holds the only copy of the master key. It gets
             overwritten with random bytes, so the password can never derive the key again.
             <br />
             <em>BitLocker</em> — every key protector (TPM, PIN, recovery key) is removed and the
@@ -84,7 +84,7 @@ export default function CryptoEraseSection({ veracryptVolumes }: { veracryptVolu
       const target: EncryptedTarget = {
         id: `vcfile:${selected}`,
         kind: "veracrypt",
-        label: `VeraCrypt container ${selected}`,
+        label: `Encrypted container ${selected}`,
         path: selected,
         isOsVolume: isVeraCryptDevicePath(selected),
         eligible: true,
@@ -144,7 +144,7 @@ export default function CryptoEraseSection({ veracryptVolumes }: { veracryptVolu
 
         {loadError && (
           <Callout intent="warning" title="Couldn't read the BitLocker volume list">
-            {loadError} VeraCrypt volumes are still listed below, and you can always erase a container
+            {loadError} Encrypted volumes are still listed below, and you can always erase a container
             by picking its file.
           </Callout>
         )}
@@ -158,7 +158,7 @@ export default function CryptoEraseSection({ veracryptVolumes }: { veracryptVolu
           <EmptyState
             icon="key"
             title="No encrypted containers detected"
-            hint="Mount a VeraCrypt volume or enable BitLocker to see it here. An unmounted container can still be erased directly from its file."
+            hint="Mount an encrypted volume or enable BitLocker to see it here. An unmounted container can still be erased directly from its file."
             action={
               <Button minimal small icon="folder-open" text="Erase container file…" onClick={eraseByPath} />
             }

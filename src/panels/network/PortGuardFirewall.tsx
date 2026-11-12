@@ -17,7 +17,7 @@ export default function PortGuardFirewall() {
     await firewall.add(label.trim(), ports, protocol, direction);
     setPorts(''); setLabel('');
   }
-  return <details style={{ marginTop: 16 }}>
+  return <details className="port-guard-firewall">
     <summary>Firewall port blocks</summary>
     <div className="port-guard-heading" style={{ marginTop: 8 }}>
       <span>Port rules, not whole-app blocks</span>

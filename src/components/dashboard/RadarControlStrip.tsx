@@ -75,7 +75,7 @@ export default function RadarControlStrip() {
 
       <div className="radar-strip-readout" title={networkDnsStatus?.resolverIp ?? networkDnsStatus?.servers?.join(", ") ?? undefined}>
         <Server size={12} className="rsr-icon" />
-        <span className="rsr-label">DNS</span>
+        <span className="rsr-label">ENTERPRISE DNS</span>
         <span className="rsr-value">{dnsLabel(networkDnsStatus)}</span>
       </div>
     </div>

@@ -53,7 +53,7 @@ export function buildTargets(
     out.push({
       id: `vc:${v.letter}`,
       kind: "veracrypt",
-      label: `VeraCrypt ${v.letter}`,
+      label: `Encrypted container ${v.letter}`,
       path: hasPath ? (v.path as string) : undefined,
       mountLetter: v.letter,
       isOsVolume: isVeraCryptDevicePath(v.path),
@@ -114,7 +114,7 @@ export function targetSubject(target: EncryptedTarget): string {
  *  (same idea as DriveWipeDialog's wipeMethodLabel). */
 export function eraseMethodLabel(target: EncryptedTarget): string {
   return target.kind === "veracrypt"
-    ? "VeraCrypt · overwrite the primary + backup header with random bytes"
+    ? "Encrypted container · overwrite the primary + backup header with random bytes"
     : "BitLocker · remove every key protector, then lock the volume to evict its key";
 }
 

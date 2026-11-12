@@ -17,6 +17,7 @@ pub struct DiskFileTypes {
     pub scan_id: String,
     pub scope_path: String,
     pub categories: Vec<DiskFileType>,
+    pub extensions: Vec<DiskFileType>,
     pub complete: bool,
 }
 
@@ -77,6 +78,47 @@ fn summarize(children: &HashMap<String, Vec<DiskNode>>, path: &str) -> Vec<DiskF
     totals
 }
 
+fn summarize_extensions(
+    children: &HashMap<String, Vec<DiskNode>>,
+    path: &str,
+) -> Vec<DiskFileType> {
+    let mut totals: HashMap<String, (u64, u64)> = HashMap::new();
+    let mut pending = vec![path];
+    while let Some(directory) = pending.pop() {
+        if let Some(items) = children.get(directory) {
+            for item in items {
+                if item.is_dir {
+                    pending.push(&item.full_path);
+                    continue;
+                }
+                let extension = std::path::Path::new(&item.name)
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .filter(|value| !value.is_empty())
+                    .map(|value| format!(".{}", value.to_lowercase()))
+                    .unwrap_or_else(|| "No extension".to_string());
+                let entry = totals.entry(extension).or_default();
+                entry.0 += 1;
+                entry.1 = entry.1.saturating_add(item.size);
+            }
+        }
+    }
+    let mut rows: Vec<_> = totals
+        .into_iter()
+        .map(|(category, (file_count, logical_size))| DiskFileType {
+            category,
+            file_count,
+            logical_size,
+        })
+        .collect();
+    rows.sort_by(|a, b| {
+        b.logical_size
+            .cmp(&a.logical_size)
+            .then_with(|| a.category.cmp(&b.category))
+    });
+    rows
+}
+
 pub async fn get_disk_file_types(scan_id: String, path: String) -> Result<DiskFileTypes, String> {
     tokio::task::spawn_blocking(move || {
         let guard = cache().lock().map_err(|_| "Scan cache unavailable.")?;
@@ -92,6 +134,7 @@ pub async fn get_disk_file_types(scan_id: String, path: String) -> Result<DiskFi
         }
         Ok(DiskFileTypes {
             categories: summarize(&guard.children, &path),
+            extensions: summarize_extensions(&guard.children, &path),
             scan_id,
             scope_path: path,
             complete: meta.complete,
@@ -144,6 +187,40 @@ mod tests {
         let nested = summarize(&data, "root/nested");
         assert_eq!(nested.iter().map(|row| row.file_count).sum::<u64>(), 2);
         assert_eq!(nested.iter().map(|row| row.logical_size).sum::<u64>(), 50);
+    }
+    #[test]
+    fn extension_totals_include_nested_and_extensionless_files() {
+        let data = HashMap::from([
+            (
+                "root".into(),
+                vec![
+                    item("nested", "root/nested", 0, true),
+                    item("a.JPG", "root/a.JPG", 10, false),
+                    item("readme", "root/readme", 2, false),
+                ],
+            ),
+            (
+                "root/nested".into(),
+                vec![item("b.jpg", "root/nested/b.jpg", 20, false)],
+            ),
+        ]);
+        let rows = summarize_extensions(&data, "root");
+        assert_eq!(
+            (
+                rows[0].category.as_str(),
+                rows[0].file_count,
+                rows[0].logical_size
+            ),
+            (".jpg", 2, 30)
+        );
+        assert_eq!(
+            (
+                rows[1].category.as_str(),
+                rows[1].file_count,
+                rows[1].logical_size
+            ),
+            ("No extension", 1, 2)
+        );
     }
     #[test]
     fn every_supported_type_and_unclassified_file_have_an_explicit_bucket() {

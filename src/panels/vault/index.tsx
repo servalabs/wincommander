@@ -32,6 +32,10 @@ import { confirmedMountObservationError, vaultOperationError } from "@/lib/vault
 import { notifyPersonalMountSyncWarning } from "@/lib/vaultSyncWarning";
 import MountProgress from "./MountProgress";
 import { waitForMountOptions, waitForMountReadback, type MountStage } from "./mountOperationProgress";
+import useProcessElevation from "../../hooks/useProcessElevation";
+import FleetManagementSection from "../fleet/FleetManagementSection";
+import VaultAccessTab from "../fleet/VaultAccessTab";
+import { DEFAULT_ACCESS_DIRECTORY } from "../fleet/accessControlPolicy";
 
 const validPim = (value: string) => !value || (Number.isInteger(Number(value)) && Number(value) >= 1 && Number(value) <= 2_147_468);
 const boundedMountError = (error: unknown) => vaultOperationError(error);
@@ -57,6 +61,7 @@ type VaultVolume = NonNullable<EncryptionStatus["volumes"]>[number];
 
 function VaultPanel() {
   const { encryptionStatus, refreshVault, loading, vaultStatusError, vaultManualRefreshing } = useAppState();
+  const { state: processElevation } = useProcessElevation();
 
   const volumes = encryptionStatus?.volumes || [];
 
@@ -82,6 +87,16 @@ function VaultPanel() {
           </div>
           <BackupRecoverySection />
           <StegoBackupSection />
+          {processElevation !== "administrator" && <section aria-label="My vaults">
+            <SectionCard title="My vaults" icon="lock">
+              <div className="fleet-panel"><VaultAccessTab isAdmin={false} directory={DEFAULT_ACCESS_DIRECTORY} /></div>
+            </SectionCard>
+          </section>}
+          {processElevation === "administrator" && <section aria-label="Vault permissions">
+            <SectionCard title="Vault permissions" icon="lock">
+              <FleetManagementSection section="vault" />
+            </SectionCard>
+          </section>}
       </div>
     </div>
   );

@@ -14,10 +14,15 @@ pub(super) fn remove_files(
         cancelled: false,
         errors: Vec::new(),
     };
+    let policy = RemovalPolicy::load();
     for file in files {
         if cancelled.load(Ordering::Acquire) {
             result.cancelled = true;
             break;
+        }
+        if let Some(reason) = policy.protected_reason(&file.path) {
+            result.errors.push(format!("refused removal: {reason}"));
+            continue;
         }
         let keeper = keepers
             .iter()
@@ -116,6 +121,80 @@ pub(super) fn is_inside_system_root(path: &Path) -> bool {
     protected_system_roots()
         .iter()
         .any(|root| path == root || path.starts_with(root))
+}
+
+pub(super) struct RemovalPolicy {
+    system_roots: Vec<PathBuf>,
+    #[cfg(windows)]
+    profiles: super::profile_policy::Snapshot,
+}
+
+impl RemovalPolicy {
+    pub(super) fn load() -> Self {
+        Self {
+            system_roots: protected_system_roots(),
+            #[cfg(windows)]
+            profiles: super::profile_policy::Snapshot::load(),
+        }
+    }
+
+    /// Paths remain reviewable even when removal is prohibited.
+    pub(super) fn protected_reason(&self, path: &Path) -> Option<&'static str> {
+        if self
+            .system_roots
+            .iter()
+            .any(|root| path == root || path.starts_with(root))
+        {
+            return Some("Windows or application location is protected");
+        }
+        let ext = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if matches!(
+            ext.as_str(),
+            "exe"
+                | "dll"
+                | "sys"
+                | "ocx"
+                | "ax"
+                | "acm"
+                | "drv"
+                | "cpl"
+                | "scr"
+                | "com"
+                | "msi"
+                | "msp"
+                | "msix"
+                | "appx"
+                | "bat"
+                | "cmd"
+                | "ps1"
+                | "vbs"
+                | "js"
+                | "jar"
+        ) {
+            return Some("application, executable or codec file is protected");
+        }
+        if path.components().any(|part| {
+            part.as_os_str()
+                .to_string_lossy()
+                .eq_ignore_ascii_case("AppData")
+        }) {
+            return Some("application data is protected");
+        }
+        #[cfg(windows)]
+        if let Err(reason) = self.profiles.check(path) {
+            return Some(reason);
+        }
+        None
+    }
+}
+
+#[cfg(test)]
+pub(super) fn protected_removal_reason(path: &Path) -> Option<&'static str> {
+    RemovalPolicy::load().protected_reason(path)
 }
 
 /// Validates a cached duplicate only for opening it in Explorer.  This is

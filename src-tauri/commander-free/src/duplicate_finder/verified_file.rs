@@ -36,12 +36,82 @@ pub(super) fn open_verified(
         return Err("duplicate file changed after scanning; scan again".into());
     }
     #[cfg(windows)]
-    verify_handle(&handle, file)?;
+    {
+        verify_handle(&handle, file)?;
+        if deleting {
+            verify_current_user_owns(&handle)?;
+        }
+    }
     let hash = super::scan::hash_reader(&mut handle, cancelled)?;
     if hash != file.hash {
         return Err("duplicate content changed after scanning; scan again".into());
     }
     Ok(handle)
+}
+
+#[cfg(windows)]
+fn verify_current_user_owns(handle: &File) -> Result<(), String> {
+    use std::{os::windows::io::AsRawHandle, ptr};
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, LocalFree},
+        Security::{
+            Authorization::{GetSecurityInfo, SE_FILE_OBJECT},
+            EqualSid, GetTokenInformation, TokenUser, OWNER_SECURITY_INFORMATION, TOKEN_QUERY,
+            TOKEN_USER,
+        },
+        System::Threading::{GetCurrentProcess, OpenProcessToken},
+    };
+    let mut token = ptr::null_mut();
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+        return Err("refused removal: unable to verify the current user".into());
+    }
+    let mut bytes = 0;
+    unsafe { GetTokenInformation(token, TokenUser, ptr::null_mut(), 0, &mut bytes) };
+    let mut user = vec![0usize; (bytes as usize).div_ceil(std::mem::size_of::<usize>())];
+    let ok = bytes != 0
+        && unsafe {
+            GetTokenInformation(
+                token,
+                TokenUser,
+                user.as_mut_ptr().cast(),
+                bytes,
+                &mut bytes,
+            )
+        } != 0;
+    unsafe {
+        CloseHandle(token);
+    }
+    if !ok {
+        return Err("refused removal: unable to verify the current user".into());
+    }
+    let mut owner = ptr::null_mut();
+    let mut descriptor = ptr::null_mut();
+    let status = unsafe {
+        GetSecurityInfo(
+            handle.as_raw_handle(),
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION,
+            &mut owner,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            &mut descriptor,
+        )
+    };
+    if status != 0 {
+        return Err("refused removal: unable to verify file ownership".into());
+    }
+    let same = !owner.is_null()
+        && unsafe { EqualSid(owner, (*user.as_ptr().cast::<TOKEN_USER>()).User.Sid) } != 0;
+    if !descriptor.is_null() {
+        unsafe {
+            LocalFree(descriptor);
+        }
+    }
+    if !same {
+        return Err("refused removal: file is not owned by the current user".into());
+    }
+    Ok(())
 }
 
 #[cfg(windows)]

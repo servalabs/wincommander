@@ -35,7 +35,12 @@ export function diskAnalyzerAuditResponse(command: string, args: Record<string, 
     const scope = pathKey(args.path);
     const scopedFiles = files.filter(row => pathKey(row.fullPath).startsWith(`${scope}\\`));
     const category = (name: string) => /\.(jpg|png)$/i.test(name) ? "images" : /\.mkv$/i.test(name) ? "videos" : /\.(zip|iso)$/i.test(name) ? "archives" : "unclassified";
-    return { scanId: SCAN_ID, scopePath: String(args.path ?? ROOT), complete: true,
+    const names = [...new Set(scopedFiles.map(row => row.name.includes(".") ? `.${row.name.split(".").pop()!.toLowerCase()}` : "No extension"))];
+    const extensions = names.map(name => {
+      const matches = scopedFiles.filter(row => (row.name.includes(".") ? `.${row.name.split(".").pop()!.toLowerCase()}` : "No extension") === name);
+      return { category: name, fileCount: matches.length, logicalSize: matches.reduce((sum, row) => sum + row.size, 0) };
+    });
+    return { scanId: SCAN_ID, scopePath: String(args.path ?? ROOT), complete: true, extensions,
       categories: ["images", "videos", "audio", "documents", "code", "archives", "unclassified"].map(type => {
         const matches = scopedFiles.filter(row => category(row.name) === type);
         return { category: type, fileCount: matches.length, logicalSize: matches.reduce((sum, row) => sum + row.size, 0) };

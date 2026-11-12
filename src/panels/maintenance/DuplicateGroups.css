@@ -22,3 +22,8 @@
 .duplicate-member[data-retained] { background: var(--accent-soft); }
 .duplicate-empty { padding: 24px; text-align: center; font-size: 12px; color: var(--text-dim); }
 @media (max-width: 700px) { .duplicate-member { flex-wrap: wrap; } .duplicate-member-location { flex-basis: calc(100% - 34px); } .duplicate-member-size { margin-left: 30px; } .duplicate-group summary { flex-wrap: wrap; } }
+
+.duplicate-scan-options { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 9px 10px; border: 1px solid var(--border); border-radius: var(--r); background: var(--surface-2); font-size: 12px; }
+.duplicate-scan-options label { color: var(--text); font-weight: 500; }
+.duplicate-scan-options select { max-width: 100%; border: 1px solid var(--border); border-radius: var(--r); background: var(--surface); color: var(--text); padding: 6px 8px; }
+.duplicate-scan-options span { color: var(--text-dim); }

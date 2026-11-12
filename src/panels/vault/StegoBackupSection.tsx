@@ -26,6 +26,7 @@ function StegoInfoPopover({ content }: { content: string }) {
 export default function StegoBackupSection() {
   const stego = useStegoBackup();
   const [showLegacyPassword, setShowLegacyPassword] = useState(false);
+  const [mode, setMode] = useState<"attach" | "restore">("attach");
   const { fields, set, busy } = stego;
   const attachPath = stego.attachResult?.kind === "ok" ? stego.attachResult.path : null;
   const restorePath = stego.restoreResult?.kind === "ok" ? stego.restoreResult.path : null;
@@ -36,8 +37,16 @@ export default function StegoBackupSection() {
       <div className="stego-section">
         <p className="stego-intro">Attach an existing encrypted container to a normal-looking video that still plays. It is a sealed snapshot: this screen copies the locked container without opening it.</p>
         <TierGate tier="paid" featureLabel="Stego Backup">
+          <div className="stego-mode-picker" role="group" aria-label="Choose a backup action">
+            <button type="button" className="stego-mode" aria-pressed={mode === "attach"} disabled={locked} onClick={() => setMode("attach")}>
+              <Icon icon="add" size={22} /><span><strong>Create or update</strong><small>Save an encrypted container in a video</small></span>
+            </button>
+            <button type="button" className="stego-mode" aria-pressed={mode === "restore"} disabled={locked} onClick={() => setMode("restore")}>
+              <Icon icon="download" size={22} /><span><strong>Recover a backup</strong><small>Restore a container from a video</small></span>
+            </button>
+          </div>
           <div className="stego-blocks-row">
-            <section className="stego-block" aria-labelledby="stego-attach-title">
+            <section className="stego-block" aria-labelledby="stego-attach-title" hidden={mode !== "attach"}>
               <span id="stego-attach-title" className="stego-block__title">Create or update a video backup</span>
               <p className="stego-intro">Choose a carrier video and the container you already use. Its filename can have any extension or none at all; an extensionless NTFS container is accepted. Its password is never requested or stored.</p>
               <FilePick label="Carrier video or existing backup…" value={fields.carrierPath} onPick={() => void stego.pickCarrier()} onClear={() => set.setCarrierPath("")} disabled={locked} />
@@ -53,10 +62,10 @@ export default function StegoBackupSection() {
               {attachPath && <SuccessCallout title="Video backup created" path={attachPath} onReveal={() => void stego.revealFolder(attachPath)}>Recover and mount it once before deleting or replacing any other copy.</SuccessCallout>}
               <Button intent="primary" loading={busy === "attach"} disabled={locked || stego.attachBlocked} onClick={() => void stego.runAttach()}>Create or update backup video</Button>
             </section>
-            <section className="stego-block stego-block--restore" aria-labelledby="stego-restore-title">
+            <section className="stego-block stego-block--restore" aria-labelledby="stego-restore-title" hidden={mode !== "restore"}>
               <span id="stego-restore-title" className="stego-block__title">Restore from a video <InfoDot content={INFO.restore} /></span>
               <p className="stego-intro">Choose a destination folder only. The backup restores the container using the original name saved inside the video.</p>
-              <ol className="stego-restore-steps" aria-label="Restore steps"><li>Choose the backup video.</li><li>Choose an empty or safe destination folder.</li><li>Mount the restored original-name container above.</li></ol>
+              <ol className="stego-restore-steps" aria-label="Restore steps"><li>Choose the backup video.</li><li>Choose an empty or safe destination folder.</li><li>Mount the recovered container in Secure Storage.</li></ol>
               <FilePick label="Video with a backup…" value={fields.restoreVideoPath} onPick={() => void stego.pickRestoreVideo()} onClear={() => set.setRestoreVideoPath("")} disabled={locked} />
               <IssueLine issues={stego.restoreErrors} field="carrier" /><IssueLine issues={stego.restoreWarnings} field="carrier" tone="warn" />
               <FilePick label="Recover into folder…" value={fields.restoreDestinationDir} onPick={() => void stego.pickRestoreDestination()} onClear={() => set.setRestoreDestinationDir("")} disabled={locked} />
@@ -77,7 +86,7 @@ export default function StegoBackupSection() {
               <IssueLine issues={stego.legacyErrors} field="output" />
               <div className="stego-size-row"><FormGroup label="Empty container size"><InputGroup type="number" min={1} value={fields.legacySizeRaw} disabled={locked} onChange={(event) => set.setLegacySizeRaw(event.currentTarget.value)} /></FormGroup><FormGroup label="Unit"><HTMLSelect value={fields.legacySizeUnit} disabled={locked} onChange={(event) => set.setLegacySizeUnit(event.currentTarget.value as SizeUnit)} options={[{ value: "M", label: "MB" }, { value: "G", label: "GB" }, { value: "T", label: "TB" }]} /></FormGroup></div>
               <IssueLine issues={stego.legacyErrors} field="size" />
-              <div className="stego-password-row"><FormGroup label="New password"><InputGroup type={showLegacyPassword ? "text" : "password"} value={fields.legacyPassword} autoComplete="new-password" disabled={locked} onChange={(event) => set.setLegacyPassword(event.currentTarget.value)} rightElement={<Button minimal icon={showLegacyPassword ? "eye-off" : "eye-open"} onClick={() => setShowLegacyPassword((current) => !current)} />} /></FormGroup><FormGroup label="Confirm password"><InputGroup type={showLegacyPassword ? "text" : "password"} value={fields.legacyPasswordConfirm} autoComplete="new-password" disabled={locked} onChange={(event) => set.setLegacyPasswordConfirm(event.currentTarget.value)} /></FormGroup></div>
+              <div className="stego-password-row"><FormGroup label="New password"><InputGroup type={showLegacyPassword ? "text" : "password"} value={fields.legacyPassword} autoComplete="new-password" disabled={locked} onChange={(event) => set.setLegacyPassword(event.currentTarget.value)} rightElement={<Button minimal icon={showLegacyPassword ? "eye-off" : "eye-open"} aria-label={showLegacyPassword ? "Hide password" : "Show password"} onClick={() => setShowLegacyPassword((current) => !current)} />} /></FormGroup><FormGroup label="Confirm password"><InputGroup type={showLegacyPassword ? "text" : "password"} value={fields.legacyPasswordConfirm} autoComplete="new-password" disabled={locked} onChange={(event) => set.setLegacyPasswordConfirm(event.currentTarget.value)} /></FormGroup></div>
               <IssueLine issues={stego.legacyErrors} field="password" />
               {busy === "legacy" && <BusyBar label="Creating the empty encrypted container and verifying the video." />}
               {stego.legacyResult?.kind === "fail" && <FailureCallout failure={stego.legacyResult.failure} />}
