@@ -53,6 +53,8 @@ class GazeTests(unittest.TestCase):
             self.assertEqual(classify(landmarks(sign * 0.4)), "blur")
             self.assertEqual(classify(landmarks(sign * 0.5)), "blackout")
         self.assertEqual(classify(landmarks(left=0.01)), "blur")
+        # A face clipped by the camera edge has unreliable yaw; keep blur
+        # even if its incomplete landmarks would otherwise imply a full turn.
         self.assertEqual(classify(landmarks(yaw=0.5, left=-0.1)), "blur")
         half_face = landmarks()
         half_face[10].y = -0.1
