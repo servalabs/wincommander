@@ -368,6 +368,8 @@ such data is safe.
 Earlier local-key and desktop security drafts are retained in Git history for
 continued work. Their presence in branch ancestry does not mean every draft
 behavior is implemented or validated in the current source tree.
+The older Safe Paste handoff prototype is also retained in history only; it is
+not the current implementation or an established confinement boundary.
 
 ## Local maintenance
 
