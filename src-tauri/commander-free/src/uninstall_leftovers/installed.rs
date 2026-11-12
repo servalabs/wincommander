@@ -83,9 +83,9 @@ pub(super) fn installed_app_evidence() -> InstalledAppEvidence {
 }
 
 #[cfg(windows)]
-pub(super) fn running_app_evidence() -> RunningAppEvidence {
+pub(super) fn running_app_evidence() -> Result<RunningAppEvidence, String> {
     let mut evidence = RunningAppEvidence::default();
-    let system = sysinfo::System::new_all();
+    let system = sysinfo::System::new_all().map_err(|e| format!("Running application list unavailable: {e}"))?;
     for process in system.processes().values() {
         add_name(&mut evidence.names, &process.name().to_string_lossy());
         if let Some(path) = process.exe() {
@@ -95,12 +95,12 @@ pub(super) fn running_app_evidence() -> RunningAppEvidence {
             evidence.executable_paths.push(path.to_path_buf());
         }
     }
-    evidence
+    Ok(evidence)
 }
 
 #[cfg(not(windows))]
-pub(super) fn running_app_evidence() -> RunningAppEvidence {
-    RunningAppEvidence::default()
+pub(super) fn running_app_evidence() -> Result<RunningAppEvidence, String> {
+    Ok(RunningAppEvidence::default())
 }
 
 #[cfg(windows)]

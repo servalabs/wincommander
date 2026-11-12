@@ -69,16 +69,17 @@ pub struct LiveMetrics {
     pub disks_age_ms: Option<u64>,
 }
 
-fn collect_disk_metrics() -> Vec<DiskMetric> {
-    let disks = sysinfo::Disks::new_with_refreshed_list();
-    disks
+fn collect_disk_metrics() -> Result<Vec<DiskMetric>, String> {
+    let disks = sysinfo::Disks::new_with_refreshed_list()
+        .map_err(|e| format!("Disk metrics unavailable: {e}"))?;
+    Ok(disks
         .iter()
         .map(|disk: &sysinfo::Disk| DiskMetric {
             name: disk.mount_point().to_string_lossy().to_string(),
             total_gb: disk.total_space() as f64 / 1_073_741_824.0,
             free_gb: disk.available_space() as f64 / 1_073_741_824.0,
         })
-        .collect()
+        .collect())
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -393,20 +394,22 @@ pub struct ProcessMetric {
 /// the per-call cost roughly 4-6×.
 #[tauri::command]
 pub async fn get_top_processes(limit: usize) -> Result<Vec<ProcessMetric>, String> {
-    PROCESS_SNAPSHOT.refresh(Duration::from_secs(2), || Ok(collect_top_processes()));
+    PROCESS_SNAPSHOT.refresh(Duration::from_secs(2), collect_top_processes);
     let mut processes = PROCESS_SNAPSHOT.wait(Duration::from_secs(2)).await?;
     processes.truncate(limit.clamp(1, 20));
     Ok(processes)
 }
 
-fn collect_top_processes() -> Vec<ProcessMetric> {
+fn collect_top_processes() -> Result<Vec<ProcessMetric>, String> {
     static PROCESSES: Lazy<Mutex<Option<System>>> = Lazy::new(|| Mutex::new(None));
     // Single-flight ownership lets the worker retain deltas without locking during OS calls.
     let mut sys = PROCESSES
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .take()
-        .unwrap_or_default();
+        .map(Ok)
+        .unwrap_or_else(System::new)
+        .map_err(|e| format!("Process metrics unavailable: {e}"))?;
     sys.refresh_processes_specifics(
         ProcessesToUpdate::All,
         true,
@@ -442,7 +445,7 @@ fn collect_top_processes() -> Vec<ProcessMetric> {
     });
     processes.truncate(20);
     *PROCESSES.lock().unwrap_or_else(|e| e.into_inner()) = Some(sys);
-    processes
+    Ok(processes)
 }
 
 /// Query CPU temperature via WMI across multiple sources.
@@ -654,8 +657,8 @@ $out | ConvertTo-Json -Depth 2 -Compress
 /// Slow hardware observations never gate CPU/RAM reads or the window event loop.
 #[tauri::command]
 pub async fn get_live_metrics() -> Result<LiveMetrics, String> {
-    CPU_SNAPSHOT.refresh(CPU_REFRESH, || Ok(collect_cpu_metrics()));
-    DISK_SNAPSHOT.refresh(DISK_SNAPSHOT_REFRESH, || Ok(collect_disk_metrics()));
+    CPU_SNAPSHOT.refresh(CPU_REFRESH, collect_cpu_metrics);
+    DISK_SNAPSHOT.refresh(DISK_SNAPSHOT_REFRESH, collect_disk_metrics);
     TEMP_CACHE.refresh(TEMP_REFRESH, get_cpu_temp_from_wmi);
     let cpu = CPU_SNAPSHOT.wait(Duration::from_millis(500)).await?;
     let disks = DISK_SNAPSHOT.snapshot(DISK_SNAPSHOT_REFRESH);
@@ -679,12 +682,14 @@ pub async fn get_live_metrics() -> Result<LiveMetrics, String> {
     })
 }
 
-fn collect_cpu_metrics() -> CpuMetrics {
+fn collect_cpu_metrics() -> Result<CpuMetrics, String> {
     let mut sys = SYS
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .take()
-        .unwrap_or_default();
+        .map(Ok)
+        .unwrap_or_else(System::new)
+        .map_err(|e| format!("CPU metrics unavailable: {e}"))?;
     sys.refresh_cpu_all();
     sys.refresh_memory();
 
@@ -699,5 +704,5 @@ fn collect_cpu_metrics() -> CpuMetrics {
         ram_total_gb: sys.total_memory() as f64 / 1_073_741_824.0,
     };
     *SYS.lock().unwrap_or_else(|e| e.into_inner()) = Some(sys);
-    metrics
+    Ok(metrics)
 }
