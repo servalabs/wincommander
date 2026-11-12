@@ -374,6 +374,9 @@ Sanitized snapshots of older vault dismount and build drafts are likewise
 retained in history; they do not replace the current vault implementation.
 Incomplete DLP and Fleet reporting source snapshots are retained in history
 with sensitive fixture files omitted; they are not operational release trees.
+An incomplete Fleet authority source snapshot is also retained in history only:
+its test-only code, fixtures and integration wiring were omitted, and it does
+not implement or enable a recovery authorization boundary.
 
 ## Local maintenance
 
