@@ -44,11 +44,12 @@ fn native_path(path: &Path) -> io::Result<Vec<u16>> {
 
 #[cfg(windows)]
 pub(super) fn move_no_replace(source: &Path, target: &Path) -> io::Result<()> {
-    use windows_sys::Win32::Storage::FileSystem::MoveFileW;
+    use windows_sys::Win32::Storage::FileSystem::MoveFileExW;
     let source = native_path(source)?;
     let target = native_path(target)?;
-    // MoveFileW fails if the target exists, including a concurrent creator.
-    if unsafe { MoveFileW(source.as_ptr(), target.as_ptr()) } == 0 {
+    // With no flags, the destination cannot be replaced and cross-volume
+    // copy/delete is forbidden; the operation remains a same-volume move.
+    if unsafe { MoveFileExW(source.as_ptr(), target.as_ptr(), 0) } == 0 {
         Err(io::Error::last_os_error())
     } else {
         Ok(())
