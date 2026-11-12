@@ -3026,11 +3026,11 @@ mod recovery_commit_tests {
         let prior=RecoveryCommit { recovery_id:first_id.into(),old_trust:old.clone(),new_generation:first_generation.into(),decision_digest:hex(v1.decision_digest()),
             archive_sha256:archive.clone(),credential_sha256:"ef".repeat(32),candidate_fingerprint:hex(v1.fingerprint()),origin:"https://fleet.example".into(),
             local_commit_digest:"12".repeat(32),activation_pending:false,server_status:Some("credential_committed_active".into()),rollback_sha256:None };
-        let state=State { record:Some(Record { trust:current.clone(),policy:None,audit:Vec::new(),contact:None,origins:vec!["https://fleet.example".into()],
+        let state=State { record:Some(Record { trust:current.clone(),hybrid_trust:None,hybrid_epoch_floor:0,hybrid_credential:None,hybrid_initial_pending:false,hybrid_unconfirmed:false,policy:None,audit:Vec::new(),contact:None,origins:vec!["https://fleet.example".into()],
             transport_profile:Some(TransportProfile { spki_pins:String::new(),environment_fingerprint:STANDARD.encode([1u8;32]) }),
             credential:Some(StoredCredential { origin:"https://fleet.example".into(),ciphertext:STANDARD.encode([1u8;32]) }),credential_revision:1,
             connection_revision:0,cleared:None,runtime_profile_changed:false,service_enabled:true,recovery_commit:Some(prior.clone()),
-            operator_key:Some(STANDARD.encode(SigningKey::from_bytes(&[33;32]).verifying_key().as_bytes())) }),pending:None,contact_challenge:None };
+            operator_key:Some(STANDARD.encode(SigningKey::from_bytes(&[33;32]).verifying_key().as_bytes())) }),pending:None,contact_challenge:None,hybrid_enrollment:None,hybrid_claim:None };
         let path=dir.join("fleet-machine-policy.json");fs.atomic_write(&path,&serde_json::to_vec(&state).unwrap()).unwrap();
         let store=FleetMachinePolicy::open(Box::new(fs.clone()),dir.clone()).unwrap();
         let journal_path=dir.join(format!("replacement-{first_id}.json"));
@@ -3129,11 +3129,11 @@ mod recovery_commit_tests {
         let recovery=field("recovery_id");let operator=field("operator_key");
         let receipt=serde_json::to_vec(fixture.get("retirement_receipt").unwrap()).unwrap();
         let fs=Fs::default();let dir=PathBuf::from("loopback-protected");
-        let state=State { record:Some(Record { trust:trust.clone(),policy:None,audit:Vec::new(),contact:None,
+        let state=State { record:Some(Record { trust:trust.clone(),hybrid_trust:None,hybrid_epoch_floor:0,hybrid_credential:None,hybrid_initial_pending:false,hybrid_unconfirmed:false,policy:None,audit:Vec::new(),contact:None,
             origins:vec![base.clone()],transport_profile:Some(TransportProfile { spki_pins:String::new(),
                 environment_fingerprint:crate::fleet_runtime_env::fingerprint().unwrap() }),credential:None,credential_revision:0,
             connection_revision:0,cleared:None,runtime_profile_changed:false,service_enabled:true,recovery_commit:None,operator_key:Some(operator) }),
-            pending:None,contact_challenge:None };
+            pending:None,contact_challenge:None,hybrid_enrollment:None,hybrid_claim:None };
         fs.atomic_write(&dir.join("fleet-machine-policy.json"),&serde_json::to_vec(&state).unwrap()).unwrap();
         let store=FleetMachinePolicy::open(Box::new(fs.clone()),dir.clone()).unwrap();
         assert_eq!(store.recovery_execution_mode().unwrap(),(trust.device_id.clone(),"legacy"));
@@ -3208,8 +3208,8 @@ mod recovery_commit_tests {
         let trust=FleetTrust { org_id:"org-a".into(),device_id:"0480b2ca-f4c3-4599-81fc-4876f73e70fa".into(),
             enrollment_generation:"22222222-2222-4222-8222-222222222222".into(),signer_key:STANDARD.encode(signer.verifying_key().as_bytes()) };
         let fs=Fs::default(); let dir=PathBuf::from("operator-test");
-        let state=State { record:Some(Record { trust:trust.clone(),policy:None,audit:Vec::new(),contact:None,origins:Vec::new(),transport_profile:None,
-            credential:None,credential_revision:0,connection_revision:0,cleared:None,runtime_profile_changed:false,service_enabled:true,recovery_commit:None,operator_key:None }),pending:None,contact_challenge:None };
+        let state=State { record:Some(Record { trust:trust.clone(),hybrid_trust:None,hybrid_epoch_floor:0,hybrid_credential:None,hybrid_initial_pending:false,hybrid_unconfirmed:false,policy:None,audit:Vec::new(),contact:None,origins:Vec::new(),transport_profile:None,
+            credential:None,credential_revision:0,connection_revision:0,cleared:None,runtime_profile_changed:false,service_enabled:true,recovery_commit:None,operator_key:None }),pending:None,contact_challenge:None,hybrid_enrollment:None,hybrid_claim:None };
         let mut legacy=serde_json::to_value(&state).unwrap(); legacy["record"].as_object_mut().unwrap().remove("operator_key");
         fs.atomic_write(&dir.join("fleet-machine-policy.json"),&serde_json::to_vec(&legacy).unwrap()).unwrap();
         let store=FleetMachinePolicy::open(Box::new(fs.clone()),dir).unwrap(); assert!(store.operator_key().unwrap().is_none());
@@ -3244,9 +3244,9 @@ mod recovery_commit_tests {
             "checkin_secret_b64":STANDARD.encode(secret),"signature":STANDARD.encode(SigningKey::from_bytes(&[11;32]).sign(&response_preimage).to_bytes())});
         let credential=crate::fleet_recovery_credential::verify_response(&serde_json::to_vec(&response).unwrap(),&trust,&verified,&archive,nonce,1001).unwrap();
         let fs=Fs::default(); let dir=PathBuf::from("protected"); let path=dir.join("fleet-machine-policy.json");
-        let state=State { record:Some(Record { trust:trust.clone(),policy:None,audit:Vec::new(),contact:None,origins:vec!["https://fleet.example".into()],
+        let state=State { record:Some(Record { trust:trust.clone(),hybrid_trust:None,hybrid_epoch_floor:0,hybrid_credential:None,hybrid_initial_pending:false,hybrid_unconfirmed:false,policy:None,audit:Vec::new(),contact:None,origins:vec!["https://fleet.example".into()],
             transport_profile:Some(TransportProfile { spki_pins:String::new(),environment_fingerprint:STANDARD.encode([1u8;32]) }),
-            credential:None,credential_revision:0,connection_revision:0,cleared:None,runtime_profile_changed:false,service_enabled:true,recovery_commit:None,operator_key:Some(STANDARD.encode(SigningKey::from_bytes(&[33;32]).verifying_key().as_bytes())) }),pending:None,contact_challenge:None };
+            credential:None,credential_revision:0,connection_revision:0,cleared:None,runtime_profile_changed:false,service_enabled:true,recovery_commit:None,operator_key:Some(STANDARD.encode(SigningKey::from_bytes(&[33;32]).verifying_key().as_bytes())) }),pending:None,contact_challenge:None,hybrid_enrollment:None,hybrid_claim:None };
         fs.atomic_write(&path,&serde_json::to_vec(&state).unwrap()).unwrap();
         let review=serde_json::json!({"org_id":trust.org_id,"device_id":trust.device_id,"old_generation":trust.enrollment_generation,
             "recovery_id":verified.retirement_id(),"new_generation":verified.new_generation(),"handoff_digest":hex(verified.digest()),"decision_digest":decision,
