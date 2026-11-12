@@ -5,7 +5,7 @@
 // evidence.vault (B1) — WORM export of the Free evidence ledger
 // ═══════════════════════════════════════════════════════════════════════
 //
-// The Free tier records events to a plain JSONL ledger (`evidence.rs`).
+// The Free tier records events to an encrypted local ledger (`evidence.rs`).
 // This module is the Free-side dispatch layer for the Investigator vault
 // workflow. It is deliberately absent from the everyday Privacy panel.
 //

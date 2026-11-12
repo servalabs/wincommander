@@ -142,6 +142,13 @@ pub fn user_data_dir() -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+pub(crate) fn optional_user_data_location() -> Result<Option<PathBuf>, String> {
+    let Some(local) = std::env::var_os("LOCALAPPDATA") else { return Ok(None); };
+    let local = PathBuf::from(local);
+    if !local.is_absolute() { return Err("User data location is not absolute".into()); }
+    Ok(Some(local.join(APP_DIR_NAME)))
+}
+
 /// A current-user NSIS install lives directly below the caller's LocalAppData
 /// directory.  That location is a per-user security boundary: it must never
 /// make the desktop shell depend on a writable ProgramData directory merely to

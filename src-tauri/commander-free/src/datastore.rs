@@ -187,7 +187,7 @@ fn user_file_path(filename: &str) -> Result<PathBuf, String> {
 // targets are CI stubs (never run): identity functions so the crate builds.
 
 #[cfg(windows)]
-fn dpapi_protect(plain: &[u8]) -> Result<Vec<u8>, String> {
+pub(crate) fn dpapi_protect(plain: &[u8]) -> Result<Vec<u8>, String> {
     use windows_sys::Win32::Foundation::LocalFree;
     use windows_sys::Win32::Security::Cryptography::{
         CryptProtectData, CRYPTPROTECT_LOCAL_MACHINE, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
@@ -220,7 +220,7 @@ fn dpapi_protect(plain: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(windows)]
-fn dpapi_unprotect(blob: &[u8]) -> Result<Vec<u8>, String> {
+pub(crate) fn dpapi_unprotect(blob: &[u8]) -> Result<Vec<u8>, String> {
     use windows_sys::Win32::Foundation::LocalFree;
     use windows_sys::Win32::Security::Cryptography::{
         CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
@@ -355,11 +355,11 @@ fn user_dpapi_unprotect(blob: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(not(windows))]
-fn dpapi_protect(plain: &[u8]) -> Result<Vec<u8>, String> {
+pub(crate) fn dpapi_protect(plain: &[u8]) -> Result<Vec<u8>, String> {
     Ok(plain.to_vec())
 }
 #[cfg(not(windows))]
-fn dpapi_unprotect(blob: &[u8]) -> Result<Vec<u8>, String> {
+pub(crate) fn dpapi_unprotect(blob: &[u8]) -> Result<Vec<u8>, String> {
     Ok(blob.to_vec())
 }
 
@@ -612,7 +612,7 @@ fn nonce_from_bytes(bytes: &[u8]) -> Result<&Nonce<U12>, String> {
 /// Writes the current datastore envelope.  The authenticated scope prevents a
 /// local attacker who can replace files from moving a valid ciphertext between
 /// settings sections or user-owned blobs.
-fn encode_section(
+pub(crate) fn encode_section(
     key: &[u8; DERIVED_KEY_LEN],
     plaintext: &[u8],
     scope: &str,
@@ -637,7 +637,7 @@ fn encode_section(
     Ok(format!("{}{}", FORMAT_PREFIX_V2, B64.encode(&payload)))
 }
 
-fn decode_section(
+pub(crate) fn decode_section(
     key: &[u8; DERIVED_KEY_LEN],
     encoded: &str,
     scope: &str,
