@@ -2017,7 +2017,6 @@ dependencies = [
  "hex",
  "hmac",
  "rand 0.10.3",
- "rand 0.8.8",
  "rcgen",
  "reqwest",
  "rustls",

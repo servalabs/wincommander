@@ -62,40 +62,57 @@ pub fn is_transient_status(status: u16) -> bool {
 ///
 /// `attempt` is 0-based. Returns a duration in `[0, min(cap, base * 2^attempt)]`.
 pub fn backoff_duration(attempt: u32, base: Duration, cap: Duration) -> Duration {
-    use rand::Rng;
+    use rand::RngExt;
     let exp = base.as_millis().saturating_mul(1u128 << attempt.min(20));
     let capped_ms = exp.min(cap.as_millis());
     let capped_ms_u64: u64 = capped_ms.try_into().unwrap_or(u64::MAX);
     let jittered = if capped_ms_u64 == 0 {
         0
     } else {
-        rand::thread_rng().gen_range(0..=capped_ms_u64)
+        rand::rng().random_range(0..=capped_ms_u64)
     };
     Duration::from_millis(jittered)
 }
 
 /// Generate a compact cryptographically-random nonce string for check-in requests.
-fn checkin_nonce() -> String {
-    use rand::RngCore;
+fn fill_random(bytes: &mut [u8]) -> Result<(), String> {
+    use rand::TryRng;
+    rand::rngs::SysRng
+        .try_fill_bytes(bytes)
+        .map_err(|_| "fleet randomness unavailable".to_string())
+}
+
+fn checkin_nonce() -> Result<String, String> {
+    checkin_nonce_with(fill_random)
+}
+
+fn checkin_nonce_with(
+    fill: impl FnOnce(&mut [u8]) -> Result<(), String>,
+) -> Result<String, String> {
     let mut bytes = [0u8; 16];
-    rand::thread_rng().fill_bytes(&mut bytes);
-    format!("ci-{}", hex::encode(bytes))
+    fill(&mut bytes)?;
+    Ok(format!("ci-{}", hex::encode(bytes)))
 }
 
 /// Mint a fresh, client-owned device identity (RFC 4122 v4 UUID string). The
 /// device owns its identity in the unified check-in transport (the server
 /// echoes it back at enroll); a UUIDv4 is unguessable, so it cannot be used to
 /// enumerate or hijack other devices' ids.
-fn new_device_id() -> String {
-    use rand::RngCore;
+fn new_device_id() -> Result<String, String> {
+    new_device_id_with(fill_random)
+}
+
+fn new_device_id_with(
+    fill: impl FnOnce(&mut [u8]) -> Result<(), String>,
+) -> Result<String, String> {
     let mut b = [0u8; 16];
-    rand::thread_rng().fill_bytes(&mut b);
+    fill(&mut b)?;
     b[6] = (b[6] & 0x0f) | 0x40; // version 4
     b[8] = (b[8] & 0x3f) | 0x80; // variant 10xx
-    format!(
+    Ok(format!(
         "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
         b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]
-    )
+    ))
 }
 
 /// Map the agent `platform` tag to the fleet server's `device_kind` enum value.
@@ -124,7 +141,7 @@ fn platform_device_kind(platform: &str) -> &str {
 /// a sane bounded value rather than panicking `gen_range` on an empty/invalid
 /// range.
 fn randomized_interval_secs(interval: u64, min_frac: f64, max_frac: f64) -> u64 {
-    use rand::Rng;
+    use rand::RngExt;
 
     let (lo_frac, hi_frac) = if min_frac > 0.0 && min_frac <= max_frac {
         (min_frac, max_frac)
@@ -138,7 +155,7 @@ fn randomized_interval_secs(interval: u64, min_frac: f64, max_frac: f64) -> u64 
     if lo >= hi {
         return lo as u64;
     }
-    rand::thread_rng().gen_range(lo as u64..=hi as u64)
+    rand::rng().random_range(lo as u64..=hi as u64)
 }
 
 /// Generate an opaque, cryptographically-random base64 padding string sized
@@ -156,17 +173,25 @@ fn randomized_interval_secs(interval: u64, min_frac: f64, max_frac: f64) -> u64 
 /// This is a pure size-shaping helper — the returned value is carried in
 /// `CheckinRequest::padding`, which is covered by the v2 request MAC (see the
 /// module doc on `CheckinRequest`).
-fn make_padding(target_bytes: usize, already_used_bytes: usize) -> String {
+fn make_padding(target_bytes: usize, already_used_bytes: usize) -> Result<String, String> {
+    make_padding_with(target_bytes, already_used_bytes, fill_random)
+}
+
+fn make_padding_with(
+    target_bytes: usize,
+    already_used_bytes: usize,
+    fill: impl FnOnce(&mut [u8]) -> Result<(), String>,
+) -> Result<String, String> {
     if target_bytes == 0 || already_used_bytes >= target_bytes {
-        return String::new();
+        return Ok(String::new());
     }
     // Base64 (STANDARD, no padding stripped) expands 3 raw bytes -> 4 chars,
     // so ask for enough raw bytes to cover the remaining budget.
     let remaining = target_bytes - already_used_bytes;
     let raw_len = remaining.div_ceil(4) * 3;
     let mut bytes = vec![0u8; raw_len];
-    rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut bytes);
-    B64.encode(bytes)
+    fill(&mut bytes)?;
+    Ok(B64.encode(bytes))
 }
 
 /// Best-effort hostname (falls back to `"unknown"`).
@@ -210,7 +235,7 @@ pub async fn enroll(
             debug!("fleet: already enrolled as {id}");
             return Ok(id.clone());
         }
-        new_device_id()
+        new_device_id()?
     };
 
     let hostname = hostname_str();
@@ -265,7 +290,8 @@ pub async fn enroll(
         {
             if existing != received {
                 return Err(
-                    "fleet server returned a different server signing key on re-enroll — REFUSING".to_string(),
+                    "fleet server returned a different server signing key on re-enroll — REFUSING"
+                        .to_string(),
                 );
             }
         }
@@ -317,7 +343,13 @@ pub async fn report_search_results(
     let url = format!("{}/v1/agents/search-result", config.url);
     for report in reports {
         let now = crate::util::now_unix();
-        let nonce = checkin_nonce();
+        let nonce = match checkin_nonce() {
+            Ok(nonce) => nonce,
+            Err(error) => {
+                warn!("fleet: search-result not sent: {error}");
+                return;
+            }
+        };
         let mut body = SearchResultReport {
             device_id: device_id.to_string(),
             ts: now,
@@ -417,11 +449,23 @@ pub async fn run_checkin_cycle_inner(
     //    (excluding only the `hmac` field). Padding is sized against a rough
     //    estimate of the non-padding JSON so the WHOLE body (not just the
     //    padding value) lands near the configured bucket.
-    let nonce = checkin_nonce();
+    let nonce = match checkin_nonce() {
+        Ok(nonce) => nonce,
+        Err(error) => {
+            warn!("fleet: check-in not sent: {error}");
+            return false;
+        }
+    };
     let hostname = hostname_str();
     let base_len_estimate =
         device_id.len() + hostname.len() + nonce.len() + 44 + 64 /* JSON scaffolding */;
-    let padding = make_padding(config.checkin_padding_bytes, base_len_estimate);
+    let padding = match make_padding(config.checkin_padding_bytes, base_len_estimate) {
+        Ok(padding) => padding,
+        Err(error) => {
+            warn!("fleet: check-in not sent: {error}");
+            return false;
+        }
+    };
     let url = format!("{}/v1/agents/checkin", config.url);
     // Resources/health are skipped entirely on a decoy check-in — a decoy is
     // cover traffic only and must never carry real device state (mirrors why
@@ -668,12 +712,12 @@ pub fn spawn_fleet_client(
             // back into local dead-man/command state.
             if config.checkin_decoy_enabled && config.checkin_decoy_rate > 0.0 {
                 let fire_decoy = {
-                    use rand::Rng;
-                    rand::thread_rng().gen::<f64>() < config.checkin_decoy_rate
+                    use rand::RngExt;
+                    rand::rng().random::<f64>() < config.checkin_decoy_rate
                 };
                 if fire_decoy && next_secs > 1 {
-                    use rand::Rng;
-                    let offset_secs = rand::thread_rng().gen_range(1..next_secs);
+                    use rand::RngExt;
+                    let offset_secs = rand::rng().random_range(1..next_secs);
                     tokio::time::sleep(Duration::from_secs(offset_secs)).await;
                     let decoy_now = crate::util::now_unix();
                     debug!("fleet client: firing decoy (cover-traffic) check-in");
@@ -703,6 +747,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn security_randomness_failure_never_produces_identity_nonce_or_padding() {
+        fn unavailable(_: &mut [u8]) -> Result<(), String> {
+            Err("randomness unavailable".into())
+        }
+        assert!(new_device_id_with(unavailable).is_err());
+        assert!(checkin_nonce_with(unavailable).is_err());
+        assert!(make_padding_with(128, 0, unavailable).is_err());
+        assert_eq!(make_padding_with(0, 0, unavailable).unwrap(), "");
+    }
+
+    #[test]
     fn is_transient_status_covers_5xx_and_429_only() {
         assert!(is_transient_status(500));
         assert!(is_transient_status(503));
@@ -725,7 +780,7 @@ mod tests {
 
     #[test]
     fn new_device_id_is_uuid_v4_shaped() {
-        let id = new_device_id();
+        let id = new_device_id().unwrap();
         assert_eq!(id.len(), 36, "UUID canonical form is 36 chars");
         let parts: Vec<&str> = id.split('-').collect();
         assert_eq!(
@@ -733,7 +788,10 @@ mod tests {
             vec![8, 4, 4, 4, 12]
         );
         assert!(id.as_bytes()[14] == b'4', "version nibble is 4");
-        assert!(new_device_id() != new_device_id(), "ids are unique");
+        assert!(
+            new_device_id().unwrap() != new_device_id().unwrap(),
+            "ids are unique"
+        );
     }
 
     #[test]
@@ -831,21 +889,21 @@ mod tests {
 
     #[test]
     fn padding_disabled_when_target_is_zero() {
-        assert_eq!(make_padding(0, 0), "");
-        assert_eq!(make_padding(0, 500), "");
+        assert_eq!(make_padding(0, 0).unwrap(), "");
+        assert_eq!(make_padding(0, 500).unwrap(), "");
     }
 
     #[test]
     fn padding_empty_when_real_content_already_meets_bucket() {
-        assert_eq!(make_padding(100, 100), "");
-        assert_eq!(make_padding(100, 200), "");
+        assert_eq!(make_padding(100, 100).unwrap(), "");
+        assert_eq!(make_padding(100, 200).unwrap(), "");
     }
 
     #[test]
     fn padding_tops_up_towards_target_bucket() {
         let target = 512;
         let used = 120;
-        let padding = make_padding(target, used);
+        let padding = make_padding(target, used).unwrap();
         assert!(!padding.is_empty());
         // Padding is base64; decode to confirm it's real filler bytes, then
         // check the combined estimate lands at-or-above the bucket (a floor,
@@ -857,8 +915,8 @@ mod tests {
 
     #[test]
     fn padding_is_random_across_calls_not_a_fixed_filler() {
-        let a = make_padding(256, 0);
-        let b = make_padding(256, 0);
+        let a = make_padding(256, 0).unwrap();
+        let b = make_padding(256, 0).unwrap();
         assert_ne!(
             a, b,
             "padding must be freshly randomized, not a static filler string"
@@ -880,7 +938,7 @@ mod tests {
             nonce: nonce.to_string(),
             hmac_version: HMAC_VERSION_V2,
             hmac: String::new(),
-            padding: make_padding(512, 0),
+            padding: make_padding(512, 0).unwrap(),
             decoy: false,
             ..CheckinRequest::default()
         };
@@ -892,7 +950,7 @@ mod tests {
             nonce: nonce.to_string(),
             hmac_version: HMAC_VERSION_V2,
             hmac: String::new(),
-            padding: make_padding(4096, 0),
+            padding: make_padding(4096, 0).unwrap(),
             decoy: true,
             resources: None,
             health: Some(crate::verify::HealthSnapshot {
