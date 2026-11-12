@@ -91,4 +91,3 @@
         assert_eq!(std::fs::read(&src).unwrap(), b"other");
         assert_eq!(std::fs::read(&dst).unwrap(), b"ours");
     }
-
