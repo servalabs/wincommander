@@ -148,7 +148,19 @@ pub(crate) fn stage(
     binding: &Binding<'_>, trust: &wincmd_pq_experiment::jws::Trust<'_>, licence: &RefreshLicence<'_>, now: u64, request: &[u8],
 ) -> Result<Zeroizing<Vec<u8>>, &'static str> {
     with_current(binding, trust, licence, now, |store, credential, body|
-        save_locked(store, &MachineDpapi, binding, credential, body, request))
+        stage_guarded(store, &crate::license_cache::release_gate::machine(), &MachineDpapi,
+            binding, credential, body, request))
+}
+
+fn stage_guarded(store: &anchor::Anchor, gate: &anchor::Anchor, protector: &dyn Protector,
+    binding: &Binding<'_>, credential: &ConfirmedCredential, body: &[u8], request: &[u8],
+) -> Result<Zeroizing<Vec<u8>>, &'static str> {
+    wire::verify_stored_release_request(credential, body, request)?;
+    let context = release_entropy(binding, credential, body)?;
+    crate::license_cache::release_gate::begin_at(gate, &context)?;
+    let saved = save_locked(store, protector, binding, credential, body, request)?;
+    crate::license_cache::release_gate::bind_request_at(gate, &context, &saved)?;
+    Ok(saved)
 }
 
 /// A caller may retry these exact bytes; the local licence is never cleared here.
@@ -156,7 +168,21 @@ pub(crate) fn load(
     binding: &Binding<'_>, trust: &wincmd_pq_experiment::jws::Trust<'_>, licence: &RefreshLicence<'_>, now: u64,
 ) -> Result<Option<SavedRelease>, &'static str> {
     with_current(binding, trust, licence, now, |store, credential, body|
-        load_locked(store, &MachineDpapi, binding, credential, body))
+        load_guarded(store, &crate::license_cache::release_gate::machine(), &MachineDpapi,
+            binding, credential, body))
+}
+
+fn load_guarded(store: &anchor::Anchor, gate: &anchor::Anchor, protector: &dyn Protector,
+    binding: &Binding<'_>, credential: &ConfirmedCredential, body: &[u8],
+) -> Result<Option<SavedRelease>, &'static str> {
+    let saved = load_locked(store, protector, binding, credential, body)?;
+    let context = release_entropy(binding, credential, body)?;
+    if let Some(item) = &saved {
+        crate::license_cache::release_gate::bind_request_at(gate, &context, &item.request)?;
+    } else {
+        crate::license_cache::release_gate::check_request_at(gate, &context, None)?;
+    }
+    Ok(saved)
 }
 
 /// Record the exact confirmed request and read it back before acknowledgement.
@@ -164,16 +190,23 @@ pub(crate) fn confirm(
     binding: &Binding<'_>, trust: &wincmd_pq_experiment::jws::Trust<'_>, licence: &RefreshLicence<'_>, now: u64,
     request: &[u8], response: &[u8],
 ) -> Result<(), &'static str> {
-    with_current(binding, trust, licence, now, |store, credential, body|
-        confirm_locked(store, &MachineDpapi, binding, credential, body, request, response))
+    with_current(binding, trust, licence, now, |store, credential, body| {
+        let context = release_entropy(binding, credential, body)?;
+        crate::license_cache::release_gate::check_request(&context, Some(request))?;
+        confirm_locked(store, &MachineDpapi, binding, credential, body, request, response)
+    })
 }
 
 /// No acknowledgement is generated until the protected confirmed state exists.
 pub(crate) fn prepare_acknowledgement(
     binding: &Binding<'_>, trust: &wincmd_pq_experiment::jws::Trust<'_>, licence: &RefreshLicence<'_>, now: u64,
 ) -> Result<Zeroizing<Vec<u8>>, &'static str> {
-    with_current(binding, trust, licence, now, |store, credential, body|
-        prepare_ack_locked(store, &MachineDpapi, binding, credential, body))
+    with_current(binding, trust, licence, now, |store, credential, body| {
+        let saved = load_locked(store, &MachineDpapi, binding, credential, body)?.ok_or(INVALID)?;
+        let context = release_entropy(binding, credential, body)?;
+        crate::license_cache::release_gate::check_request(&context, Some(&saved.request))?;
+        prepare_ack_locked(store, &MachineDpapi, binding, credential, body)
+    })
 }
 
 /// Retain the acknowledged phase before any future local finalization. The
@@ -183,8 +216,11 @@ pub(crate) fn record_acknowledgement(
     binding: &Binding<'_>, trust: &wincmd_pq_experiment::jws::Trust<'_>, licence: &RefreshLicence<'_>, now: u64,
     request: &[u8], confirmation: &wire::AcknowledgementConfirmation,
 ) -> Result<(), &'static str> {
-    with_current(binding, trust, licence, now, |store, credential, body|
-        acknowledge_locked(store, &MachineDpapi, binding, credential, body, request, confirmation))
+    with_current(binding, trust, licence, now, |store, credential, body| {
+        let context = release_entropy(binding, credential, body)?;
+        crate::license_cache::release_gate::check_request(&context, Some(request))?;
+        acknowledge_locked(store, &MachineDpapi, binding, credential, body, request, confirmation)
+    })
 }
 
 fn prepare_ack_locked(store: &anchor::Anchor, protector: &dyn Protector, binding: &Binding<'_>,
@@ -202,6 +238,8 @@ mod tests {
     fn release_retry_is_sealed_bound_and_never_replaced() {
         let path = format!(r"SOFTWARE\WinCommanderReleaseRetryTest-{}", uuid::Uuid::new_v4());
         let store = anchor::Anchor::test_user(path.clone());
+        let gate_path = format!(r"SOFTWARE\WinCommanderReleaseRetryGateTest-{}", uuid::Uuid::new_v4());
+        let gate = anchor::Anchor::test_user(gate_path.clone());
         let binding = Binding { licence_id: "licence", device_hash: "device", issuer_origin: "https://license.example" };
         let credential = ConfirmedCredential { id: [7; 32], secret: Zeroizing::new([9; 32]) };
         let body = b"verified licence request";
@@ -217,8 +255,21 @@ mod tests {
         let mut forged: serde_json::Value = serde_json::from_slice(&request).unwrap();
         forged["proof"] = serde_json::json!(URL_SAFE_NO_PAD.encode([0; 32]));
         assert!(save_locked(&store, &MachineDpapi, &binding, &credential, body, &serde_json::to_vec(&forged).unwrap()).is_err());
+        assert!(stage_guarded(&store, &gate, &MachineDpapi, &binding, &credential, body, &serde_json::to_vec(&forged).unwrap()).is_err());
+        assert!(gate.read().unwrap().is_none());
         assert!(store.read().unwrap().is_none());
-        assert_eq!(save_locked(&store, &MachineDpapi, &binding, &credential, body, &request).unwrap().as_slice(), request);
+        // A crash after saving the request but before binding its digest must
+        // recover only the exact protected request.
+        let context = release_entropy(&binding, &credential, body).unwrap();
+        crate::license_cache::release_gate::begin_at(&gate, &context).unwrap();
+        save_locked(&store, &MachineDpapi, &binding, &credential, body, &request).unwrap();
+        crate::license_cache::release_gate::check_request_at(&gate, &context, None).unwrap();
+        assert_eq!(load_guarded(&store, &gate, &MachineDpapi, &binding, &credential, body)
+            .unwrap().unwrap().request.as_slice(), request);
+        assert_eq!(stage_guarded(&store, &gate, &MachineDpapi, &binding, &credential, body, &request).unwrap().as_slice(), request);
+        assert!(crate::license_cache::release_gate::ensure_idle_at(&gate).is_err());
+        assert_eq!(load_guarded(&anchor::Anchor::test_user(path.clone()), &anchor::Anchor::test_user(gate_path.clone()),
+            &MachineDpapi, &binding, &credential, body).unwrap().unwrap().request.as_slice(), request);
         let sealed = store.read().unwrap().unwrap();
         assert!(!sealed.windows(request.len()).any(|part| part == request));
         let reopened = load_locked(&anchor::Anchor::test_user(path.clone()), &MachineDpapi, &binding, &credential, body).unwrap().unwrap();
@@ -261,9 +312,13 @@ mod tests {
         confirm_locked(&store, &MachineDpapi, &binding, &credential, body, &request, br#"{"ok":true}"#).unwrap();
         assert!(load_locked(&store, &MachineDpapi, &binding, &credential, body).unwrap().unwrap().acknowledged);
         assert!(save_locked(&store, &MachineDpapi, &binding, &credential, body, &alternate).is_err());
+        assert!(stage_guarded(&store, &gate, &MachineDpapi, &binding, &credential, body, &alternate).is_err());
+        gate.write(b"invalid").unwrap();
+        assert!(load_guarded(&store, &gate, &MachineDpapi, &binding, &credential, body).is_err());
         store.write(b"invalid").unwrap();
         assert!(load_locked(&store, &MachineDpapi, &binding, &credential, body).is_err());
         assert!(save_locked(&store, &MachineDpapi, &binding, &credential, body, &request).is_err());
         anchor::remove_test_key(&path).unwrap();
+        anchor::remove_test_key(&gate_path).unwrap();
     }
 }

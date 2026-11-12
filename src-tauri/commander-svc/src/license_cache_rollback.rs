@@ -51,11 +51,19 @@ fn write_with_anchor(
     trust: &wincmd_pq_experiment::jws::Trust<'_>,
     anchor: &anchor::Anchor,
 ) -> Result<(), &'static str> {
+    write_with_gate(path, candidate, bytes, public_key, trust, anchor, &super::release_gate::machine())
+}
+
+fn write_with_gate(
+    path: &Path, candidate: &StoreLicenseCacheRequest, bytes: &[u8], public_key: &str,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>, anchor: &anchor::Anchor, gate: &anchor::Anchor,
+) -> Result<(), &'static str> {
     let old_trust = history::configured(trust)?;
     let _lock = WRITE_LOCK
         .lock()
         .map_err(|_| "license cache lock is unavailable")?;
     let _process_lock = crate::licence_security_lock()?;
+    super::release_gate::ensure_idle_at(gate)?;
     let existing = read_cache(path)?;
     if let Some(existing) = existing.as_deref() {
         check_previous_with_history(existing, candidate, public_key, trust, old_trust.as_ref())?;
@@ -111,12 +119,21 @@ fn write_renewal_with_anchor(
     trust: &wincmd_pq_experiment::jws::Trust<'_>,
     anchor: &anchor::Anchor,
 ) -> Result<(), &'static str> {
+    write_renewal_with_gate(path, previous, candidate, now, public_key, trust, anchor, &super::release_gate::machine())
+}
+
+fn write_renewal_with_gate(
+    path: &Path, previous: (&StoreLicenseCacheRequest, u64), candidate: &StoreLicenseCacheRequest,
+    now: u64, public_key: &str, trust: &wincmd_pq_experiment::jws::Trust<'_>,
+    anchor: &anchor::Anchor, gate: &anchor::Anchor,
+) -> Result<(), &'static str> {
     let (expected, expected_time) = previous;
     let old_trust = history::configured(trust)?;
     let _lock = WRITE_LOCK
         .lock()
         .map_err(|_| "license cache lock is unavailable")?;
     let _process_lock = crate::licence_security_lock()?;
+    super::release_gate::ensure_idle_at(gate)?;
     let existing = read_cache(path)?.ok_or("license cache is unavailable")?;
     let retained = anchor
         .read()
