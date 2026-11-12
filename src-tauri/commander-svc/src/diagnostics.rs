@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use rand::{rngs::OsRng, RngCore};
+use rand::{rngs::SysRng, TryRng};
 use wincmd_shared::diagnostics::{
     open_diagnostic_record, seal_diagnostic_record, DiagnosticEvent, DiagnosticLifecycle,
     DiagnosticOutcome, DiagnosticPrivacyClass, DiagnosticRetryability, DiagnosticSeverity,
@@ -416,7 +416,7 @@ fn record_recovery_if_needed(dir: &Path) {
 fn persist_event_at(dir: &Path, event: &DiagnosticEvent, payload: &[u8]) -> Result<(), String> {
     let key = service_key(dir)?;
     let mut nonce = [0u8; 12];
-    OsRng.fill_bytes(&mut nonce);
+    SysRng.try_fill_bytes(&mut nonce).map_err(|_| "diagnostic randomness unavailable")?;
     let line = seal_diagnostic_record(&key, &event.occurred_at[..10], "service", payload, nonce)?;
     let mut file = OpenOptions::new()
         .create(true)
@@ -667,7 +667,7 @@ fn service_key(dir: &Path) -> Result<[u8; 32], String> {
             .map_err(|_| "diagnostic key material is invalid".to_string());
     }
     let mut key = [0u8; 32];
-    OsRng.fill_bytes(&mut key);
+    SysRng.try_fill_bytes(&mut key).map_err(|_| "diagnostic randomness unavailable")?;
     let protected = machine_protect(&key)?;
     fs::write(path, protected).map_err(|_| "write diagnostic key material failed".to_string())?;
     Ok(key)

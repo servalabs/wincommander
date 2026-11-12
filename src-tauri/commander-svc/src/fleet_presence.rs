@@ -3,7 +3,7 @@
 use crate::fleet_machine_policy::FleetTrust;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use ed25519_dalek::{Signature, VerifyingKey};
-use rand::RngCore;
+use rand::TryRng;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -21,7 +21,7 @@ pub(crate) fn make_request(
         return Err("credential_unavailable");
     }
     let mut bytes = [0u8; 16];
-    rand::rngs::OsRng
+    rand::rngs::SysRng
         .try_fill_bytes(&mut bytes)
         .map_err(|_| "random_unavailable")?;
     let nonce = format!(

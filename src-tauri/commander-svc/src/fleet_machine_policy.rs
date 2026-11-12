@@ -368,7 +368,7 @@ impl FleetMachinePolicy {
         allowed_origins: Vec<String>,
         transport_profile: Option<TransportProfile>,
     ) -> Result<String, &'static str> {
-        use rand::RngCore;
+        use rand::TryRng;
         let placeholder = FleetTrust {
             org_id: "pending".into(),
             device_id: device_id.clone(),
@@ -379,7 +379,7 @@ impl FleetMachinePolicy {
         let allowed_origins = origins::normalize(&allowed_origins)?;
         if let Some(profile) = &transport_profile { validate_transport_profile(profile)?; }
         let mut bytes = [0u8; 16];
-        rand::rngs::OsRng
+        rand::rngs::SysRng
             .try_fill_bytes(&mut bytes)
             .map_err(|_| "random_unavailable")?;
         bytes[6] = (bytes[6] & 0x0f) | 0x40;

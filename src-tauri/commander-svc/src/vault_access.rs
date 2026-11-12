@@ -12,7 +12,7 @@ mod local_principals;
 #[cfg(windows)]
 pub use local_principals::local_user_principals;
 
-use rand::{rngs::OsRng, RngCore};
+use rand::{rngs::SysRng, TryRng};
 use serde::{Deserialize, Serialize};
 use wincmd_shared::vault_access::{
     PersonalVaultRecord, VaultAccess, VaultAccessDirectory, VaultAccessEntry, VaultAccessPolicy,
@@ -1186,7 +1186,7 @@ impl VaultAccessStore {
         // file was deleted, the original owner may reuse the name.
         let normalized_path = normalized.to_string_lossy().into_owned();
         let mut reservation_nonce = [0u8; 32];
-        OsRng
+        SysRng
             .try_fill_bytes(&mut reservation_nonce)
             .map_err(|_| VaultError::Persistence)?;
         let pending = PendingPersonalVault {

@@ -3,7 +3,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use once_cell::sync::Lazy;
-use rand::RngCore;
+use rand::{rngs::SysRng, TryRng};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -37,11 +37,15 @@ pub(super) fn hash_args(args_canonical: &str) -> [u8; 32] {
 }
 
 /// Mint a capability for (action, args). Returns the opaque token id.
-pub fn mint(action: DestructiveAction, args_canonical: &str) -> String {
+pub fn mint(action: DestructiveAction, args_canonical: &str) -> Result<String, String> {
+    mint_with(action, args_canonical, |raw| SysRng.try_fill_bytes(raw).map_err(|_| "confirmation randomness unavailable".to_string()))
+}
+
+fn mint_with(action: DestructiveAction, args_canonical: &str, fill: impl FnOnce(&mut [u8]) -> Result<(), String>) -> Result<String, String> {
     let mut raw = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut raw);
+    fill(&mut raw)?;
     let token = raw.iter().map(|b| format!("{:02x}", b)).collect::<String>();
-    let mut store = STORE.lock().expect("authz store poisoned");
+    let mut store = STORE.lock().map_err(|_| "confirmation unavailable (authorization store failure)")?;
     // Opportunistic GC of expired tokens.
     store.retain(|_, m| m.at.elapsed() < TTL);
     store.insert(
@@ -52,7 +56,7 @@ pub fn mint(action: DestructiveAction, args_canonical: &str) -> String {
             at: Instant::now(),
         },
     );
-    token
+    Ok(token)
 }
 
 /// Consume a capability. Fails closed on any mismatch, expiry, or reuse.
@@ -87,4 +91,13 @@ pub fn consume_required(
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| "confirmation required (capability missing)".to_string())?;
     consume(token, action, args_canonical)
+}
+
+#[cfg(test)]
+mod randomness_tests {
+    use super::*;
+    #[test]
+    fn failed_randomness_cannot_mint_capability() {
+        assert!(mint_with(DestructiveAction::DiskDelete, "target", |_| Err("unavailable".into())).is_err());
+    }
 }
