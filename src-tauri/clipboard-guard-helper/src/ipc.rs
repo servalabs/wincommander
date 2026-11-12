@@ -217,14 +217,25 @@ mod win32 {
 
     fn random_session_token() -> Result<String, SvcError> {
         use rand::{rngs::SysRng, TryRng};
+        random_session_token_with(|buf| SysRng.try_fill_bytes(buf).map_err(|_| SvcError::Unavailable))
+    }
+
+    fn random_session_token_with(fill: impl FnOnce(&mut [u8]) -> Result<(), SvcError>) -> Result<String, SvcError> {
         let mut buf = [0u8; 32];
-        SysRng.try_fill_bytes(&mut buf).map_err(|_| SvcError::Unavailable)?;
+        fill(&mut buf)?;
         Ok(buf.iter().map(|b| format!("{b:02x}")).collect())
     }
 
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn session_token_requires_successful_randomness() {
+            assert!(random_session_token_with(|_| Err(SvcError::Unavailable)).is_err());
+            let token = random_session_token_with(|bytes| { bytes.fill(0xab); Ok(()) }).unwrap();
+            assert_eq!(token, "ab".repeat(32));
+        }
 
         #[tokio::test]
         async fn rejects_an_unregistered_pipe_server_before_sending_hello() {
