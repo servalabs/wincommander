@@ -143,6 +143,20 @@ fn path_capability_detects_file_identity_replacement() {
     assert_ne!(confirmed, replaced);
 }
 
+#[cfg(windows)]
+#[test]
+fn path_capability_detects_directory_identity_replacement() {
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("selected-folder");
+    let retained = root.path().join("previous-folder");
+    std::fs::create_dir(&target).unwrap();
+    let confirmed = disk_delete_args(&target.to_string_lossy());
+    std::fs::rename(&target, &retained).unwrap();
+    std::fs::create_dir(&target).unwrap();
+    let replaced = disk_delete_args(&target.to_string_lossy());
+    assert_ne!(confirmed, replaced);
+}
+
 #[test]
 fn required_capability_is_single_use() {
     let args = kill_switch_args(true);
