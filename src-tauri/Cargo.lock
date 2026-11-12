@@ -929,7 +929,7 @@ name = "commander-context-shred"
 version = "3.5.1"
 dependencies = [
  "embed-resource",
- "rand 0.8.8",
+ "rand 0.10.3",
  "tempfile",
  "windows-sys 0.61.2",
 ]
