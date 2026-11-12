@@ -7675,6 +7675,7 @@ version = "0.1.0"
 dependencies = [
  "aes-gcm",
  "calamine",
+ "fs4",
  "globset",
  "hex",
  "hmac",
