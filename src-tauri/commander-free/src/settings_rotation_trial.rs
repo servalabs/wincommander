@@ -287,3 +287,10 @@ mod tests;
 #[cfg(windows)]
 #[path = "settings_rotation_snapshot.rs"]
 mod source_snapshot;
+
+// Experimental building block only. Existing pathname-based migration is not
+// safe to activate until every read, enumeration and publication is converted.
+#[cfg(windows)]
+#[allow(dead_code)]
+#[path = "../../runtime-support/settings_relative_windows.rs"]
+mod settings_relative_windows;
