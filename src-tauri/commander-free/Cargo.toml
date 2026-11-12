@@ -154,7 +154,7 @@ hex = "0.4"
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
 # KT: sysinfo for Rust-native CPU/RAM/Disk metrics — replaces 3s PowerShell spawn poll.
 # once_cell for lazy-init System singleton (sysinfo needs persistent state for accurate CPU deltas).
-sysinfo = { version = "0.40", default-features = false, features = ["system", "disk", "component", "network"] }
+sysinfo = { version = "0.39", default-features = false, features = ["system", "disk", "component", "network"] }
 once_cell = "1"
 # Used by the updater command to parse cache-busted endpoint URLs
 # before handing them to tauri-plugin-updater. Already in the dep
