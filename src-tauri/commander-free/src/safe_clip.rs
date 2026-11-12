@@ -26,6 +26,9 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+
+#[path = "safe_paste_publish.rs"]
+mod safe_paste_publish;
 #[cfg(windows)]
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -375,9 +378,17 @@ fn commit_staged_batch(
     staged: Vec<(PathBuf, PathBuf)>,
     skipped: &mut Vec<SafeSkip>,
 ) -> Result<Vec<String>, String> {
+    commit_staged_batch_with(staged, skipped, safe_paste_publish::move_no_replace)
+}
+
+fn commit_staged_batch_with(
+    staged: Vec<(PathBuf, PathBuf)>,
+    skipped: &mut Vec<SafeSkip>,
+    publish: impl Fn(&Path, &Path) -> std::io::Result<()>,
+) -> Result<Vec<String>, String> {
     let mut committed: Vec<(PathBuf, PathBuf)> = Vec::new();
     for (stage_target, target) in staged {
-        if target.exists() {
+        if std::fs::symlink_metadata(&target).is_ok() {
             skipped.push(SafeSkip {
                 name: target
                     .file_name()
@@ -387,7 +398,17 @@ fn commit_staged_batch(
             });
             continue;
         }
-        if let Err(error) = std::fs::rename(&stage_target, &target) {
+        if let Err(error) = publish(&stage_target, &target) {
+            // A name may be claimed after the preflight. Never replace it.
+            if error.kind() == std::io::ErrorKind::AlreadyExists
+                || std::fs::symlink_metadata(&target).is_ok()
+            {
+                skipped.push(SafeSkip {
+                    name: target.file_name().map(|name| name.to_string_lossy().to_string()).unwrap_or_default(),
+                    reason: "a file with that name already exists".into(),
+                });
+                continue;
+            }
             let mut rollback_errors = Vec::new();
             for (staged_back, published) in committed.iter().rev() {
                 if let Err(rollback) = std::fs::rename(published, staged_back) {
@@ -1735,6 +1756,48 @@ mod tests {
         assert!(skipped.is_empty());
         assert_eq!(std::fs::read(dest.join("one.jpg")).unwrap(), b"one");
         assert_eq!(std::fs::read(dest.join("two.jpg")).unwrap(), b"two");
+    }
+
+    #[test]
+    fn late_collision_preserves_other_file_and_skips_item() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("stage");
+        let target = root.path().join("destination");
+        std::fs::write(&source, b"scrubbed").unwrap();
+        let mut skipped = Vec::new();
+        let copied = commit_staged_batch_with(vec![(source.clone(), target.clone())], &mut skipped, |_, to| {
+            std::fs::write(to, b"other writer")?;
+            Err(std::io::Error::from(std::io::ErrorKind::AlreadyExists))
+        }).unwrap();
+        assert!(copied.is_empty());
+        assert_eq!(skipped.len(), 1);
+        assert_eq!(std::fs::read(target).unwrap(), b"other writer");
+        assert_eq!(std::fs::read(source).unwrap(), b"scrubbed");
+    }
+
+    #[test]
+    fn publication_failure_rolls_prior_items_back_into_staging() {
+        let root = tempfile::tempdir().unwrap();
+        let staged_a = root.path().join("stage-a");
+        let staged_b = root.path().join("stage-b");
+        let target_a = root.path().join("target-a");
+        let target_b = root.path().join("target-b");
+        std::fs::write(&staged_a, b"first").unwrap();
+        std::fs::write(&staged_b, b"second").unwrap();
+        let mut skipped = Vec::new();
+        let result = commit_staged_batch_with(
+            vec![(staged_a.clone(), target_a.clone()), (staged_b.clone(), target_b.clone())],
+            &mut skipped,
+            |from, to| {
+                if to == target_b { return Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied)); }
+                std::fs::rename(from, to)
+            },
+        );
+        assert!(result.is_err());
+        assert!(!target_a.exists());
+        assert!(!target_b.exists());
+        assert_eq!(std::fs::read(staged_a).unwrap(), b"first");
+        assert_eq!(std::fs::read(staged_b).unwrap(), b"second");
     }
 
     #[test]
