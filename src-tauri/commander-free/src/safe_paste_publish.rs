@@ -3,17 +3,50 @@
 use std::{io, path::Path};
 
 #[cfg(windows)]
-pub(super) fn move_no_replace(source: &Path, target: &Path) -> io::Result<()> {
+fn native_path(path: &Path) -> io::Result<Vec<u16>> {
     use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::MoveFileW;
-    fn wide(path: &Path) -> io::Result<Vec<u16>> {
-        let mut result: Vec<u16> = path.as_os_str().encode_wide().collect();
-        if result.contains(&0) { return Err(io::Error::new(io::ErrorKind::InvalidInput, "path contains NUL")); }
-        result.push(0);
-        Ok(result)
+    let raw: Vec<u16> = path.as_os_str().encode_wide().collect();
+    if raw.contains(&0) {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "path contains NUL"));
     }
-    let source = wide(source)?;
-    let target = wide(target)?;
+    let slash = |unit: u16| unit == b'\\' as u16 || unit == b'/' as u16;
+    let verbatim = raw.starts_with(&[92, 92, 63, 92]) || raw.starts_with(&[92, 63, 63, 92]);
+    let short_drive = raw.len() >= 2 && raw[1] == b':' as u16 && !slash(raw[0])
+        && (raw.len() == 2 || raw.get(2).is_some_and(|unit| slash(*unit)));
+    let short_network = raw.len() >= 2 && slash(raw[0]) && slash(raw[1]);
+    let mut result = if raw.is_empty() || verbatim || (raw.len() + 1 < 248 && (short_drive || short_network)) {
+        raw
+    } else {
+        // Lexical Windows full-path resolution, not filesystem canonicalization:
+        // junctions are not opened or followed by this conversion.
+        let absolute: Vec<u16> = std::path::absolute(path)?.as_os_str().encode_wide().collect();
+        let mut prefix = Vec::new();
+        let remainder = if absolute.starts_with(&[92, 92, 63, 92]) || absolute.starts_with(&[92, 63, 63, 92]) {
+            absolute.as_slice()
+        } else if absolute.starts_with(&[92, 92, 46, 92]) {
+            prefix.extend([92, 92, 63, 92]);
+            &absolute[4..]
+        } else if absolute.starts_with(&[92, 92]) {
+            prefix.extend([92, 92, 63, 92, 85, 78, 67, 92]);
+            &absolute[2..]
+        } else if absolute.len() >= 3 && absolute[1] == 58 && absolute[2] == 92 {
+            prefix.extend([92, 92, 63, 92]);
+            absolute.as_slice()
+        } else {
+            absolute.as_slice()
+        };
+        prefix.extend_from_slice(remainder);
+        prefix
+    };
+    result.push(0);
+    Ok(result)
+}
+
+#[cfg(windows)]
+pub(super) fn move_no_replace(source: &Path, target: &Path) -> io::Result<()> {
+    use windows_sys::Win32::Storage::FileSystem::MoveFileW;
+    let source = native_path(source)?;
+    let target = native_path(target)?;
     // MoveFileW fails if the target exists, including a concurrent creator.
     if unsafe { MoveFileW(source.as_ptr(), target.as_ptr()) } == 0 {
         Err(io::Error::last_os_error())
@@ -52,6 +85,48 @@ mod tests {
         assert_eq!(workers.into_iter().map(|w| w.join().unwrap()).filter(Result::is_ok).count(), 1);
         assert_eq!(first.exists() as u8 + second.exists() as u8, 1);
         assert!([b"first".as_slice(), b"second".as_slice()].contains(&std::fs::read(target).unwrap().as_slice()));
+    }
+
+    #[test]
+    fn path_encoding_preserves_short_and_verbatim_inputs() {
+        use std::ffi::OsString;
+        use std::os::windows::ffi::OsStringExt;
+        fn output(path: &str) -> String {
+            let mut wide = native_path(Path::new(path)).unwrap();
+            assert_eq!(wide.pop(), Some(0));
+            String::from_utf16(&wide).unwrap()
+        }
+        assert_eq!(output(r"C:\short\item"), r"C:\short\item");
+        assert_eq!(output(r"\\?\C:\name.\..\item"), r"\\?\C:\name.\..\item");
+        assert_eq!(output(r"\??\C:\name.\..\item"), r"\??\C:\name.\..\item");
+        assert_eq!(output(r"\\?\UNC\server\share\file"), r"\\?\UNC\server\share\file");
+        let nul = OsString::from_wide(&[b'a' as u16, 0, b'b' as u16]);
+        assert_eq!(native_path(Path::new(&nul)).unwrap_err().kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn long_drive_and_unc_names_are_prefixed_without_filesystem_io() {
+        let drive = format!(r"C:\{}\item", "a".repeat(260));
+        let unc = format!(r"\\server\share\{}\item", "b".repeat(260));
+        for (input, expected_prefix) in [(&drive, r"\\?\C:\"), (&unc, r"\\?\UNC\server\share\")] {
+            let mut output = native_path(Path::new(input)).unwrap();
+            assert_eq!(output.pop(), Some(0));
+            let output = String::from_utf16(&output).unwrap();
+            assert!(output.starts_with(expected_prefix));
+            assert!(output.ends_with(r"\item"));
+        }
+    }
+
+    #[test]
+    fn relative_paths_use_the_same_lexical_absolute_resolution() {
+        use std::os::windows::ffi::OsStrExt;
+        let input = Path::new(r"subdir\..\item");
+        let absolute = std::path::absolute(input).unwrap();
+        let output = native_path(input).unwrap();
+        let absolute_wide: Vec<u16> = absolute.as_os_str().encode_wide().collect();
+        // The conversion adds a verbatim drive or UNC prefix, not a filesystem lookup.
+        assert!(output.windows(absolute_wide.len().saturating_sub(2))
+            .any(|window| window == &absolute_wide[2..]));
     }
 
     #[test]
