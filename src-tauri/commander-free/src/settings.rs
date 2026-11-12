@@ -2620,7 +2620,7 @@ pub(crate) fn create_default_settings() -> AppSettings {
     }
 }
 
-#[cfg(all(windows, feature = "experimental-settings-generation"))]
+#[cfg(all(windows, any(test, feature = "experimental-settings-generation")))]
 pub(crate) fn fresh_machine_settings() -> Result<serde_json::Value, String> {
     let value = serde_json::to_value(create_default_settings())
         .map_err(|_| "Could not create fresh machine settings".to_string())?;

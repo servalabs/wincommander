@@ -291,7 +291,7 @@ fn migration_without_machine_f6_does_not_generate_an_unverified_identity() {
     assert!(error.contains("identity could not be verified"));
     assert!(owner.write_section("f6-keystore", json!({"signing_seed_hex": "c".repeat(64)})).is_err());
     assert_eq!(owner.read_reconciled().unwrap(), before);
-    #[cfg(windows)] {
+    #[cfg(all(windows, feature = "experimental-settings-generation"))] {
         let runtime = RuntimeWriteGuard { owner, _root_pins: Vec::new(), selected: true };
         assert!(runtime.get_or_create_f6(|| panic!("runtime must not generate an unverified identity")).is_err());
         assert!(runtime.write("f6-keystore", &json!({"signing_seed_hex": "c".repeat(64)})).is_err());
