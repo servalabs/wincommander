@@ -101,9 +101,10 @@ pub struct UninstallLeftoverRemoveResult {
 #[tauri::command]
 pub async fn uninstall_leftovers_scan() -> Result<UninstallLeftoverScan, String> {
     CANCELLED.store(false, Ordering::Release);
+    cache().lock().map_err(|_| "uninstall leftovers cache lock poisoned".to_string())?.entries.clear();
     let (scan, entries) = tokio::task::spawn_blocking(|| scanner::scan_leftovers(&CANCELLED))
         .await
-        .map_err(|error| format!("uninstall leftovers scan task failed: {error}"))?;
+        .map_err(|error| format!("uninstall leftovers scan task failed: {error}"))??;
     let mut guard = cache()
         .lock()
         .map_err(|_| "uninstall leftovers cache lock poisoned".to_string())?;

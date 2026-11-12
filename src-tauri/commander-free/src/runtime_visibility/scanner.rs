@@ -214,7 +214,7 @@ fn classify(
 
 #[tauri::command]
 pub fn scan_runtimes() -> Result<ScanResult, String> {
-    let mut sys = System::new();
+    let mut sys = System::new().map_err(|e| format!("Process enumeration unavailable: {e}"))?;
     sys.refresh_processes(ProcessesToUpdate::All, true);
 
     let visible_pids = pids_with_visible_windows();

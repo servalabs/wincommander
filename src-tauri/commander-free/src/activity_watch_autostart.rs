@@ -263,7 +263,7 @@ pub async fn activity_watch_ensure_started() -> Result<(), String> {
 
 #[cfg(windows)]
 fn running_processes() -> Result<SessionProcesses, &'static str> {
-    let mut system = System::new();
+    let mut system = System::new().map_err(|_| "activitywatch_process_list_unavailable")?;
     system.refresh_processes(ProcessesToUpdate::All, false);
     let current_session = system
         .process(Pid::from_u32(std::process::id()))
