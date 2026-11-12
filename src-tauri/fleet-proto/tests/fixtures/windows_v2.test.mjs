@@ -1,0 +1,128 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+import assert from "node:assert/strict";
+import { createHash, createPrivateKey, createPublicKey, sign, verify } from "node:crypto";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+
+const fixture = JSON.parse(readFileSync(new URL("./windows_v2.json", import.meta.url), "utf8"));
+// Opaque JSON text remains a string: never parse it to rebuild signing bytes.
+function canonical(value) {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+const bytes = value => Buffer.from(canonical(value), "utf8");
+const hash = value => createHash("sha256").update(value).digest();
+const publicKey = base64 => createPublicKey({ key: Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"), Buffer.from(base64, "base64")]), format: "der", type: "spki" });
+// Public, deterministic fixture seeds; never production credentials.
+const privateKey = seed => createPrivateKey({ key: Buffer.concat([Buffer.from("302e020100300506032b657004220420", "hex"), Buffer.alloc(32, seed)]), format: "der", type: "pkcs8" });
+
+function commandBytes(command) {
+  return bytes(["fleet.windows.command.v2", command.binding, command.idempotency_key, command.catalog_id, command.action_class, command.payload, command.epoch_version]);
+}
+
+test("Python, Rust and JavaScript agree on exact command/outcome/receipt signing bytes", () => {
+  const command = JSON.parse(JSON.stringify(fixture.command));
+  assert.equal(typeof command.epoch_version, "string");
+  assert.equal(typeof command.payload, "string");
+  assert.match(command.payload, /12345678901234567890123456789012345678901234567890/);
+  assert.match(command.payload, /1e400/);
+  assert.match(command.payload, /🔒/);
+  assert.match(command.payload, /\\n/);
+  const message = commandBytes(command);
+  assert.equal(message.toString("utf8"), fixture.command_preimage);
+  assert.equal(sign(null, message, privateKey(13)).toString("base64"), command.signature);
+  assert.ok(verify(null, message, publicKey(command.signer_key), Buffer.from(command.signature, "base64")));
+  const outcome = JSON.parse(JSON.stringify(fixture.outcome));
+  const outcomeBytes = bytes(["fleet.windows.action-outcome.v2", outcome.version, outcome.binding, outcome.receipt_id, outcome.sequence, outcome.previous_hash, outcome.command_id, outcome.catalog_id, outcome.action_class, outcome.outcome, outcome.failure_stage, outcome.observed_at, outcome.summary]);
+  assert.equal(outcomeBytes.toString("utf8"), fixture.outcome_preimage);
+  assert.equal(hash(outcomeBytes).toString("hex"), outcome.record_hash);
+  assert.equal(sign(null, hash(outcomeBytes), privateKey(7)).toString("base64"), outcome.signature);
+  const proof = fixture.proof;
+  const proofBytes = bytes(["fleet.windows.outcome-receipt.v2", proof.binding, proof.nonce, proof.request_sha256, proof.http_status, proof.response_sha256]);
+  assert.equal(proofBytes.toString("utf8"), fixture.proof_preimage);
+  assert.equal(hash(Buffer.from(fixture.request_bytes, "utf8")).toString("base64"), proof.request_sha256);
+  assert.equal(hash(Buffer.from(fixture.response_bytes, "utf8")).toString("base64"), proof.response_sha256);
+  assert.equal(sign(null, proofBytes, privateKey(11)).toString("base64"), proof.signature);
+  assert.ok(verify(null, proofBytes, publicKey(proof.binding.authority_key_b64), Buffer.from(proof.signature, "base64")));
+  assert.equal(hash(bytes(["fleet.windows.ack.v2", fixture.ack])).toString("hex"), fixture.ack_hash);
+  assert.equal(hash(bytes(["fleet.windows.result.v2", fixture.ack.result])).toString("hex"), fixture.result_hash);
+});
+
+test("outer JSON roundtrip keeps full counters and payload spelling; altered text fails", () => {
+  const command = JSON.parse(JSON.stringify({ ...fixture.command, epoch_version: "9223372036854775807" }));
+  assert.equal(command.epoch_version, "9223372036854775807");
+  const head = JSON.parse(JSON.stringify({ last_sequence: "18446744073709551615" }));
+  assert.equal(head.last_sequence, "18446744073709551615");
+  assert.equal(BigInt(head.last_sequence), 18446744073709551615n);
+  const altered = { ...fixture.command, payload: ` ${fixture.command.payload}` };
+  assert.ok(!verify(null, commandBytes(altered), publicKey(altered.signer_key), Buffer.from(altered.signature, "base64")));
+});
+
+
+test("closed command/readiness summaries roundtrip and bind every structured field", () => {
+  assert.deepEqual(fixture.outcome.summary, { kind: "command", result_sha256: fixture.result_hash });
+  const readiness = JSON.parse(JSON.stringify(fixture.readiness));
+  assert.deepEqual(Object.keys(readiness.summary).sort(), ["kind", "result"]);
+  assert.equal(readiness.summary.kind, "readiness");
+  assert.deepEqual(Object.keys(readiness.summary.result).sort(), ["arm_predicate", "observed_at", "recovery_path", "signed_dispatch", "simulate_branch"]);
+  const preimage = outcome => bytes(["fleet.windows.action-outcome.v2", outcome.version, outcome.binding, outcome.receipt_id, outcome.sequence, outcome.previous_hash, outcome.command_id, outcome.catalog_id, outcome.action_class, outcome.outcome, outcome.failure_stage, outcome.observed_at, outcome.summary]);
+  const message = preimage(readiness);
+  assert.equal(message.toString("utf8"), fixture.readiness_preimage);
+  assert.equal(hash(message).toString("hex"), readiness.record_hash);
+  assert.equal(sign(null, hash(message), privateKey(7)).toString("base64"), readiness.signature);
+  for (const field of Object.keys(readiness.summary.result)) {
+    const changed = structuredClone(readiness);
+    changed.summary.result[field] = field === "observed_at" ? "2026-02-01T00:00:00Z" : (changed.summary.result[field] === "pass" ? "fail" : "pass");
+    assert.ok(!verify(null, hash(preimage(changed)), publicKey(fixture.device_key), Buffer.from(readiness.signature, "base64")));
+  }
+});
+
+
+test("signed i64 epoch extremes survive JS roundtrip and bind floor authority", () => {
+  for (const [index, epoch] of ["-9223372036854775808", "9223372036854775807"].entries()) {
+    const vector = fixture.epoch_boundaries[index];
+    const command = JSON.parse(JSON.stringify(vector.command));
+    assert.equal(command.epoch_version, epoch);
+    assert.equal(commandBytes(command).toString("utf8"), vector.command_preimage);
+    assert.equal(sign(null, commandBytes(command), privateKey(13)).toString("base64"), command.signature);
+    const response = JSON.parse(vector.response_bytes);
+    assert.equal(response.windows_v2.command_epoch_floor, epoch);
+    assert.equal(BigInt(response.windows_v2.command_epoch_floor), BigInt(epoch));
+    assert.equal(typeof response.windows_v2.command_epoch_floor, "string");
+    const proof = vector.proof;
+    const preimage = bytes(["fleet.windows.outcome-receipt.v2", proof.binding, proof.nonce, proof.request_sha256, proof.http_status, proof.response_sha256]);
+    assert.equal(preimage.toString("utf8"), vector.proof_preimage);
+    assert.equal(hash(Buffer.from(vector.response_bytes)).toString("base64"), proof.response_sha256);
+    assert.equal(sign(null, preimage, privateKey(11)).toString("base64"), proof.signature);
+    response.windows_v2.command_epoch_floor = "0";
+    const altered = bytes(["fleet.windows.outcome-receipt.v2", proof.binding, proof.nonce, proof.request_sha256, proof.http_status, hash(bytes(response)).toString("base64")]);
+    assert.ok(!verify(null, altered, publicKey(proof.binding.authority_key_b64), Buffer.from(proof.signature, "base64")));
+  }
+});
+
+test("delivery extremes survive JS roundtrip and require response authority", () => {
+  for (const [index, value] of ["-9223372036854775808", "9223372036854775807"].entries()) {
+    const vector = fixture.delivery_boundaries[index];
+    const response = JSON.parse(JSON.stringify(JSON.parse(vector.response_bytes)));
+    assert.equal(response.windows_v2.delivery_issued_unix_ms, value);
+    assert.equal(response.windows_v2.commands[0].delivery_expires_unix_ms, value);
+    assert.equal(BigInt(response.windows_v2.delivery_issued_unix_ms), BigInt(value));
+    const command = response.windows_v2.commands[0];
+    assert.equal(commandBytes(command).toString("utf8"), fixture.command_preimage);
+    assert.equal(command.signature, fixture.command.signature);
+    const proof = vector.proof;
+    const preimage = body => bytes(["fleet.windows.outcome-receipt.v2", proof.binding, proof.nonce, proof.request_sha256, proof.http_status, hash(body).toString("base64")]);
+    assert.equal(preimage(Buffer.from(vector.response_bytes)).toString("utf8"), vector.proof_preimage);
+    assert.equal(sign(null, preimage(Buffer.from(vector.response_bytes)), privateKey(11)).toString("base64"), proof.signature);
+    for (const field of ["delivery_issued_unix_ms", "delivery_expires_unix_ms"]) {
+      const altered = structuredClone(response);
+      const target = field === "delivery_issued_unix_ms" ? altered.windows_v2 : altered.windows_v2.commands[0];
+      target[field] = "0";
+      assert.ok(!verify(null, preimage(bytes(altered)), publicKey(proof.binding.authority_key_b64), Buffer.from(proof.signature, "base64")));
+      assert.equal(commandBytes(altered.windows_v2.commands[0]).toString("utf8"), fixture.command_preimage);
+    }
+  }
+});

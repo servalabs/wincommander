@@ -117,6 +117,13 @@ fn normalize_fleet_server_url(raw: &str) -> Result<String, String> {
     Ok(parsed.origin().ascii_serialization())
 }
 
+fn require_secure_fleet_origin(origin: &str) -> Result<(), String> {
+    if !origin.starts_with("https://") {
+        return Err("Fleet requires an HTTPS server with post-quantum hybrid TLS support.".into());
+    }
+    Ok(())
+}
+
 /// Only origins already configured for the normal Fleet agent may be staged
 /// by the privileged machine-enrollment operation. Invalid optional mesh
 /// configuration never prevents ordinary desktop enrollment.
@@ -411,6 +418,7 @@ async fn fleet_connect_inner_locked(
         .try_lock()
         .map_err(|_| "A Fleet connection change is already in progress".to_string())?;
     let server_url = normalize_fleet_server_url(&server_url)?;
+    require_secure_fleet_origin(&server_url)?;
     // A failed read cannot prove this device is unenrolled.
     crate::settings::invalidate_cache();
     let current = crate::settings::read_settings()?;
@@ -5608,6 +5616,12 @@ mod tests {
         ] {
             assert!(super::normalize_fleet_server_url(raw).is_err(), "{raw}");
         }
+    }
+
+    #[test]
+    fn fleet_connection_requires_https() {
+        assert!(super::require_secure_fleet_origin("http://fleet.example").is_err());
+        assert!(super::require_secure_fleet_origin("https://fleet.example").is_ok());
     }
 
     /// Verify the settings patch shape for connect: nested app.fleet with

@@ -53,6 +53,27 @@ overwrite existing outputs. These commands do not load or manage signing keys,
 publish files, prevent later file replacement, or establish a production
 signing ceremony. Keep the artifact immutable until publication.
 
+For a local offline rehearsal, `wincmd-pq-offline-sign` can sign either
+prepared message with its separately held key. Build it with
+`--features experimental-signer --bin wincmd-pq-offline-sign`:
+
+```text
+wincmd-pq-offline-sign ed25519 ed-private-seed.bin ed.msg pro.exe trusted-keys.json 3.7.0 pro 7 ed.sig
+wincmd-pq-offline-sign mldsa65 pq-private-pkcs8.der pq.msg pro.exe trusted-keys.json 3.7.0 pro 7 pq.sig
+```
+
+The Ed25519 input is a raw 32-byte seed; the ML-DSA-65 input is PKCS#8 DER.
+Use `-` as the private-key path to read bounded key bytes from standard input,
+so an encrypted-key wrapper can avoid creating a plaintext private-key file.
+The tool refuses existing output files, validates the artifact and complete
+release metadata, matches the private key against independently supplied
+trust, and reconstructs the exact message. For Free, use the installer,
+Free trust, and `stable` or `beta` instead of `pro`. It does not independently
+approve trust keys, provide secure key storage,
+or publish a release. Run each signer only after independently reviewing the
+artifact and signing inputs, and run the corresponding `finish` and offline
+verification steps. Keep private key files out of the repository and logs.
+
 For the experimental Free updater, build `wincmd-pq-free-release-prepare`
 with `--features experimental-signer --bin wincmd-pq-free-release-prepare`.
 Use an independently trusted Free key file, not the Pro trust file:
@@ -73,6 +94,14 @@ and recheck the same installer; finish requires both valid raw signatures.
 The operator must keep the installer unchanged through publication and verify
 the ordinary release checks separately. These commands do not provide a key
 store, production signing ceremony, publishing, revocation or rollback.
+
+A previously signed record can be checked locally with
+`release-free.ps1 -Version 3.7.0 -StageOnly -SkipBuild -HybridSignedRecord <path>`.
+This requires approved release trust and possession proofs in the local release
+environment and verifies the record and existing installer offline before SBOM
+generation. It does not prove which keys an existing installer embeds or
+provide release provenance. Free publication remains blocked until the hybrid
+record is published and the installed update path is qualified.
 
 The local Free release staging command can prepare the same unsigned payload
 after its normal artifact checks: pass `-StageOnly -HybridPrepareTool` with the

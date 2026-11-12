@@ -16,6 +16,9 @@ mod wire;
 #[path = "licence_device_release_pending.rs"]
 mod release_pending;
 
+#[cfg(test)]
+pub(crate) use release_pending::{test_make_acknowledged_record, test_rotate_completed_record};
+
 const INVALID: &str = "device credential is invalid or unavailable";
 pub(crate) const RETRY_LATER: &str = "Licence service is busy. Wait two minutes and retry.";
 const LIMIT: usize = 64 * 1024;
@@ -123,6 +126,7 @@ fn save_locked(
     binding: &Binding<'_>,
     credential: &PendingCredential,
 ) -> Result<(), &'static str> {
+    crate::license_cache::release_gate::ensure_idle()?;
     // Never silently replace an existing or damaged identity. Recovery and
     // cross-process coordination must be designed before this is connected.
     if anchor.read().map_err(|_| INVALID)?.is_some() {
@@ -163,6 +167,7 @@ fn get_or_create_with(
 ) -> Result<PendingCredential, &'static str> {
     let _guard = LOCK.lock().map_err(|_| INVALID)?;
     let _process_lock = crate::licence_security_lock().map_err(|_| INVALID)?;
+    crate::license_cache::release_gate::ensure_idle()?;
     if let Some(bytes) = anchor.read().map_err(|_| INVALID)? {
         return decode(protector, binding, &bytes);
     }
@@ -303,6 +308,16 @@ fn checked_refresh_wire(
     )
 }
 
+fn checked_renewal_wire(binding: &Binding<'_>, licence: &RefreshLicence<'_>) -> Result<Vec<u8>, &'static str> {
+    crate::license_cache::with_verified_refresh_wire(
+        licence.payload, licence.signature, licence.hybrid, licence.last_verified_at,
+        binding.licence_id, binding.device_hash, |body| {
+            crate::license_cache::release_gate::ensure_idle()?;
+            Ok(body)
+        },
+    )
+}
+
 /// Prepare a challenge request from the service's verified cache and confirmed identity.
 pub(crate) fn prepare_challenge_request(
     binding: &Binding<'_>,
@@ -311,7 +326,7 @@ pub(crate) fn prepare_challenge_request(
     now: u64,
 ) -> Result<Vec<u8>, &'static str> {
     let credential = load_confirmed(binding, receipt_trust, now)?;
-    let body = checked_refresh_wire(binding, licence)?;
+    let body = checked_renewal_wire(binding, licence)?;
     wire::challenge_request(&credential, &body)
 }
 
@@ -324,7 +339,7 @@ pub(crate) fn prepare_renewal_request(
     now: u64,
 ) -> Result<Vec<u8>, &'static str> {
     let credential = load_confirmed(binding, receipt_trust, now)?;
-    let body = checked_refresh_wire(binding, licence)?;
+    let body = checked_renewal_wire(binding, licence)?;
     wire::renewal_request(&credential, body, challenge, now)
 }
 
@@ -335,7 +350,8 @@ pub(crate) fn prepare_release_challenge_request(
     licence: &RefreshLicence<'_>, now: u64,
 ) -> Result<Vec<u8>, &'static str> {
     let credential = load_confirmed(binding, receipt_trust, now)?;
-    let body = checked_refresh_wire(binding, licence)?;
+    let body = crate::license_cache::with_verified_release_wire(licence.payload, licence.signature, licence.hybrid,
+        licence.last_verified_at, binding.licence_id, binding.device_hash, Ok)?;
     wire::release_challenge_request(&credential, &body)
 }
 
@@ -345,7 +361,8 @@ pub(crate) fn prepare_release_request(
     licence: &RefreshLicence<'_>, challenge: &[u8], now: u64,
 ) -> Result<Vec<u8>, &'static str> {
     let credential = load_confirmed(binding, receipt_trust, now)?;
-    let body = checked_refresh_wire(binding, licence)?;
+    let body = crate::license_cache::with_verified_release_wire(licence.payload, licence.signature, licence.hybrid,
+        licence.last_verified_at, binding.licence_id, binding.device_hash, Ok)?;
     wire::release_request(&credential, body, challenge, now)
 }
 
@@ -375,6 +392,58 @@ pub(crate) async fn request_release(
         |request, confirmation| release_pending::record_acknowledgement(
             binding, receipt_trust, licence, now()?, &request, &confirmation),
     ).await
+}
+
+/// No caller-supplied licence identity, trust, cache or path is accepted.
+/// Success means the release was confirmed and recovery completed. A missing
+/// cache alone cannot prove that a server seat is absent.
+pub(crate) async fn release_from_machine_cache() -> Result<(), &'static str> {
+    let trust = crate::license_cache::configured_device_receipt_trust()?;
+    let mut receipt_policy = trust.policy();
+    receipt_policy.purpose = wincmd_pq_experiment::Purpose::LicenceEnrolment;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| INVALID)?.as_secs();
+    let completed = release_pending::remove_prepared_cache(&receipt_policy, now)?
+        || release_pending::verify_completed_recovery(&receipt_policy, now)?;
+    if completed && crate::license_cache::ensure_paid_history_released().is_ok() { return Ok(()); }
+    let cache = select_release_snapshot(
+        completed,
+        crate::license_cache::load_release_licence_snapshot,
+        crate::license_cache::load_retained_release_snapshot,
+        |cache| {
+            let binding = Binding { licence_id: &cache.licence_id, device_hash: &cache.device_hash,
+                issuer_origin: wire::LICENCE_ORIGIN };
+            let licence = RefreshLicence { payload: &cache.payload, signature: &cache.signature,
+                hybrid: &cache.hybrid, last_verified_at: cache.last_verified_at };
+            release_pending::matches_in_progress(&binding, &receipt_policy, &licence, now)
+        },
+    )?;
+    let binding = Binding { licence_id: &cache.licence_id, device_hash: &cache.device_hash,
+        issuer_origin: wire::LICENCE_ORIGIN };
+    let licence = RefreshLicence { payload: &cache.payload, signature: &cache.signature,
+        hybrid: &cache.hybrid, last_verified_at: cache.last_verified_at };
+    request_release(&binding, &receipt_policy, &licence).await?;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| INVALID)?.as_secs();
+    if release_pending::remove_prepared_cache(&receipt_policy, now)? {
+        crate::license_cache::ensure_paid_history_released()
+    } else { Err(INVALID) }
+}
+
+fn select_release_snapshot<T>(
+    completed: bool,
+    current: impl FnOnce() -> Result<T, &'static str>,
+    retained: impl FnOnce() -> Result<T, &'static str>,
+    owns_pending: impl FnOnce(&T) -> Result<bool, &'static str>,
+) -> Result<T, &'static str> {
+    if completed { return retained(); }
+    match current() {
+        Ok(snapshot) => Ok(snapshot),
+        Err(original) => {
+            let snapshot = retained()?;
+            if owns_pending(&snapshot)? { Ok(snapshot) } else { Err(original) }
+        }
+    }
 }
 
 /// Resume only a protected confirmed release. On an uncertain send or write,
@@ -633,6 +702,7 @@ fn confirm_locked(
     signed_receipt: &str,
     now: u64,
 ) -> Result<ConfirmedCredential, &'static str> {
+    crate::license_cache::release_gate::ensure_idle()?;
     let original = anchor.read().map_err(|_| INVALID)?.ok_or(INVALID)?;
     let record: Record = serde_json::from_slice(&original).map_err(|_| INVALID)?;
     if record.phase == "confirmed" {
@@ -694,6 +764,7 @@ fn enrolment_state(
     let state = {
         let _guard = LOCK.lock().map_err(|_| INVALID)?;
         let _process_lock = crate::licence_security_lock().map_err(|_| INVALID)?;
+        crate::license_cache::release_gate::ensure_idle()?;
         match anchor.read().map_err(|_| INVALID)? {
             None => {
                 let pending = PendingCredential::generate()?;

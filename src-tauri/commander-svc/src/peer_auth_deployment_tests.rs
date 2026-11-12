@@ -62,11 +62,11 @@ fn shared_shortcuts_require_the_pinned_free_image_and_captured_session() {
 
 #[test]
 fn licence_relay_accepts_active_remote_session_but_rejects_untrusted_peers() {
-    use wincmd_shared::svc::{ENROL_HYBRID_LICENSE_VERB, RENEW_HYBRID_LICENSE_VERB};
+    use wincmd_shared::svc::{ENROL_HYBRID_LICENSE_VERB, RENEW_HYBRID_LICENSE_VERB, RELEASE_HYBRID_LICENSE_VERB};
     let gate = SessionHelperGate::with_allowed_root(Arc::new(Probe),
         Some(PathBuf::from(r"C:\ProgramData\WinCommander\bin")));
     let peer = identity(7); // The console session in this test is 1, not 7.
-    for verb in [ENROL_HYBRID_LICENSE_VERB, RENEW_HYBRID_LICENSE_VERB] {
+    for verb in [ENROL_HYBRID_LICENSE_VERB, RENEW_HYBRID_LICENSE_VERB, RELEASE_HYBRID_LICENSE_VERB] {
         assert_eq!(gate.authorize_licence_observation(&peer, verb, 7, true, || Ok(())),
             Ok(TrustOrigin::SessionHelperPinned));
         assert_eq!(gate.authorize_licence_observation(&peer, verb, 8, true, || Ok(())),
@@ -181,6 +181,26 @@ fn fleet_policy_relay_requires_matching_active_session_and_protected_helper() {
         ),
         Err(PeerAuthError::PathNotAllowed)
     );
+}
+
+#[test]
+fn hybrid_trust_read_requires_active_session_and_verified_installed_helper() {
+    let gate = SessionHelperGate::with_allowed_root(
+        Arc::new(Probe), Some(PathBuf::from(r"C:\ProgramData\WinCommander\bin")),
+    );
+    let verb = "svc.fleet.read_hybrid_trust";
+    assert_eq!(gate.authorize_fleet_policy_observation(&identity(2), verb, 2, true, || Ok(())),
+        Ok(TrustOrigin::SessionHelperPinned));
+    assert_eq!(gate.authorize_fleet_policy_observation(&identity(2), verb, 3, true, || Ok(())),
+        Err(PeerAuthError::WrongSession));
+    assert_eq!(gate.authorize_fleet_policy_observation(&identity(2), verb, 2, false, || Ok(())),
+        Err(PeerAuthError::WrongSession));
+    assert_eq!(gate.authorize_fleet_policy_observation(&identity(2), verb, 2, true, || Err(PeerAuthError::PathNotAllowed)),
+        Err(PeerAuthError::PathNotAllowed));
+    let mut foreign = identity(2);
+    foreign.canonical_image_path = r"C:\Users\other\wincommander-pro.exe".into();
+    assert_eq!(gate.authorize_fleet_policy_observation(&foreign, verb, 2, true, || panic!("foreign image must not be verified")),
+        Err(PeerAuthError::PathNotAllowed));
 }
 
 #[test]

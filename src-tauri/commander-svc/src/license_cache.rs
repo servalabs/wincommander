@@ -26,6 +26,13 @@ mod hybrid_trust;
 mod rollback;
 #[cfg(feature = "experimental-pq-licence")]
 pub(crate) use rollback::anchor as licence_device_anchor;
+#[cfg(feature = "experimental-pq-licence")]
+#[path = "licence_release_gate.rs"]
+pub(crate) mod release_gate;
+#[cfg(not(feature = "experimental-pq-licence"))]
+#[allow(dead_code)]
+#[path = "../../commander-free/src/updater/hybrid_free_anchor.rs"]
+mod classical_anchor;
 
 const DEFAULT_LICENSE_PUBLIC_KEY_B64: &str = "Z4ulYtrFLpOZYVLGpNo_PlegZsitTmJx2JwfyIqSJpY";
 const MAINLINE_APP_ID: &str = "com.servalabs.wincommander";
@@ -68,6 +75,9 @@ struct SignedClaims {
     #[cfg(feature = "experimental-pq-licence")]
     #[serde(default)]
     license_id: Option<String>,
+    #[cfg(feature = "experimental-pq-licence")]
+    #[serde(default)]
+    activation_generation: Option<u64>,
     device_hash: String,
     iat: u64,
     exp: u64,
@@ -126,8 +136,24 @@ pub fn store(args: serde_json::Value) -> Result<(), &'static str> {
     }
     #[cfg(not(feature = "experimental-pq-licence"))]
     {
-        atomic_write(&path, &bytes).map_err(|_| "machine license cache is unavailable")
+        write_classical_with_anchor(&path, &bytes, &classical_anchor::Anchor::machine_named(
+            r"SOFTWARE\ServaLabs\WinCommander\HybridLicence"))
     }
+}
+
+#[cfg(not(feature = "experimental-pq-licence"))]
+fn write_classical_with_anchor(path: &Path, bytes: &[u8], anchor: &classical_anchor::Anchor) -> Result<(), &'static str> {
+    let _lock = crate::licence_security_lock()?;
+    require_classical_floor(anchor)?;
+    atomic_write(path, bytes).map_err(|_| "machine license cache is unavailable")
+}
+
+#[cfg(not(feature = "experimental-pq-licence"))]
+fn require_classical_floor(anchor: &classical_anchor::Anchor) -> Result<(), &'static str> {
+    if anchor.exists().map_err(|_| "license security record is unavailable")? {
+        return Err("hybrid license verification is required");
+    }
+    Ok(())
 }
 
 /// Read-only confirmation that the current signed cache matches protected history.
@@ -202,6 +228,10 @@ fn validate_claims(payload: &[u8]) -> Result<(), &'static str> {
     if claims.device_hash.trim().is_empty() || claims.exp == 0 || claims.iat > claims.exp {
         return Err("license cache payload is invalid");
     }
+    #[cfg(feature = "experimental-pq-licence")]
+    if claims.activation_generation.is_some_and(|value| value == 0 || value > 9_007_199_254_740_991) {
+        return Err("license activation generation is invalid");
+    }
     Ok(())
 }
 
@@ -210,6 +240,8 @@ fn validate_claims(payload: &[u8]) -> Result<(), &'static str> {
 struct RefreshClaims {
     license_id: String,
     device_hash: String,
+    #[serde(default)]
+    activation_generation: Option<u64>,
     iss: String,
     sub: String,
     #[serde(default)]
@@ -268,6 +300,27 @@ pub(crate) fn load_device_licence_snapshot() -> Result<DeviceLicenceSnapshot, &'
     let public = service_public_key().ok_or("license verification is unavailable")?;
     let trust = hybrid_trust::configured()?;
     rollback::load_snapshot(&machine_license_cache_path()?, public, &trust.policy())
+}
+
+#[cfg(feature = "experimental-pq-licence")]
+pub(crate) fn load_release_licence_snapshot() -> Result<DeviceLicenceSnapshot, &'static str> {
+    let public = service_public_key().ok_or("license verification is unavailable")?;
+    let trust = hybrid_trust::configured()?;
+    rollback::load_release_snapshot(&machine_license_cache_path()?, public, &trust.policy())
+}
+
+#[cfg(feature = "experimental-pq-licence")]
+pub(crate) fn load_retained_release_snapshot() -> Result<DeviceLicenceSnapshot, &'static str> {
+    let public = service_public_key().ok_or("license verification is unavailable")?;
+    let trust = hybrid_trust::configured()?;
+    rollback::load_retained_release_snapshot(&machine_license_cache_path()?, public, &trust.policy())
+}
+
+#[cfg(feature = "experimental-pq-licence")]
+pub(crate) fn ensure_paid_history_released() -> Result<(), &'static str> {
+    let public = service_public_key().ok_or("license verification is unavailable")?;
+    let trust = hybrid_trust::configured()?;
+    rollback::ensure_paid_history_released(public, &trust.policy())
 }
 
 /// Receipt keys are supplied by the service build, never by a desktop caller.
@@ -335,6 +388,95 @@ pub(crate) fn with_verified_refresh_wire<T>(
     let wire = build_refresh_wire(&request, public, &trust.policy(), licence_id, device_hash)?;
     rollback::with_verified_current(&machine_license_cache_path()?, &request, last_verified_at, public,
         &trust.policy(), || operation(wire))
+}
+
+/// Release recovery may reopen the exact retired token while its gate remains set.
+#[cfg(feature = "experimental-pq-licence")]
+pub(crate) fn with_verified_release_wire<T>(
+    payload: &str, signature: &str, hybrid: &str, last_verified_at: u64,
+    licence_id: &str, device_hash: &str, operation: impl FnOnce(Vec<u8>) -> Result<T, &'static str>,
+) -> Result<T, &'static str> {
+    let request = StoreLicenseCacheRequest { payload: payload.into(), signature: signature.into(),
+        hybrid: Some(hybrid.into()), seats_used: None, seat_limit: None };
+    let public = service_public_key().ok_or("license verification is unavailable")?;
+    let trust = hybrid_trust::configured()?;
+    let wire = build_refresh_wire(&request, public, &trust.policy(), licence_id, device_hash)?;
+    rollback::with_verified_release_current(&machine_license_cache_path()?, &request, last_verified_at, public,
+        &trust.policy(), || operation(wire))
+}
+
+/// Called only inside the release-specific verified-cache and process locks.
+#[cfg(feature = "experimental-pq-licence")]
+pub(crate) fn mark_acknowledged_release_locked(payload: &str, signature: &str, hybrid: &str, last_verified_at: u64)
+    -> Result<(), &'static str> {
+    let request = StoreLicenseCacheRequest { payload: payload.into(), signature: signature.into(),
+        hybrid: Some(hybrid.into()), seats_used: None, seat_limit: None };
+    let public = service_public_key().ok_or("license verification is unavailable")?;
+    let trust = hybrid_trust::configured()?;
+    rollback::mark_acknowledged_release_locked(&machine_license_cache_path()?, &request, last_verified_at, public, &trust.policy())
+}
+
+#[cfg(feature = "experimental-pq-licence")]
+pub(crate) fn released_snapshot_locked(payload: &str, signature: &str, hybrid: &str, last_verified_at: u64)
+    -> Result<(Vec<u8>, u64), &'static str> {
+    let request = StoreLicenseCacheRequest { payload: payload.into(), signature: signature.into(),
+        hybrid: Some(hybrid.into()), seats_used: None, seat_limit: None };
+    let public = service_public_key().ok_or("license verification is unavailable")?;
+    let trust = hybrid_trust::configured()?;
+    rollback::released_snapshot_locked(&machine_license_cache_path()?, &request, last_verified_at, public, &trust.policy())
+}
+
+/// Reverify a journal's retired cache without requiring the original file.
+#[cfg(feature = "experimental-pq-licence")]
+pub(crate) fn with_prepared_release_recovery<T>(
+    operation: impl FnOnce(&release_gate::PreparedRelease, &DeviceLicenceSnapshot, Vec<u8>) -> Result<T, &'static str>,
+) -> Result<Option<T>, &'static str> {
+    let public = service_public_key().ok_or("license verification is unavailable")?;
+    let trust = hybrid_trust::configured()?;
+    rollback::with_prepared_release_recovery(public, &trust.policy(), operation)
+}
+
+#[cfg(feature = "experimental-pq-licence")]
+pub(crate) fn with_completed_release_recovery<T>(
+    operation: impl FnOnce(&release_gate::PreparedRelease, &DeviceLicenceSnapshot, Vec<u8>) -> Result<T, &'static str>,
+) -> Result<Option<T>, &'static str> {
+    let public = service_public_key().ok_or("license verification is unavailable")?;
+    let trust = hybrid_trust::configured()?;
+    rollback::with_completed_release_recovery(&machine_license_cache_path()?, public, &trust.policy(), operation)
+}
+
+#[cfg(feature = "experimental-pq-licence")]
+pub(crate) fn verify_release_completed_locked(journal: &release_gate::PreparedRelease, snapshot: &DeviceLicenceSnapshot,
+    request: &[u8], acknowledgement: &[u8]) -> Result<(), &'static str> {
+    let public = service_public_key().ok_or("license verification is unavailable")?;
+    let trust = hybrid_trust::configured()?;
+    rollback::verify_release_completed_locked(journal, snapshot, request, acknowledgement, public, &trust.policy())
+}
+
+/// Only call from verified release recovery while all licence locks are held.
+#[cfg(feature = "experimental-pq-licence")]
+pub(crate) fn remove_prepared_cache_locked(journal: &release_gate::PreparedRelease) -> Result<(), &'static str> {
+    rollback::remove_prepared_cache_locked(&machine_license_cache_path()?, journal)
+}
+
+#[cfg(feature = "experimental-pq-licence")]
+pub(crate) fn mark_release_completed_locked(journal: &release_gate::PreparedRelease, snapshot: &DeviceLicenceSnapshot,
+    request: &[u8], acknowledgement: &[u8]) -> Result<(), &'static str> {
+    let public = service_public_key().ok_or("license verification is unavailable")?;
+    let trust = hybrid_trust::configured()?;
+    rollback::mark_release_completed_locked(journal, snapshot, request, acknowledgement, public, &trust.policy())
+}
+
+#[cfg(feature = "experimental-pq-licence")]
+pub(crate) fn can_replace_completed_release_locked(
+    payload: &str, signature: &str, hybrid: &str, last_verified_at: u64, credential_id: &[u8; 32], previous_record: &[u8],
+) -> Result<bool, &'static str> {
+    let request = StoreLicenseCacheRequest { payload: payload.into(), signature: signature.into(),
+        hybrid: Some(hybrid.into()), seats_used: None, seat_limit: None };
+    let public = service_public_key().ok_or("license verification is unavailable")?;
+    let trust = hybrid_trust::configured()?;
+    rollback::can_replace_completed_release_locked(&machine_license_cache_path()?, &request, last_verified_at,
+        credential_id, previous_record, public, &trust.policy())
 }
 
 #[cfg(feature = "experimental-pq-licence")]
@@ -510,6 +652,32 @@ fn now_unix() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(feature = "experimental-pq-licence"))]
+    #[test]
+    fn classical_store_rejects_present_hybrid_security_record() {
+        let path = format!(r"SOFTWARE\WinCommanderLicenceFloorTest-{}", uuid::Uuid::new_v4().simple());
+        let anchor = classical_anchor::Anchor::test_user(path.clone());
+        let cache = std::env::temp_dir().join(format!("wincom-licence-floor-{}.json", uuid::Uuid::new_v4().simple()));
+        assert!(write_classical_with_anchor(&cache, b"classical", &anchor).is_ok());
+        assert_eq!(fs::read(&cache).unwrap(), b"classical");
+        anchor.write(b"malformed security record").unwrap();
+        assert_eq!(write_classical_with_anchor(&cache, b"downgrade", &anchor), Err("hybrid license verification is required"));
+        assert_eq!(fs::read(&cache).unwrap(), b"classical");
+        use windows_sys::Win32::System::Registry::{RegCloseKey, RegDeleteValueW, RegOpenKeyExW, HKEY_CURRENT_USER, KEY_SET_VALUE, KEY_WOW64_64KEY};
+        let wide_path: Vec<u16> = path.encode_utf16().chain(Some(0)).collect();
+        let value: Vec<u16> = "SignedFloor".encode_utf16().chain(Some(0)).collect();
+        let mut key = std::ptr::null_mut();
+        unsafe {
+            assert_eq!(RegOpenKeyExW(HKEY_CURRENT_USER, wide_path.as_ptr(), 0, KEY_SET_VALUE | KEY_WOW64_64KEY, &mut key), 0);
+            assert_eq!(RegDeleteValueW(key, value.as_ptr()), 0);
+            RegCloseKey(key);
+        }
+        assert_eq!(write_classical_with_anchor(&cache, b"downgrade", &anchor), Err("hybrid license verification is required"));
+        assert_eq!(fs::read(&cache).unwrap(), b"classical");
+        fs::remove_file(cache).unwrap();
+        classical_anchor::remove_test_key(&path).unwrap();
+    }
 
     #[cfg(feature = "experimental-pq-licence")]
     #[test]

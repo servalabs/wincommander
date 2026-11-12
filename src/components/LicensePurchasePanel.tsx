@@ -94,16 +94,16 @@ export default function LicensePurchasePanel({
 
   return (
     <div className="license-gate-buy">
-      {licenseStatus?.trial_available && (
+      {(licenseStatus?.trial_available || licenseStatus?.trial_recoverable) && (
         <div className="license-gate-trial">
           <div className="license-gate-trial-left">
             <div>
               <strong>16-Day Free Trial</strong>
-              <div className="license-gate-trial-sub">Pro features · No card · Once per Windows device</div>
+              <div className="license-gate-trial-sub">{licenseStatus?.trial_recoverable ? "Restore your existing trial; its original expiry still applies." : "Pro features · No card · Once per Windows device"}</div>
             </div>
           </div>
           <button type="button" className="license-gate-trial-btn" disabled={isLicenseBusy} onClick={onStartTrial}>
-            {isLicenseBusy ? "Starting…" : "Start Free Trial"}
+            {isLicenseBusy ? "Please wait…" : licenseStatus?.trial_recoverable ? "Restore Trial" : "Start Free Trial"}
           </button>
         </div>
       )}

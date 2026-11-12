@@ -27,6 +27,9 @@ param(
     # Optional local-only hybrid release preparation tool.
     [string]$HybridPrepareTool,
 
+    # Optional signed-record verification against approved verifier trust, local only.
+    [string]$HybridSignedRecord,
+
     # Re-use an already-built, signed NSIS setup for the requested version.
     [switch]$SkipBuild
 )
@@ -51,6 +54,9 @@ $script:RcloneExe = $null
 if ($HybridPrepareTool -and -not $StageOnly) {
     throw '[FAIL] -HybridPrepareTool is available only with -StageOnly.'
 }
+if ($HybridSignedRecord -and (-not $StageOnly -or -not $SkipBuild)) {
+    throw '[FAIL] -HybridSignedRecord requires -StageOnly -SkipBuild.'
+}
 if ($HybridPrepareTool -and $Version -notmatch '^\d+\.\d+\.\d+$') {
     throw '[FAIL] Hybrid Free rehearsal requires a numeric X.Y.Z version.'
 }
@@ -59,6 +65,9 @@ if ($Beta -and -not $StageOnly) {
 }
 if ($Beta -and $Version -notmatch '^\d+\.\d+\.\d+$') {
     throw '[FAIL] Free beta candidates require a numeric X.Y.Z version.'
+}
+if (-not $StageOnly) {
+    throw '[FAIL] Free publication is disabled until verified hybrid metadata publication is integrated. Use -StageOnly for local verification.'
 }
 
 function Stop-Release {
@@ -326,6 +335,13 @@ try {
     if (-not $SkipBuild) {
         & bun run build:free:release-installer
         if ($LASTEXITCODE -ne 0) { Stop-Release 'Free NSIS release build failed.' }
+    }
+    if ($HybridSignedRecord) {
+        $setups = @(Get-ChildItem -LiteralPath (Join-Path $script:Root 'src-tauri\target\release\bundle\nsis') -Filter "WinCommander*${Version}*_x64-setup.exe" -File | Where-Object { $_.Name -notlike '*.sig*' })
+        if ($setups.Count -ne 1) { Stop-Release "Expected exactly one existing NSIS setup for v$Version." }
+        $channel = if ($Beta) { 'beta' } else { 'stable' }
+        & bun run tools/verify-hybrid-free-stage.ts $HybridSignedRecord $setups[0].FullName $Version $channel
+        if ($LASTEXITCODE -ne 0) { Stop-Release 'The hybrid Free record did not match approved verifier trust and the installer.' }
     }
     $assets = Get-ReleaseAssets
     if ($StageOnly) {

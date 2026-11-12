@@ -442,7 +442,7 @@ export interface FileSearchSettings {
 export interface FleetSettings {
   /** false = agent never starts */
   enabled: boolean;
-  /** e.g. "http://fleet.corp.ts.net:8787" */
+  /** e.g. "https://fleet.example.com" */
   serverUrl: string;
   /** enable command poll + verify */
   dispatch: boolean;

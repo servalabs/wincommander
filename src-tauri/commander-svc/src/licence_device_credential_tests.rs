@@ -1,6 +1,56 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 use super::*;
 
+#[test]
+fn missing_cache_resumes_only_the_retained_gate_owner() {
+    let current_missing = || Err::<u32, _>("cache missing");
+    assert_eq!(select_release_snapshot(false, || Ok(7), || panic!("current wins"), |_| panic!("current wins")), Ok(7));
+    assert_eq!(select_release_snapshot(true, || panic!("completed"), || Ok(8), |_| panic!("completed")), Ok(8));
+    assert_eq!(select_release_snapshot(false, current_missing, || Ok(8), |value| Ok(*value == 8)), Ok(8));
+    assert_eq!(select_release_snapshot(false, current_missing, || Ok(8), |_| Ok(false)), Err("cache missing"));
+    assert_eq!(select_release_snapshot(false, current_missing, || Ok(8), |_| Err("damaged gate")), Err("damaged gate"));
+    assert_eq!(select_release_snapshot(false, current_missing, || Err::<u32, _>("damaged history"), |_| Ok(true)), Err("damaged history"));
+}
+
+#[tokio::test]
+async fn missing_cache_retry_reopens_gate_after_network_failure() {
+    use std::cell::RefCell;
+    let path = format!(r"SOFTWARE\WinCommanderRetainedRetryTest-{}", uuid::Uuid::new_v4());
+    let store = anchor::Anchor::test_user(path.clone());
+    let context = [11; 32];
+    let pending = RefCell::new(None::<Vec<u8>>);
+    let first = release_exchange_with(
+        || Ok(None),
+        || async { Ok(Zeroizing::new(b"release request".to_vec())) },
+        |request| {
+            crate::license_cache::release_gate::begin_at(&store, &context)?;
+            crate::license_cache::release_gate::bind_request_at(&store, &context, &request)?;
+            *pending.borrow_mut() = Some(request.to_vec());
+            Ok(request)
+        },
+        |_| async { Err(INVALID) },
+        |_, _| panic!("failed send must not confirm"),
+    ).await;
+    assert!(first.is_err());
+    drop(store);
+    let reopened = anchor::Anchor::test_user(path.clone());
+    let select = |candidate| select_release_snapshot(false, || Err::<u8, _>("cache missing"),
+        || Ok(candidate), |value| crate::license_cache::release_gate::matches_in_progress_at(&reopened, &[*value; 32]));
+    assert_eq!(select(10), Err("cache missing"));
+    assert_eq!(select(11), Ok(11));
+    let retry = release_exchange_with(
+        || Ok(pending.borrow().as_ref().map(|request| release_pending::SavedRelease {
+            request: Zeroizing::new(request.clone()), confirmed: false, acknowledged: false,
+        })),
+        || async { panic!("retry must not replace the original request") },
+        |_| panic!("retry must not restage"),
+        |request| { assert_eq!(request.as_slice(), b"release request"); async { Ok(br#"{"ok":true}"#.to_vec()) } },
+        |request, _| { assert_eq!(request.as_slice(), b"release request"); Ok(()) },
+    ).await;
+    assert!(retry.is_ok());
+    anchor::remove_test_key(&path).unwrap();
+}
+
 #[tokio::test]
 async fn acknowledgement_retries_after_network_or_persistence_failure() {
     use std::cell::RefCell;

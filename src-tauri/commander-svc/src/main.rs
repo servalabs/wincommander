@@ -74,12 +74,12 @@ mod reconciler;
 mod diagnostics;
 mod fleet_credential;
 mod fleet_machine_policy;
-#[cfg(all(windows, feature = "experimental-pq-licence"))]
+mod policy_store;
+#[cfg(windows)]
 #[allow(dead_code)]
 #[path = "../../commander-free/src/fleet_lifecycle_mutex.rs"]
 mod licence_coordination;
-mod policy_store;
-#[cfg(all(windows, feature = "experimental-pq-licence"))]
+#[cfg(windows)]
 fn licence_security_lock() -> Result<licence_coordination::Guard, &'static str> {
     licence_coordination::acquire_named(r"Global\WinCommander.Licence.Security.v1", 30_000)
         .map_err(|_| "license security coordination is unavailable")

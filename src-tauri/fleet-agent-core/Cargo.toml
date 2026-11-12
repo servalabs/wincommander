@@ -33,6 +33,7 @@ tokio = { version = "1", features = ["time", "rt", "sync", "macros"], optional =
 # so pinning never drags in a second copy of the rustls stack.
 rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "std", "logging", "tls12", "prefer-post-quantum"], optional = true }
 rustls-webpki = { version = "0.103", default-features = false, features = ["aws-lc-rs", "std"], optional = true }
+rustls-platform-verifier = { version = "0.7", optional = true }
 
 [dev-dependencies]
 rand10 = { package = "rand", version = "0.10" }
@@ -47,3 +48,4 @@ default = ["transport"]
 types = []
 # The full background check-in loop (enroll/check-in/backoff/dispatch).
 transport = ["dep:reqwest", "dep:tokio", "dep:rustls", "dep:rustls-webpki"]
+required-hybrid-tls = ["transport", "dep:rustls-platform-verifier"]

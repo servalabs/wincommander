@@ -2,8 +2,11 @@ import { copyFileSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { assertSharedAssets } from "./check-shared-assets";
 import { pairedServiceHash, pairedSearchTemplate } from "./paired-search-release-contract";
+import { desktopBuildCommand, normalizedPqReleaseEnvironment, serviceBuildCommand } from "./pq-release-profile";
+import { validateReleaseTrust, verifyReleaseTrustProofs } from "./pq-release-preflight";
 
 const root = resolve(import.meta.dirname, "..");
+validateReleaseTrust(root, process.env);
 assertSharedAssets(root);
 const configPath = resolve(root, "src-tauri", "commander-free", "tauri.conf.json");
 const generatedConfigPath = resolve(root, "src-tauri", "commander-free", "tauri.release.generated.json");
@@ -58,32 +61,31 @@ const rustflags = [process.env.RUSTFLAGS, staticCrtFlags].filter(Boolean).join("
 // C runtime, but use normal release linking for the installer so it is
 // reproducible on both local machines and CI.
 const releaseBuildEnv = {
-  ...process.env,
+  ...normalizedPqReleaseEnvironment(process.env),
   RUSTFLAGS: rustflags,
   CARGO_PROFILE_RELEASE_LTO: "false",
   ...(pairedSearch ? { WINCMD_PAIRED_LAB_BUILD: "1" } : {}),
   ...(pairedSettings ? { WINCMD_SETTINGS_LAB_AUTOROUTE: "1" } : {}),
 };
 
-function run(command: string[], label: string) {
+function run(command: string[], label: string, env = releaseBuildEnv) {
   const result = Bun.spawnSync(command, {
     cwd: root,
-    env: releaseBuildEnv,
+    env,
     stdout: "inherit",
     stderr: "inherit",
   });
   if (result.exitCode !== 0) throw new Error(`${label} failed with exit code ${result.exitCode}`);
 }
 
+verifyReleaseTrustProofs(root, releaseBuildEnv);
+
 run(
   ["cargo", "build", "--manifest-path", "src-tauri/Cargo.toml", "-p", "commander-context-shred", "--release"],
   "WinCommander context-delete helper release build",
 );
 if (!pairedSearch) {
-  run(
-    ["cargo", "build", "--manifest-path", "src-tauri/Cargo.toml", "-p", "commander-svc", "--release"],
-    "WinCommander machine-service release build",
-  );
+  run(serviceBuildCommand(), "WinCommander machine-service release build");
 }
 run(
   ["cargo", "build", "--manifest-path", "src-tauri/Cargo.toml", "-p", "commander-calculator-launcher", "--release"],
@@ -125,8 +127,14 @@ if (pairedSearch) pairedServiceHash(readFileSync(stagedServicePath), process.env
 copyFileSync(calculatorBuildPath, stagedCalculatorPath);
 writeFileSync(generatedConfigPath, `${JSON.stringify(config, null, 2)}\n`);
 try {
-  run(["bun", "x", "--package", "@tauri-apps/cli@2.12.4", "tauri", "build", "--config", generatedConfigPath,
-    ...(pairedSearch ? ["--features", pairedSettings ? "experimental-encrypted-search,experimental-settings-generation" : "experimental-encrypted-search"] : [])], "Tauri release bundle");
+  const desktopCommand = desktopBuildCommand(generatedConfigPath);
+  if (pairedSearch) {
+    const featuresIndex = desktopCommand.indexOf("--features") + 1;
+    desktopCommand[featuresIndex] += pairedSettings
+      ? ",experimental-encrypted-search,experimental-settings-generation"
+      : ",experimental-encrypted-search";
+  }
+  run(desktopCommand, "Tauri release bundle");
   if (pairedSearch) pairedServiceHash(readFileSync(stagedServicePath), process.env.WINCMD_FENCED_SERVICE_SHA256 ?? "");
 } finally {
   rmSync(generatedConfigPath, { force: true });

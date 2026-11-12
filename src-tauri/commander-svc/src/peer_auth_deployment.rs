@@ -120,8 +120,8 @@ impl SessionHelperGate {
         &self, identity: &PeerIdentitySnapshot, verb: &str, captured_session: u32,
         active: bool, verify: impl FnOnce() -> Result<(), PeerAuthError>,
     ) -> Result<TrustOrigin, PeerAuthError> {
-        use wincmd_shared::svc::{ENROL_HYBRID_LICENSE_VERB, RENEW_HYBRID_LICENSE_VERB};
-        if !matches!(verb, ENROL_HYBRID_LICENSE_VERB | RENEW_HYBRID_LICENSE_VERB) {
+        use wincmd_shared::svc::{ENROL_HYBRID_LICENSE_VERB, RENEW_HYBRID_LICENSE_VERB, RELEASE_HYBRID_LICENSE_VERB};
+        if !matches!(verb, ENROL_HYBRID_LICENSE_VERB | RENEW_HYBRID_LICENSE_VERB | RELEASE_HYBRID_LICENSE_VERB) {
             return Err(PeerAuthError::PathNotAllowed);
         }
         if !active || captured_session == 0 || identity.session_id != captured_session {
@@ -168,7 +168,7 @@ impl SessionHelperGate {
         active: bool,
         verify: impl FnOnce() -> Result<(), PeerAuthError>,
     ) -> Result<TrustOrigin, PeerAuthError> {
-        if !matches!(verb, "svc.fleet.install_policy" | "svc.fleet.get_policy") {
+        if !matches!(verb, "svc.fleet.install_policy" | "svc.fleet.get_policy" | "svc.fleet.read_hybrid_trust") {
             return Err(PeerAuthError::PathNotAllowed);
         }
         if !active || captured_session == 0 || identity.session_id != captured_session {

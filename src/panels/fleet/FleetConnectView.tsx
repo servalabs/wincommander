@@ -605,11 +605,14 @@ export default function FleetConnectView() {
             <Input
               value={serverUrl}
               onChange={(e) => setServerUrl(e.target.value)}
-              placeholder="http://fleet.corp.ts.net:8787"
+              placeholder="https://fleet.example.com"
               spellCheck={false}
               autoComplete="url"
               disabled={enrolling}
             />
+            <span className="fleet-field-hint">
+              Requires HTTPS with post-quantum hybrid TLS enabled on the server.
+            </span>
           </label>
 
           <label className="fleet-field">

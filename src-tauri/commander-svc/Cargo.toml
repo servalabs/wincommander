@@ -31,8 +31,8 @@ experimental-pq-licence = ["dep:wincmd-pq-experiment", "dep:rustls", "dep:rustls
 [dependencies]
 wincmd-shared = { path = "../wincmd-shared" }
 wincmd-pq-experiment = { path = "../wincmd-pq-experiment", optional = true }
-fleet-proto = { path = "../fleet-proto" }
-fleet-agent-core = { path = "../fleet-agent-core", default-features = false, features = ["types", "transport"] }
+fleet-proto = { path = "../fleet-proto", features = ["windows-v2-hybrid"] }
+fleet-agent-core = { path = "../fleet-agent-core", default-features = false, features = ["types", "required-hybrid-tls"] }
 wincmd-volume = { path = "../wincmd-volume" }
 # Clipboard Guard's rule engine (plan §4.1): pure matcher/compiler shared with
 # Fleet and commander-pro, so the per-user helper's on-device matching
@@ -51,6 +51,7 @@ subtle = "2"
 base64 = "0.22"
 bytes = { version = "1", optional = true }
 url = "2"
+uuid = { version = "1", features = ["v4"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "stream"] }
 rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "std", "prefer-post-quantum"], optional = true }
 rustls-platform-verifier = { version = "0.7", optional = true }
@@ -58,7 +59,6 @@ ed25519-dalek = { version = "3", default-features = false, features = ["alloc", 
 
 [dev-dependencies]
 rcgen = "0.14"
-uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", features = ["test-util"] }
 aws-lc-rs = { version = "1.19", default-features = false, features = ["alloc", "aws-lc-sys"] }
 wincmd-pq-experiment = { path = "../wincmd-pq-experiment", features = ["experimental-signer"] }

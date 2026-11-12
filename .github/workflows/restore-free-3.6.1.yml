@@ -23,6 +23,9 @@ jobs:
       name: release
       url: https://winupdates.servalabs.com/free/latest.json
     steps:
+      - name: Block classical Free rollback
+        shell: pwsh
+        run: throw 'Free 3.6.1 rollback is disabled because it lacks hybrid update verification.'
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Download and verify the published 3.6.1 release
