@@ -5838,7 +5838,7 @@ mod tests {
     fn known_principal_response_preserves_trusted_caller_label_and_admin_flag() {
         let response = build_known_principals_response(
             "S-1-5-21-caller",
-            "WORKSTATION\\Parth".into(),
+            "WORKSTATION\\Example".into(),
             vec![wincmd_shared::vault_access::VaultKnownPrincipal {
                 sid: "S-1-5-21-directory-user".into(),
                 display_name: "Fleet User".into(),
@@ -5846,7 +5846,7 @@ mod tests {
             }],
             vec![wincmd_shared::vault_access::VaultKnownPrincipal {
                 sid: "S-1-5-21-caller".into(),
-                display_name: "WORKSTATION\\Parth".into(),
+                display_name: "WORKSTATION\\Example".into(),
                 is_local_administrator: true,
             }],
         );
@@ -5855,7 +5855,7 @@ mod tests {
         assert_eq!(response.principals.len(), 2);
         assert!(response.principals.iter().any(|principal| {
             principal.sid == "S-1-5-21-caller"
-                && principal.display_name == "WORKSTATION\\Parth"
+                && principal.display_name == "WORKSTATION\\Example"
                 && principal.is_local_administrator
         }));
     }
@@ -6120,13 +6120,13 @@ mod tests {
     fn personal_file_create_target_keeps_the_existing_absolute_path_contract() {
         let args = serde_json::json!({
             "TargetKind": "file",
-            "Path": r"C:\Users\Parth\vault.hc",
+            "Path": r"C:\Users\Example\vault.hc",
         });
         let target = parse_personal_vault_create_target(&args).expect("file target is valid");
         assert!(matches!(
             target,
             PersonalVaultCreateTarget::File { ref path }
-                if path == r"C:\Users\Parth\vault.hc"
+                if path == r"C:\Users\Example\vault.hc"
         ));
     }
 

@@ -1764,7 +1764,7 @@ mod tests {
         }
         assert!(matches!(
             mode.as_str(),
-            "administrator" | "system" | "parth" | "wait-admin"
+            "administrator" | "system" | "example" | "wait-admin"
         ));
         let mut ledger = read(
             &path,

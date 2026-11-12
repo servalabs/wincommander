@@ -327,11 +327,11 @@ fn review_validation_allows_an_unchanged_cached_file_without_granting_removal() 
 #[test]
 fn explorer_selection_uses_a_normal_windows_path_after_canonicalization() {
     let argument =
-        explorer_select_argument(std::path::Path::new(r"\\?\C:\Users\Parth\same file.txt"))
+        explorer_select_argument(std::path::Path::new(r"\\?\C:\Users\Example\same file.txt"))
             .unwrap();
     assert_eq!(
         argument.to_string_lossy(),
-        r"/select,C:\Users\Parth\same file.txt"
+        r"/select,C:\Users\Example\same file.txt"
     );
 
     let unc = explorer_select_argument(std::path::Path::new(r"\\?\UNC\server\share\same file.txt"))
