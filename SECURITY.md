@@ -399,3 +399,5 @@ security weakness, private implementation, customer data, credentials, or
 internal infrastructure. When unsure, email the security address.
 
 Two additional historical Fleet and Shield source variants are preserved in inactive history. Other snapshot files were omitted; this does not enable or complete Fleet recovery.
+
+An earlier Fleet DNS projection test is retained in inactive history. The current filtered Fleet DNS scope remains in effect.
