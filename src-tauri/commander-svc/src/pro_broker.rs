@@ -272,17 +272,35 @@ pub(crate) struct VaultCall<'a> {
 }
 
 #[cfg(windows)]
+fn require_upgrade_probe_acl(feature:&str,check:impl FnOnce()->bool)->Result<(),wincmd_shared::vault_access::VaultMountReason> {
+    if feature=="fleet.recovery.upgrade_probe" && !check() { return Err(wincmd_shared::vault_access::VaultMountReason::BrokerIdentityRejected); }
+    Ok(())
+}
+
+#[cfg(windows)]
 pub async fn vault_call(
     call: VaultCall<'_>,
 ) -> Result<serde_json::Value, wincmd_shared::vault_access::VaultMountReason> {
     let deadline = tokio::time::Instant::now() + broker_timeout_for(call.feature_id);
-    vault_call_until(call, deadline).await
+    vault_call_until(call, deadline, None).await
+}
+
+/// Only a recovery coordinator with verified consent and handoff may provide
+/// this callback; success means the exact archive is durably service-owned.
+#[cfg(windows)]
+pub(crate) async fn vault_archive_call(call:VaultCall<'_>,
+    receiver:&mut (dyn FnMut(serde_json::Value)->Result<serde_json::Value,wincmd_shared::vault_access::VaultMountReason> + Send))
+    ->Result<serde_json::Value,wincmd_shared::vault_access::VaultMountReason> {
+    if call.feature_id!="fleet.journal.archive_transfer" { return Err(wincmd_shared::vault_access::VaultMountReason::BrokerReplyRejected); }
+    let deadline=tokio::time::Instant::now()+std::time::Duration::from_secs(90);
+    vault_call_until(call,deadline,Some(receiver)).await
 }
 
 #[cfg(windows)]
 async fn vault_call_until(
     call: VaultCall<'_>,
     deadline: tokio::time::Instant,
+    mut archive_receiver:Option<&mut (dyn FnMut(serde_json::Value)->Result<serde_json::Value,wincmd_shared::vault_access::VaultMountReason> + Send)>,
 ) -> Result<serde_json::Value, wincmd_shared::vault_access::VaultMountReason> {
     use tokio::net::windows::named_pipe::{PipeMode, ServerOptions};
     use tokio::time::{timeout_at, Instant};
@@ -293,6 +311,7 @@ async fn vault_call_until(
 
     vault_payload_readiness()?;
     let pro_path = fixed_pro_path();
+    require_upgrade_probe_acl(call.feature_id,||crate::peer_auth_deployment_acl::verify_path(&pro_path).is_ok())?;
     let _operation =
         update_guard::operation_lease(Some(&pro_path), &pro_path.with_extension("maintenance"))
             .map_err(|error| {
@@ -310,6 +329,9 @@ async fn vault_call_until(
         feature_id,
         mut args,
     } = call;
+    if feature_id=="fleet.journal.archive_transfer" && archive_receiver.is_none() {
+        return Err(VaultMountReason::BrokerReplyRejected);
+    }
 
     // A healthy, unchanged driver does not mean the newly installed Pro's
     // user-mode engine was extracted. Standard users cannot update that cache.
@@ -394,6 +416,7 @@ async fn vault_call_until(
         let connected_hash = verified_connected_process_hash(&pipe, process,
             #[cfg(feature = "experimental-search-broker-fence")] &pinned_fenced_pro)
             .ok_or(VaultMountReason::BrokerIdentityRejected)?;
+        require_upgrade_probe_acl(feature_id,||crate::peer_auth_deployment_acl::verify_path(&fixed_pro_path()).is_ok())?;
         if !hash_matches_fixed_pro(&connected_hash) {
             return Err(VaultMountReason::BrokerIdentityRejected);
         }
@@ -472,7 +495,7 @@ async fn vault_call_until(
                             presentation: wincmd_shared::vault_access::VaultPresentation::Machine,
                             feature_id: "vault.broker.apply_root_acl",
                             args: helper_args,
-                        }, helper_deadline)).await;
+                        }, helper_deadline,None)).await;
                         let ack = Envelope::Response(wincmd_shared::Response {
                             request_id,
                             result: root_acl::acknowledgement(&ready, &applied),
@@ -480,14 +503,33 @@ async fn vault_call_until(
                         timeout_at(deadline, write_envelope(&mut pipe, &ack)).await
                             .map_err(|_| VaultMountReason::BrokerUnavailable)?
                             .map_err(|_| VaultMountReason::BrokerUnavailable)?;
+                    } else if notification.event == "fleet.journal.archive_transfer" {
+                        if feature_id!="fleet.journal.archive_transfer" { return Err(VaultMountReason::BrokerReplyRejected); }
+                        let receiver=archive_receiver.take().ok_or(VaultMountReason::BrokerReplyRejected)?;
+                        let ack_result=receiver(notification.payload)?;
+                        let ack=Envelope::Response(wincmd_shared::Response { request_id,result:ack_result }).sign(&session_token);
+                        timeout_at(deadline,write_envelope(&mut pipe,&ack)).await
+                            .map_err(|_|VaultMountReason::BrokerUnavailable)?
+                            .map_err(|_|VaultMountReason::BrokerUnavailable)?;
                     }
                 }
                 BrokerReply::Finished(result) => break result,
             }
         };
+        if feature_id=="fleet.journal.archive_transfer" && archive_receiver.is_some() {
+            return Err(VaultMountReason::BrokerReplyRejected);
+        }
         eprintln!("[wincommander-svc] vault_call({feature_id}, operation={request_id}): finished");
         let _ = timeout_at(deadline, write_envelope(&mut pipe, &Envelope::Bye)).await;
-        result
+        if feature_id=="fleet.recovery.upgrade_probe" {
+            use windows_sys::Win32::{Foundation::FILETIME,System::Threading::{GetProcessId,GetProcessTimes}};
+            let value=result?;let pid=unsafe { GetProcessId(process) };
+            let mut created=FILETIME { dwLowDateTime:0,dwHighDateTime:0 };let mut exited=created;let mut kernel=created;let mut user=created;
+            if pid==0 || unsafe { GetProcessTimes(process,&mut created,&mut exited,&mut kernel,&mut user) }==0 { return Err(VaultMountReason::BrokerIdentityRejected); }
+            let created=(u64::from(created.dwHighDateTime)<<32)|u64::from(created.dwLowDateTime);
+            if created==0 { return Err(VaultMountReason::BrokerIdentityRejected); }
+            Ok(serde_json::json!({"response":value,"image_sha256":connected_hash.to_ascii_lowercase(),"pid":pid,"process_created":created}))
+        } else { result }
     }
     .await;
     use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
@@ -1497,6 +1539,14 @@ mod tests {
         let pipe = random_pipe_name();
         assert!(pipe.starts_with(r"\\.\pipe\wincmd-pro-"));
         assert_eq!(pipe.len(), r"\\.\pipe\wincmd-pro-".len() + 16);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn upgrade_probe_rejects_insecure_installed_image_before_and_after_launch() {
+        assert!(require_upgrade_probe_acl("fleet.recovery.upgrade_probe",||false).is_err());
+        assert!(require_upgrade_probe_acl("fleet.recovery.upgrade_probe",||true).is_ok());
+        assert!(require_upgrade_probe_acl("unrelated",||panic!("other operations are unchanged")).is_ok());
     }
 
     #[cfg(windows)]

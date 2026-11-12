@@ -8876,6 +8876,56 @@
       ]
     },
     {
+      "id": "tauri:fleet_recovery_finish",
+      "name": "fleet_recovery_finish",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useFleetRecovery.ts"
+      ]
+    },
+    {
+      "id": "tauri:fleet_recovery_handoff",
+      "name": "fleet_recovery_handoff",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useFleetRecovery.ts"
+      ]
+    },
+    {
+      "id": "tauri:fleet_recovery_pin_operator_key",
+      "name": "fleet_recovery_pin_operator_key",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useFleetRecovery.ts"
+      ]
+    },
+    {
+      "id": "tauri:fleet_recovery_resume",
+      "name": "fleet_recovery_resume",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useFleetRecovery.ts"
+      ]
+    },
+    {
+      "id": "tauri:fleet_recovery_stage",
+      "name": "fleet_recovery_stage",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useFleetRecovery.ts"
+      ]
+    },
+    {
       "id": "tauri:fleet_repair_machine_trust",
       "name": "fleet_repair_machine_trust",
       "transport": "tauri",

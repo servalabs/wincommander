@@ -3281,6 +3281,11 @@ pub fn run() {
             runtime_visibility::actions::set_global_runtime_visibility,
             // ── Fleet agent onboarding (paid) ────────────────────────────
             fleet_agent::fleet_connect,
+            fleet_agent::fleet_recovery_stage,
+            fleet_agent::fleet_recovery_pin_operator_key,
+            fleet_agent::fleet_recovery_handoff,
+            fleet_agent::fleet_recovery_finish,
+            fleet_agent::fleet_recovery_resume,
             fleet_agent::fleet_repair_machine_trust,
             fleet_agent::fleet_machine_trust_status,
             fleet_agent::fleet_disconnect,

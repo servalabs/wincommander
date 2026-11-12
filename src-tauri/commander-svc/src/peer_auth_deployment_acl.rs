@@ -13,8 +13,8 @@ use windows_sys::Win32::{
     Foundation::LocalFree,
     Security::{
         Authorization::{ConvertStringSidToSidW, GetSecurityInfo, SE_FILE_OBJECT},
-        CreateWellKnownSid, EqualSid, GetAce, WinBuiltinAdministratorsSid, WinLocalSystemSid,
-        ACCESS_ALLOWED_ACE, ACL, DACL_SECURITY_INFORMATION, INHERIT_ONLY_ACE,
+        CreateWellKnownSid, EqualSid, GetAce, IsValidSid, WinBuiltinAdministratorsSid,
+        WinLocalSystemSid, ACCESS_ALLOWED_ACE, ACL, DACL_SECURITY_INFORMATION, INHERIT_ONLY_ACE,
         OWNER_SECURITY_INFORMATION,
     },
     Storage::FileSystem::{
@@ -144,7 +144,7 @@ unsafe fn verify_acl(owner: *mut core::ffi::c_void, acl: *mut ACL) -> Result<(),
     }
     for index in 0..(*acl).AceCount {
         let mut entry = std::ptr::null_mut();
-        if GetAce(acl, index as u32, &mut entry) == 0 {
+        if GetAce(acl, index as u32, &mut entry) == 0 || entry.is_null() {
             return Err(deny);
         }
         let header = &*entry.cast::<windows_sys::Win32::Security::ACE_HEADER>();
@@ -154,8 +154,20 @@ unsafe fn verify_acl(owner: *mut core::ffi::c_void, acl: *mut ACL) -> Result<(),
         if header.AceType != 0 {
             return Err(deny);
         }
+        let ace_len = usize::from(header.AceSize);
+        if ace_len < 16 {
+            return Err(deny);
+        }
+        let sid_bytes = entry.cast::<u8>().add(8);
+        let sid_len = 8usize + usize::from(*sid_bytes.add(1)) * 4;
+        if sid_len > ace_len - 8 {
+            return Err(deny);
+        }
         let entry = &*entry.cast::<ACCESS_ALLOWED_ACE>();
         let sid = std::ptr::addr_of!(entry.SidStart).cast_mut().cast();
+        if IsValidSid(sid) == 0 {
+            return Err(deny);
+        }
         if entry.Mask & WRITE_MASK != 0 && !trusted(sid) {
             return Err(deny);
         }

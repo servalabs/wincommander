@@ -145,7 +145,7 @@ fn open_verified_client_process_token(
     }
 }
 
-fn token_session_id(token: HANDLE) -> Option<u32> {
+pub(super) fn token_session_id(token: HANDLE) -> Option<u32> {
     let mut session_id = 0u32;
     let mut returned = 0u32;
     let ok = unsafe {
@@ -160,7 +160,7 @@ fn token_session_id(token: HANDLE) -> Option<u32> {
     ok.then_some(session_id)
 }
 
-fn token_sid(token: HANDLE) -> Option<String> {
+pub(super) fn token_sid(token: HANDLE) -> Option<String> {
     let mut size = 0u32;
     unsafe { GetTokenInformation(token, TokenUser, std::ptr::null_mut(), 0, &mut size) };
     let mut buffer = vec![0u8; size as usize];
@@ -176,7 +176,7 @@ fn token_sid(token: HANDLE) -> Option<String> {
     sid
 }
 
-fn token_authentication_id(token: HANDLE) -> Option<(u32, i32)> {
+pub(super) fn token_authentication_id(token: HANDLE) -> Option<(u32, i32)> {
     let mut statistics = TOKEN_STATISTICS::default();
     let mut returned = 0u32;
     let ok = unsafe {

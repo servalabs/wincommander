@@ -51,7 +51,7 @@ impl FleetMachinePolicy {
                 policy: None, audit: vec![audit], contact: None, origins: allowed_origins,
                 transport_profile, credential: None, credential_revision: 0,
                 connection_revision: 0, cleared: None, runtime_profile_changed: false,
-                service_enabled: false,
+                service_enabled: false, recovery_commit: None, operator_key: None,
             }),
             pending: None, contact_challenge: None, hybrid_enrollment: None, hybrid_claim: None,
         };

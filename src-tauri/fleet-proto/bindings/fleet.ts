@@ -197,7 +197,12 @@ export type CheckinAckReceipt = { command_id: string, report_id: string | null, 
  * Everything else is additive/defaulted for mixed-version operation. This
  * top-level type must not use `deny_unknown_fields`.
  */
-export type CheckinRequest = { protocol_version: bigint, capabilities: Array<string>, device_id: string, ts: bigint, nonce: string, hmac_version: bigint, hmac: string, acks: Array<CheckinAck>, action_outcomes: Array<ActionOutcome>, posture: PostureReport | null, health: HealthSnapshot | null, resources: DeviceResourceSample | null, telemetry: JsonValue | null, productivity: JsonValue | null, argus: JsonValue | null, decoy_tripwire: JsonValue | null, capability_status: JsonValue | null, transport_health: JsonValue | null, offline_delivery_opt_out: boolean | null, productivity_detail: JsonValue | null, inventory: JsonValue | null, events: Array<LocalAlertReport>, clipboard_events: Array<ClipboardEventReport>, ink_receipts: Array<InkReceiptReport>, padding: string, decoy: boolean, };
+export type CheckinRequest = { protocol_version: bigint, capabilities: Array<string>, device_id: string, ts: bigint, nonce: string, hmac_version: bigint, hmac: string, acks: Array<CheckinAck>, action_outcomes: Array<ActionOutcome>,
+/**
+ * Signed policy held by a recovered service identity; does not attest
+ * that native controls have been applied or verified.
+ */
+recovery_held_policy: RecoveryHeldPolicy | null, posture: PostureReport | null, health: HealthSnapshot | null, resources: DeviceResourceSample | null, telemetry: JsonValue | null, productivity: JsonValue | null, argus: JsonValue | null, decoy_tripwire: JsonValue | null, capability_status: JsonValue | null, transport_health: JsonValue | null, offline_delivery_opt_out: boolean | null, productivity_detail: JsonValue | null, inventory: JsonValue | null, events: Array<LocalAlertReport>, clipboard_events: Array<ClipboardEventReport>, ink_receipts: Array<InkReceiptReport>, padding: string, decoy: boolean, };
 
 /**
  * Successful check-in response.
@@ -1028,6 +1033,8 @@ modified_at: string, };
  * device-side limit (see the handler).
  */
 export type RecentDownloadsResult = { entries: Array<RecentDownloadEntry>, };
+
+export type RecoveryHeldPolicy = { enrollment_generation: string, config_revision: bigint, resolution_revision: bigint, epoch_version: bigint, policy_sha256: string, policy: PolicyEnvelope, };
 
 /**
  * Per-device signed `files.search` command payload. The server derives the

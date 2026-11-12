@@ -5,8 +5,11 @@ import { pairedServiceHash, pairedSearchTemplate } from "./paired-search-release
 import { desktopBuildCommand, normalizedPqReleaseEnvironment, serviceBuildCommand } from "./pq-release-profile";
 import { validateReleaseTrust, verifyReleaseTrustProofs } from "./pq-release-preflight";
 
+import { recoveryLabEnabled } from "./recovery-lab-build";
+
 const root = resolve(import.meta.dirname, "..");
 validateReleaseTrust(root, process.env);
+const recoveryLab = recoveryLabEnabled(process.env);
 assertSharedAssets(root);
 const configPath = resolve(root, "src-tauri", "commander-free", "tauri.conf.json");
 const generatedConfigPath = resolve(root, "src-tauri", "commander-free", "tauri.release.generated.json");
@@ -85,14 +88,16 @@ run(
   "WinCommander context-delete helper release build",
 );
 if (!pairedSearch) {
-  run(serviceBuildCommand(), "WinCommander machine-service release build");
+  const serviceCommand = serviceBuildCommand();
+  if (recoveryLab) serviceCommand[serviceCommand.indexOf("--features") + 1] += ",fleet-recovery-lab";
+  run(serviceCommand, "WinCommander machine-service release build");
 }
 run(
   ["cargo", "build", "--manifest-path", "src-tauri/Cargo.toml", "-p", "commander-calculator-launcher", "--release"],
   "Calculator launcher release build",
 );
 const config = JSON.parse(readFileSync(configPath, "utf8")) as {
-  bundle: { resources: string[]; targets: string | string[]; windows: { nsis: { template: string } } };
+  bundle: { resources: string[]; targets: string | string[]; createUpdaterArtifacts?: boolean; windows: { nsis: { template: string } } };
 };
 const contextShredResource = "resources/wincommander-context-shred.exe";
 const contextDeleteIconResource = "resources/context-delete.ico";
@@ -119,6 +124,7 @@ if (pairedSearch) {
   writeFileSync(pairedTemplatePath, pairedSearchTemplate(readFileSync(originalTemplate, "utf8"), pairedSettings));
   config.bundle.windows.nsis.template = "nsis/installer.paired.generated.nsi";
 }
+if (recoveryLab) config.bundle.createUpdaterArtifacts = false;
 
 copyFileSync(contextShredBuildPath, stagedContextShredPath);
 copyFileSync(contextDeleteIconPath, stagedContextDeleteIconPath);
@@ -134,6 +140,7 @@ try {
       ? ",experimental-encrypted-search,experimental-settings-generation"
       : ",experimental-encrypted-search";
   }
+  if (recoveryLab) desktopCommand[desktopCommand.indexOf("--features") + 1] += ",fleet-recovery-lab";
   run(desktopCommand, "Tauri release bundle");
   if (pairedSearch) pairedServiceHash(readFileSync(stagedServicePath), process.env.WINCMD_FENCED_SERVICE_SHA256 ?? "");
 } finally {

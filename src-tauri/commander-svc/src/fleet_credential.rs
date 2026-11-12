@@ -41,7 +41,7 @@ impl CredentialBinding<'_> {
     }
 }
 
-pub(crate) trait Protector {
+pub(crate) trait Protector: Sync {
     fn protect(&self, plaintext: &[u8], entropy: &[u8]) -> Result<Vec<u8>, &'static str>;
     fn unprotect(&self, sealed: &[u8], entropy: &[u8]) -> Result<Zeroizing<Vec<u8>>, &'static str>;
 }

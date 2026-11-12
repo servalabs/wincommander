@@ -64,6 +64,12 @@ impl Store {
     }
 
     fn open_at(path: &str) -> Result<Self, &'static str> {
+        Self::open_at_with_options(path,0)
+    }
+    fn open_at_with_options(path:&str,options:u32) -> Result<Self,&'static str> {
+        Self::open_at_with_disposition(path,options).map(|(store,_)|store)
+    }
+    fn open_at_with_disposition(path:&str,options:u32) -> Result<(Self,bool),&'static str> {
         let mut descriptor = std::ptr::null_mut();
         // The descriptor is owned until RegCreateKeyExW returns and copied by Windows.
         if unsafe {
@@ -83,17 +89,18 @@ impl Store {
             bInheritHandle: 0,
         };
         let mut key = std::ptr::null_mut();
+        let mut disposition=0u32;
         let status = unsafe {
             RegCreateKeyExW(
                 HKEY_LOCAL_MACHINE,
                 wide(path).as_ptr(),
                 0,
                 std::ptr::null(),
-                0,
+                options,
                 KEY_QUERY_VALUE | KEY_SET_VALUE | KEY_WOW64_64KEY | 0x0002_0000,
                 &attributes,
                 &mut key,
-                std::ptr::null_mut(),
+                &mut disposition,
             )
         };
         unsafe {
@@ -104,7 +111,7 @@ impl Store {
         }
         let store = Self(key);
         store.verify_acl()?;
-        Ok(store)
+        Ok((store,disposition==1))
     }
 
     fn verify_acl(&self) -> Result<(), &'static str> {
@@ -222,6 +229,29 @@ impl Store {
         }
         Ok(())
     }
+}
+
+/// A protected volatile HKLM value survives service restarts and disappears
+/// only when the machine hive is unloaded. It is never treated as proof that
+/// a privileged user cannot deliberately start an old executable later.
+#[allow(dead_code)]
+pub(crate) fn recovery_boot_token()->Result<[u8;32],&'static str> {
+    use rand::{rngs::OsRng,RngCore};
+    use std::sync::Mutex;
+    use windows_sys::Win32::System::Registry::REG_OPTION_VOLATILE;
+    static LOCK:Mutex<()>=Mutex::new(());
+    let _guard=LOCK.lock().map_err(|_| "reboot witness unavailable")?;
+    // Keep the volatile witness outside the SCM service key: the supported
+    // installer deletes/recreates that key during an in-place upgrade.
+    let _parent=Store::open_at(r"SOFTWARE\WinCommanderRecoveryWitness")?;
+    let (store,created)=Store::open_at_with_disposition(r"SOFTWARE\WinCommanderRecoveryWitness\Boot",REG_OPTION_VOLATILE)?;
+    let name=wide("BootToken");let mut kind=0;let mut size=32u32;let mut token=[0u8;32];
+    let status=unsafe { RegQueryValueExW(store.0,name.as_ptr(),std::ptr::null(),&mut kind,token.as_mut_ptr(),&mut size) };
+    if status==0 && kind==REG_BINARY && size==32 && token.iter().any(|b|*b!=0) { return Ok(token); }
+    if status!=2 || !created { return Err("reboot witness unavailable"); }
+    OsRng.try_fill_bytes(&mut token).map_err(|_| "reboot witness unavailable")?;
+    if token.iter().all(|b|*b==0) || unsafe { RegSetValueExW(store.0,name.as_ptr(),0,REG_BINARY,token.as_ptr(),32) }!=0 { return Err("reboot witness unavailable"); }
+    Ok(token)
 }
 
 #[cfg(test)]

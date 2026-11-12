@@ -114,9 +114,7 @@ impl PolicyFs for WindowsFleetPolicyFs {
     }
 
     fn read(&self, path: &std::path::Path) -> std::io::Result<Vec<u8>> {
-        if !path.exists() {
-            return Err(std::io::ErrorKind::NotFound.into());
-        }
+        std::fs::symlink_metadata(path)?;
         protected_acl::verify_component(path)
             .map_err(|_| std::io::Error::from(std::io::ErrorKind::PermissionDenied))?;
         std::fs::read(path)
@@ -221,9 +219,12 @@ struct StoredCredential {
 pub(crate) struct CredentialSnapshot {
     pub trust: FleetTrust,
     pub origins: Vec<String>,
+    pub origin: String,
     pub profile: TransportProfile,
     pub revision: u64,
     pub secret: zeroize::Zeroizing<Vec<u8>>,
+    pub operator_key: Option<String>,
+    pub is_recovered: bool,
 }
 
 #[derive(Clone)]
@@ -245,6 +246,15 @@ fn validate_transport_profile(profile: &TransportProfile) -> Result<(), &'static
     Ok(())
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecoveryCommit {
+    recovery_id:String, old_trust:FleetTrust, new_generation:String, decision_digest:String,
+    archive_sha256:String, credential_sha256:String, candidate_fingerprint:String,
+    origin:String, local_commit_digest:String, activation_pending:bool,
+    #[serde(default)] server_status:Option<String>,
+    #[serde(default)] rollback_sha256:Option<String>,
+}
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Record {
@@ -279,6 +289,10 @@ struct Record {
     runtime_profile_changed: bool,
     #[serde(default = "default_service_enabled")]
     service_enabled: bool,
+    #[serde(default)]
+    recovery_commit: Option<RecoveryCommit>,
+    #[serde(default)]
+    operator_key: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -334,6 +348,7 @@ fn ensure_completed(record: Option<&Record>) -> Result<(), &'static str> {
 struct ClearAcknowledgement {
     token: String,
     connection_token: String,
+    #[serde(default)] leave_evidence: Option<crate::fleet_recovery_leave::TerminalEvidence>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -445,6 +460,16 @@ fn validate_trust(trust: &FleetTrust) -> Result<(), &'static str> {
     Ok(())
 }
 
+pub(crate) fn validate_operator_key(trust:&FleetTrust, value:&str) -> Result<[u8;32],&'static str> {
+    let raw=STANDARD.decode(value).map_err(|_| "invalid_operator_key")?;
+    if STANDARD.encode(&raw)!=value { return Err("invalid_operator_key"); }
+    let bytes:[u8;32]=raw.try_into().map_err(|_| "invalid_operator_key")?;
+    let key=ed25519_dalek::VerifyingKey::from_bytes(&bytes).map_err(|_| "invalid_operator_key")?;
+    let online:[u8;32]=STANDARD.decode(&trust.signer_key).map_err(|_| "invalid_operator_key")?.try_into().map_err(|_| "invalid_operator_key")?;
+    if key.is_weak() || bytes==online { return Err("invalid_operator_key"); }
+    Ok(bytes)
+}
+
 fn verify_policy(trust: &FleetTrust, policy: &PolicyEnvelope) -> Result<(), &'static str> {
     if policy.org_id.0 != trust.org_id
         || policy.device_id.0 != trust.device_id
@@ -522,6 +547,37 @@ fn verify_policy(trust: &FleetTrust, policy: &PolicyEnvelope) -> Result<(), &'st
 }
 
 impl FleetMachinePolicy {
+    /// Restore a prior protected state only for a still-pending local commit.
+    /// The verifier must authenticate the server's irreversible cancellation
+    /// and a fresh local administrator while the state lock is held.
+    pub(crate) fn rollback_cancelled_prepare(&self,verify:impl FnOnce(&FleetTrust,&str,&str,&str,&str)->Result<(),&'static str>) -> Result<(),&'static str> {
+        use sha2::{Digest,Sha256};
+        let mut guard=self.state.lock().map_err(|_| "store_unavailable")?;
+        let current=guard.record.as_ref().ok_or("not_provisioned")?;
+        let commit=current.recovery_commit.as_ref().ok_or("recovery_not_prepared")?;
+        if !commit.activation_pending || current.service_enabled || current.trust.enrollment_generation!=commit.new_generation
+            || current.trust.org_id!=commit.old_trust.org_id || current.trust.device_id!=commit.old_trust.device_id
+            || current.trust.signer_key!=commit.old_trust.signer_key { return Err("recovery rollback unavailable"); }
+        let hash=commit.rollback_sha256.as_deref().ok_or("recovery rollback snapshot missing")?;
+        let id=uuid::Uuid::parse_str(&commit.recovery_id).map_err(|_| "recovery rollback unavailable")?;
+        if id.is_nil() || id.to_string()!=commit.recovery_id { return Err("recovery rollback unavailable"); }
+        let path=self.path.parent().ok_or("store_unavailable")?.join(format!("recovery-rollback-{id}.json"));
+        let bytes=self.fs.read(&path).map_err(|_| "recovery rollback snapshot missing")?;
+        if bytes.len()>16*1024*1024 || Sha256::digest(&bytes).iter().map(|b|format!("{b:02x}")).collect::<String>()!=hash
+            { return Err("recovery rollback snapshot changed"); }
+        let mut previous:State=serde_json::from_slice(&bytes).map_err(|_| "recovery rollback snapshot changed")?;
+        let record=previous.record.as_mut().ok_or("recovery rollback snapshot changed")?;
+        let prior=record.recovery_commit.as_ref().ok_or("recovery rollback snapshot changed")?;
+        if record.trust!=commit.old_trust || !record.service_enabled || record.credential.is_none()
+            || prior.activation_pending || prior.new_generation!=record.trust.enrollment_generation
+            || prior.old_trust.org_id!=record.trust.org_id || prior.old_trust.device_id!=record.trust.device_id
+            || prior.old_trust.signer_key!=record.trust.signer_key { return Err("recovery rollback snapshot changed"); }
+        verify(&record.trust,&prior.recovery_id,&commit.recovery_id,&commit.new_generation,&commit.decision_digest)?;
+        record.credential_revision=record.credential_revision.max(current.credential_revision).checked_add(1).ok_or("revision_exhausted")?;
+        record.connection_revision=record.connection_revision.max(current.connection_revision).checked_add(1).ok_or("revision_exhausted")?;
+        previous.pending=None;previous.contact_challenge=None;
+        self.persist(&previous)?;*guard=previous;Ok(())
+    }
     /// The supplied filesystem must validate existing owner/DACL and reject
     /// reparse points *before* loading any existing trust record.
     fn open(fs: Box<dyn PolicyFs>, dir: PathBuf) -> Result<Self, &'static str> {
@@ -533,8 +589,10 @@ impl FleetMachinePolicy {
             Err(_) => return Err("store_unavailable"),
         };
         if let Some(record) = &state.record {
+            if record.recovery_commit.as_ref().is_some_and(|commit| commit.activation_pending && record.service_enabled) { return Err("invalid_store"); }
             validate_trust(&record.trust)?;
             validate_hybrid_state(record)?;
+            if let Some(key)=&record.operator_key { validate_operator_key(&record.trust,key)?; }
             if let Some(policy) = &record.policy {
                 verify_policy(&record.trust, policy)?;
             }
@@ -589,6 +647,7 @@ impl FleetMachinePolicy {
         let mut guard = self.state.lock().map_err(|_| "store_unavailable")?;
         guard.hybrid_enrollment = None;
         guard.hybrid_claim = None;
+        if guard.record.as_ref().and_then(|r|r.recovery_commit.as_ref()).is_some_and(|c|c.activation_pending) { return Err("recovery_pending"); }
         let mut next = guard.clone();
         next.pending = Some(PendingEnrollment {
             device_id,
@@ -673,6 +732,8 @@ impl FleetMachinePolicy {
                 cleared: None,
                 runtime_profile_changed: false,
                 service_enabled: true,
+                recovery_commit: None,
+                operator_key: None,
             }),
             pending: None,
             contact_challenge: None,
@@ -848,6 +909,7 @@ impl FleetMachinePolicy {
         }
         let mut guard = self.state.lock().map_err(|_| "store_unavailable")?;
         let current = guard.record.as_ref().ok_or("not_provisioned")?;
+        if current.recovery_commit.as_ref().is_some_and(|commit|commit.activation_pending) { return Err("recovery_pending"); }
         if current.trust != previous {
             return Err("binding_changed");
         }
@@ -885,6 +947,8 @@ impl FleetMachinePolicy {
                 cleared: None,
                 runtime_profile_changed: false,
                 service_enabled: true,
+                recovery_commit: None,
+                operator_key: None,
             }),
             pending: None,
             contact_challenge: None,
@@ -908,6 +972,7 @@ impl FleetMachinePolicy {
         validate_trust(&expected)?;
         let mut guard = self.state.lock().map_err(|_| "store_unavailable")?;
         let current = guard.record.as_ref().ok_or("not_provisioned")?;
+        if current.recovery_commit.as_ref().is_some_and(|commit|commit.activation_pending) { return Err("recovery_pending"); }
         if current.trust != expected { return Err("binding_changed"); }
         if current.hybrid_trust.is_some() { return Err("hybrid_enrollment_required"); }
         Self::verify_enrollment(&guard, &expected, signature)?;
@@ -971,9 +1036,25 @@ impl FleetMachinePolicy {
     }
 
     pub fn install(&self, policy: PolicyEnvelope) -> Result<(), &'static str> {
+        self.install_with_snapshot(policy,None)
+    }
+
+    pub(crate) fn install_recovery_policy(&self,policy:PolicyEnvelope,snapshot:&CredentialSnapshot)->Result<(),&'static str> {
+        self.install_with_snapshot(policy,Some(snapshot))
+    }
+
+    fn install_with_snapshot(&self, policy:PolicyEnvelope, snapshot:Option<&CredentialSnapshot>) -> Result<(), &'static str> {
         let mut guard = self.state.lock().map_err(|_| "store_unavailable")?;
         let current = guard.record.as_ref().ok_or("not_provisioned")?;
         if current.hybrid_trust.is_some() { return Err("hybrid_policy_required"); }
+        if let Some(snapshot)=snapshot {
+            if !snapshot.is_recovered || !current.service_enabled || current.trust!=snapshot.trust
+                || current.credential_revision!=snapshot.revision || current.origins!=snapshot.origins
+                || current.transport_profile.as_ref()!=Some(&snapshot.profile) || current.operator_key!=snapshot.operator_key
+                || !current.credential.as_ref().is_some_and(|credential|credential.origin==snapshot.origin)
+                || !current.recovery_commit.as_ref().is_some_and(|commit|!commit.activation_pending) { return Err("recovery_credential_changed"); }
+        }
+        if current.recovery_commit.as_ref().is_some_and(|commit|commit.activation_pending) { return Err("recovery_pending"); }
         verify_policy(&current.trust, &policy)?;
         if let Some(old) = &current.policy {
             if policy.shield_revision < old.shield_revision {
@@ -1023,6 +1104,8 @@ impl FleetMachinePolicy {
                 cleared: current.cleared.clone(),
                 runtime_profile_changed: current.runtime_profile_changed,
                 service_enabled: current.service_enabled,
+                recovery_commit: current.recovery_commit.clone(),
+                operator_key: current.operator_key.clone(),
             }),
             pending: guard.pending.clone(),
             contact_challenge: guard.contact_challenge.clone(),
@@ -1069,6 +1152,34 @@ impl FleetMachinePolicy {
             .record
             .as_ref()
             .map(|record| (record.trust.clone(), record.audit.clone())))
+    }
+
+    /// Holds protected trust stable for a short non-reentrant operation. The
+    /// trust lock must always precede the handoff grant lock.
+    pub(crate) fn with_handoff_trust<T>(&self, f: impl FnOnce(&FleetTrust) -> Result<T, &'static str>) -> Result<T, &'static str> {
+        let guard = self.state.lock().map_err(|_| "store_unavailable")?;
+        f(&guard.record.as_ref().ok_or("protected Fleet trust is unavailable")?.trust)
+    }
+
+    /// An initial enrollment has no trust yet. Keep the pending identity and
+    /// the absence of an existing binding stable while checking recovery state.
+    pub(crate) fn with_handoff_or_pending<T>(&self, device: &str, trusted: impl FnOnce(&FleetTrust) -> Result<T, &'static str>, pending: impl FnOnce() -> Result<T, &'static str>) -> Result<T, &'static str> {
+        let guard = self.state.lock().map_err(|_| "store_unavailable")?;
+        match &guard.record {
+            Some(record) => trusted(&record.trust),
+            None if guard.pending.as_ref().is_some_and(|value| value.device_id == device) => pending(),
+            None => Err("protected Fleet trust is unavailable"),
+        }
+    }
+
+    /// Hold trust stable while matching a prior, fully activated recovery.
+    pub(crate) fn with_handoff_history<T>(&self, f: impl FnOnce(&FleetTrust, Option<(&str, &FleetTrust, &str, &str)>) -> Result<T, &'static str>) -> Result<T, &'static str> {
+        let guard = self.state.lock().map_err(|_| "store_unavailable")?;
+        let record = guard.record.as_ref().ok_or("protected Fleet trust is unavailable")?;
+        let previous = record.recovery_commit.as_ref().filter(|c| !c.activation_pending && record.service_enabled
+            && record.credential.is_some() && c.new_generation == record.trust.enrollment_generation)
+            .map(|c| (c.recovery_id.as_str(), &c.old_trust, c.decision_digest.as_str(),c.candidate_fingerprint.as_str()));
+        f(&record.trust, previous)
     }
 
     pub fn trust_with_origins(&self) -> Result<Option<TrustWithTransport>, &'static str> {
@@ -1226,17 +1337,20 @@ impl FleetMachinePolicy {
         };
         let secret = crate::fleet_credential::unseal(protector, &binding, &ciphertext)?;
         Ok(Some(CredentialSnapshot {
-            trust: record.trust.clone(), origins: record.origins.clone(), profile: profile.clone(),
-            revision: record.credential_revision, secret,
+            trust: record.trust.clone(), origins: record.origins.clone(), origin:credential.origin.clone(), profile: profile.clone(),
+            revision: record.credential_revision, secret, operator_key:record.operator_key.clone(),
+            is_recovered:record.recovery_commit.as_ref().is_some_and(|commit|!commit.activation_pending),
         }))
     }
 
     pub(crate) fn credential_is_current(&self, snapshot: &CredentialSnapshot) -> bool {
         let Ok(guard) = self.state.lock() else { return false; };
         guard.record.as_ref().is_some_and(|record| {
-            record.service_enabled && record.trust == snapshot.trust && record.credential.is_some()
+            record.service_enabled && record.trust == snapshot.trust && record.credential.as_ref().is_some_and(|credential|credential.origin==snapshot.origin)
                 && record.credential_revision == snapshot.revision
                 && record.origins == snapshot.origins && record.transport_profile.as_ref() == Some(&snapshot.profile)
+                && record.operator_key == snapshot.operator_key
+                && record.recovery_commit.as_ref().is_some_and(|commit|!commit.activation_pending)==snapshot.is_recovered
         })
     }
 
@@ -1244,6 +1358,79 @@ impl FleetMachinePolicy {
         let Ok(guard) = self.state.lock() else { return false; };
         guard.record.as_ref().is_some_and(|record| {
             record.service_enabled && record.trust == *trust && record.credential.is_some() && record.credential_revision == revision
+        })
+    }
+
+    /// Expose only the protected current recovery identity to service-owned leave signing.
+    pub(crate) fn with_leave_identity<T>(&self, snapshot: &CredentialSnapshot, f: impl FnOnce(&FleetTrust, &FleetTrust, &str, &str) -> Result<T, &'static str>) -> Result<T, &'static str> {
+        let guard = self.state.lock().map_err(|_| "store_unavailable")?;
+        let record = guard.record.as_ref().ok_or("not_provisioned")?;
+        let commit = record.recovery_commit.as_ref().ok_or("recovery_not_prepared")?;
+        if commit.activation_pending || !snapshot.is_recovered || !record.service_enabled || record.credential.is_none()
+            || record.trust != snapshot.trust || record.credential_revision != snapshot.revision
+            || record.origins != snapshot.origins || record.transport_profile.as_ref() != Some(&snapshot.profile)
+            || !record.credential.as_ref().is_some_and(|v| v.origin == snapshot.origin)
+            || record.trust.org_id != commit.old_trust.org_id || record.trust.device_id != commit.old_trust.device_id
+            || record.trust.signer_key != commit.old_trust.signer_key || record.trust.enrollment_generation != commit.new_generation {
+            return Err("recovery_credential_changed");
+        }
+        f(&record.trust, &commit.old_trust, &commit.recovery_id, &commit.candidate_fingerprint)
+    }
+
+    /// Keep protected active trust locked while a caller validates and uses
+    /// historical recovery evidence; this does not authorize new recovery.
+    pub(crate) fn with_active_recovery<T>(&self, expected:Option<&CredentialSnapshot>,f:impl FnOnce(&FleetTrust,&FleetTrust,&str,&str,&str,&str,&str,i64,&PolicyEnvelope)->Result<T,&'static str>) -> Result<T,&'static str> {
+        let guard=self.state.lock().map_err(|_| "store_unavailable")?;
+        let record=guard.record.as_ref().ok_or("not_provisioned")?;
+        let commit=record.recovery_commit.as_ref().ok_or("recovery_not_prepared")?;
+        if commit.activation_pending || !record.service_enabled || record.credential.is_none()
+            || record.trust.org_id!=commit.old_trust.org_id || record.trust.device_id!=commit.old_trust.device_id
+            || record.trust.signer_key!=commit.old_trust.signer_key || record.trust.enrollment_generation!=commit.new_generation {
+            return Err("recovery_not_active");
+        }
+        if let Some(snapshot)=expected {
+            if !snapshot.is_recovered || record.trust!=snapshot.trust || record.credential_revision!=snapshot.revision
+                || record.origins!=snapshot.origins || record.transport_profile.as_ref()!=Some(&snapshot.profile)
+                || record.operator_key!=snapshot.operator_key
+                || !record.credential.as_ref().is_some_and(|credential|credential.origin==snapshot.origin) { return Err("recovery_credential_changed"); }
+        }
+        let operator=record.operator_key.as_deref().ok_or("operator_key_not_pinned")?;
+        validate_operator_key(&record.trust,operator)?;
+        let policy=record.policy.as_ref().ok_or("policy_unavailable")?;
+        verify_policy(&record.trust,policy)?;
+        let epoch=policy.config.as_ref().map(|config|config.version).ok_or("policy_unavailable")?;
+        f(&record.trust,&commit.old_trust,&commit.recovery_id,&commit.decision_digest,&commit.archive_sha256,&commit.candidate_fingerprint,operator,epoch,policy)
+    }
+
+    /// Fleet posture's held-epoch signal is the signed configuration held by
+    /// the service; it does not assert native enforcement or Windows readback.
+    pub(crate) fn held_recovery_epoch(&self,snapshot:&CredentialSnapshot)->Result<i64,&'static str> {
+        self.with_active_recovery(Some(snapshot),|_,_,_,_,_,_,_,epoch,_|Ok(epoch))
+    }
+    /// Distinguish ordinary, prepared, and committed service-owned recovery
+    /// without releasing a credential to the helper.
+    pub(crate) fn recovery_execution_mode(&self)->Result<(String,&'static str),&'static str> {
+        let guard=self.state.lock().map_err(|_| "store_unavailable")?;
+        let Some(record)=guard.record.as_ref() else {
+            return guard.pending.as_ref().map(|pending| (pending.device_id.clone(), "enrolling")).ok_or("not_provisioned");
+        };
+        let mode=match &record.recovery_commit {
+            None=>"legacy",
+            Some(commit) if commit.activation_pending && !record.service_enabled=>"pending",
+            Some(commit) if !commit.activation_pending && record.service_enabled && record.credential.is_some()
+                && record.trust.org_id==commit.old_trust.org_id && record.trust.device_id==commit.old_trust.device_id
+                && record.trust.signer_key==commit.old_trust.signer_key && record.trust.enrollment_generation==commit.new_generation=>"recovered",
+            _=>return Err("recovery_unavailable"),
+        };
+        Ok((record.trust.device_id.clone(),mode))
+    }
+    pub(crate) fn held_recovery_policy(&self,snapshot:&CredentialSnapshot)->Result<fleet_proto::RecoveryHeldPolicy,&'static str> {
+        self.with_active_recovery(Some(snapshot),|current,_,_,_,_,_,_,epoch,policy| {
+            let value=serde_json::to_value(policy).map_err(|_| "invalid_policy")?;
+            Ok(fleet_proto::RecoveryHeldPolicy { enrollment_generation:current.enrollment_generation.clone(),
+                config_revision:policy.config_revision.ok_or("missing_config_revision")?,
+                resolution_revision:policy.resolution_revision.ok_or("missing_resolution_revision")?,epoch_version:epoch,
+                policy_sha256:fleet_proto::canonical_json_sha256(&value),policy:policy.clone() })
         })
     }
 
@@ -1379,6 +1566,7 @@ impl FleetMachinePolicy {
     pub(crate) fn clear_credential(&self, token: &str, connection_token: &str) -> Result<bool, &'static str> {
         let mut guard = self.state.lock().map_err(|_| "store_unavailable")?;
         let Some(record) = &guard.record else { return Ok(false); };
+        if record.recovery_commit.as_ref().is_some_and(|commit|commit.activation_pending) { return Err("recovery_pending"); }
         if !record.service_enabled && record.credential.is_none()
             && record.cleared.as_ref().is_some_and(|ack| ack.token == token && ack.connection_token == connection_token) {
             // An ambiguous prior hybrid write needs exact readback-by-write;
@@ -1391,6 +1579,9 @@ impl FleetMachinePolicy {
             }
             return Ok(true);
         }
+        if !record.service_enabled && record.credential.is_none()
+            && record.cleared.as_ref().and_then(|a|a.leave_evidence.as_ref()).is_some_and(|e|crate::fleet_recovery_leave::evidence_valid(&record.trust,e))
+            && Self::clear_token(record)?==token && Self::connection_token_for(record)?==connection_token { return Ok(true); }
         if Self::clear_token(record)? != token || Self::connection_token_for(record)? != connection_token {
             return Ok(false);
         }
@@ -1402,7 +1593,7 @@ impl FleetMachinePolicy {
         record.hybrid_credential = None;
         record.service_enabled = false;
         record.connection_revision = record.connection_revision.checked_add(1).ok_or("revision_exhausted")?;
-        record.cleared = Some(ClearAcknowledgement { token:token.to_owned(), connection_token:connection_token.to_owned() });
+        record.cleared = Some(ClearAcknowledgement { token:token.to_owned(), connection_token:connection_token.to_owned(), leave_evidence: None });
         record.credential_revision = record.credential_revision.checked_add(1).ok_or("revision_exhausted")?;
         next.pending = None;
         match self.persist(&next) {
@@ -1415,6 +1606,24 @@ impl FleetMachinePolicy {
                 Err(error)
             }
             Err(error) => Err(error),
+        }
+    }
+    pub(crate) fn clear_after_verified_leave(&self, token: &str, connection_token: &str, proof: &crate::fleet_recovery_leave::VerifiedTerminal) -> Result<bool, &'static str> {
+        let mut guard = self.state.lock().map_err(|_| "store_unavailable")?;
+        let Some(record) = guard.record.as_ref() else { return Ok(false) };
+        if !record.service_enabled || !proof.matches(&record.trust, record.credential_revision)
+            || Self::clear_token(record)? != token || Self::connection_token_for(record)? != connection_token { return Ok(false) }
+        let mut next=guard.clone(); let record=next.record.as_mut().ok_or("not_provisioned")?;
+        record.credential=None; record.service_enabled=false;
+        record.connection_revision=record.connection_revision.checked_add(1).ok_or("revision_exhausted")?;
+        record.credential_revision=record.credential_revision.checked_add(1).ok_or("revision_exhausted")?;
+        record.cleared=Some(ClearAcknowledgement { token:token.to_owned(), connection_token:connection_token.to_owned(), leave_evidence:Some(proof.evidence()) });
+        next.pending=None; self.persist(&next)?; *guard=next; Ok(true)
+    }
+    pub(crate) fn confirmed_leave(&self) -> Result<Option<(FleetTrust,String)>, &'static str> {
+        let guard=self.state.lock().map_err(|_| "store_unavailable")?;
+        match guard.record.as_ref().filter(|record| !record.service_enabled && record.credential.is_none() && record.cleared.as_ref().and_then(|a|a.leave_evidence.as_ref()).is_some_and(|e|crate::fleet_recovery_leave::evidence_valid(&record.trust,e))) {
+            Some(record)=>Ok(Some((record.trust.clone(),Self::connection_token_for(record)?))), None=>Ok(None),
         }
     }
 }
@@ -2223,6 +2432,21 @@ mod tests {
     }
 
     #[test]
+    fn pending_enrollment_never_bypasses_existing_trust_or_other_device() {
+        let store = store(MemoryFs::default());
+        let device = trust().device_id;
+        assert!(store.recovery_execution_mode().is_err());
+        assert!(store.with_handoff_or_pending(&device, |_| Ok("trusted"), || Ok("pending")).is_err());
+        let _ = proof(&store, &trust());
+        assert_eq!(store.recovery_execution_mode().unwrap(), (device.clone(), "enrolling"));
+        assert_eq!(store.with_handoff_or_pending(&device, |_| Ok("trusted"), || Ok("pending")), Ok("pending"));
+        assert!(store.with_handoff_or_pending("other", |_| Ok("trusted"), || Ok("pending")).is_err());
+        provision(&store);
+        assert_eq!(store.recovery_execution_mode().unwrap(), (device.clone(), "legacy"));
+        assert_eq!(store.with_handoff_or_pending(&device, |_| Ok("trusted"), || Ok("pending")), Ok("trusted"));
+    }
+
+    #[test]
     fn provision_requires_one_use_challenge_and_rejects_replacement() {
         let store = store(MemoryFs::default());
         let signature = proof(&store, &trust());
@@ -2539,5 +2763,631 @@ mod tests {
         *bytes = Some(serde_json::to_vec(&state).unwrap());
         drop(bytes);
         assert!(FleetMachinePolicy::open(Box::new(fs), PathBuf::from("test")).is_err());
+    }
+}
+
+// Recovery preparation is intentionally not exposed through the service pipe.
+#[cfg(windows)]
+impl FleetMachinePolicy {
+    pub(crate) fn prepare_recovery_commit(
+        &self, verified:&crate::fleet_identity_handoff::VerifiedHandoff,
+        credential:&crate::fleet_recovery_credential::VerifiedCredential,
+        archive:&str, origin:&str, protector:&dyn crate::fleet_credential::Protector, now:i64,
+    ) -> Result<String,&'static str> {
+        use sha2::{Digest,Sha256};
+        if !crate::fleet_identity_handoff::recovery_timestamp_valid(verified.issued_at(),now)
+            || !crate::fleet_identity_handoff::recovery_timestamp_valid(credential.issued_at(),now)
+            || credential.recovery_id()!=verified.retirement_id() || credential.new_generation()!=verified.new_generation()
+            || credential.decision_digest()!=verified.decision_digest().iter().map(|b|format!("{b:02x}")).collect::<String>()
+            || credential.archive_sha256()!=archive { return Err("invalid recovery commit"); }
+        let mut guard=self.state.lock().map_err(|_| "store_unavailable")?;
+        let current=guard.record.as_ref().ok_or("not_provisioned")?;
+        validate_operator_key(&current.trust,current.operator_key.as_deref().ok_or("operator_key_not_pinned")?)?;
+        if let Some(prepared)=current.recovery_commit.as_ref() {
+            if prepared.recovery_id==verified.retirement_id() && prepared.new_generation==verified.new_generation()
+                && prepared.decision_digest==credential.decision_digest() && prepared.archive_sha256==archive
+                && prepared.credential_sha256==credential.digest() && prepared.origin==origin
+                && prepared.candidate_fingerprint==verified.fingerprint().iter().map(|b|format!("{b:02x}")).collect::<String>()
+                && prepared.activation_pending && !current.service_enabled
+                && current.trust.org_id==prepared.old_trust.org_id && current.trust.device_id==prepared.old_trust.device_id
+                && current.trust.signer_key==prepared.old_trust.signer_key && current.trust.enrollment_generation==prepared.new_generation {
+                use subtle::ConstantTimeEq;
+                let stored=current.credential.as_ref().ok_or("invalid_store")?;
+                if stored.origin!=origin { return Err("invalid_store"); }
+                let bytes=STANDARD.decode(&stored.ciphertext).map_err(|_| "invalid_store")?;
+                if STANDARD.encode(&bytes)!=stored.ciphertext { return Err("invalid_store"); }
+                let binding=crate::fleet_credential::CredentialBinding { org_id:&current.trust.org_id,device_id:&current.trust.device_id,
+                    enrollment_generation:&current.trust.enrollment_generation,origin };
+                let recovered=crate::fleet_credential::unseal(protector,&binding,&bytes)?;
+                if !bool::from(recovered.as_slice().ct_eq(credential.secret())) { return Err("invalid_store"); }
+                return Ok(prepared.local_commit_digest.clone());
+            }
+            if prepared.activation_pending || !current.service_enabled || current.credential.is_none()
+                || prepared.recovery_id==verified.retirement_id() || prepared.new_generation!=current.trust.enrollment_generation
+                || prepared.old_trust.org_id!=current.trust.org_id || prepared.old_trust.device_id!=current.trust.device_id
+                || prepared.old_trust.signer_key!=current.trust.signer_key { return Err("recovery commit changed"); }
+            let dir=self.path.parent().ok_or("store_unavailable")?;
+            let operator=current.operator_key.as_deref().ok_or("operator_key_not_pinned")?;
+            crate::pipe::fleet_handoff_confirmation::check_previous_recovery_drained(&*self.fs,dir,protector,&current.trust,
+                &prepared.old_trust,&prepared.recovery_id,&prepared.decision_digest,&prepared.archive_sha256,
+                &prepared.candidate_fingerprint,operator,verified)?;
+            let id=uuid::Uuid::parse_str(&prepared.recovery_id).map_err(|_| "invalid_store")?;
+            if id.is_nil() || id.to_string()!=prepared.recovery_id { return Err("invalid_store"); }
+            let archive_path=dir.join(format!("recovery-commit-{id}.json"));
+            let prior=serde_json::to_vec(prepared).map_err(|_| "invalid_store")?;
+            match self.fs.read(&archive_path) {
+                Ok(existing) if existing==prior=>{},
+                Err(e) if e.kind()==std::io::ErrorKind::NotFound=>{
+                    self.fs.atomic_write(&archive_path,&prior).map_err(|_| "store_unavailable")?;
+                    if self.fs.read(&archive_path).map_err(|_| "store_unavailable")?!=prior { return Err("store_unavailable"); }
+                },
+                _=>return Err("recovery history changed"),
+            }
+        }
+        let old=current.trust.clone();
+        if !current.origins.iter().any(|value|value==origin) || current.transport_profile.is_none() { return Err("invalid recovery origin"); }
+        let dir=self.path.parent().ok_or("store_unavailable")?;
+        crate::pipe::fleet_handoff_confirmation::initialize_replacement(&*self.fs,dir,&old,verified,archive)?;
+        let new_trust=FleetTrust { org_id:old.org_id.clone(), device_id:old.device_id.clone(),
+            enrollment_generation:verified.new_generation().into(), signer_key:old.signer_key.clone() };
+        let credential_binding=crate::fleet_credential::CredentialBinding { org_id:&new_trust.org_id,device_id:&new_trust.device_id,
+            enrollment_generation:&new_trust.enrollment_generation,origin };
+        let sealed=crate::fleet_credential::seal(protector,&credential_binding,credential.secret())?;
+        let decision=credential.decision_digest().to_owned();
+        let local=serde_json::to_vec(&("wincommander:fleet:identity-handoff-local-commit:v1",&old.org_id,&old.device_id,
+            verified.retirement_id(),verified.new_generation(),&decision,archive,STANDARD.encode(verified.public_key()),
+            &old.signer_key,credential.digest(),verified.next_sequence(),verified.previous_hash())).map_err(|_| "invalid recovery commit")?;
+        let local_commit_digest=Sha256::digest(&local).iter().map(|b|format!("{b:02x}")).collect::<String>();
+        // Preserve the complete protected pre-transition state before the
+        // credential is replaced. An incomplete write can only block retry.
+        let rollback_bytes=serde_json::to_vec(&*guard).map_err(|_| "invalid_store")?;
+        let rollback_hash=Sha256::digest(&rollback_bytes).iter().map(|b|format!("{b:02x}")).collect::<String>();
+        let recovery_id=uuid::Uuid::parse_str(verified.retirement_id()).map_err(|_| "invalid_store")?;
+        if recovery_id.is_nil() || recovery_id.to_string()!=verified.retirement_id() { return Err("invalid_store"); }
+        let rollback_path=dir.join(format!("recovery-rollback-{recovery_id}.json"));
+        match self.fs.read(&rollback_path) {
+            Ok(existing) if existing==rollback_bytes=>{},
+            Err(e) if e.kind()==std::io::ErrorKind::NotFound=>{
+                self.fs.atomic_write(&rollback_path,&rollback_bytes).map_err(|_| "store_unavailable")?;
+                if self.fs.read(&rollback_path).map_err(|_| "store_unavailable")?!=rollback_bytes { return Err("store_unavailable"); }
+            },
+            _=>return Err("recovery rollback snapshot changed"),
+        }
+        let prepared=RecoveryCommit { recovery_id:verified.retirement_id().into(),old_trust:old,
+            new_generation:verified.new_generation().into(),decision_digest:decision,archive_sha256:archive.into(),
+            credential_sha256:credential.digest().into(),candidate_fingerprint:verified.fingerprint().iter().map(|b|format!("{b:02x}")).collect(),
+            origin:origin.into(),local_commit_digest:local_commit_digest.clone(),activation_pending:true,server_status:None,rollback_sha256:Some(rollback_hash) };
+        let mut next=guard.clone();
+        let record=next.record.as_mut().ok_or("not_provisioned")?;
+        record.trust=new_trust; record.policy=None; record.contact=None;
+        record.credential=Some(StoredCredential { origin:origin.into(),ciphertext:STANDARD.encode(sealed) });
+        record.credential_revision=record.credential_revision.checked_add(1).ok_or("revision_exhausted")?;
+        record.connection_revision=record.connection_revision.checked_add(1).ok_or("revision_exhausted")?;
+        record.cleared=None; record.service_enabled=false; record.recovery_commit=Some(prepared);
+        next.pending=None; next.contact_challenge=None;
+        self.persist(&next)?; *guard=next;
+        Ok(local_commit_digest)
+    }
+}
+
+#[cfg(windows)]
+pub(crate) struct RecoveryExpected {
+    old_trust:FleetTrust, recovery_id:String, new_generation:String, decision_digest:String,
+    archive_sha256:String, credential_sha256:String, local_commit_digest:String, candidate_fingerprint:String,
+    origin:String, profile:TransportProfile,
+}
+#[cfg(windows)]
+impl RecoveryExpected {
+    pub(crate) fn old_trust(&self)->&FleetTrust { &self.old_trust }
+    pub(crate) fn recovery_id(&self)->&str { &self.recovery_id }
+    pub(crate) fn new_generation(&self)->&str { &self.new_generation }
+    pub(crate) fn decision_digest(&self)->&str { &self.decision_digest }
+    pub(crate) fn archive_sha256(&self)->&str { &self.archive_sha256 }
+    pub(crate) fn credential_sha256(&self)->&str { &self.credential_sha256 }
+    pub(crate) fn local_commit_digest(&self)->&str { &self.local_commit_digest }
+    pub(crate) fn candidate_fingerprint(&self)->&str { &self.candidate_fingerprint }
+    pub(crate) fn origin(&self)->&str { &self.origin }
+    pub(crate) fn profile(&self)->&TransportProfile { &self.profile }
+}
+#[cfg(windows)]
+impl FleetMachinePolicy {
+    pub(crate) fn pending_recovery(&self)->Result<Option<RecoveryExpected>,&'static str> {
+        let guard=self.state.lock().map_err(|_| "store_unavailable")?;
+        let Some(record)=guard.record.as_ref() else { return Ok(None) };
+        let Some(commit)=record.recovery_commit.as_ref() else { return Ok(None) };
+        validate_operator_key(&record.trust,record.operator_key.as_deref().ok_or("operator_key_not_pinned")?)?;
+        if !commit.activation_pending { return Ok(None); }
+        if record.service_enabled || record.credential.is_none() || record.trust.org_id!=commit.old_trust.org_id
+            || record.trust.device_id!=commit.old_trust.device_id || record.trust.signer_key!=commit.old_trust.signer_key
+            || record.trust.enrollment_generation!=commit.new_generation { return Err("invalid_store"); }
+        Ok(Some(RecoveryExpected { old_trust:commit.old_trust.clone(),recovery_id:commit.recovery_id.clone(),
+            new_generation:commit.new_generation.clone(),decision_digest:commit.decision_digest.clone(),
+            archive_sha256:commit.archive_sha256.clone(),credential_sha256:commit.credential_sha256.clone(),
+            local_commit_digest:commit.local_commit_digest.clone(),candidate_fingerprint:commit.candidate_fingerprint.clone(),
+            origin:commit.origin.clone(),profile:record.transport_profile.clone().ok_or("invalid_store")? }))
+    }
+}
+
+#[cfg(windows)]
+impl FleetMachinePolicy {
+    pub(crate) fn activate_recovery(&self, expected:&RecoveryExpected,
+        activation:&crate::fleet_recovery_credential::VerifiedActivation, now:i64) -> Result<(),&'static str> {
+        if !crate::fleet_identity_handoff::recovery_timestamp_valid(activation.issued_at(),now)
+            || activation.recovery_id()!=expected.recovery_id() || activation.local_commit_digest()!=expected.local_commit_digest() {
+            return Err("invalid recovery activation");
+        }
+        let mut guard=self.state.lock().map_err(|_| "store_unavailable")?;
+        let record=guard.record.as_ref().ok_or("not_provisioned")?;
+        let commit=record.recovery_commit.as_ref().ok_or("recovery_not_prepared")?;
+        if commit.recovery_id!=expected.recovery_id || commit.old_trust!=expected.old_trust
+            || commit.new_generation!=expected.new_generation || commit.decision_digest!=expected.decision_digest
+            || commit.archive_sha256!=expected.archive_sha256 || commit.credential_sha256!=expected.credential_sha256
+            || commit.local_commit_digest!=expected.local_commit_digest || commit.candidate_fingerprint!=expected.candidate_fingerprint
+            || commit.origin!=expected.origin || record.transport_profile.as_ref()!=Some(&expected.profile)
+            || record.trust.org_id!=commit.old_trust.org_id || record.trust.device_id!=commit.old_trust.device_id
+            || record.trust.signer_key!=commit.old_trust.signer_key || record.trust.enrollment_generation!=commit.new_generation
+            || record.credential.is_none() { return Err("recovery commit changed"); }
+        if !commit.activation_pending {
+            return if record.service_enabled { Ok(()) } else { Err("invalid_store") };
+        }
+        if record.service_enabled { return Err("invalid_store"); }
+        let mut next=guard.clone();
+        let record=next.record.as_mut().ok_or("not_provisioned")?;
+        let commit=record.recovery_commit.as_mut().ok_or("recovery_not_prepared")?;
+        commit.activation_pending=false; commit.server_status=Some(activation.status().into());
+        record.service_enabled=true;
+        self.persist(&next)?; *guard=next;
+        Ok(())
+    }
+}
+
+#[cfg(all(test,windows))]
+mod recovery_commit_tests {
+    use super::*;
+    use ed25519_dalek::{Signer,SigningKey};
+    use std::{collections::HashMap,path::Path,sync::{Arc,atomic::{AtomicBool,Ordering}}};
+    #[derive(Clone,Default)] struct Fs { files:Arc<Mutex<HashMap<PathBuf,Vec<u8>>>>, fail:Arc<AtomicBool> }
+    impl PolicyFs for Fs {
+        fn read(&self,p:&Path)->std::io::Result<Vec<u8>> { self.files.lock().unwrap().get(p).cloned().ok_or(std::io::ErrorKind::NotFound.into()) }
+        fn atomic_write(&self,p:&Path,b:&[u8])->std::io::Result<()> {
+            if p.file_name().is_some_and(|n|n=="fleet-machine-policy.json") && self.fail.swap(false,Ordering::SeqCst) { return Err(std::io::ErrorKind::Other.into()); }
+            self.files.lock().unwrap().insert(p.into(),b.into()); Ok(())
+        }
+        fn ensure_dir_secure(&self,_:&Path)->Result<(),crate::policy_store::PolicyStoreError> { Ok(()) }
+    }
+    struct Protector;
+    impl crate::fleet_credential::Protector for Protector {
+        fn protect(&self,p:&[u8],e:&[u8])->Result<Vec<u8>,&'static str> { let mut v=e.to_vec(); v.extend(p.iter().zip(e).map(|(a,b)|a^b)); Ok(v) }
+        fn unprotect(&self,p:&[u8],e:&[u8])->Result<zeroize::Zeroizing<Vec<u8>>,&'static str> {
+            if p.len()!=64 || p[..32]!=*e { return Err("invalid"); }
+            Ok(zeroize::Zeroizing::new(p[32..].iter().zip(e).map(|(a,b)|a^b).collect()))
+        }
+    }
+    fn hex(bytes:&[u8])->String { bytes.iter().map(|b|format!("{b:02x}")).collect() }
+    #[test]
+    fn repeated_recovery_preserves_prior_commit_and_retries_after_failed_write() {
+        use sha2::{Digest,Sha256};
+        struct VariableProtector;
+        impl crate::fleet_credential::Protector for VariableProtector {
+            fn protect(&self,p:&[u8],e:&[u8])->Result<Vec<u8>,&'static str> { let mut v=e.to_vec();v.extend_from_slice(p);Ok(v) }
+            fn unprotect(&self,p:&[u8],e:&[u8])->Result<zeroize::Zeroizing<Vec<u8>>,&'static str> {
+                if !p.starts_with(e) { return Err("invalid"); } Ok(zeroize::Zeroizing::new(p[e.len()..].to_vec()))
+            }
+        }
+        let fs=Fs::default();let dir=PathBuf::from("repeat-protected");let protector=VariableProtector;
+        let signer=SigningKey::from_bytes(&[11;32]);
+        let old=FleetTrust { org_id:"org-a".into(),device_id:"0480b2ca-f4c3-4599-81fc-4876f73e70fa".into(),
+            enrollment_generation:"22222222-2222-4222-8222-222222222222".into(),signer_key:STANDARD.encode(signer.verifying_key().as_bytes()) };
+        let first_id="11111111-1111-4111-8111-111111111111";let second_id="44444444-4444-4444-8444-444444444444";
+        let first_generation="33333333-3333-4333-8333-333333333333";let second_generation="55555555-5555-4555-8555-555555555555";
+        let candidate=crate::fleet_recovery_candidate::CandidateStore::open(&fs,dir.clone(),&protector).unwrap();
+        let make=|trust:&FleetTrust,id:&str,generation:&str| {
+            let receipt_preimage=serde_json::to_vec(&("fleet.windows.admin-retirement.v1",&trust.org_id,&trust.device_id,&trust.enrollment_generation,id,1000i64,&trust.signer_key)).unwrap();
+            let receipt=serde_json::json!({"org_id":trust.org_id,"old_device_id":trust.device_id,"old_generation":trust.enrollment_generation,
+                "retirement_id":id,"issued_at":1000,"signer_key":trust.signer_key,"signature":STANDARD.encode(signer.sign(&receipt_preimage).to_bytes())});
+            let key=candidate.stage(trust,&serde_json::to_vec(&receipt).unwrap(),1001).unwrap();
+            let hash=Some("ab".repeat(32));
+            let preimage=serde_json::to_vec(&("wincommander:fleet:identity-outcome-handoff:v1",id,&trust.org_id,&trust.device_id,
+                &trust.enrollment_generation,generation,&key,7u64,&hash,1000i64,&trust.signer_key)).unwrap();
+            let handoff:crate::fleet_identity_handoff::Handoff=serde_json::from_value(serde_json::json!({"recovery_id":id,"org_id":trust.org_id,"device_id":trust.device_id,
+                "old_generation":trust.enrollment_generation,"new_generation":generation,"new_key":key,"next_sequence":7,"previous_hash":hash,
+                "issued_at":1000,"server_key":trust.signer_key,"signature":STANDARD.encode(signer.sign(&preimage).to_bytes())})).unwrap();
+            let public:[u8;32]=STANDARD.decode(key).unwrap().try_into().unwrap();
+            let verified=handoff.verify(trust,id,generation,&public,1001).unwrap();
+            (handoff,public,verified)
+        };
+        let (first,key1,v1)=make(&old,first_id,first_generation);let archive="cd".repeat(32);
+        crate::pipe::fleet_handoff_confirmation::test_seed_review(&fs,&dir,&old,&first,first_id,&key1,1001,&archive).unwrap();
+        let current=FleetTrust { enrollment_generation:first_generation.into(),..old.clone() };
+        let (second,key2,v2)=make(&current,second_id,second_generation);
+        let snapshot="34".repeat(32);let proof_nonce="77777777-7777-4777-8777-777777777777";
+        let proof=candidate.sign_drain(&old,&current,first_id,&v2,&snapshot,1001,proof_nonce).unwrap();
+        let signed=serde_json::to_vec(&("wincommander:fleet:recovery-drain:v1",&current.org_id,&current.device_id,&current.enrollment_generation,
+            first_id,second_id,second_generation,hex(v2.fingerprint()),hex(v2.decision_digest()),7u64,Some("ab".repeat(32)),
+            &snapshot,&current.signer_key,1001i64,proof_nonce)).unwrap();
+        let retried=candidate.sign_drain(&old,&current,first_id,&v2,&snapshot,1002,"88888888-8888-4888-8888-888888888888").unwrap();
+        assert_ne!(proof,retried);
+        let signature:[u8;64]=STANDARD.decode(proof).unwrap().try_into().unwrap();
+        assert!(ed25519_dalek::VerifyingKey::from_bytes(&key1).unwrap().verify_strict(&signed,&ed25519_dalek::Signature::from_bytes(&signature)).is_ok());
+        let cancel_request=candidate.sign_cancel(&old,&current,first_id,second_id,second_generation,&hex(v2.decision_digest()),1001,proof_nonce).unwrap();
+        let cancel_bytes=serde_json::to_vec(&("wincommander:fleet:recovery-cancel:v1","POST","/v1/agents/identity-handoff/cancel",
+            &current.org_id,&current.device_id,&current.enrollment_generation,first_id,second_id,second_generation,hex(v2.decision_digest()),
+            &current.signer_key,1001i64,proof_nonce)).unwrap();
+        let cancel_signature:[u8;64]=STANDARD.decode(cancel_request).unwrap().try_into().unwrap();
+        assert!(ed25519_dalek::VerifyingKey::from_bytes(&key1).unwrap().verify_strict(&cancel_bytes,&ed25519_dalek::Signature::from_bytes(&cancel_signature)).is_ok());
+        crate::pipe::fleet_handoff_confirmation::test_seed_review(&fs,&dir,&current,&second,second_id,&key2,1001,&archive).unwrap();
+        let decision=hex(v2.decision_digest());let nonce="66666666-6666-4666-8666-666666666666";let secret=[8u8;32];let credential_hash=hex(&Sha256::digest(secret));
+        let response_preimage=serde_json::to_vec(&("wincommander:fleet:identity-handoff-prepare-response:v1","POST","/v1/agents/identity-handoff/confirm",
+            &current.org_id,&current.device_id,second_id,second_generation,&decision,&archive,&credential_hash,&current.signer_key,nonce,1000i64)).unwrap();
+        let response=serde_json::json!({"org_id":current.org_id,"device_id":current.device_id,"recovery_id":second_id,"new_generation":second_generation,
+            "decision_digest":decision,"archive_sha256":archive,"credential_sha256":credential_hash,"server_key":current.signer_key,
+            "request_nonce":nonce,"issued_at":1000,"checkin_secret_b64":STANDARD.encode(secret),"signature":STANDARD.encode(signer.sign(&response_preimage).to_bytes())});
+        let credential=crate::fleet_recovery_credential::verify_response(&serde_json::to_vec(&response).unwrap(),&current,&v2,&archive,nonce,1001).unwrap();
+        let prior=RecoveryCommit { recovery_id:first_id.into(),old_trust:old.clone(),new_generation:first_generation.into(),decision_digest:hex(v1.decision_digest()),
+            archive_sha256:archive.clone(),credential_sha256:"ef".repeat(32),candidate_fingerprint:hex(v1.fingerprint()),origin:"https://fleet.example".into(),
+            local_commit_digest:"12".repeat(32),activation_pending:false,server_status:Some("credential_committed_active".into()),rollback_sha256:None };
+        let state=State { record:Some(Record { trust:current.clone(),hybrid_trust:None,hybrid_epoch_floor:0,hybrid_credential:None,hybrid_initial_pending:false,hybrid_unconfirmed:false,policy:None,audit:Vec::new(),contact:None,origins:vec!["https://fleet.example".into()],
+            transport_profile:Some(TransportProfile { spki_pins:String::new(),environment_fingerprint:STANDARD.encode([1u8;32]) }),
+            credential:Some(StoredCredential { origin:"https://fleet.example".into(),ciphertext:STANDARD.encode([1u8;32]) }),credential_revision:1,
+            connection_revision:0,cleared:None,runtime_profile_changed:false,service_enabled:true,recovery_commit:Some(prior.clone()),
+            operator_key:Some(STANDARD.encode(SigningKey::from_bytes(&[33;32]).verifying_key().as_bytes())) }),pending:None,contact_challenge:None,hybrid_enrollment:None,hybrid_claim:None };
+        let path=dir.join("fleet-machine-policy.json");fs.atomic_write(&path,&serde_json::to_vec(&state).unwrap()).unwrap();
+        let store=FleetMachinePolicy::open(Box::new(fs.clone()),dir.clone()).unwrap();
+        let journal_path=dir.join(format!("replacement-{first_id}.json"));
+        let original_journal=fs.read(&journal_path).unwrap();let mut blocked:serde_json::Value=serde_json::from_slice(&original_journal).unwrap();
+        blocked["base_sequence"]=6.into();fs.atomic_write(&journal_path,&serde_json::to_vec(&blocked).unwrap()).unwrap();
+        assert!(store.prepare_recovery_commit(&v2,&credential,&archive,"https://fleet.example",&protector,1001).is_err());
+        assert_eq!(store.trust_snapshot().unwrap().unwrap().0,current);
+        fs.atomic_write(&journal_path,&original_journal).unwrap();
+        let operator=STANDARD.encode(SigningKey::from_bytes(&[33;32]).verifying_key().as_bytes());
+        crate::pipe::fleet_handoff_confirmation::test_freeze_drain(&fs,&dir,&protector,&current,&old,&v1,&archive,&operator,&v2).unwrap();
+        // Lost proof responses are safe to retry; a different transition cannot reuse the freeze.
+        crate::pipe::fleet_handoff_confirmation::test_freeze_drain(&fs,&dir,&protector,&current,&old,&v1,&archive,&operator,&v2).unwrap();
+        assert!(crate::pipe::fleet_handoff_confirmation::test_freeze_drain(&fs,&dir,&protector,&current,&old,&v1,&archive,&operator,&v1).is_err());
+        assert!(crate::pipe::fleet_handoff_confirmation::test_frozen_admission(&fs,&dir,&protector,&current,&old,&v1,&archive,&operator).is_err());
+        let cancel_nonce="99999999-9999-4999-8999-999999999999";let status="cancelled";
+        let signed_cancel=serde_json::to_vec(&("wincommander:fleet:recovery-cancel-response:v1","POST","/v1/agents/identity-handoff/cancel",
+            &current.org_id,&current.device_id,&current.enrollment_generation,first_id,second_id,second_generation,&decision,&current.signer_key,
+            cancel_nonce,1001i64,status)).unwrap();
+        let cancel=serde_json::json!({"org_id":current.org_id,"device_id":current.device_id,"current_generation":current.enrollment_generation,
+            "previous_recovery_id":first_id,"next_recovery_id":second_id,"next_generation":second_generation,"decision_digest":decision,
+            "server_key":current.signer_key,"request_nonce":cancel_nonce,"issued_at":1001,"status":status,
+            "signature":STANDARD.encode(signer.sign(&signed_cancel).to_bytes())});let cancel=serde_json::to_vec(&cancel).unwrap();
+        assert!(crate::pipe::fleet_handoff_confirmation::test_cancel_drain(&fs,&dir,&protector,&current,&old,&v1,&archive,&operator,&cancel,cancel_nonce,1002,false).is_err());
+        assert!(crate::pipe::fleet_handoff_confirmation::test_cancel_drain(&fs,&dir,&protector,&current,&old,&v1,&archive,&operator,&cancel,"77777777-7777-4777-8777-777777777777",1002,true).is_err());
+        crate::pipe::fleet_handoff_confirmation::test_cancel_drain(&fs,&dir,&protector,&current,&old,&v1,&archive,&operator,&cancel,cancel_nonce,1002,true).unwrap();
+        let fresh_nonce="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        let fresh_preimage=serde_json::to_vec(&("wincommander:fleet:recovery-cancel-response:v1","POST","/v1/agents/identity-handoff/cancel",
+            &current.org_id,&current.device_id,&current.enrollment_generation,first_id,second_id,second_generation,&decision,&current.signer_key,
+            fresh_nonce,1400i64,status)).unwrap();
+        let mut fresh:serde_json::Value=serde_json::from_slice(&cancel).unwrap();fresh["request_nonce"]=fresh_nonce.into();fresh["issued_at"]=1400.into();
+        fresh["signature"]=STANDARD.encode(signer.sign(&fresh_preimage).to_bytes()).into();let fresh=serde_json::to_vec(&fresh).unwrap();
+        crate::pipe::fleet_handoff_confirmation::test_cancel_drain(&fs,&dir,&protector,&current,&old,&v1,&archive,&operator,&fresh,fresh_nonce,1401,true).unwrap();
+        let after_cancel=FleetMachinePolicy::open(Box::new(fs.clone()),dir.clone()).unwrap();
+        assert_eq!(after_cancel.trust_snapshot().unwrap().unwrap().0,current);
+        crate::pipe::fleet_handoff_confirmation::test_cancel_drain(&fs,&dir,&protector,&current,&old,&v1,&archive,&operator,&cancel,cancel_nonce,1002,true).unwrap();
+        assert!(crate::pipe::fleet_handoff_confirmation::test_freeze_drain(&fs,&dir,&protector,&current,&old,&v1,&archive,&operator,&v2).is_err());
+        // Restore the independent pre-cancellation fixture to test a successful
+        // commit; production permanently rejects a cancelled decision.
+        fs.atomic_write(&journal_path,&original_journal).unwrap();
+        crate::pipe::fleet_handoff_confirmation::test_freeze_drain(&fs,&dir,&protector,&current,&old,&v1,&archive,&operator,&v2).unwrap();
+        fs.fail.store(true,Ordering::SeqCst);
+        assert!(store.prepare_recovery_commit(&v2,&credential,&archive,"https://fleet.example",&protector,1001).is_err());
+        assert_eq!(store.trust_snapshot().unwrap().unwrap().0,current);
+        let archived=fs.read(&dir.join(format!("recovery-commit-{first_id}.json"))).unwrap();
+        assert_eq!(archived,serde_json::to_vec(&prior).unwrap());
+        let reopened=FleetMachinePolicy::open(Box::new(fs.clone()),dir.clone()).unwrap();
+        assert!(crate::pipe::fleet_handoff_confirmation::test_frozen_admission(&fs,&dir,&protector,&current,&old,&v1,&archive,&operator).is_err());
+        let digest=reopened.prepare_recovery_commit(&v2,&credential,&archive,"https://fleet.example",&protector,1001).unwrap();
+        let again=FleetMachinePolicy::open(Box::new(fs.clone()),dir.clone()).unwrap();
+        assert_eq!(again.prepare_recovery_commit(&v2,&credential,&archive,"https://fleet.example",&protector,1001).unwrap(),digest);
+        assert_eq!(fs.read(&dir.join(format!("recovery-commit-{first_id}.json"))).unwrap(),archived);
+        assert_eq!(candidate.public_key(&old,first_id).unwrap(),key1);
+        assert!(again.rollback_cancelled_prepare(|_,_,_,_,_|Err("denied")).is_err());
+        assert_eq!(again.trust_snapshot().unwrap().unwrap().0.enrollment_generation,second_generation);
+        let rollback_path=dir.join(format!("recovery-rollback-{second_id}.json"));
+        let snapshot=fs.read(&rollback_path).unwrap();fs.atomic_write(&rollback_path,b"tampered").unwrap();
+        assert!(again.rollback_cancelled_prepare(|_,_,_,_,_|Ok(())).is_err());
+        fs.atomic_write(&rollback_path,&snapshot).unwrap();
+        fs.fail.store(true,Ordering::SeqCst);
+        assert!(again.rollback_cancelled_prepare(|_,_,_,_,_|Ok(())).is_err());
+        let after_failed_rollback=FleetMachinePolicy::open(Box::new(fs.clone()),dir.clone()).unwrap();
+        assert_eq!(after_failed_rollback.trust_snapshot().unwrap().unwrap().0.enrollment_generation,second_generation);
+        after_failed_rollback.rollback_cancelled_prepare(|trust,previous,next,generation,seen_decision| {
+            assert_eq!(trust,&current);assert_eq!(previous,first_id);assert_eq!(next,second_id);
+            assert_eq!(generation,second_generation);assert_eq!(seen_decision,decision);Ok(())
+        }).unwrap();
+        let restored=FleetMachinePolicy::open(Box::new(fs.clone()),dir.clone()).unwrap();
+        assert_eq!(restored.trust_snapshot().unwrap().unwrap().0,current);
+        assert!(crate::pipe::fleet_handoff_confirmation::test_frozen_admission(&fs,&dir,&protector,&current,&old,&v1,&archive,&operator).is_err());
+        crate::pipe::fleet_handoff_confirmation::test_cancel_drain(&fs,&dir,&protector,&current,&old,&v1,&archive,&operator,&fresh,fresh_nonce,1401,true).unwrap();
+        crate::pipe::fleet_handoff_confirmation::test_frozen_admission(&fs,&dir,&protector,&current,&old,&v1,&archive,&operator).unwrap();
+    }
+    /// Opt-in cross-process test against the disposable server fixture only.
+    /// Native consent and the Pro archive broker are deliberately simulated.
+    #[tokio::test]
+    #[ignore = "requires isolated recovery loopback fixture"]
+    async fn recovery_loopback_prepare_commit_and_contact() {
+        struct LoopProtector;
+        impl crate::fleet_credential::Protector for LoopProtector {
+            fn protect(&self,p:&[u8],e:&[u8])->Result<Vec<u8>,&'static str> {
+                if e.is_empty() { return Err("invalid"); } let mut v=e.to_vec();v.extend(p.iter().enumerate().map(|(i,b)|b^e[i%e.len()]));Ok(v)
+            }
+            fn unprotect(&self,p:&[u8],e:&[u8])->Result<zeroize::Zeroizing<Vec<u8>>,&'static str> {
+                if e.is_empty() || !p.starts_with(e) { return Err("invalid"); }
+                Ok(zeroize::Zeroizing::new(p[e.len()..].iter().enumerate().map(|(i,b)|b^e[i%e.len()]).collect()))
+            }
+        }
+        let base=std::env::var("FLEET_RECOVERY_LOOPBACK_BASE").expect("set isolated loopback fixture URL");
+        let parsed=url::Url::parse(&base).unwrap();
+        assert_eq!(parsed.scheme(),"http");
+        assert!(matches!(parsed.host_str(),Some("127.0.0.1")|Some("localhost")));
+        let http=reqwest::Client::new();
+        let fixture:serde_json::Value=http.get(format!("{base}/test/fixture")).send().await.unwrap().error_for_status().unwrap().json().await.unwrap();
+        let field=|name:&str|fixture.get(name).and_then(serde_json::Value::as_str).unwrap().to_owned();
+        let trust=FleetTrust { org_id:field("org_id"),device_id:field("device_id"),enrollment_generation:field("old_generation"),signer_key:field("server_key") };
+        let recovery=field("recovery_id");let operator=field("operator_key");
+        let receipt=serde_json::to_vec(fixture.get("retirement_receipt").unwrap()).unwrap();
+        let fs=Fs::default();let dir=PathBuf::from("loopback-protected");
+        let state=State { record:Some(Record { trust:trust.clone(),hybrid_trust:None,hybrid_epoch_floor:0,hybrid_credential:None,hybrid_initial_pending:false,hybrid_unconfirmed:false,policy:None,audit:Vec::new(),contact:None,
+            origins:vec![base.clone()],transport_profile:Some(TransportProfile { spki_pins:String::new(),
+                environment_fingerprint:crate::fleet_runtime_env::fingerprint().unwrap() }),credential:None,credential_revision:0,
+            connection_revision:0,cleared:None,runtime_profile_changed:false,service_enabled:true,recovery_commit:None,operator_key:Some(operator) }),
+            pending:None,contact_challenge:None,hybrid_enrollment:None,hybrid_claim:None };
+        fs.atomic_write(&dir.join("fleet-machine-policy.json"),&serde_json::to_vec(&state).unwrap()).unwrap();
+        let store=FleetMachinePolicy::open(Box::new(fs.clone()),dir.clone()).unwrap();
+        assert_eq!(store.recovery_execution_mode().unwrap(),(trust.device_id.clone(),"legacy"));
+        let protector=LoopProtector;let candidate=crate::fleet_recovery_candidate::CandidateStore::open(&fs,dir.clone(),&protector).unwrap();
+        let now=||i64::try_from(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()).unwrap();
+        let (public, conflict)=crate::fleet_recovery_transport::submit_candidate(&store,&candidate,&receipt,||true).await.unwrap();
+        assert!(!conflict);
+        assert_eq!(crate::fleet_recovery_transport::submit_candidate(&store,&candidate,&receipt,||true).await.unwrap(),(public.clone(),false));
+        assert!(crate::fleet_recovery_transport::submit_candidate(&store,&candidate,&receipt,||false).await.is_err());
+        http.post(format!("{base}/test/fixture/candidate")).json(&serde_json::json!({"candidate_key":public})).send().await.unwrap().error_for_status().unwrap();
+        let handoff=crate::fleet_recovery_transport::request_handoff(&store,&candidate,&receipt,||true).await.unwrap();
+        let key:[u8;32]=STANDARD.decode(&public).unwrap().try_into().unwrap();let archive="ab".repeat(32);
+        crate::pipe::fleet_handoff_confirmation::test_seed_review(&fs,&dir,&trust,&handoff,&recovery,&key,now(),&archive).unwrap();
+        let status=crate::fleet_recovery_transport::prepare_and_resume(&store,&candidate,&receipt,&handoff,&recovery,
+            handoff.new_generation(),&archive,&protector,||true).await.unwrap();
+        assert_eq!(status,"credential_committed_pending_approval");
+        assert!(crate::pipe::fleet_handoff_confirmation::test_recovery_contact(&store,false,false,&protector).await.unwrap());
+        http.post(format!("{base}/test/fixture/activate")).send().await.unwrap().error_for_status().unwrap();
+        assert!(!crate::pipe::fleet_handoff_confirmation::test_recovery_contact(&store,false,false,&protector).await.unwrap());
+        crate::pipe::fleet_handoff_confirmation::test_recovery_contact(&store,false,true,&protector).await.unwrap();
+        crate::pipe::fleet_handoff_confirmation::test_recovery_contact(&store,true,false,&protector).await.unwrap();
+        if std::env::var("FLEET_SIMPLE_LEAVE_LOOPBACK").ok().as_deref()==Some("1") {
+            // Leave proof and cleanup need no separate operator key. The test
+            // modifies only its in-memory mock store after recovery setup.
+            let path=dir.join("fleet-machine-policy.json");
+            let mut saved:State=serde_json::from_slice(&fs.read(&path).unwrap()).unwrap();
+            saved.record.as_mut().unwrap().operator_key=None;
+            fs.atomic_write(&path,&serde_json::to_vec(&saved).unwrap()).unwrap();
+            let store=FleetMachinePolicy::open(Box::new(fs.clone()),dir.clone()).unwrap();
+            assert!(crate::fleet_recovery_leave::request(&store,&protector,"wrong-device").await.is_err());
+            let request=crate::fleet_recovery_leave::request(&store,&protector,&trust.device_id).await.unwrap();
+            assert_eq!(request["status"],"pending");
+            let pending=crate::pipe::fleet_handoff_confirmation::test_simple_leave_status(&store,&fs,&dir,&protector,&candidate).await.unwrap();
+            assert_eq!(pending["approved"],false);
+            http.post(format!("{base}/test/fixture/remove")).send().await.unwrap().error_for_status().unwrap();
+            let approved=crate::pipe::fleet_handoff_confirmation::test_simple_leave_status(&store,&fs,&dir,&protector,&candidate).await.unwrap();
+            assert_eq!(approved["approved"],true);
+            assert!(store.credential_snapshot(&protector).unwrap().is_none());
+            let reopened=FleetMachinePolicy::open(Box::new(fs.clone()),dir.clone()).unwrap();
+            assert!(reopened.confirmed_leave().unwrap().is_some());
+            let (_,_,token,connection,_)=reopened.contact_state().unwrap().unwrap();
+            assert!(reopened.clear_credential(&token.unwrap(),&connection).unwrap());
+            assert!(reopened.confirmed_leave().unwrap().is_some());
+            return;
+        }
+        let results:serde_json::Value=http.get(format!("{base}/test/fixture/results")).send().await.unwrap().error_for_status().unwrap().json().await.unwrap();
+        let commands:Vec<fleet_proto::SignedCommand>=serde_json::from_value(results["commands"].clone()).unwrap();assert_eq!(commands.len(),2);
+        for command in commands { crate::pipe::fleet_handoff_confirmation::test_seed_late_evidence(&store,&fs,&dir,&protector,&candidate,command).unwrap(); }
+        assert_eq!(crate::pipe::fleet_handoff_confirmation::test_pending_result_count(&store,&fs,&dir,&candidate).unwrap(),2);
+        assert!(crate::pipe::fleet_handoff_confirmation::test_recovery_results(&store,&fs,&dir,&protector,&candidate).await.is_err());
+        assert_eq!(crate::pipe::fleet_handoff_confirmation::test_pending_result_count(&store,&fs,&dir,&candidate).unwrap(),2);
+        http.post(format!("{base}/test/fixture/results/release")).send().await.unwrap().error_for_status().unwrap();
+        crate::pipe::fleet_handoff_confirmation::test_recovery_results(&store,&fs,&dir,&protector,&candidate).await.unwrap();
+        assert_eq!(crate::pipe::fleet_handoff_confirmation::test_pending_result_count(&store,&fs,&dir,&candidate).unwrap(),0);
+        let command:fleet_proto::SignedCommand=http.get(format!("{base}/test/fixture/unknown")).send().await.unwrap().error_for_status().unwrap().json().await.unwrap();
+        let command_id=command.command_id.clone();
+        let seeded=crate::pipe::fleet_handoff_confirmation::test_seed_late_evidence(&store,&fs,&dir,&protector,&candidate,command).unwrap();
+        http.post(format!("{base}/test/fixture/unknown")).json(&seeded).send().await.unwrap().error_for_status().unwrap();
+        crate::pipe::fleet_handoff_confirmation::test_upload_late(&store,&fs,&dir,&protector,&candidate,&command_id).await.unwrap();
+        // A repeated upload returns from the retained verified receipt; it does not delete evidence.
+        crate::pipe::fleet_handoff_confirmation::test_upload_late(&store,&fs,&dir,&protector,&candidate,&command_id).await.unwrap();
+        let created:serde_json::Value=http.post(format!("{base}/test/fixture/vault")).send().await.unwrap().error_for_status().unwrap().json().await.unwrap();
+        let id=created["command_id"].as_str().unwrap();
+        crate::pipe::fleet_handoff_confirmation::test_vault_work(&store,&fs,&dir,&protector,&candidate,id).await.unwrap();
+        let report:serde_json::Value=http.get(format!("{base}/test/fixture/vault/{id}")).send().await.unwrap().error_for_status().unwrap().json().await.unwrap();
+        assert!(matches!(report["status"].as_str(),Some("applied"|"verified")));
+        assert_eq!(report["result"],serde_json::json!({"installed":true,"scope":"agent_authorized","mounted_count":2}));
+    }
+    #[test]
+    fn operator_pin_requires_approval_distinct_key_and_atomic_storage() {
+        let signer=SigningKey::from_bytes(&[11;32]);
+        let trust=FleetTrust { org_id:"org-a".into(),device_id:"0480b2ca-f4c3-4599-81fc-4876f73e70fa".into(),
+            enrollment_generation:"22222222-2222-4222-8222-222222222222".into(),signer_key:STANDARD.encode(signer.verifying_key().as_bytes()) };
+        let fs=Fs::default(); let dir=PathBuf::from("operator-test");
+        let state=State { record:Some(Record { trust:trust.clone(),hybrid_trust:None,hybrid_epoch_floor:0,hybrid_credential:None,hybrid_initial_pending:false,hybrid_unconfirmed:false,policy:None,audit:Vec::new(),contact:None,origins:Vec::new(),transport_profile:None,
+            credential:None,credential_revision:0,connection_revision:0,cleared:None,runtime_profile_changed:false,service_enabled:true,recovery_commit:None,operator_key:None }),pending:None,contact_challenge:None,hybrid_enrollment:None,hybrid_claim:None };
+        let mut legacy=serde_json::to_value(&state).unwrap(); legacy["record"].as_object_mut().unwrap().remove("operator_key");
+        fs.atomic_write(&dir.join("fleet-machine-policy.json"),&serde_json::to_vec(&legacy).unwrap()).unwrap();
+        let store=FleetMachinePolicy::open(Box::new(fs.clone()),dir).unwrap(); assert!(store.operator_key().unwrap().is_none());
+        let operator=STANDARD.encode(SigningKey::from_bytes(&[33;32]).verifying_key().as_bytes());
+        assert!(store.commit_operator_key_with(trust.signer_key.clone(),|_,_| panic!("equal key must be rejected first")).is_err());
+        assert!(validate_operator_key(&trust,&STANDARD.encode([0u8;32])).is_err());
+        assert!(validate_operator_key(&trust,"not-canonical!").is_err());
+        assert!(store.commit_operator_key_with(operator.clone(),|_,_| Err("denied")).is_err());
+        fs.fail.store(true,Ordering::SeqCst);
+        assert!(store.commit_operator_key_with(operator.clone(),|_,_| Ok("S-1-5-21-1".into())).is_err());
+        assert!(store.operator_key().unwrap().is_none());
+        store.commit_operator_key_with(operator.clone(),|seen,key| { assert_eq!(seen,&trust); assert_eq!(key,operator); Ok("S-1-5-21-1".into()) }).unwrap();
+        assert_eq!(store.operator_key().unwrap(),Some(operator));
+    }
+    #[test]
+    fn prepared_credential_is_atomic_restartable_and_inactive_until_signed_commit() {
+        use sha2::{Digest,Sha256};
+        let trust=FleetTrust { org_id:"org-a".into(),device_id:"0480b2ca-f4c3-4599-81fc-4876f73e70fa".into(),
+            enrollment_generation:"22222222-2222-4222-8222-222222222222".into(),signer_key:"Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo=".into() };
+        let h:crate::fleet_identity_handoff::Handoff=serde_json::from_value(serde_json::json!({"recovery_id":"11111111-1111-4111-8111-111111111111","org_id":trust.org_id,"device_id":trust.device_id,
+            "old_generation":trust.enrollment_generation,"new_generation":"33333333-3333-4333-8333-333333333333","new_key":"kaKKC3Q4FZOk2UaVeSCJJq/IrYLIg5t2RDWbnrqaSzo=",
+            "next_sequence":7,"previous_hash":"ab".repeat(32),"issued_at":1000,"server_key":trust.signer_key,
+            "signature":"h97rXEpV9lskSg1jI2698m0urZAufIhNyq0qhcDFCNc2lVnOBaCWXIWxHgi6GDWP3rRyvbqdv/zhsv/TvjWZDQ=="})).unwrap();
+        let key:[u8;32]=STANDARD.decode("kaKKC3Q4FZOk2UaVeSCJJq/IrYLIg5t2RDWbnrqaSzo=").unwrap().try_into().unwrap();
+        let verified=h.verify(&trust,"11111111-1111-4111-8111-111111111111","33333333-3333-4333-8333-333333333333",&key,1001).unwrap();
+        let archive="cd".repeat(32); let nonce="44444444-4444-4444-8444-444444444444"; let secret=[8u8;32];
+        let decision=hex(verified.decision_digest()); let secret_hash=hex(&Sha256::digest(secret));
+        let response_preimage=serde_json::to_vec(&("wincommander:fleet:identity-handoff-prepare-response:v1","POST","/v1/agents/identity-handoff/confirm",
+            &trust.org_id,&trust.device_id,verified.retirement_id(),verified.new_generation(),&decision,&archive,&secret_hash,&trust.signer_key,nonce,1000i64)).unwrap();
+        let response=serde_json::json!({"org_id":trust.org_id,"device_id":trust.device_id,"recovery_id":verified.retirement_id(),"new_generation":verified.new_generation(),
+            "decision_digest":decision,"archive_sha256":archive,"credential_sha256":secret_hash,"server_key":trust.signer_key,"request_nonce":nonce,"issued_at":1000,
+            "checkin_secret_b64":STANDARD.encode(secret),"signature":STANDARD.encode(SigningKey::from_bytes(&[11;32]).sign(&response_preimage).to_bytes())});
+        let credential=crate::fleet_recovery_credential::verify_response(&serde_json::to_vec(&response).unwrap(),&trust,&verified,&archive,nonce,1001).unwrap();
+        let fs=Fs::default(); let dir=PathBuf::from("protected"); let path=dir.join("fleet-machine-policy.json");
+        let state=State { record:Some(Record { trust:trust.clone(),hybrid_trust:None,hybrid_epoch_floor:0,hybrid_credential:None,hybrid_initial_pending:false,hybrid_unconfirmed:false,policy:None,audit:Vec::new(),contact:None,origins:vec!["https://fleet.example".into()],
+            transport_profile:Some(TransportProfile { spki_pins:String::new(),environment_fingerprint:STANDARD.encode([1u8;32]) }),
+            credential:None,credential_revision:0,connection_revision:0,cleared:None,runtime_profile_changed:false,service_enabled:true,recovery_commit:None,operator_key:Some(STANDARD.encode(SigningKey::from_bytes(&[33;32]).verifying_key().as_bytes())) }),pending:None,contact_challenge:None,hybrid_enrollment:None,hybrid_claim:None };
+        fs.atomic_write(&path,&serde_json::to_vec(&state).unwrap()).unwrap();
+        let review=serde_json::json!({"org_id":trust.org_id,"device_id":trust.device_id,"old_generation":trust.enrollment_generation,
+            "recovery_id":verified.retirement_id(),"new_generation":verified.new_generation(),"handoff_digest":hex(verified.digest()),"decision_digest":decision,
+            "candidate_fingerprint":hex(verified.fingerprint()),"archive_sha256":archive,"journal_present":false,"journal_sha256":null,
+            "archived_actor_sid":"S-1-5-21-1","reviewing_actor_sid":"S-1-5-21-1","outcome":"unknown_acknowledged"});
+        fs.atomic_write(&dir.join(format!("review-{}.json",verified.retirement_id())),&serde_json::to_vec(&review).unwrap()).unwrap();
+        let store=FleetMachinePolicy::open(Box::new(fs.clone()),dir.clone()).unwrap();
+        assert_eq!(store.recovery_execution_mode().unwrap(),(trust.device_id.clone(),"legacy"));
+        fs.fail.store(true,Ordering::SeqCst);
+        assert!(store.prepare_recovery_commit(&verified,&credential,&archive,"https://fleet.example",&Protector,1001).is_err());
+        assert_eq!(store.trust_snapshot().unwrap().unwrap().0,trust);
+        let digest=store.prepare_recovery_commit(&verified,&credential,&archive,"https://fleet.example",&Protector,1001).unwrap();
+        assert_eq!(store.recovery_execution_mode().unwrap(),(trust.device_id.clone(),"pending"));
+        assert!(store.credential_snapshot(&Protector).unwrap().is_none());
+        let reopened=FleetMachinePolicy::open(Box::new(fs.clone()),dir.clone()).unwrap();
+        let expected=reopened.pending_recovery().unwrap().unwrap(); assert_eq!(expected.local_commit_digest(),digest);
+        assert!(reopened.begin_enrollment(trust.device_id.clone(),trust.signer_key.clone(),vec!["https://fleet.example".into()],None).is_err());
+        let clear_token=reopened.credential_clear_token().unwrap().unwrap();
+        let connection_token=reopened.contact_state().unwrap().unwrap().3;
+        assert!(reopened.clear_credential(&clear_token,&connection_token).is_err());
+        let status="credential_committed_pending_approval";
+        let commit_preimage=serde_json::to_vec(&("wincommander:fleet:identity-handoff-commit-response:v1","POST","/v1/agents/identity-handoff/commit",
+            &trust.org_id,&trust.device_id,verified.retirement_id(),verified.new_generation(),&decision,&archive,&digest,&secret_hash,&trust.signer_key,nonce,1000i64,status)).unwrap();
+        let commit=serde_json::json!({"org_id":trust.org_id,"device_id":trust.device_id,"recovery_id":verified.retirement_id(),"new_generation":verified.new_generation(),
+            "decision_digest":decision,"archive_sha256":archive,"local_commit_digest":digest,"credential_sha256":secret_hash,"server_key":trust.signer_key,
+            "request_nonce":nonce,"issued_at":1000,"status":status,"signature":STANDARD.encode(SigningKey::from_bytes(&[11;32]).sign(&commit_preimage).to_bytes())});
+        let activation=crate::fleet_recovery_credential::verify_commit_response(&serde_json::to_vec(&commit).unwrap(),&expected,nonce,1001).unwrap();
+        reopened.activate_recovery(&expected,&activation,1001).unwrap();
+        assert_eq!(reopened.recovery_execution_mode().unwrap(),(trust.device_id.clone(),"recovered"));
+        let mut snapshot=reopened.credential_snapshot(&Protector).unwrap().unwrap();
+        assert_eq!(snapshot.secret.as_slice(),&secret);
+        assert!(reopened.pending_recovery().unwrap().is_none());
+        let signer=SigningKey::from_bytes(&[11;32]);
+        let mut config=fleet_proto::ConfigEpoch { org_id:fleet_proto::OrgId(trust.org_id.clone()),version:7,
+            config_json:serde_json::json!({}),target_kind:"org".into(),target_id:None,locked_paths:vec![],managed:true,
+            signature:String::new(),signer_key:trust.signer_key.clone() };
+        config.signature=STANDARD.encode(signer.sign(&fleet_proto::epoch_preimage(&fleet_proto::EpochSigningInput { version:config.version,
+            config:&config.config_json,locked_paths:&config.locked_paths,managed:config.managed,target_kind:&config.target_kind,target_id:config.target_id.as_deref() })).to_bytes());
+        let mut policy=fleet_proto::PolicyEnvelope { org_id:fleet_proto::OrgId(trust.org_id.clone()),device_id:fleet_proto::DeviceId(trust.device_id.clone()),
+            enrollment_generation:Some(verified.new_generation().into()),config_revision:Some(1),resolution_revision:Some(1),config:Some(config),
+            shield:None,shield_revision:0,clipboard_guard_enabled:false,signature:String::new(),signer_key:trust.signer_key.clone() };
+        policy.signature=STANDARD.encode(signer.sign(&policy.preimage()).to_bytes());
+        let mut forged=policy.clone(); forged.enrollment_generation=Some(trust.enrollment_generation.clone());
+        assert!(reopened.install_recovery_policy(forged,&snapshot).is_err());
+        let mut forged=policy.clone(); forged.config.as_mut().unwrap().config_json=serde_json::json!({"tampered":true});
+        forged.signature=STANDARD.encode(signer.sign(&forged.preimage()).to_bytes());
+        assert!(reopened.install_recovery_policy(forged,&snapshot).is_err());
+        reopened.install_recovery_policy(policy.clone(),&snapshot).unwrap();
+        assert_eq!(reopened.held_recovery_epoch(&snapshot).unwrap(),7);
+        let held=reopened.held_recovery_policy(&snapshot).unwrap();
+        assert_eq!(held.enrollment_generation,verified.new_generation());assert_eq!(held.epoch_version,7);
+        assert_eq!(held.policy_sha256,fleet_proto::canonical_json_sha256(&serde_json::to_value(&policy).unwrap()));
+        assert_eq!(held.policy,policy);
+        let request=crate::pipe::fleet_handoff_confirmation::test_held_policy_request(&reopened,&snapshot).unwrap();
+        assert_eq!(request.recovery_held_policy.as_ref(),Some(&held));
+        assert!(request.capabilities.iter().any(|value|value=="windows_recovery_commands_only_v1"));
+        assert_eq!(request.hmac,fleet_agent_core::compute_request_hmac_v2(&snapshot.secret,"POST","/v1/agents/checkin",&request).unwrap());
+        let results=crate::pipe::fleet_handoff_confirmation::test_results_policy_request(&reopened,&snapshot).unwrap();
+        assert_eq!(results.recovery_held_policy.as_ref(),Some(&held));
+        assert!(results.capabilities.iter().any(|value|value=="windows_recovery_results_v1"));
+        assert_eq!(results.hmac,fleet_agent_core::compute_request_hmac_v2(&snapshot.secret,"POST","/v1/agents/checkin",&results).unwrap());
+        snapshot.revision+=1;
+        assert!(reopened.held_recovery_epoch(&snapshot).is_err());
+        assert!(reopened.held_recovery_policy(&snapshot).is_err());
+        snapshot.revision-=1;
+        let generation=snapshot.trust.enrollment_generation.clone();
+        snapshot.trust.enrollment_generation=trust.enrollment_generation.clone();
+        assert!(reopened.held_recovery_epoch(&snapshot).is_err());
+        assert!(reopened.held_recovery_policy(&snapshot).is_err());
+        snapshot.trust.enrollment_generation=generation;
+        let after_restart=FleetMachinePolicy::open(Box::new(fs.clone()),dir.clone()).unwrap();
+        assert_eq!(after_restart.snapshot().unwrap(),Some(policy));
+        let snapshot=after_restart.credential_snapshot(&Protector).unwrap().unwrap();
+        assert_eq!(after_restart.held_recovery_epoch(&snapshot).unwrap(),7);
+    }
+}
+
+#[cfg(windows)]
+impl FleetMachinePolicy {
+    /// Revalidates the reviewed decision against current protected trust.
+    pub(crate) fn validate_recovery_review(&self, verified:&crate::fleet_identity_handoff::VerifiedHandoff,
+        archive:&str) -> Result<(),&'static str> {
+        self.with_handoff_trust(|trust| {
+            let dir=self.path.parent().ok_or("store_unavailable")?;
+            crate::pipe::fleet_handoff_confirmation::initialize_replacement(&*self.fs,dir,trust,verified,archive)
+        })
+    }
+}
+
+#[cfg(windows)]
+impl FleetMachinePolicy {
+    pub(crate) fn validate_pending_recovery_credential(&self, expected:&RecoveryExpected,
+        protector:&dyn crate::fleet_credential::Protector) -> Result<(),&'static str> {
+        use sha2::{Digest,Sha256};
+        let guard=self.state.lock().map_err(|_| "store_unavailable")?;
+        let record=guard.record.as_ref().ok_or("not_provisioned")?;
+        let commit=record.recovery_commit.as_ref().ok_or("recovery_not_prepared")?;
+        if !commit.activation_pending || record.service_enabled || commit.recovery_id!=expected.recovery_id
+            || commit.local_commit_digest!=expected.local_commit_digest || commit.credential_sha256!=expected.credential_sha256
+            || commit.origin!=expected.origin || record.trust.org_id!=expected.old_trust.org_id
+            || record.trust.device_id!=expected.old_trust.device_id || record.trust.signer_key!=expected.old_trust.signer_key
+            || record.trust.enrollment_generation!=expected.new_generation { return Err("recovery commit changed"); }
+        let credential=record.credential.as_ref().ok_or("invalid_store")?;
+        if credential.origin!=commit.origin { return Err("invalid_store"); }
+        let sealed=STANDARD.decode(&credential.ciphertext).map_err(|_| "invalid_store")?;
+        if STANDARD.encode(&sealed)!=credential.ciphertext { return Err("invalid_store"); }
+        let binding=crate::fleet_credential::CredentialBinding { org_id:&record.trust.org_id,device_id:&record.trust.device_id,
+            enrollment_generation:&record.trust.enrollment_generation,origin:&credential.origin };
+        let secret=crate::fleet_credential::unseal(protector,&binding,&sealed)?;
+        let digest=Sha256::digest(secret.as_slice()).iter().map(|b|format!("{b:02x}")).collect::<String>();
+        if digest!=commit.credential_sha256 { return Err("invalid_store"); }
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+impl FleetMachinePolicy {
+    pub(crate) fn operator_key(&self)->Result<Option<String>,&'static str> {
+        let guard=self.state.lock().map_err(|_| "store_unavailable")?;
+        let Some(record)=guard.record.as_ref() else { return Ok(None) };
+        if let Some(key)=&record.operator_key { validate_operator_key(&record.trust,key)?; }
+        Ok(record.operator_key.clone())
+    }
+    pub(crate) fn commit_operator_key(&self, operator:String,
+        approval:crate::pipe::fleet_handoff_confirmation::OperatorApproval,
+        peer:&crate::pipe::AuthenticatedPipePeer)->Result<(),&'static str> {
+        self.commit_operator_key_with(operator, |trust,key| approval.validate(trust,key,peer))
+    }
+    fn commit_operator_key_with(&self,operator:String,
+        verify:impl FnOnce(&FleetTrust,&str)->Result<String,&'static str>)->Result<(),&'static str> {
+        let mut guard=self.state.lock().map_err(|_| "store_unavailable")?;
+        let current=guard.record.as_ref().ok_or("not_provisioned")?;
+        if current.recovery_commit.as_ref().is_some_and(|commit|commit.activation_pending) { return Err("recovery_pending"); }
+        validate_operator_key(&current.trust,&operator)?;
+        let actor=verify(&current.trust,&operator)?;
+        let mut next=guard.clone(); let record=next.record.as_mut().ok_or("not_provisioned")?;
+        if record.operator_key.as_deref()!=Some(&operator) {
+            if record.audit.len()>=64 { record.audit.remove(0); }
+            record.audit.push(trust_audit("operator_key_pin",&actor,&record.trust.enrollment_generation)?);
+            record.operator_key=Some(operator);
+        }
+        self.persist(&next)?; *guard=next; Ok(())
     }
 }
