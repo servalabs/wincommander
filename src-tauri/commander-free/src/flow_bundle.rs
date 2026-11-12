@@ -599,7 +599,7 @@ mod tests {
 
     #[test]
     fn sign_then_verify_roundtrips() {
-        let signing_key = SigningKey::generate(&mut rand10::rng());
+        let signing_key = SigningKey::generate(&mut rand::rng());
         let pubkey = signing_key.verifying_key();
         let flows = vec![fake_flow("hello")];
         let mut bundle = FlowBundle {
@@ -617,7 +617,7 @@ mod tests {
 
     #[test]
     fn tamper_breaks_verify() {
-        let signing_key = SigningKey::generate(&mut rand10::rng());
+        let signing_key = SigningKey::generate(&mut rand::rng());
         let pubkey = signing_key.verifying_key();
         let flows = vec![fake_flow("orig")];
         let mut bundle = FlowBundle {

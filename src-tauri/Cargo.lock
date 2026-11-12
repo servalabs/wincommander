@@ -966,7 +966,6 @@ dependencies = [
  "notify",
  "once_cell",
  "rand 0.10.3",
- "rand 0.8.8",
  "raw-window-handle",
  "rcgen",
  "regex",

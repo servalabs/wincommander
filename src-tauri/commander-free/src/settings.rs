@@ -5984,7 +5984,7 @@ mod tests {
         use base64::{engine::general_purpose::STANDARD, Engine};
         use ed25519_dalek::{Signer, SigningKey};
 
-        let signing_key = SigningKey::generate(&mut rand10::rng());
+        let signing_key = SigningKey::generate(&mut rand::rng());
         let pubkey_b64 = STANDARD.encode(signing_key.verifying_key().to_bytes());
 
         warm_cache_with_pinned_fleet_key(&pubkey_b64);

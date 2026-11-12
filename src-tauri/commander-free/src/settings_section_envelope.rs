@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Self-contained section envelope. Key protection is supplied by the caller.
-use super::{decode_section, encode_section, B64, OsRng, RngCore};
+use super::{decode_section, encode_section, B64, SysRng, TryRng};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
@@ -13,7 +13,7 @@ struct Envelope { wrapped_key: String, ciphertext: String }
 
 pub(super) fn seal(section: &str, data: &[u8], protect: impl Fn(&[u8]) -> Result<Vec<u8>, String>, unprotect: impl Fn(&[u8]) -> Result<Vec<u8>, String>) -> Result<String, String> {
     let mut key = Zeroizing::new([0u8; 32]);
-    OsRng.fill_bytes(key.as_mut());
+    SysRng.try_fill_bytes(key.as_mut()).map_err(|_| "randomness unavailable")?;
     let wrapped = protect(key.as_ref())?;
     if wrapped.is_empty() || wrapped.len() > MAX_WRAPPED { return Err("invalid protected section key".into()); }
     let check = Zeroizing::new(unprotect(&wrapped)?);

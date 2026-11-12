@@ -877,30 +877,29 @@ pub(crate) async fn quiesce_idle_pro_for_search() -> Result<ProSearchQuiescence,
 /// Compute a Windows named-pipe path from a random suffix. The
 /// `\\.\pipe\` prefix is required by the OS; we add a `wincmd-pro-`
 /// component so the pipe is greppable in tools like Process Explorer.
-fn random_pipe_name() -> String {
+fn random_pipe_name() -> Result<String, String> {
     // 16 hex chars = 64 bits of randomness — collision-free for any
     // realistic spawn rate.
     let mut buf = [0u8; 8];
-    getrandom_bytes(&mut buf);
+    getrandom_bytes(&mut buf)?;
     let suffix: String = buf.iter().map(|b| format!("{:02x}", b)).collect();
-    format!(r"\\.\pipe\wincmd-pro-{}", suffix)
+    Ok(format!(r"\\.\pipe\wincmd-pro-{}", suffix))
 }
 
-fn random_session_token() -> String {
+fn random_session_token() -> Result<String, String> {
     let mut buf = [0u8; 32];
-    getrandom_bytes(&mut buf);
-    buf.iter().map(|b| format!("{:02x}", b)).collect()
+    getrandom_bytes(&mut buf)?;
+    Ok(buf.iter().map(|b| format!("{:02x}", b)).collect())
 }
 
 // CSPRNG-backed: the session token is the HMAC key and the sole secret
 // authenticating every frame on the per-session pipe. A time+PID LCG (the old
 // v1) was locally predictable, letting a same-machine attacker forge signed
-// frames to the privileged Pro peer. OsRng pulls from the OS CSPRNG
+// frames to the privileged Pro peer. SysRng pulls from the OS CSPRNG
 // (BCryptGenRandom on Windows) — same source datastore.rs uses for keys/nonces.
-fn getrandom_bytes(buf: &mut [u8]) {
-    use rand::rngs::OsRng;
-    use rand::RngCore;
-    OsRng.fill_bytes(buf);
+fn getrandom_bytes(buf: &mut [u8]) -> Result<(), String> {
+    use rand::{rngs::SysRng, TryRng};
+    SysRng.try_fill_bytes(buf).map_err(|_| "sidecar randomness unavailable".to_string())
 }
 
 /// Result returned to the frontend `test_pro_handshake` command.
@@ -966,8 +965,10 @@ pub async fn handshake_pro_once() -> HandshakeResult {
         }
     };
 
-    let pipe_name = random_pipe_name();
-    let token = random_session_token();
+    let (pipe_name, token) = match random_pipe_name().and_then(|pipe| Ok((pipe, random_session_token()?))) {
+        Ok(values) => values,
+        Err(error) => return HandshakeResult { ok: false, pipe: None, pro_version: None, binary_hash: None, error: Some(error) },
+    };
 
     // Create the server side of the pipe BEFORE spawning Pro so Pro's
     // ClientOptions::open() finds it on the first try. ServerOptions
@@ -1219,8 +1220,8 @@ async fn spawn_pro_session_unlocked(role: SessionRole) -> Result<ProSession, Str
     let _operation = crate::pro_install::pro_operation_lease()?;
     crate::log_message_src("info", "core", "[Sidecar] spawn_pro_session: start");
     let pro_path = resolve_pro_binary()?;
-    let pipe_name = random_pipe_name();
-    let token = random_session_token();
+    let pipe_name = random_pipe_name()?;
+    let token = random_session_token()?;
 
     let mut server = ServerOptions::new()
         .first_pipe_instance(true)
@@ -2269,7 +2270,7 @@ mod tests {
         use std::{collections::HashMap, sync::Arc};
         use tokio::net::windows::named_pipe::{ClientOptions, ServerOptions};
         use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE};
-        let name = super::random_pipe_name();
+        let name = super::random_pipe_name().unwrap();
         let server = ServerOptions::new().first_pipe_instance(true).create(&name).unwrap();
         let client = ClientOptions::new().open(&name).unwrap();
         server.connect().await.unwrap();

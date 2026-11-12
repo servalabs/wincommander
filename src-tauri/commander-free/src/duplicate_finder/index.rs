@@ -56,7 +56,7 @@ impl ScanIndex {
         // Scratch databases cannot be resumed after process exit, so their key
         // lives only in memory. Never leave SQLite temporary stores on disk.
         let mut key = Zeroizing::new([0u8; 32]);
-        rand::RngCore::try_fill_bytes(&mut rand::rngs::OsRng, &mut *key)
+        rand::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, &mut *key)
             .map_err(|_| "Cannot generate scan encryption key")?;
         let key_hex = Zeroizing::new(hex::encode(key.as_slice()));
         let raw_key = Zeroizing::new(format!("x'{}'", key_hex.as_str()));
