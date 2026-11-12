@@ -38,6 +38,8 @@ mod hybrid_history;
 pub(crate) mod update_guard;
 #[path = "pro_download.rs"]
 mod pro_download;
+#[path = "pro_manifest_body.rs"]
+mod pro_manifest_body;
 #[path = "pro_update_process.rs"]
 mod update_process;
 #[path = "pro_update_replace.rs"]
@@ -705,10 +707,9 @@ pub async fn fetch_pro_manifest(manifest_url: String) -> Result<serde_json::Valu
     if !resp.status().is_success() {
         return Err(format!("http_error:HTTP {}", resp.status()));
     }
-    let manifest = resp
-        .json::<serde_json::Value>()
-        .await
-        .map_err(|e| format!("parse:{}", e))?;
+    let body = pro_manifest_body::read(resp).await?;
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&body).map_err(|e| format!("parse:{}", e))?;
     crate::updater::require_selected_channel(channel)?;
     check_pro_release_minimum(manifest.get("version").and_then(serde_json::Value::as_str))?;
     Ok(manifest)

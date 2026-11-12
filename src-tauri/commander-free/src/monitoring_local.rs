@@ -6,7 +6,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 use tauri::AppHandle;
 
-use crate::monitoring_rows::{local_row, locked_row};
+use crate::monitoring_rows::{configuration_only_row, local_row, locked_row};
 
 pub(crate) async fn local_monitors(app: AppHandle, paid: bool) -> Vec<Value> {
     let mut rows = Vec::with_capacity(8);
@@ -178,39 +178,18 @@ pub(crate) async fn local_monitors(app: AppHandle, paid: bool) -> Vec<Value> {
         None,
     ));
 
-    let (rdp_enabled, rdp_count) = crate::settings::read_settings()
-        .ok()
-        .map(|settings| {
-            let tracking = &settings.ideal.privacy.tracking;
-            let tweaks = &settings.ideal.tweaks.rdp;
-            let count = [
-                tracking.rdp_idle_disconnect_enabled.unwrap_or(false),
-                tweaks.incoming_idle_timeout_enabled.unwrap_or(false),
-            ]
-            .into_iter()
-            .filter(|enabled| *enabled)
-            .count() as u64;
-            (count > 0, count)
-        })
-        .unwrap_or((false, 0));
-    rows.push(local_row(
-        "rdp-idle-protection",
-        "RDP idle protections",
-        "sessions",
-        true,
-        !paid,
-        None,
-        &[
-            "idle-disconnect",
-            "session-end-cleanup",
-            "incoming-session-policy",
-        ],
-        Ok(json!({ "running": rdp_enabled, "activeCount": rdp_count })),
-        None,
-        Some(rdp_count),
-        false,
-        None,
-    ));
+    let rdp_count = crate::settings::read_settings().ok().map(|settings| {
+        let tracking = &settings.ideal.privacy.tracking;
+        let tweaks = &settings.ideal.tweaks.rdp;
+        [
+            tracking.rdp_idle_disconnect_enabled.unwrap_or(false),
+            tweaks.incoming_idle_timeout_enabled.unwrap_or(false),
+        ]
+        .into_iter()
+        .filter(|enabled| *enabled)
+        .count() as u64
+    });
+    rows.push(configuration_only_row(!paid, rdp_count));
 
     if paid {
         let print_status = crate::print_log::get_print_audit_status()
