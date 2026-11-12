@@ -4987,8 +4987,8 @@ mod test_support {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn recovery_lab_profile_is_coherent_and_disabled_by_default() {
-        let enabled=cfg!(feature="fleet-recovery-lab");
+    fn recovery_verbs_remain_disabled_until_signed_v2_admission_is_ready() {
+        let enabled = false;
         assert_eq!(super::OPERATOR_PIN_READY,enabled);assert_eq!(super::RECOVERY_RESUME_READY,enabled);
         assert_eq!(super::RECOVERY_STAGE_READY,enabled);assert_eq!(super::RECOVERY_HANDOFF_READY,enabled);
         assert_eq!(super::RECOVERY_FINISH_READY,enabled);assert_eq!(super::RECOVERY_CONTACT_READY,enabled);
@@ -5002,13 +5002,11 @@ mod tests {
         assert!(!super::OPERATOR_PIN_READY);
         assert!(super::handle_operator_key_pin(serde_json::json!({"operator_key":"invalid"}),None).is_err());
     }
-    #[cfg(not(feature="fleet-recovery-lab"))]
     #[tokio::test]
     async fn recovery_resume_ipc_stays_unavailable_until_recovery_is_ready() {
         assert!(!super::RECOVERY_RESUME_READY);
         assert!(super::handle_recovery_resume(serde_json::json!({}), None).await.is_err());
     }
-    #[cfg(not(feature="fleet-recovery-lab"))]
     #[tokio::test]
     async fn recovery_stage_ipc_stays_unavailable_until_recovery_is_ready() {
         assert!(!super::RECOVERY_STAGE_READY);
