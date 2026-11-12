@@ -23,10 +23,12 @@ RequestExecutionLevel user
 SilentInstall silent
 Section
   !insertmacro WC_LOAD_PROGRAMDATA_OR_ABORT "fixture"
+  ClearErrors
   FileOpen $1 "$EXEDIR\observed.bin" w
   IfErrors failed
   FileWriteUTF16LE $1 "$R5"
   FileClose $1
+  SetErrorLevel 0
   Quit
   failed:
   SetErrorLevel 1
@@ -40,7 +42,7 @@ SectionEnd
         # A changed inherited value must not redirect the machine-data root.
         $env:ProgramData = Join-Path $root 'fake-program-data'
         $result = Start-Process -FilePath (Join-Path $root 'probe.exe') -Wait -PassThru
-        if ($result.ExitCode -ne 0) { throw 'The known-folder probe failed.' }
+        if ($result.ExitCode -ne 0) { throw "The known-folder probe failed with exit code $($result.ExitCode)." }
         $actual = [IO.File]::ReadAllText((Join-Path $root 'observed.bin'), [Text.Encoding]::Unicode).TrimStart([char]0xFEFF)
         $expected = [Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)
         if (-not $expected -or -not [string]::Equals($actual, $expected, [StringComparison]::OrdinalIgnoreCase)) {
