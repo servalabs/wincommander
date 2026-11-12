@@ -2,17 +2,20 @@ import { spawnSync } from "node:child_process";
 import { copyFileSync, mkdirSync, renameSync } from "node:fs";
 import { resolve } from "node:path";
 import { getProManifestPath } from "./pro-workspace";
+import { recoveryLabEnabled, validateRecoveryLabCargoArgs } from "./recovery-lab-build";
 
 const ROOT = resolve(import.meta.dir, "..");
 const PRO_MANIFEST = getProManifestPath(ROOT);
 const TARGET_DIR = resolve(ROOT, "src-tauri", "target");
 const extraArgs = process.argv.slice(2);
+const recoveryLab = recoveryLabEnabled(process.env);
+validateRecoveryLabCargoArgs(extraArgs, recoveryLab);
 const staticCrtFlags = "-C target-feature=+crt-static";
 const rustflags = [process.env.RUSTFLAGS, staticCrtFlags].filter(Boolean).join(" ");
 
 const result = spawnSync(
   "cargo",
-  ["build", "-p", "commander-pro", ...extraArgs, "--manifest-path", PRO_MANIFEST, "--target-dir", TARGET_DIR],
+  ["build", "-p", "commander-pro", ...extraArgs, ...(recoveryLab ? ["--features", "fleet-recovery-lab"] : []), "--manifest-path", PRO_MANIFEST, "--target-dir", TARGET_DIR],
   {
     cwd: ROOT,
     // Cargo reads config from its working directory, which is this public

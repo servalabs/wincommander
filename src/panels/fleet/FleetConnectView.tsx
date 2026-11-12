@@ -108,6 +108,7 @@ export default function FleetConnectView() {
   // the required admin approval(s) from the fleet console).
   const [unenrollInfo, setUnenrollInfo] = useState<UnenrollInfo | null>(null);
   const [cleanupRetry, setCleanupRetry] = useState(false);
+  const [removalNotice, setRemovalNotice] = useState<string | null>(null);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const enrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -244,6 +245,7 @@ export default function FleetConnectView() {
     }
     setError(null);
     setCleanupRetry(false);
+    setRemovalNotice(null);
     setBusy(true);
     try {
       // fleet_connect: persists config to settings, then sends fleet_agent_configure
@@ -295,7 +297,8 @@ export default function FleetConnectView() {
     setStatus(null);
     setWasEnrolled(false);
     setUnenrollInfo(null);
-    if (!serviceStopped) setError("The device was removed from Fleet, but stopping local service reachability could not be confirmed. An administrator can stop the WinCommander service.");
+    if (serviceStopped) setRemovalNotice("Removed from Fleet and disconnected on this device.");
+    else setError("The device was removed from Fleet, but stopping local service reachability could not be confirmed. An administrator can stop the WinCommander service.");
   }
 
   // Submits (or, if one already exists, refreshes) the managed-device
@@ -346,6 +349,7 @@ export default function FleetConnectView() {
 
   async function disconnect() {
     setError(null);
+    setRemovalNotice(null);
     setBusy(true);
     stopPoll();
     stopUnenrollPoll();
@@ -407,6 +411,7 @@ export default function FleetConnectView() {
   const isConnected = linkState === "linked" || linkState === "pending";
   // Surface any Pro-agent error whether connected or not.
   const agentError = status?.lastError ?? null;
+  const reapplicationPending = agentError === "Reapplication submitted — waiting for Fleet administrator approval.";
   const isRetrying = status?.retrying ?? false;
   // Enrolled + checking in, but the fleet admin hasn't approved this device
   // yet — the server withholds all policy/commands until they do. Distinct
@@ -461,7 +466,7 @@ export default function FleetConnectView() {
           </span>
         ) : isReconnecting ? (
           <span className="fleet-connect-badge fleet-connect-badge--pending">
-            <span className="fleet-dot is-pending" /> Reconnecting…
+            <span className="fleet-dot is-pending" /> {reapplicationPending ? "Waiting for approval" : "Reconnecting…"}
           </span>
         ) : isRemoved ? (
           <span className="fleet-connect-badge fleet-connect-badge--off">
@@ -573,16 +578,21 @@ export default function FleetConnectView() {
             </div>
           </dl>
           <p className="fleet-connect-enrolling">
-            <Icon icon="refresh" size={13} /> Retrying contact with the fleet server. A current connection is not yet confirmed.
+            <Icon icon="refresh" size={13} /> {reapplicationPending ? "Reapplication submitted. Waiting for a Fleet administrator to approve this device; connection will retry automatically." : "Retrying contact with the fleet server. A current connection is not yet confirmed."}
           </p>
-          {agentError && (
+          {agentError && !reapplicationPending && (
             <p className="fleet-connect-error" role="alert">
               <Icon icon="warning-sign" size={13} intent="danger" /> {agentError}
             </p>
           )}
-          {fleetEntitled && <Button variant="outline" size="sm" disabled={busy} onClick={disconnect}>
-            {busy ? "Requesting…" : "Request to leave"}
-          </Button>}
+          {unenrollInfo && <p className="fleet-connect-enrolling" role="status">Leave requested — waiting for an administrator to approve removal.</p>}
+          {error && <p className="fleet-connect-error" role="alert"><Icon icon="warning-sign" size={13} intent="danger" /> {error}</p>}
+          {fleetEntitled && <>
+            <Button variant="outline" size="sm" disabled={busy} onClick={disconnect}>
+              {busy ? "Requesting…" : "Request to leave"}
+            </Button>{" "}
+            <Button variant="outline" size="sm" disabled={busy} onClick={checkRemoval}>Check removal status</Button>
+          </>}
         </div>
       ) : hasAuthoritativeDeviceLink && status ? (
         <div className="fleet-connect-status">
@@ -600,6 +610,7 @@ export default function FleetConnectView() {
         </div>
       ) : (
         <div className="fleet-connect-form">
+          {removalNotice && <p className="fleet-connect-enrolling" role="status">{removalNotice}</p>}
           <label className="fleet-field">
             <span className="fleet-field-label">Fleet server URL</span>
             <Input
@@ -623,7 +634,7 @@ export default function FleetConnectView() {
               disabled={enrolling}
             />
             <span className="fleet-field-hint">
-              Pin the Fleet signing key to verify commands and signed contact. Signed contact also requires a separate operator key configured in Fleet.
+              Pin the Fleet signing key to verify commands and signed contact.
             </span>
           </label>
 

@@ -254,6 +254,28 @@ fn is_transport_err(e: &str) -> bool {
 }
 
 static FLEET_CONNECT_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+const RECOVERY_LAB_READY:bool=cfg!(feature="fleet-recovery-lab");
+fn require_recovery_lab()->Result<(),String> {
+    if !RECOVERY_LAB_READY { return Err("Fleet recovery is unavailable".into()); } Ok(())
+}
+
+fn validate_recovery_operator_key(operator_key:&str)->Result<(),String> {
+    use base64::{engine::general_purpose::STANDARD,Engine};
+    if operator_key.len()!=44 { return Err("Invalid offline operator key".into()); }
+    let bytes=STANDARD.decode(operator_key).map_err(|_| "Invalid offline operator key")?;
+    if bytes.len()!=32 || STANDARD.encode(&bytes)!=operator_key { return Err("Invalid offline operator key".into()); }
+    Ok(())
+}
+
+/// Send an independently obtained offline public key to the service, which
+/// requires an active local administrator and a native fingerprint prompt.
+#[tauri::command]
+pub async fn fleet_recovery_pin_operator_key(operator_key:String)->Result<serde_json::Value,String> {
+    require_recovery_lab()?;
+    crate::license::require_service_feature("fleet")?;
+    validate_recovery_operator_key(&operator_key)?;
+    crate::svc_client::call("svc.fleet.operator_key.pin",serde_json::json!({"operator_key":operator_key})).await
+}
 
 /// Connect this device to a fleet server and persist the config to settings.
 ///
@@ -270,6 +292,49 @@ pub async fn fleet_connect(
     confirmation: Option<String>,
 ) -> Result<serde_json::Value, String> {
     fleet_connect_inner(app, server_url, dispatch, signing_key_pub, confirmation, None).await
+}
+
+/// Submit a signed retirement receipt to the privileged Fleet service.
+#[tauri::command]
+pub async fn fleet_recovery_stage(retirement_receipt: serde_json::Value) -> Result<serde_json::Value, String> {
+    require_recovery_lab()?;
+    crate::license::require_service_feature("fleet")?;
+    if !retirement_receipt.is_object() || serde_json::to_vec(&retirement_receipt).map_err(|_| "Invalid retirement receipt")?.len() > 8192 {
+        return Err("Invalid retirement receipt".into());
+    }
+    crate::svc_client::call("svc.fleet.recovery.stage", serde_json::json!({"retirement_receipt": retirement_receipt})).await
+}
+
+/// Retrieve the signed handoff after Fleet approves the candidate identity.
+#[tauri::command]
+pub async fn fleet_recovery_handoff(retirement_receipt: serde_json::Value) -> Result<serde_json::Value, String> {
+    require_recovery_lab()?;
+    crate::license::require_service_feature("fleet")?;
+    if !retirement_receipt.is_object() || serde_json::to_vec(&retirement_receipt).map_err(|_| "Invalid retirement receipt")?.len() > 8192 {
+        return Err("Invalid retirement receipt".into());
+    }
+    crate::svc_client::call("svc.fleet.recovery.handoff", serde_json::json!({"retirement_receipt": retirement_receipt})).await
+}
+
+/// Complete a reviewed recovery through the privileged service and native consent.
+#[tauri::command]
+pub async fn fleet_recovery_finish(retirement_receipt: serde_json::Value, handoff: serde_json::Value) -> Result<serde_json::Value, String> {
+    require_recovery_lab()?;
+    crate::license::require_service_feature("fleet")?;
+    if !retirement_receipt.is_object() || !handoff.is_object()
+        || serde_json::to_vec(&retirement_receipt).map_err(|_| "Invalid recovery data")?.len() > 8192
+        || serde_json::to_vec(&handoff).map_err(|_| "Invalid recovery data")?.len() > 16384 {
+        return Err("Invalid recovery data".into());
+    }
+    crate::svc_client::call("svc.fleet.recovery.finish", serde_json::json!({"retirement_receipt": retirement_receipt, "handoff": handoff})).await
+}
+
+/// Resume a previously prepared recovery using protected service state.
+#[tauri::command]
+pub async fn fleet_recovery_resume() -> Result<serde_json::Value, String> {
+    require_recovery_lab()?;
+    crate::license::require_service_feature("fleet")?;
+    crate::svc_client::call("svc.fleet.recovery.resume", serde_json::json!({})).await
 }
 
 /// Repair a missing service trust record for this already-linked device.
@@ -841,7 +906,7 @@ async fn fleet_apply_pending_epoch_inner() -> Result<serde_json::Value, ApplyErr
     crate::license::require_service_feature("fleet").map_err(ApplyError::PolicyError)?;
 
     // The dispatch call is the ONLY place a transport failure can originate.
-    let resp =
+    let mut resp =
         crate::sidecar::dispatch_paid_command("fleet_agent_pending_epoch", serde_json::Value::Null)
             .await
             .map_err(|e| {
@@ -860,6 +925,14 @@ async fn fleet_apply_pending_epoch_inner() -> Result<serde_json::Value, ApplyErr
                     ApplyError::PolicyError(e)
                 }
             })?;
+    // Recovery policy application remains gated until the service can bind a
+    // verified Windows readback to its current generation.
+    if RECOVERY_POLICY_APPLY_READY && resp.get("epoch").is_none_or(Value::is_null) {
+        let trust = crate::svc_client::call("svc.fleet.get_trust", serde_json::json!({})).await.map_err(ApplyError::PolicyError)?;
+        let policy = crate::svc_client::call("svc.fleet.get_policy", serde_json::json!({})).await.map_err(ApplyError::PolicyError)?;
+        let settings = crate::settings::read_settings_for_recovery_readback().map_err(ApplyError::PolicyError)?;
+        if let Some(candidate) = recovery_policy_candidate(&settings, &trust, &policy).map_err(ApplyError::PolicyError)? { resp = candidate; }
+    }
     record_fleet_lifecycle(
         &operation_id,
         DiagnosticLifecycle::Delivered,
@@ -1123,6 +1196,38 @@ async fn fleet_apply_pending_epoch_inner() -> Result<serde_json::Value, ApplyErr
         "remoteUpdatesApplied": remote_updates_applied,
         "settings": updated,
     }))
+}
+
+const RECOVERY_POLICY_APPLY_READY: bool = false;
+
+/// Prepare a service-owned recovery envelope for the existing verified epoch
+/// pipeline. Equal versions need generation-specific readback, not a settings
+/// version inherited from the previous identity.
+fn recovery_policy_candidate(settings: &crate::settings::AppSettings, trust: &Value, response: &Value) -> Result<Option<Value>, String> {
+    if trust.get("service_enabled").and_then(Value::as_bool) != Some(true)
+        || response.get("trust_bound").and_then(Value::as_bool) != Some(true) { return Err("Fleet service trust is unavailable".into()); }
+    let Some(policy) = response.get("policy").filter(|v| !v.is_null()) else { return Ok(None) };
+    let envelope: wincmd_shared::fleet::PolicyEnvelope = serde_json::from_value(policy.clone()).map_err(|_| "signed recovery policy is malformed")?;
+    validate_cached_shield_envelope(settings, &envelope)?;
+    let bound = trust.get("trust").ok_or("Fleet service trust is unavailable")?;
+    if bound.get("org_id").and_then(Value::as_str) != Some(envelope.org_id.0.as_str())
+        || bound.get("device_id").and_then(Value::as_str) != Some(envelope.device_id.0.as_str())
+        || bound.get("signer_key").and_then(Value::as_str) != Some(envelope.signer_key.as_str())
+        || bound.get("enrollment_generation").and_then(Value::as_str) != envelope.enrollment_generation.as_deref() {
+        return Err("Fleet recovery policy does not match current service trust".into());
+    }
+    let Some(epoch) = envelope.config.as_ref() else { return Ok(None) };
+    if epoch.version == i64::from(settings.policy.master_config_version.unwrap_or(0)) {
+        if !crate::settings::recovery_signed_settings_readback(settings,epoch)? {
+            return Err("Fleet recovery desired settings differ from the signed policy".into());
+        }
+        // A settings match is not proof that Windows or native monitors applied it.
+        return Err("Fleet recovery policy requires generation-specific application verification".into());
+    }
+    if epoch.version < i64::from(settings.policy.master_config_version.unwrap_or(0)) {
+        return Err("Fleet recovery policy requires generation-specific application verification".into());
+    }
+    Ok(Some(serde_json::json!({"epoch":epoch,"policyEnvelope":envelope})))
 }
 
 async fn install_service_shield_policy(
@@ -3889,6 +3994,39 @@ mod tests {
         envelope.config_revision = Some(version);
         envelope.config = Some(config);
         envelope.signature = base64::engine::general_purpose::STANDARD.encode(key.sign(&envelope.preimage()).to_bytes());
+    }
+
+    #[test]
+    fn recovery_operator_key_bridge_accepts_only_canonical_public_key() {
+        use base64::{engine::general_purpose::STANDARD,Engine};
+        let key=STANDARD.encode([7u8;32]);
+        assert!(super::validate_recovery_operator_key(&key).is_ok());
+        assert!(super::validate_recovery_operator_key(key.trim_end_matches('=')).is_err());
+        assert!(super::validate_recovery_operator_key(&format!(" {key}")).is_err());
+        assert!(super::validate_recovery_operator_key(&STANDARD.encode([7u8;31])).is_err());
+    }
+    #[test]
+    fn recovery_lab_bridge_requires_explicit_build_feature() {
+        assert_eq!(super::require_recovery_lab().is_ok(),cfg!(feature="fleet-recovery-lab"));
+    }
+
+    #[test]
+    fn recovery_policy_needs_current_service_identity_and_never_trusts_equal_epoch() {
+        let (mut settings, mut envelope) = signed_shield_envelope();
+        settings.policy.master_config_version = Some(5);
+        attach_signed_config(&mut envelope, 6);
+        let trust = json!({"service_enabled":true,"trust":{"org_id":envelope.org_id.0,"device_id":envelope.device_id.0,"signer_key":envelope.signer_key,"enrollment_generation":envelope.enrollment_generation}});
+        let response = json!({"trust_bound":true,"policy":envelope});
+        assert_eq!(super::recovery_policy_candidate(&settings,&trust,&response).unwrap().unwrap()["epoch"]["version"],6);
+        let mut mismatch=trust.clone(); mismatch["trust"]["enrollment_generation"]=json!("cccccccc-cccc-4ccc-8ccc-cccccccccccc");
+        assert!(super::recovery_policy_candidate(&settings,&mismatch,&response).is_err());
+        let mut forged=response.clone(); forged["policy"]["shield_revision"]=json!(10);
+        assert!(super::recovery_policy_candidate(&settings,&trust,&forged).is_err());
+        settings.policy.master_config_version=Some(6);
+        assert!(super::recovery_policy_candidate(&settings,&trust,&response).is_err());
+        settings.policy.master_config_version=Some(7);
+        assert!(super::recovery_policy_candidate(&settings,&trust,&response).is_err());
+        assert!(!super::RECOVERY_POLICY_APPLY_READY);
     }
 
     #[test]

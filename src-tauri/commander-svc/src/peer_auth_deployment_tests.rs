@@ -30,6 +30,19 @@ fn identity(session_id: u32) -> PeerIdentitySnapshot {
 }
 
 #[test]
+fn recovery_execution_requires_exact_pro_image_active_session_and_protected_file() {
+    let gate=gate(); let expected=std::path::Path::new(IMAGE); let peer=identity(7);
+    for verb in ["svc.fleet.recovery.stop_poll","svc.fleet.recovery.stop_complete","svc.fleet.recovery.legacy_work_start","svc.fleet.recovery.legacy_work_complete","svc.fleet.recovery.upgrade_challenge","svc.fleet.recovery.upgrade_confirm","svc.fleet.recovery.execution_status","svc.fleet.recovery.execute_list","svc.fleet.recovery.execute_grant","svc.fleet.recovery.execute_start","svc.fleet.recovery.execute_result"] {
+        assert_eq!(gate.authorize_recovery_execution_observation(&peer,verb,7,true,expected,||Ok(())),Ok(TrustOrigin::SessionHelperPinned));
+        assert_eq!(gate.authorize_recovery_execution_observation(&peer,verb,8,true,expected,||Ok(())),Err(PeerAuthError::WrongSession));
+        assert_eq!(gate.authorize_recovery_execution_observation(&peer,verb,7,false,expected,||Ok(())),Err(PeerAuthError::WrongSession));
+        let mut free=peer.clone(); free.canonical_image_path=PathBuf::from(r"C:\ProgramData\WinCommander\bin\wincommander-free.exe");
+        assert_eq!(gate.authorize_recovery_execution_observation(&free,verb,7,true,expected,||panic!("wrong image")),Err(PeerAuthError::PathNotAllowed));
+        assert_eq!(gate.authorize_recovery_execution_observation(&peer,verb,7,true,expected,||Err(PeerAuthError::IdentityUnavailable)),Err(PeerAuthError::IdentityUnavailable));
+    }
+}
+
+#[test]
 fn shared_shortcuts_require_the_pinned_free_image_and_captured_session() {
     let gate = SessionHelperGate::with_allowed_root(
         Arc::new(Probe), Some(PathBuf::from(r"C:\Program Files\WinCommander")),

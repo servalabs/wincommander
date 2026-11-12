@@ -94,6 +94,31 @@ impl ActionClass {
     }
 }
 
+/// Accept only the privacy-preserving vault projection used in recovered
+/// command receipts. No paths, labels, or per-user vault details are allowed.
+pub fn valid_recovery_vault_status(value: &serde_json::Value) -> bool {
+    let Some(object) = value.as_object() else { return false; };
+    if object.get("installed").and_then(serde_json::Value::as_bool).is_none() { return false; }
+    match object.get("scope").and_then(serde_json::Value::as_str) {
+        Some("agent_authorized") => object.len() == 3 && object.get("mounted_count")
+            .and_then(serde_json::Value::as_u64).is_some_and(|n| n <= 26),
+        Some("unavailable") => object.len() == 2,
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn recovery_vault_status_rejects_paths_and_unavailable_counts() {
+    use serde_json::json;
+    assert!(valid_recovery_vault_status(&json!({"installed":true,"scope":"agent_authorized","mounted_count":2})));
+    assert!(valid_recovery_vault_status(&json!({"installed":false,"scope":"unavailable"})));
+    for invalid in [json!({"installed":true,"scope":"agent_authorized","mounted_count":27}),
+        json!({"installed":true,"scope":"agent_authorized","mounted_count":2,"path":"private"}),
+        json!({"installed":true,"scope":"unavailable","mounted_count":0}),
+        json!({"installed":true,"scope":"agent_authorized"})] { assert!(!valid_recovery_vault_status(&invalid)); }
+}
+
 /// Catalog ids for OPERATOR-signed control commands — verified against the
 /// org's operator command key, NEVER the server signing key. Every catalog id
 /// NOT in this list is a server-signed ordinary command. This is the SSOT for

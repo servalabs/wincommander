@@ -42,12 +42,14 @@ test("unenroll requires an explicit approved response and a successful final rec
     mock.module('@/components/ui/input',()=>({Input:props=>h('input',props)}));
     mock.module('@/components/ui/switch',()=>({Switch:({checked,onCheckedChange,...props})=>h('input',{...props,type:'checkbox',checked,onChange:event=>onCheckedChange(event.target.checked)})}));
     mock.module('@/components/ui/icon',()=>({Icon:()=>null}));
+    mock.module('./src/panels/fleet/FleetRecovery',()=>({default:()=>{throw new Error('complex recovery UI must not render')}}));
     const {default:View}=await import('./src/panels/fleet/FleetConnectView');
     const host=document.getElementById('root'),root=createRoot(host);
     const leave=()=>[...host.querySelectorAll('button')].find(button=>button.textContent==='Request to leave');
     async function request(){await act(async()=>{leave().click();});assert.match(host.textContent,/waiting for admin approval/);}
     async function poll(){const timer=[...timers.values()].find(t=>t.delay===5000);assert.ok(timer);await act(async()=>{await timer.callback();});}
     await act(async()=>{root.render(h(View));});
+    assert.doesNotMatch(host.textContent,/fingerprint|retirement receipt|offline operator|candidate key/i, 'complex recovery ceremony stays hidden');
     await request(); await poll();
     assert.match(host.textContent,/Could not verify Fleet removal status/);
     assert.doesNotMatch(host.textContent,/waiting for admin approval/);
@@ -104,6 +106,7 @@ test("unenroll requires an explicit approved response and a successful final rec
     await act(async()=>{retry.click();});
     assert.equal(disconnectCalls,5);
     assert.ok(![...host.querySelectorAll('button')].some(button=>button.textContent==='Retry local cleanup'));
+    assert.match(host.textContent,/Removed from Fleet and disconnected on this device/);
     status.cleanupPending=true;
     await act(async()=>{root.unmount();});
     const remount=createRoot(host);
@@ -120,7 +123,16 @@ test("unenroll requires an explicit approved response and a successful final rec
     disconnectFails=false; check=[...host.querySelectorAll('button')].find(button=>button.textContent==='Check removal status');
     await act(async()=>{check.click();});
     assert.equal(disconnectCalls,7,'direct verification does not require a fresh unenroll request');
-    await act(async()=>{terminal.unmount();});dom.window.close();
+    await act(async()=>{terminal.unmount();});
+    status.retrying=true; requestFails=true; status.lastError="Reapplication submitted — waiting for Fleet administrator approval.";
+    const reconnect=createRoot(host); await act(async()=>{reconnect.render(h(View));});
+    assert.match(host.textContent,/Waiting for approval/);
+    assert.match(host.textContent,/connection will retry automatically/);
+    const retryLeave=[...host.querySelectorAll('button')].find(button=>button.textContent==='Request to leave');
+    assert.ok(retryLeave); await act(async()=>{retryLeave.click();});
+    assert.match(host.textContent,/Could not verify Fleet removal status/, 'offline request failure is visible');
+    assert.ok([...host.querySelectorAll('button')].some(button=>button.textContent==='Check removal status'), 'reconnecting device can check server removal');
+    await act(async()=>{reconnect.unmount();});dom.window.close();
   `;
   const process=Bun.spawn([Bun.which("bun")!,"-e",script],{stdout:"pipe",stderr:"pipe"});
   let timedOut=false;

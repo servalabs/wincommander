@@ -54,6 +54,7 @@ pub(super) async fn ensure(request_id: u64, deadline: Instant) -> Result<(), Vau
             args: serde_json::json!({}),
         },
         deadline,
+        None,
     ))
     .await?;
     if result != serde_json::json!({"prepared":true}) || installed_digest()? != image {

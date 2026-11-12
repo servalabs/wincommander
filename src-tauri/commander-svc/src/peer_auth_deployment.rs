@@ -69,6 +69,24 @@ pub(crate) fn deployment_session_is_permitted(
 }
 
 impl SessionHelperGate {
+    /// Execution grants and their results are accepted only from the exact
+    /// protected installed Pro image in the captured active session.
+    pub(crate) fn authorize_recovery_execution_relay(&self,pid:u32,verb:&str,captured_session:u32,active:bool)
+        ->Result<TrustOrigin,PeerAuthError> {
+        let identity=self.probe.identity(pid)?;
+        let expected=std::fs::canonicalize(crate::pro_broker::fixed_pro_path()).map_err(|_|PeerAuthError::PathNotAllowed)?;
+        self.authorize_recovery_execution_observation(&identity,verb,captured_session,active,&expected,
+            ||verify_image(&identity.canonical_image_path,&expected))
+    }
+    fn authorize_recovery_execution_observation(&self,identity:&PeerIdentitySnapshot,verb:&str,captured_session:u32,
+        active:bool,expected:&Path,verify:impl FnOnce()->Result<(),PeerAuthError>)->Result<TrustOrigin,PeerAuthError> {
+        if !matches!(verb,"svc.fleet.recovery.stop_poll"|"svc.fleet.recovery.stop_complete"|"svc.fleet.recovery.legacy_work_start"|"svc.fleet.recovery.legacy_work_complete"|"svc.fleet.recovery.upgrade_challenge"|"svc.fleet.recovery.upgrade_confirm"|"svc.fleet.recovery.execution_status"|"svc.fleet.recovery.execute_list"|"svc.fleet.recovery.execute_grant"|"svc.fleet.recovery.execute_start"|"svc.fleet.recovery.leave_request" | "svc.fleet.recovery.leave_status" | "svc.fleet.recovery.execute_result") { return Err(PeerAuthError::PathNotAllowed); }
+        if !active || captured_session==0 || identity.session_id!=captured_session { return Err(PeerAuthError::WrongSession); }
+        if !paths_equal(&identity.canonical_image_path,expected) { return Err(PeerAuthError::PathNotAllowed); }
+        verify()?;
+        self.check_rate_limit(identity,verb,Instant::now())?;
+        Ok(TrustOrigin::SessionHelperPinned)
+    }
     pub(crate) fn authorize_shared_shortcut_relay(
         &self,
         pid: u32,

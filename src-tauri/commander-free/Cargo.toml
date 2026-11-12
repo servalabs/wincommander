@@ -28,6 +28,8 @@ path = "src/main.rs"
 test = false
 
 [features]
+# Explicit isolated recovery rehearsal only; production builds omit this.
+fleet-recovery-lab = []
 # Portable single-exe edition. Gates the trial out (the most-copyable build has
 # nothing to farm) and packaging differences. Persistent state is already
 # machine-wide (%ProgramData%) regardless of this flag.

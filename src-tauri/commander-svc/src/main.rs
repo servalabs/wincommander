@@ -74,6 +74,11 @@ mod reconciler;
 mod diagnostics;
 mod policy_store;
 mod fleet_machine_policy;
+mod fleet_identity_handoff;
+mod fleet_recovery_candidate;
+mod fleet_recovery_credential;
+mod fleet_recovery_transport;
+mod fleet_recovery_leave;
 mod fleet_credential;
 #[cfg(all(windows, feature = "experimental-pq-licence"))]
 #[allow(dead_code)]
@@ -403,6 +408,7 @@ async fn run(mut stop_rx: Option<tokio::sync::watch::Receiver<bool>>) {
     tokio::spawn(reconciler::run());
     tokio::spawn(command_worker::run());
     tokio::spawn(fleet_transport::run());
+    tokio::spawn(pipe::fleet_handoff_confirmation::run_automatic_recovery_contact());
     // Pro can extract the engine after this service has already started.
     // Poll only the fixed payload: the helper is private, accepts no renderer
     // arguments, and fails closed until its signer/ownership/ACL checks pass.

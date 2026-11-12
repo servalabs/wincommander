@@ -1,8 +1,12 @@
 import { copyFileSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { assertSharedAssets } from "./check-shared-assets";
+import { recoveryLabEnabled } from "./recovery-lab-build";
 
 const root = resolve(import.meta.dirname, "..");
+// An isolated lab package must enable its UI and both Rust halves together.
+// Normal builds omit the opt-in and retain the default-disabled behavior.
+const recoveryLab = recoveryLabEnabled(process.env);
 assertSharedAssets(root);
 const configPath = resolve(root, "src-tauri", "commander-free", "tauri.conf.json");
 const generatedConfigPath = resolve(root, "src-tauri", "commander-free", "tauri.release.generated.json");
@@ -59,7 +63,7 @@ run(
   "WinCommander context-delete helper release build",
 );
 run(
-  ["cargo", "build", "--manifest-path", "src-tauri/Cargo.toml", "-p", "commander-svc", "--release"],
+  ["cargo", "build", "--manifest-path", "src-tauri/Cargo.toml", "-p", "commander-svc", "--release", ...(recoveryLab ? ["--features", "fleet-recovery-lab"] : [])],
   "WinCommander machine-service release build",
 );
 run(
@@ -67,7 +71,7 @@ run(
   "Calculator launcher release build",
 );
 const config = JSON.parse(readFileSync(configPath, "utf8")) as {
-  bundle: { resources: string[]; targets: string | string[] };
+  bundle: { resources: string[]; targets: string | string[]; createUpdaterArtifacts?: boolean };
 };
 const contextShredResource = "resources/wincommander-context-shred.exe";
 const contextDeleteIconResource = "resources/context-delete.ico";
@@ -89,6 +93,7 @@ config.bundle.resources = [
 // places the immutable application binary in Program Files, while each person
 // still gets their own settings when they run it without elevation.
 config.bundle.targets = ["nsis"];
+if (recoveryLab) config.bundle.createUpdaterArtifacts = false;
 
 copyFileSync(contextShredBuildPath, stagedContextShredPath);
 copyFileSync(contextDeleteIconPath, stagedContextDeleteIconPath);
@@ -96,7 +101,8 @@ copyFileSync(serviceBuildPath, stagedServicePath);
 copyFileSync(calculatorBuildPath, stagedCalculatorPath);
 writeFileSync(generatedConfigPath, `${JSON.stringify(config, null, 2)}\n`);
 try {
-  run(["bun", "x", "--package", "@tauri-apps/cli@2.12.4", "tauri", "build", "--config", generatedConfigPath], "Tauri release bundle");
+  run(["bun", "x", "--package", "@tauri-apps/cli@2.12.4", "tauri", "build", "--config", generatedConfigPath,
+    ...(recoveryLab ? ["--features", "fleet-recovery-lab"] : [])], "Tauri release bundle");
 } finally {
   rmSync(generatedConfigPath, { force: true });
   rmSync(stagedContextShredPath, { force: true });

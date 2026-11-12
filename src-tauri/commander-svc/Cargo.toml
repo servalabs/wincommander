@@ -23,6 +23,8 @@ name = "wincommander-svc"
 path = "src/main.rs"
 
 [features]
+# Explicit isolated recovery rehearsal only; production builds omit this.
+fleet-recovery-lab = []
 # Compile-only migration work; this does not enable issuance or cache writes.
 experimental-pq-licence = ["dep:wincmd-pq-experiment", "dep:rustls", "dep:rustls-platform-verifier", "dep:bytes"]
 
@@ -47,6 +49,7 @@ zeroize = { version = "1", features = ["alloc"] }
 sha2 = "0.11"
 subtle = "2"
 base64 = "0.22"
+uuid = { version = "1", features = ["v4"] }
 bytes = { version = "1", optional = true }
 url = "2"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "stream"] }
@@ -56,7 +59,6 @@ ed25519-dalek = { version = "3", default-features = false, features = ["alloc", 
 
 [dev-dependencies]
 rcgen = "0.14"
-uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", features = ["test-util"] }
 aws-lc-rs = { version = "1.19", default-features = false, features = ["alloc", "aws-lc-sys"] }
 wincmd-pq-experiment = { path = "../wincmd-pq-experiment", features = ["experimental-signer"] }
@@ -69,6 +71,7 @@ windows-service = "0.8"
 windows-sys = { version = "0.61", features = [
   "Win32_System_Registry",
   "Win32_Foundation",
+  "Win32_System_Time",
   "Win32_Security",
   "Win32_Security_Authorization",
   "Win32_Security_Authentication_Identity",
@@ -86,6 +89,7 @@ windows-sys = { version = "0.61", features = [
   "Win32_NetworkManagement_NetManagement",
   "Win32_Storage_FileSystem",
   "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
   "Win32_System_Com",
 ] }
 windows = { version = "0.62", features = [

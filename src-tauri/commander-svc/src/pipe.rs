@@ -60,6 +60,8 @@ pub(crate) use service_peer_identity::{capture_authenticated_pipe_peer, Authenti
 
 #[path = "service_peer_privileges.rs"]
 mod service_peer_privileges;
+#[path = "fleet_handoff_confirmation.rs"]
+pub(crate) mod fleet_handoff_confirmation;
 use service_peer_privileges::{caller_has_vault_policy_capability_token, token_is_privileged};
 
 #[path = "service_peer_query.rs"]
@@ -410,6 +412,15 @@ pub(crate) async fn handle_connection(
                 Ok(result) => result.map(Some).map_err(|error| error.to_string()),
                 Err(_) => Err("licence peer authorization unavailable".into()),
             }
+        } else if matches!(req.feature_id.as_str(), "svc.fleet.recovery.stop_poll" | "svc.fleet.recovery.stop_complete" | "svc.fleet.recovery.legacy_work_start" | "svc.fleet.recovery.legacy_work_complete" | "svc.fleet.recovery.upgrade_challenge" | "svc.fleet.recovery.upgrade_confirm" | "svc.fleet.recovery.execution_status" | "svc.fleet.recovery.execute_list" | "svc.fleet.recovery.execute_grant" | "svc.fleet.recovery.execute_start" | "svc.fleet.recovery.leave_request" | "svc.fleet.recovery.leave_status" | "svc.fleet.recovery.execute_result") {
+            let gate=Arc::clone(&session_helper_gate);
+            let verb=req.feature_id.clone();
+            let session=peer.as_deref().map(AuthenticatedPipePeer::session_id).unwrap_or(0);
+            let active=peer.as_deref().is_some_and(peer_has_active_interactive_session);
+            match tokio::task::spawn_blocking(move || gate.authorize_recovery_execution_relay(client_pid,&verb,session,active)).await {
+                Ok(result)=>result.map(Some).map_err(|error|error.to_string()),
+                Err(_)=>Err("Fleet execution peer authorization unavailable".into()),
+            }
         } else if matches!(req.feature_id.as_str(), "svc.fleet.install_policy" | "svc.fleet.get_policy") {
             #[cfg(debug_assertions)]
             let policy_trace_started = if req.feature_id == "svc.fleet.get_policy" {
@@ -450,7 +461,8 @@ pub(crate) async fn handle_connection(
                 crate::pipe_transport::write_frame(&mut conn, &reply).await?;
             }
             Ok(trust_origin) => {
-                let reply = dispatch_verb(
+                let sensitive_reply=matches!(req.feature_id.as_str(),"svc.fleet.recovery.execute_grant"|"svc.fleet.recovery.stop_poll"|"svc.fleet.recovery.legacy_work_start"|"svc.fleet.recovery.upgrade_challenge");
+                let mut reply = dispatch_verb(
                     req,
                     trust_origin,
                     &policy_store,
@@ -461,7 +473,9 @@ pub(crate) async fn handle_connection(
                     caller_privileged,
                 )
                 .await;
-                crate::pipe_transport::write_frame(&mut conn, &reply).await?;
+                let result=crate::pipe_transport::write_frame(&mut conn, &reply).await;
+                if sensitive_reply { if let Envelope::Response(response)=&mut reply { wincmd_shared::zeroize_json(&mut response.result); } }
+                result?;
             }
         }
     }
@@ -671,6 +685,27 @@ async fn dispatch_verb(
 
         "svc.fleet.begin_enrollment" | "svc.fleet.provision_trust" | "svc.fleet.replace_trust" | "svc.fleet.bind_origins" | "svc.fleet.get_trust" | "svc.fleet.install_policy" | "svc.fleet.get_policy" =>
             handle_fleet_machine_policy(&feature_id, args, peer),
+
+        "svc.fleet.operator_key.pin" => handle_operator_key_pin(args, peer),
+        "svc.fleet.recovery.stage" => handle_recovery_stage(args, peer).await,
+        "svc.fleet.recovery.handoff" => handle_recovery_handoff(args, peer).await,
+        "svc.fleet.recovery.finish" => handle_recovery_finish(args, peer).await,
+        "svc.fleet.recovery.contact" => handle_recovery_contact(args,trust_origin.is_some()).await,
+        "svc.fleet.recovery.leave_request" => {
+            if !RECOVERY_EXECUTION_READY || trust_origin.is_none() { Err(VerbError::new("recovery_unavailable","Fleet leave request is unavailable")) }
+            else if let Some(device)=args.as_object().filter(|o|o.len()==1).and_then(|o|o.get("device_id")).and_then(|v|v.as_str()).filter(|v|!v.is_empty() && v.len()<=128) {
+                match fleet_machine_policy_store() { Ok(store)=>crate::fleet_recovery_leave::request(store,&crate::fleet_credential::MachineDpapi,device).await.map_err(|_|VerbError::new("recovery_unavailable","Fleet leave request is unavailable")), Err(error)=>Err(error) }
+            } else { Err(VerbError::new("recovery_unavailable","Fleet leave request is unavailable")) }
+        },
+        "svc.fleet.recovery.leave_status" => {
+            if !RECOVERY_EXECUTION_READY || trust_origin.is_none() || args!=serde_json::json!({}) { Err(VerbError::new("recovery_unavailable","Fleet leave status is unavailable")) }
+            else { handle_recovered_leave_status().await }
+        },
+        "svc.fleet.recovery.stop_poll" | "svc.fleet.recovery.stop_complete" | "svc.fleet.recovery.legacy_work_start" | "svc.fleet.recovery.legacy_work_complete" | "svc.fleet.recovery.upgrade_challenge" | "svc.fleet.recovery.upgrade_confirm" => handle_recovery_stop(&feature_id,args,trust_origin.is_some(),peer),
+        "svc.fleet.recovery.resolve_unknown" => handle_recovery_unknown(args,peer),
+        "svc.fleet.recovery.execution_status" | "svc.fleet.recovery.execute_list" | "svc.fleet.recovery.execute_grant" | "svc.fleet.recovery.execute_start" | "svc.fleet.recovery.execute_result" =>
+            handle_recovery_execution(&feature_id,args,trust_origin.is_some(),peer),
+        "svc.fleet.recovery.resume" => handle_recovery_resume(args, peer).await,
 
         "svc.fleet.contact_observation" => fleet_machine_policy_store().and_then(|store|
             crate::fleet_contact_transfer::handle(store, args)
@@ -3578,6 +3613,290 @@ fn vault_group_update_error(error: crate::vault_access::VaultError) -> VerbError
     VerbError::new(kind, vault_error_message(error))
 }
 
+// Enabled only after the complete recovery path and native consent are validated.
+const OPERATOR_PIN_READY: bool = cfg!(feature="fleet-recovery-lab");
+const RECOVERY_RESUME_READY: bool = cfg!(feature="fleet-recovery-lab");
+const RECOVERY_STAGE_READY: bool = cfg!(feature="fleet-recovery-lab");
+const RECOVERY_HANDOFF_READY: bool = cfg!(feature="fleet-recovery-lab");
+const RECOVERY_FINISH_READY: bool = cfg!(feature="fleet-recovery-lab");
+const RECOVERY_CONTACT_READY: bool = cfg!(feature="fleet-recovery-lab");
+const RECOVERY_EXECUTION_READY: bool = cfg!(feature="fleet-recovery-lab");
+const RECOVERY_STOP_READY: bool = cfg!(feature="fleet-recovery-lab");
+const RECOVERY_UPGRADE_READY: bool = cfg!(feature="fleet-recovery-lab");
+fn handle_recovery_stop(verb:&str,args:serde_json::Value,exact_pro:bool,peer:Option<&AuthenticatedPipePeer>)->Result<serde_json::Value,VerbError> {
+    if !RECOVERY_STOP_READY { return Err(VerbError::new("recovery_unavailable","Fleet recovery is unavailable")); }
+    if !exact_pro { return Err(VerbError::new("forbidden","authenticated Pro helper required")); }
+    let peer=peer.ok_or_else(||VerbError::new("forbidden","authenticated Pro helper required"))?;
+    let store=fleet_machine_policy_store()?;
+    let base=std::env::var_os("ProgramData").ok_or_else(||VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
+    let dir=std::path::PathBuf::from(base).join("WinCommander").join("fleet-machine");
+    let fs=crate::fleet_machine_policy::WindowsFleetPolicyFs;
+    match verb {
+        "svc.fleet.recovery.upgrade_challenge" => {
+            if !RECOVERY_UPGRADE_READY { return Err(VerbError::new("recovery_unavailable","Fleet recovery is unavailable")); }
+            #[derive(serde::Deserialize)] #[serde(deny_unknown_fields)] struct Request { device_id:String,recovery_id:String }
+            let request:Request=serde_json::from_value(args).map_err(|_|VerbError::new("bad_request","invalid upgrade request"))?;
+            let challenge=fleet_handoff_confirmation::issue_upgrade_challenge(store,&fs,&dir,peer,&request.device_id,&request.recovery_id)
+                .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
+            Ok(serde_json::json!({"challenge":challenge,"protocol_version":1}))
+        },
+        "svc.fleet.recovery.upgrade_confirm" => {
+            if !RECOVERY_UPGRADE_READY { return Err(VerbError::new("recovery_unavailable","Fleet recovery is unavailable")); }
+            #[derive(serde::Deserialize)] #[serde(deny_unknown_fields)] struct Request { device_id:String,recovery_id:String,challenge:String,protocol_version:u32 }
+            impl Drop for Request { fn drop(&mut self) { use zeroize::Zeroize;self.challenge.zeroize(); } }
+            let request:Request=serde_json::from_value(args).map_err(|_|VerbError::new("bad_request","invalid upgrade confirmation"))?;
+            fleet_handoff_confirmation::confirm_upgrade_challenge(store,&fs,&dir,peer,&request.device_id,&request.recovery_id,&request.challenge,request.protocol_version)
+                .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
+            Ok(serde_json::json!({"verified":true}))
+        },
+        "svc.fleet.recovery.legacy_work_start" => {
+            #[derive(serde::Deserialize)] #[serde(deny_unknown_fields)] struct Request { device_id:String,kind:String,work_id:String }
+            let request:Request=serde_json::from_value(args).map_err(|_|VerbError::new("bad_request","invalid work request"))?;
+            let token=fleet_handoff_confirmation::legacy_work_start_for_pro(store,&fs,&dir,peer,&request.device_id,&request.kind,&request.work_id)
+                .map_err(|_|VerbError::new("recovery_unavailable","Fleet work admission is unavailable"))?;
+            Ok(serde_json::json!({"token":token}))
+        },
+        "svc.fleet.recovery.legacy_work_complete" => {
+            #[derive(serde::Deserialize)] #[serde(deny_unknown_fields)] struct Request { device_id:String,kind:String,work_id:String,token:String }
+            impl Drop for Request { fn drop(&mut self) { use zeroize::Zeroize;self.token.zeroize(); } }
+            let request:Request=serde_json::from_value(args).map_err(|_|VerbError::new("bad_request","invalid work receipt"))?;
+            fleet_handoff_confirmation::legacy_work_complete_for_pro(store,&fs,&dir,peer,&request.device_id,&request.kind,&request.work_id,&request.token)
+                .map_err(|_|VerbError::new("recovery_unavailable","Fleet work completion is unavailable"))?;
+            Ok(serde_json::json!({"recorded":true}))
+        },
+        "svc.fleet.recovery.stop_poll" => {
+            #[derive(serde::Deserialize)] #[serde(deny_unknown_fields)] struct Request { device_id:String }
+            let request:Request=serde_json::from_value(args).map_err(|_|VerbError::new("bad_request","invalid stop request"))?;
+            fleet_handoff_confirmation::stop_poll_for_pro(store,&fs,&dir,peer,&request.device_id)
+                .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))
+        },
+        "svc.fleet.recovery.stop_complete" => {
+            #[derive(serde::Deserialize)] #[serde(deny_unknown_fields)] struct Request { device_id:String,recovery_id:String,token:String,state:String }
+            impl Drop for Request { fn drop(&mut self) { use zeroize::Zeroize;self.token.zeroize(); } }
+            let request:Request=serde_json::from_value(args).map_err(|_|VerbError::new("bad_request","invalid stop receipt"))?;
+            fleet_handoff_confirmation::stop_complete_for_pro(store,&fs,&dir,peer,&request.device_id,&request.recovery_id,&request.token,&request.state)
+                .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
+            Ok(serde_json::json!({"recorded":true}))
+        },
+        _=>Err(VerbError::new("bad_request","invalid stop request")),
+    }
+}
+const RECOVERY_UNKNOWN_READY: bool = false;
+fn handle_recovery_unknown(args:serde_json::Value,peer:Option<&AuthenticatedPipePeer>)->Result<serde_json::Value,VerbError> {
+    if !RECOVERY_UNKNOWN_READY { return Err(VerbError::new("recovery_unavailable","Fleet recovery is unavailable")); }
+    #[derive(serde::Deserialize)] #[serde(deny_unknown_fields)] struct Request { command_id:String }
+    let request:Request=serde_json::from_value(args).map_err(|_|VerbError::new("bad_request","invalid command request"))?;
+    let peer=peer.filter(|peer|fleet_handoff_confirmation::session_matches(peer))
+        .ok_or_else(||VerbError::new("forbidden","active local administrator required"))?;
+    let store=fleet_machine_policy_store()?;
+    let base=std::env::var_os("ProgramData").ok_or_else(||VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
+    let dir=std::path::PathBuf::from(base).join("WinCommander").join("fleet-machine");
+    let fs=crate::fleet_machine_policy::WindowsFleetPolicyFs; let protector=crate::fleet_credential::MachineDpapi;
+    let candidate=crate::fleet_recovery_candidate::CandidateStore::open(&fs,dir.clone(),&protector)
+        .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
+    tokio::task::block_in_place(||fleet_handoff_confirmation::review_unknown_for_admin(store,&fs,&dir,&protector,&candidate,peer,&request.command_id))
+        .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
+    Ok(serde_json::json!({"state":"execution_unknown"}))
+}
+fn handle_recovery_execution(verb:&str,args:serde_json::Value,exact_pro:bool,peer:Option<&AuthenticatedPipePeer>) -> Result<serde_json::Value,VerbError> {
+    if !RECOVERY_EXECUTION_READY { return Err(VerbError::new("recovery_unavailable","Fleet recovery is unavailable")); }
+    if !exact_pro { return Err(VerbError::new("forbidden","authenticated Pro helper required")); }
+    let peer=peer.ok_or_else(||VerbError::new("forbidden","authenticated Pro helper required"))?;
+    let store=fleet_machine_policy_store()?;
+    let base=std::env::var_os("ProgramData").ok_or_else(||VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
+    let dir=std::path::PathBuf::from(base).join("WinCommander").join("fleet-machine");
+    let fs=crate::fleet_machine_policy::WindowsFleetPolicyFs;
+    let protector=crate::fleet_credential::MachineDpapi;
+    let candidate=crate::fleet_recovery_candidate::CandidateStore::open(&fs,dir.clone(),&protector)
+        .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
+    match verb {
+        "svc.fleet.recovery.execution_status" => {
+            if args!=serde_json::json!({}) { return Err(VerbError::new("bad_request","invalid recovery request")); }
+            let (device_id,mode)=store.recovery_execution_mode().map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
+            Ok(serde_json::json!({"device_id":device_id,"mode":mode}))
+        },
+        "svc.fleet.recovery.execute_list" => {
+            if args!=serde_json::json!({}) { return Err(VerbError::new("bad_request","invalid command request")); }
+            fleet_handoff_confirmation::ready_for_pro(store,&fs,&dir,&protector,&candidate,peer)
+                .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))
+        },
+        "svc.fleet.recovery.execute_grant" => {
+            #[derive(serde::Deserialize)] #[serde(deny_unknown_fields)] struct Request { command_id:String }
+            let request:Request=serde_json::from_value(args).map_err(|_|VerbError::new("bad_request","invalid command request"))?;
+            fleet_handoff_confirmation::grant_for_pro(store,&fs,&dir,&protector,&candidate,peer,&request.command_id)
+                .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))
+        },
+        "svc.fleet.recovery.execute_start" => {
+            #[derive(serde::Deserialize)] #[serde(deny_unknown_fields)] struct Request { command_id:String,grant:String }
+            impl Drop for Request { fn drop(&mut self) { use zeroize::Zeroize; self.grant.zeroize(); } }
+            let request:Request=serde_json::from_value(args).map_err(|_|VerbError::new("bad_request","invalid command request"))?;
+            fleet_handoff_confirmation::start_for_pro(store,&fs,&dir,&protector,&candidate,peer,&request.command_id,&request.grant)
+                .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
+            Ok(serde_json::json!({"started":true}))
+        },
+        "svc.fleet.recovery.execute_result" => {
+            #[derive(serde::Deserialize)] #[serde(deny_unknown_fields)]
+            struct Request { command_id:String,grant:String,outcome:fleet_proto::ActionOutcome,ack:fleet_proto::CheckinAck }
+            impl Drop for Request { fn drop(&mut self) { use zeroize::Zeroize; self.grant.zeroize(); } }
+            let request:Request=serde_json::from_value(args).map_err(|_|VerbError::new("bad_request","invalid command result"))?;
+            fleet_handoff_confirmation::result_from_pro(store,&fs,&dir,&protector,&candidate,peer,&request.command_id,&request.grant,request.outcome.clone(),request.ack.clone())
+                .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
+            Ok(serde_json::json!({"recorded":true}))
+        },
+        _=>Err(VerbError::new("bad_request","invalid recovery request")),
+    }
+}
+async fn handle_recovered_leave_status()->Result<serde_json::Value,VerbError> {
+    let unavailable=||VerbError::new("recovery_unavailable","Fleet leave status is unavailable");
+    let store=fleet_machine_policy_store()?;
+    let base=std::env::var_os("ProgramData").ok_or_else(unavailable)?;
+    let dir=std::path::PathBuf::from(base).join("WinCommander").join("fleet-machine");
+    let fs=crate::fleet_machine_policy::WindowsFleetPolicyFs;let protector=crate::fleet_credential::MachineDpapi;
+    let candidate=crate::fleet_recovery_candidate::CandidateStore::open(&fs,dir.clone(),&protector).map_err(|_|unavailable())?;
+    fleet_handoff_confirmation::recovered_leave_status(store,&fs,&dir,&protector,&candidate).await.map_err(|_|unavailable())
+}
+async fn handle_recovery_contact(args:serde_json::Value, trusted_helper:bool)->Result<serde_json::Value,VerbError> {
+    if !RECOVERY_CONTACT_READY { return Err(VerbError::new("recovery_unavailable","Fleet recovery is unavailable")); }
+    if !trusted_helper { return Err(VerbError::new("forbidden","authenticated Fleet helper required")); }
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Request { #[serde(default)] decoy:bool, #[serde(default)] policy_only:bool }
+    let request:Request=serde_json::from_value(args).map_err(|_|VerbError::new("bad_request","invalid recovery request"))?;
+    static LIMIT:std::sync::OnceLock<tokio::sync::Semaphore>=std::sync::OnceLock::new();
+    let _permit=LIMIT.get_or_init(||tokio::sync::Semaphore::new(1)).try_acquire()
+        .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
+    let store=fleet_machine_policy_store()?;
+    let pending=fleet_handoff_confirmation::recovery_contact(store,request.decoy,request.policy_only).await
+        .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
+    Ok(if request.decoy || request.policy_only { serde_json::json!({"sent":true}) } else { serde_json::json!({"pending_approval":pending}) })
+}
+async fn handle_recovery_finish(args:serde_json::Value, peer:Option<&AuthenticatedPipePeer>) -> Result<serde_json::Value,VerbError> {
+    use base64::{engine::general_purpose::STANDARD,Engine};
+    let unavailable=||VerbError::new("recovery_unavailable","Fleet recovery is unavailable");
+    if !RECOVERY_FINISH_READY { return Err(unavailable()); }
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Request { retirement_receipt:serde_json::Value, handoff:crate::fleet_identity_handoff::Handoff }
+    let request:Request=serde_json::from_value(args).map_err(|_|unavailable())?;
+    let peer=peer.filter(|peer|fleet_handoff_confirmation::session_matches(peer))
+        .ok_or_else(||VerbError::new("forbidden","active local administrator required"))?;
+    let receipt=serde_json::to_vec(&request.retirement_receipt).map_err(|_|unavailable())?;
+    if receipt.len()>8192 { return Err(unavailable()); }
+    let retirement=request.retirement_receipt.get("retirement_id").and_then(serde_json::Value::as_str).ok_or_else(unavailable)?.to_owned();
+    let store=fleet_machine_policy_store()?;
+    let base=std::env::var_os("ProgramData").ok_or_else(unavailable)?;
+    let dir=std::path::PathBuf::from(base).join("WinCommander").join("fleet-machine");
+    let fs=crate::fleet_machine_policy::WindowsFleetPolicyFs;
+    let protector=crate::fleet_credential::MachineDpapi;
+    let candidate=crate::fleet_recovery_candidate::CandidateStore::open(&fs,dir.clone(),&protector).map_err(|_|unavailable())?;
+    let wall=||std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok().and_then(|v|i64::try_from(v.as_secs()).ok()).ok_or("clock unavailable");
+    let (trust,verified,key)=store.with_handoff_trust(|trust| {
+        let encoded=candidate.stage(trust,&receipt,wall()?)?;
+        let key:[u8;32]=STANDARD.decode(encoded).map_err(|_|"invalid candidate")?.try_into().map_err(|_|"invalid candidate")?;
+        let verified=request.handoff.verify(trust,&retirement,request.handoff.new_generation(),&key,wall()?)?;
+        Ok((trust.clone(),verified,key))
+    }).map_err(|_|unavailable())?;
+    let (approval,witness)=tokio::task::block_in_place(||fleet_handoff_confirmation::authorize_recovery(store,&request.handoff,&verified,&key,peer))
+        .map_err(|_|unavailable())?;
+    fleet_handoff_confirmation::request_cooperative_stop(store,&fs,&dir,&request.handoff,&verified,&key,&approval).map_err(|_|unavailable())?;
+    if RECOVERY_UPGRADE_READY {
+        if fleet_handoff_confirmation::upgrade_restart_required(store,&fs,&dir,&request.handoff,&verified,&key,&approval,&witness).map_err(|_|unavailable())? {
+            return Ok(serde_json::json!({"status":"restart_required"}));
+        }
+        tokio::task::block_in_place(||tokio::runtime::Handle::current().block_on(
+            fleet_handoff_confirmation::probe_upgrade_after_restart(store,&fs,&dir,&request.handoff,&verified,&key,&approval,&witness)))
+            .map_err(|_|unavailable())?;
+    }
+    fleet_handoff_confirmation::await_cooperative_stop(store,&fs,&dir,&verified,&approval,&witness).await.map_err(|error| {
+        if error=="stop outcome unknown" {
+            VerbError::new("recovery_stop_unknown","WinCommander could not confirm that the previous Fleet agent stopped. Reconnection has not completed; previous work may still be running.")
+        } else { unavailable() }
+    })?;
+    let archive=tokio::task::block_in_place(||tokio::runtime::Handle::current().block_on(
+        fleet_handoff_confirmation::archive_review_with_broker(store,&fs,&dir,&protector,&trust,&request.handoff,&verified,&key,approval,&witness)))
+        .map_err(|_|unavailable())?;
+    let status=crate::fleet_recovery_transport::prepare_and_resume(store,&candidate,&receipt,&request.handoff,&retirement,
+        verified.new_generation(),&archive,&protector,||witness.still_authorized()).await.map_err(|_|unavailable())?;
+    Ok(serde_json::json!({"status":status}))
+}
+async fn handle_recovery_handoff(args:serde_json::Value, peer:Option<&AuthenticatedPipePeer>) -> Result<serde_json::Value,VerbError> {
+    if !RECOVERY_HANDOFF_READY { return Err(VerbError::new("recovery_unavailable","Fleet recovery is unavailable")); }
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Request { retirement_receipt:serde_json::Value }
+    let request:Request=serde_json::from_value(args).map_err(|_|VerbError::new("bad_request","invalid recovery request"))?;
+    let receipt=serde_json::to_vec(&request.retirement_receipt).map_err(|_|VerbError::new("bad_request","invalid retirement receipt"))?;
+    if receipt.len()>8192 { return Err(VerbError::new("bad_request","invalid retirement receipt")); }
+    let witness=peer.and_then(fleet_handoff_confirmation::SessionWitness::capture)
+        .ok_or_else(||VerbError::new("forbidden","active local administrator required"))?;
+    let store=fleet_machine_policy_store()?;
+    let base=std::env::var_os("ProgramData").ok_or_else(||VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
+    let fs=crate::fleet_machine_policy::WindowsFleetPolicyFs;
+    let protector=crate::fleet_credential::MachineDpapi;
+    let candidate=crate::fleet_recovery_candidate::CandidateStore::open(&fs,
+        std::path::PathBuf::from(base).join("WinCommander").join("fleet-machine"),&protector)
+        .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
+    let handoff=crate::fleet_recovery_transport::request_handoff(store,&candidate,&receipt,||witness.still_authorized()).await
+        .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
+    serde_json::to_value(handoff).map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))
+}
+async fn handle_recovery_stage(args:serde_json::Value, peer:Option<&AuthenticatedPipePeer>) -> Result<serde_json::Value,VerbError> {
+    if !RECOVERY_STAGE_READY { return Err(VerbError::new("recovery_unavailable","Fleet recovery is unavailable")); }
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Request { retirement_receipt:serde_json::Value }
+    let request:Request=serde_json::from_value(args).map_err(|_|VerbError::new("bad_request","invalid recovery request"))?;
+    let witness=peer.and_then(fleet_handoff_confirmation::SessionWitness::capture)
+        .ok_or_else(||VerbError::new("forbidden","active local administrator required"))?;
+    let receipt=serde_json::to_vec(&request.retirement_receipt).map_err(|_|VerbError::new("bad_request","invalid retirement receipt"))?;
+    if receipt.len()>8192 { return Err(VerbError::new("bad_request","invalid retirement receipt")); }
+    let store=fleet_machine_policy_store()?;
+    let base=std::env::var_os("ProgramData").ok_or_else(||VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
+    let fs=crate::fleet_machine_policy::WindowsFleetPolicyFs;
+    let protector=crate::fleet_credential::MachineDpapi;
+    let candidate=crate::fleet_recovery_candidate::CandidateStore::open(&fs,
+        std::path::PathBuf::from(base).join("WinCommander").join("fleet-machine"),&protector)
+        .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
+    let (public_key,conflict)=crate::fleet_recovery_transport::submit_candidate(store,&candidate,&receipt,||witness.still_authorized()).await
+        .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
+    Ok(serde_json::json!({"candidate_public_key":public_key,"submission_conflict":conflict}))
+}
+async fn handle_recovery_resume(args:serde_json::Value, peer:Option<&AuthenticatedPipePeer>) -> Result<serde_json::Value,VerbError> {
+    if !RECOVERY_RESUME_READY { return Err(VerbError::new("recovery_unavailable","Fleet recovery is unavailable")); }
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Request {}
+    let _:Request=serde_json::from_value(args).map_err(|_|VerbError::new("bad_request","invalid recovery request"))?;
+    let witness=peer.and_then(fleet_handoff_confirmation::SessionWitness::capture)
+        .ok_or_else(||VerbError::new("forbidden","active local administrator required"))?;
+    let store=fleet_machine_policy_store()?;
+    let base=std::env::var_os("ProgramData").ok_or_else(||VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
+    let fs=crate::fleet_machine_policy::WindowsFleetPolicyFs;
+    let protector=crate::fleet_credential::MachineDpapi;
+    let candidate=crate::fleet_recovery_candidate::CandidateStore::open(&fs,
+        std::path::PathBuf::from(base).join("WinCommander").join("fleet-machine"),&protector)
+        .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
+    let status=crate::fleet_recovery_transport::resume_prepared(store,&candidate,||witness.still_authorized()).await
+        .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
+    Ok(serde_json::json!({"status":status}))
+}
+fn handle_operator_key_pin(args:serde_json::Value, peer:Option<&AuthenticatedPipePeer>) -> Result<serde_json::Value,VerbError> {
+    if !OPERATOR_PIN_READY { return Err(VerbError::new("recovery_unavailable","Fleet recovery is unavailable")); }
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Request { operator_key:String }
+    let request:Request=serde_json::from_value(args).map_err(|_| VerbError::new("bad_request","invalid operator key"))?;
+    let peer=peer.ok_or_else(||VerbError::new("forbidden","authenticated administrator required"))?;
+    let store=fleet_machine_policy_store()?;
+    let trust=store.trust_snapshot().map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?
+        .map(|value|value.0).ok_or_else(||VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
+    let approval=tokio::task::block_in_place(|| fleet_handoff_confirmation::confirm_operator(peer,&trust,&request.operator_key))
+        .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
+    store.commit_operator_key(request.operator_key,approval,peer)
+        .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
+    Ok(serde_json::json!({"pinned":true}))
+}
+
 fn fleet_machine_policy_store()->Result<&'static crate::fleet_machine_policy::FleetMachinePolicy,VerbError> {
     crate::fleet_machine_policy::system_store().map_err(|kind| VerbError::new("fleet_policy_unavailable", kind))
 }
@@ -4321,6 +4640,53 @@ mod test_support {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn recovery_lab_profile_is_coherent_and_disabled_by_default() {
+        let enabled=cfg!(feature="fleet-recovery-lab");
+        assert_eq!(super::OPERATOR_PIN_READY,enabled);assert_eq!(super::RECOVERY_RESUME_READY,enabled);
+        assert_eq!(super::RECOVERY_STAGE_READY,enabled);assert_eq!(super::RECOVERY_HANDOFF_READY,enabled);
+        assert_eq!(super::RECOVERY_FINISH_READY,enabled);assert_eq!(super::RECOVERY_CONTACT_READY,enabled);
+        assert_eq!(super::RECOVERY_EXECUTION_READY,enabled);assert_eq!(super::RECOVERY_STOP_READY,enabled);
+        assert_eq!(super::RECOVERY_UPGRADE_READY,enabled);
+        assert!(!super::RECOVERY_UNKNOWN_READY);
+    }
+    #[cfg(not(feature="fleet-recovery-lab"))]
+    #[test]
+    fn operator_pin_ipc_stays_unavailable_until_recovery_is_ready() {
+        assert!(!super::OPERATOR_PIN_READY);
+        assert!(super::handle_operator_key_pin(serde_json::json!({"operator_key":"invalid"}),None).is_err());
+    }
+    #[cfg(not(feature="fleet-recovery-lab"))]
+    #[tokio::test]
+    async fn recovery_resume_ipc_stays_unavailable_until_recovery_is_ready() {
+        assert!(!super::RECOVERY_RESUME_READY);
+        assert!(super::handle_recovery_resume(serde_json::json!({}), None).await.is_err());
+    }
+    #[cfg(not(feature="fleet-recovery-lab"))]
+    #[tokio::test]
+    async fn recovery_stage_ipc_stays_unavailable_until_recovery_is_ready() {
+        assert!(!super::RECOVERY_STAGE_READY);
+        assert!(super::handle_recovery_stage(serde_json::json!({}), None).await.is_err());
+    }
+    #[cfg(not(feature="fleet-recovery-lab"))]
+    #[tokio::test]
+    async fn recovery_handoff_ipc_stays_unavailable_until_recovery_is_ready() {
+        assert!(!super::RECOVERY_HANDOFF_READY);
+        assert!(super::handle_recovery_handoff(serde_json::json!({}), None).await.is_err());
+    }
+    #[cfg(not(feature="fleet-recovery-lab"))]
+    #[tokio::test]
+    async fn recovery_finish_ipc_stays_unavailable_until_recovery_is_ready() {
+        assert!(!super::RECOVERY_FINISH_READY);
+        assert!(super::handle_recovery_finish(serde_json::json!({}), None).await.is_err());
+    }
+    #[cfg(not(feature="fleet-recovery-lab"))]
+    #[tokio::test]
+    async fn recovery_contact_ipc_stays_unavailable_until_recovery_is_ready() {
+        assert!(!super::RECOVERY_CONTACT_READY);
+        assert!(super::handle_recovery_contact(serde_json::json!({}),false).await.is_err());
+    }
+
     use super::test_support::*;
     use super::*;
     use wincmd_shared::svc::SVC_PROTOCOL_VERSION;

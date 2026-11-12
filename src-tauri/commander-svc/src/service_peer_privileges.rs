@@ -30,6 +30,19 @@ pub(super) fn token_is_privileged(token: HANDLE) -> Result<bool> {
     }
 }
 
+/// Recovery confirmation requires an interactive administrator, never SYSTEM.
+pub(super) fn token_is_local_administrator(token: HANDLE) -> Result<bool> {
+    unsafe {
+        let mut duplicate: HANDLE = std::ptr::null_mut();
+        if DuplicateToken(token, SecurityIdentification, &mut duplicate) == 0 {
+            anyhow::bail!("DuplicateToken failed");
+        }
+        let _guard = HandleGuard(duplicate);
+        if is_local_system_token(duplicate)? { return Ok(false); }
+        is_admin_token(duplicate)
+    }
+}
+
 pub(super) fn caller_has_vault_policy_capability_token(token: HANDLE) -> Result<bool> {
     unsafe {
         let mut membership_token = std::ptr::null_mut();

@@ -319,6 +319,9 @@ function Publish-GitHubArchive {
 Push-Location $script:Root
 try {
     Import-ReleaseEnvironment
+    if (-not $StageOnly -and ($env:WINCMD_FLEET_RECOVERY_LAB -eq '1' -or $env:VITE_FLEET_RECOVERY_LAB -eq '1')) {
+        Stop-Release 'Recovery lab builds are local-only and cannot be published.'
+    }
     Assert-ReleaseSource -AllowUntaggedStage:$StageOnly
     Normalize-UpdaterSigningKey
     New-Item -ItemType Directory -Path $script:WorkRoot -Force | Out-Null

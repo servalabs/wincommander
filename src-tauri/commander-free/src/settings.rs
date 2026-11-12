@@ -3683,6 +3683,23 @@ pub(crate) fn preview_verified_admin_config(
     epoch_write::preflight(&epoch)
 }
 
+/// Verify that persisted desired settings match a signed equal-version epoch.
+/// This does not establish that Windows or any monitor applied those settings.
+pub(crate) fn recovery_signed_settings_readback(settings: &AppSettings, config: &wincmd_shared::fleet::ConfigEpoch) -> Result<bool, String> {
+    let version=u32::try_from(config.version).map_err(|_| "Fleet policy version is outside the supported range")?;
+    let epoch=verified_admin_epoch(config.config_json.clone(),config.locked_paths.clone(),"merge".into(),version,Some(config.signature.clone()),Some(config.signer_key.clone()),Some(config.target_kind.clone()),config.target_id.clone(),Some(config.managed));
+    epoch_write::readback_equal(settings,&epoch)
+}
+
+pub(crate) fn read_settings_for_recovery_readback() -> Result<AppSettings, String> {
+    if is_decoy_mode() { return Err("Recovery settings readback is unavailable in decoy mode".into()); }
+    reload_verified_settings_with(|| {
+        let fresh=load_settings_from_store()?;
+        if !personal_settings::persisted_service_available() { return Err("Recovery settings readback is unavailable".into()); }
+        Ok(fresh)
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_verified_admin_config(
     config: serde_json::Value,
