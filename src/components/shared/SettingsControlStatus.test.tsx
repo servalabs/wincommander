@@ -8,11 +8,11 @@ describe("SettingsControlStatus", () => {
     const html = renderToStaticMarkup(
       <SettingsControlStatus lifecycle={getControlLifecycle({
         failureReason: "store-read-only",
-        account: { name: "parth", displayName: "Parth" },
+        account: { name: "example", displayName: "Example" },
       })} />,
     );
 
     expect(html).toContain("Blocked: store-read-only");
-    expect(html).toContain("Windows account: Parth");
+    expect(html).toContain("Windows account: Example");
   });
 });

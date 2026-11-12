@@ -17,7 +17,7 @@ const directory: FleetAccessDirectory = {
 
 const deployablePolicy: VaultFleetPolicy = {
   ...DEFAULT_VAULT_POLICY,
-  ownerPrincipal: "SERVER\\Parth",
+  ownerPrincipal: "SERVER\\Example",
   diskNumber: 1,
   diskUniqueId: "test-disk-id",
   confirmationText: "ERASE DISK 1",

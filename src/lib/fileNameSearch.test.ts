@@ -24,7 +24,7 @@ describe("buildSearchQuery — text + filters combine (the core fix)", () => {
   });
 
   it("matches a name containing the text, including text after a prefix", () => {
-    expect(buildSearchQuery("parth", new Set(), "any", "any")).toBe("*parth*");
+    expect(buildSearchQuery("example", new Set(), "any", "any")).toBe("*example*");
     expect(buildSearchQuery("report 2024", new Set(), "any", "any")).toBe("*report*2024*");
   });
 

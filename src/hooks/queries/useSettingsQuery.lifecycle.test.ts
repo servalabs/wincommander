@@ -46,11 +46,11 @@ describe("machine-control lifecycle", () => {
   test("retains the live Windows account with the visible state and reason", () => {
     expect(getControlLifecycle({
       failureReason: "store-read-only",
-      account: { name: "parth", displayName: "Parth", sid: "S-1-5-21" },
+      account: { name: "example", displayName: "Example", sid: "S-1-5-21" },
     })).toEqual({
       state: "Blocked",
       reason: "store-read-only",
-      account: { name: "parth", displayName: "Parth", sid: "S-1-5-21" },
+      account: { name: "example", displayName: "Example", sid: "S-1-5-21" },
     });
   });
 });
