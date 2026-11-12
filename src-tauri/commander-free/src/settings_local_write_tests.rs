@@ -376,6 +376,27 @@ fn runtime_session_observations_remain_writable_without_authority_changes() {
 }
 
 #[test]
+fn local_look_away_preference_is_outside_fleet_shield_lock_and_bounded() {
+    let mut current = create_default_settings();
+    current.policy.sync_mode = "managed".into();
+    current.policy.locked_paths = vec!["privacy.privacyShield".into()];
+    let mut candidate = current.clone();
+    candidate.app.local_privacy_shield_look_away_delay_seconds = Some(7);
+    assert!(validate(&current, &candidate).is_ok());
+    candidate.app.local_privacy_shield_look_away_delay_seconds = Some(301);
+    assert!(validate(&current, &candidate).is_err());
+    current.app.fleet.privacy_shield_policy_transaction = Some(crate::settings::ShieldPolicyTransaction {
+        epoch_version: 1, epoch_signature_hash: "a".repeat(64), resolution_revision: 1,
+        shield_revision: 1, attempt_id: "attempt".into(), was_running: true, was_fleet_owned: false,
+        owner_session_id: Some(1), pre_pause_mode: None, pre_pause_camera_index: None, pre_pause_native_options: None,
+        local_stop_requested: false, attempt_count: 1, retry_not_before_ms: 0, expected_hash: "hash".into(), last_stage: None,
+    });
+    let mut changed = current.clone();
+    changed.app.local_privacy_shield_look_away_delay_seconds = Some(7);
+    assert!(validate(&current, &changed).is_err());
+}
+
+#[test]
 fn standalone_settings_remain_editable_and_import_preserves_device_identity() {
     let fixture = Fixture::managed();
     *SETTINGS_CACHE.lock().unwrap() = Some(create_default_settings());

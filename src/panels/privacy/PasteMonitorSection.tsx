@@ -43,7 +43,12 @@ import LocalClipboardRulesEditor from "./LocalClipboardRulesEditor";
 import type { ClipboardGuardRuleLoadState } from "../../hooks/useClipboardGuardRules";
 import { newDiagnosticOperationId, recordDiagnostic } from "../../lib/diagnostics";
 
+import type { Finding } from "../../types/generated/fleet";
+import { describeFinding } from "./contentDetectorModel";
+
 interface DetectionRow {
+  truncated?: boolean;
+  findings?: Finding[];
   pattern: string;
   /** "warning" or "danger" — danger entries get a red accent in the log. */
   severity?: string;
@@ -499,7 +504,7 @@ export default function PasteMonitorSection({
                         Clear
                       </Button>
                     </div>
-                    <PrivacyEventTable title="Paste-monitor detections" columns={["Time", "Severity", "Pattern"]} rows={recent.map((r, i) => ({ id: `${r.detected_at}-${i}`, search: `${r.severity ?? ""} ${r.pattern ?? ""}`, sort: [r.detected_at, r.severity ?? "", r.pattern ?? ""], cells: [formatRelative(r.detected_at), r.severity, r.pattern] }))} />
+                    <PrivacyEventTable title="Paste-monitor detections" columns={["Time", "Severity", "Pattern", "Why it matched"]} rows={recent.map((r, i) => ({ id: `${r.detected_at}-${i}`, search: `${r.severity ?? ""} ${r.pattern ?? ""}`, sort: [r.detected_at, r.severity ?? "", r.pattern ?? ""], cells: [formatRelative(r.detected_at), r.severity, r.pattern, [(r.findings ?? []).map(describeFinding).join("; "), r.truncated ? "Scan incomplete: further matches may remain" : ""].filter(Boolean).join("; ")] }))} />
                   </div>
                 )}
               </div>

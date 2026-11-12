@@ -83,6 +83,14 @@ fn at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
 }
 
 fn validate(current: &AppSettings, candidate: &AppSettings) -> Result<(), String> {
+    if candidate.app.local_privacy_shield_look_away_delay_seconds.is_some_and(|value| value > 300) {
+        return Err("Local look-away delay must be between 0 and 300 seconds".into());
+    }
+    if current.app.fleet.privacy_shield_policy_transaction.is_some()
+        && current.app.local_privacy_shield_look_away_delay_seconds != candidate.app.local_privacy_shield_look_away_delay_seconds
+    {
+        return Err("Local look-away preference cannot change while Shield policy is transitioning".into());
+    }
     let before_slots = &current.app.vault.quick_mount_slots;
     let after_slots = &candidate.app.vault.quick_mount_slots;
     if serde_json::to_value(before_slots).ok() != serde_json::to_value(after_slots).ok() {

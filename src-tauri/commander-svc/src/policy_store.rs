@@ -516,6 +516,29 @@ impl SubtreeCompiler for ClipboardGuardCompiler {
 /// so the generic machinery below already serves both subtrees per plan
 /// §3's "svc owns both" ownership model, and swapping in a real compiler
 /// later doesn't require touching this file's install/load/health plumbing.
+struct ContentRulesCompiler;
+
+impl SubtreeCompiler for ContentRulesCompiler {
+    const CONFIG_KEY: &'static str = "contentRules";
+    type Raw = wincmd_clip_rules::ContentRulesSubtree;
+    type Compiled = wincmd_clip_rules::CompiledRuleSet;
+
+    fn extract_raw(config: &serde_json::Value) -> Result<Self::Raw, PolicyStoreError> {
+        serde_json::from_value(
+            config
+                .get(Self::CONFIG_KEY)
+                .cloned()
+                .ok_or(PolicyStoreError::DeserializeFailed)?,
+        )
+        .map_err(|_| PolicyStoreError::DeserializeFailed)
+    }
+
+    fn compile(raw: &Self::Raw) -> Result<Self::Compiled, Vec<String>> {
+        wincmd_clip_rules::compile_content_rules(raw)
+            .map_err(|errors| errors.iter().map(ToString::to_string).collect())
+    }
+}
+
 struct InkReceiptCompiler;
 
 impl SubtreeCompiler for InkReceiptCompiler {
@@ -574,7 +597,11 @@ impl SubtreeHealth {
 /// both Clipboard Guard (today, real content) and Ink Receipt (today, a
 /// placeholder identity compiler) — see the module doc's "Generic over
 /// subtree" section.
+#[path = "policy_store_binding.rs"]
+mod binding;
+
 struct ManagedSubtree<C: SubtreeCompiler> {
+    input: Option<EpochInstallInput>,
     version: Option<i64>,
     raw: Option<C::Raw>,
     compiled: Option<C::Compiled>,
@@ -585,6 +612,7 @@ struct ManagedSubtree<C: SubtreeCompiler> {
 impl<C: SubtreeCompiler> ManagedSubtree<C> {
     fn new() -> Self {
         Self {
+            input: None,
             version: None,
             raw: None,
             compiled: None,
@@ -672,6 +700,7 @@ impl<C: SubtreeCompiler> ManagedSubtree<C> {
             return Err(fail(self, PolicyStoreError::Io(format!("{:?}", e.kind()))));
         }
 
+        self.input = Some(input.clone());
         self.version = Some(input.version);
         self.raw = Some(raw);
         self.compiled = Some(compiled);
@@ -709,6 +738,7 @@ impl<C: SubtreeCompiler> ManagedSubtree<C> {
         };
         match Self::verify_and_compile(pinned_key, &input) {
             Ok((raw, compiled)) => {
+                self.input = Some(input.clone());
                 self.version = Some(input.version);
                 self.raw = Some(raw);
                 self.compiled = Some(compiled);
@@ -784,6 +814,7 @@ pub struct PolicyStore {
     dir: PathBuf,
     pinned_signing_key_b64: String,
     clipboard: Mutex<ManagedSubtree<ClipboardGuardCompiler>>,
+    content_rules: Mutex<ManagedSubtree<ContentRulesCompiler>>,
     ink_receipt: Mutex<ManagedSubtree<InkReceiptCompiler>>,
 }
 
@@ -808,6 +839,7 @@ impl PolicyStore {
             dir,
             pinned_signing_key_b64,
             clipboard: Mutex::new(ManagedSubtree::new()),
+            content_rules: Mutex::new(ManagedSubtree::new()),
             ink_receipt: Mutex::new(ManagedSubtree::new()),
         })
     }
@@ -823,6 +855,13 @@ impl PolicyStore {
     /// Load whatever was last durably installed for both subtrees. Call
     /// once at service startup, after [`PolicyStore::open`].
     pub fn load_at_startup(&self) -> StartupReport {
+        if let Ok(mut guard) = self.content_rules.lock() {
+            let _ = guard.load_at_startup(
+                self.fs.as_ref(),
+                &self.dir.join("content-rules.json"),
+                &self.pinned_signing_key_b64,
+            );
+        }
         let clipboard = match self.clipboard.lock() {
             Ok(mut guard) => guard.load_at_startup(
                 self.fs.as_ref(),
@@ -889,7 +928,39 @@ impl PolicyStore {
 
     /// Backs `svc.clipboard.get_policy` (`ReadOnly`). `None` if the
     /// subtree has never had a policy successfully installed or loaded.
+    pub fn install_content_epoch(&self, input: EpochInstallInput) -> Result<(), PolicyStoreError> {
+        let mut guard = self
+            .content_rules
+            .lock()
+            .map_err(|_| PolicyStoreError::Io("mutex poisoned".into()))?;
+        if guard.version == Some(input.version) {
+            verify_epoch_signature(&self.pinned_signing_key_b64, &input)?;
+            let offered = ContentRulesCompiler::extract_raw(&input.config)?;
+            if guard.raw.as_ref() == Some(&offered) {
+                return Ok(());
+            }
+        }
+        guard.install(
+            self.fs.as_ref(),
+            &self.dir.join("content-rules.json"),
+            &self.pinned_signing_key_b64,
+            input,
+            self.clock.as_ref(),
+        )
+    }
+
+    pub fn get_content_policy(&self) -> Option<(i64, wincmd_clip_rules::ContentRulesSubtree)> {
+        let guard = self.content_rules.lock().ok()?;
+        Some((guard.version?, guard.raw.clone()?))
+    }
+
     pub fn get_clipboard_policy(&self) -> Option<ClipboardPolicyView> {
+        if let Ok(guard) = self.content_rules.lock() {
+            if let (Some(version), Some(raw)) = (guard.version, guard.raw.as_ref()) {
+                let rules = wincmd_clip_rules::resolve_content_rules(raw).ok()?;
+                return Some(ClipboardPolicyView { version, rules });
+            }
+        }
         let guard = self.clipboard.lock().ok()?;
         let version = guard.version?;
         let rules = guard.raw.clone()?;
@@ -907,6 +978,11 @@ impl PolicyStore {
     }
 
     pub fn clipboard_health(&self) -> SubtreeHealth {
+        if let Ok(guard) = self.content_rules.lock() {
+            if guard.version.is_some() || guard.last_attempt_unix.is_some() {
+                return guard.health();
+            }
+        }
         self.clipboard
             .lock()
             .map(|g| g.health())
@@ -1077,6 +1153,84 @@ mod tests {
             PINNED_PUBKEY_B64.to_string(),
         )
         .expect("fake fs reports secure permissions by default")
+    }
+
+    fn content_input(version: i64, enabled: bool) -> (EpochInstallInput, String) {
+        use base64::Engine;
+        use ed25519_dalek::Signer;
+        let key = ed25519_dalek::SigningKey::from_bytes(&[91u8; 32]);
+        let pinned =
+            base64::engine::general_purpose::STANDARD.encode(key.verifying_key().to_bytes());
+        let subtree = wincmd_clip_rules::ContentRulesSubtree {
+            enabled,
+            ..Default::default()
+        };
+        let mut input = EpochInstallInput {
+            version,
+            config: serde_json::json!({"contentRules":subtree}),
+            locked_paths: vec![],
+            managed: true,
+            target_kind: "org".into(),
+            target_id: None,
+            signature_b64: String::new(),
+            signer_key_b64: pinned.clone(),
+        };
+        let preimage =
+            wincmd_shared::fleet::epoch_preimage(&wincmd_shared::fleet::EpochSigningInput {
+                version,
+                config: &input.config,
+                locked_paths: &input.locked_paths,
+                managed: true,
+                target_kind: "org",
+                target_id: None,
+            });
+        input.signature_b64 =
+            base64::engine::general_purpose::STANDARD.encode(key.sign(&preimage).to_bytes());
+        (input, pinned)
+    }
+
+    #[test]
+    fn content_policy_is_verified_and_a_signed_tombstone_stops_managed_matching() {
+        let (enabled, pinned) = content_input(1, true);
+        let store = PolicyStore::open(
+            Box::new(FakePolicyFs::new()),
+            Box::new(FakeClock(AtomicI64::new(1))),
+            PathBuf::from("/fake/content"),
+            pinned,
+        )
+        .unwrap();
+        store.install_content_epoch(enabled.clone()).unwrap();
+        store.install_content_epoch(enabled).unwrap();
+        assert!(store.clipboard_health().rules_compiled);
+        assert!(!store.get_clipboard_policy().unwrap().rules.is_empty());
+        let (disabled, _) = content_input(2, false);
+        store.install_content_epoch(disabled).unwrap();
+        assert!(store.get_clipboard_policy().unwrap().rules.is_empty());
+        assert_eq!(store.get_clipboard_policy().unwrap().version, 2);
+        let (older, _) = content_input(1, true);
+        assert!(store.install_content_epoch(older).is_err());
+        assert!(store.get_clipboard_policy().unwrap().rules.is_empty());
+    }
+
+    #[test]
+    fn forged_content_policy_never_replaces_the_last_valid_rules() {
+        let (enabled, pinned) = content_input(1, true);
+        let store = PolicyStore::open(
+            Box::new(FakePolicyFs::new()),
+            Box::new(FakeClock(AtomicI64::new(1))),
+            PathBuf::from("/fake/content"),
+            pinned,
+        )
+        .unwrap();
+        store.install_content_epoch(enabled).unwrap();
+        let (mut forged, _) = content_input(2, false);
+        forged.config["contentRules"]["enabled"] = serde_json::json!(true);
+        assert!(matches!(
+            store.install_content_epoch(forged),
+            Err(PolicyStoreError::BadSignature)
+        ));
+        assert_eq!(store.get_clipboard_policy().unwrap().version, 1);
+        assert!(!store.clipboard_health().rules_compiled);
     }
 
     // ── 1. Independent signature verification ────────────────────────────
@@ -1382,4 +1536,6 @@ mod tests {
         }
         let _ = std::fs::remove_dir_all(&dir);
     }
+    include!("policy_store_binding_tests.rs");
+
 }

@@ -7,7 +7,7 @@ import type { JsonValue } from "./serde_json/JsonValue";
  * order here — sequencing is the endpoint's job, this crate only carries
  * the request.
  */
-export type Action = "notify_user" | "clear_clipboard" | "quarantine_clipboard" | "record_local_receipt" | "report_fleet" | "alert_admin";
+export type Action = "mask_matches" | "notify_user" | "clear_clipboard" | "quarantine_clipboard" | "record_local_receipt" | "report_fleet" | "alert_admin";
 
 /**
  * Risk tier of a remote action — drives the safety-gate ladder in the fleet
@@ -98,7 +98,7 @@ export type AndroidFleetStatus = { framework_key_fingerprint: string, deadman_la
  */
 export type ArgusKindBucket = {
 /**
- * High-level category: "dlp_exfil" | "tamper" | "print" | "removable_media" | "tripwire" | "access".
+ * High-level category: "dlp_exfil" | "dlp_content" | "tamper" | "print" | "removable_media" | "tripwire" | "access" | "session_assurance".
  */
 kind: string,
 /**
@@ -131,7 +131,7 @@ max_severity: string, };
  */
 export type ArgusSignal = { window_start: string, window_end: string,
 /**
- * High-level category: "dlp_exfil" | "tamper" | "print" | "removable_media" | "tripwire" | "access"
+ * High-level category: "dlp_exfil" | "dlp_content" | "tamper" | "print" | "removable_media" | "tripwire" | "access" | "session_assurance"
  */
 kind: string,
 /**
@@ -828,7 +828,11 @@ export type PendingSearchJob = { job_id: string, query: string, max_hits_per_dev
  * independently-revised sections in one server-signed envelope so every
  * agent receives the same policy decision atomically.
  */
-export type PolicyEnvelope = { org_id: OrgId, device_id: DeviceId, enrollment_generation: string | null, config_revision: bigint | null, resolution_revision: bigint | null, config: ConfigEpoch | null, shield: ShieldDesiredState | null,
+export type PolicyEnvelope = {
+/**
+ * Verified org reporting switch; only sent to content_rules_v1 agents.
+ */
+clipboard_guard_enabled: boolean, org_id: OrgId, device_id: DeviceId, enrollment_generation: string | null, config_revision: bigint | null, resolution_revision: bigint | null, config: ConfigEpoch | null, shield: ShieldDesiredState | null,
 /**
  * Latest independent Shield revision for the organisation, including a
  * tombstone/empty shield section.  This prevents replaying an older

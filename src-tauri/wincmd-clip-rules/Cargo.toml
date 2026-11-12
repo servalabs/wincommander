@@ -7,18 +7,17 @@ license = "AGPL-3.0-or-later"
 edition = "2021"
 rust-version = "1.93.1"
 
-# Pure data + matcher crate — deliberately dependency-light. `regex` is the
-# only non-serde dependency: this crate does NOT depend on `uuid` (see
-# `src/ids.rs` for why — the same reason `fleet-proto`'s `DeviceId`/`OrgId`
-# are validated `String` newtypes rather than `uuid::Uuid`), does not depend
-# on `chrono` (cooldown timing uses `std::time::Instant`, never wall-clock),
-# and does not depend on `once_cell`/`lazy_static` (every builtin regex is
-# compiled inside `compile()`, not at process-load time via a `Lazy` global,
-# because size-limit enforcement has to run for builtins too — see
-# `src/compile.rs`).
+# I/O-free engine; regex-automata exposes fixed-program memory accounting,
+# Aho-Corasick provides the shared keyword filter. Hashing validates public
+# checksums and derives stable builtin identifiers, never live credentials.
 [dependencies]
 regex = "1"
+regex-automata = "0.4"
+aho-corasick = "1"
+base64 = "0.22"
+sha2 = "0.10"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 # WI-2 SSOT codegen idiom (mirrors `fleet-proto`/`wincmd-shared`): derive
 # TypeScript types for the fleet-server console's rule editor + test panel.
@@ -36,3 +35,4 @@ ts-codegen = ["dep:ts-rs"]
 # a production binary.
 [dev-dependencies]
 serde_json = "1"
+regex-syntax = "0.8"

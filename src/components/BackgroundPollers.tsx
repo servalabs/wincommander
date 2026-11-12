@@ -29,7 +29,7 @@ import { preloadDiskCleanupScheduleStatus } from "../panels/maintenance/diskClea
 import { savedRamDiskMountRequest } from "../lib/ramDisk";
 import useAutoHeal from "../hooks/useAutoHeal";
 import useAdoptCurrentState from "../hooks/useAdoptCurrentState";
-import { privacyShieldBlurTriggers, resolvePrivacyShieldMode } from "../lib/privacyShieldMode";
+import { fleetShieldDelayPolicyActive, fleetShieldDetectorPolicyActive, privacyShieldDetectorGaze, privacyShieldBlurTriggers, privacyShieldLookAwayDelay, resolvePrivacyShieldMode } from "../lib/privacyShieldMode";
 import {
   resolveFleetPrivacyShieldControl,
   resolveLocalFleetPrivacyShieldControl,
@@ -132,12 +132,6 @@ export default function BackgroundPollers({
   const fleetPrivacyShield = appSettings?.app?.fleet?.enabled === true
     && (appSettings?.ideal?.privacy?.privacyShield?.fleetManaged === true
       || appSettings?.app?.fleet?.privacyShieldSessionOwned === true);
-  // Keep the supervisor alive for every enrolled Fleet device, even after a
-  // policy turns the Shield flags off. That transition is what must stop a
-  // previously Fleet-owned process and send its final lifecycle event.
-  const fleetPrivacySupervisor = appSettings?.app?.fleet?.enabled === true;
-  const fleetPrivacyMonitoringEnabled = fleetPrivacyShield
-    && appSettings?.ideal?.privacy?.privacyShield?.fleetMonitoringEnabled === true;
 
   // Keep the changing values in refs so the listener-registration effect below
   // can read them WITHOUT depending on appSettings — otherwise every settings
@@ -152,11 +146,6 @@ export default function BackgroundPollers({
   const appSettingsRef = useRef(appSettings);
   const onboardingPreloadStartedRef = useRef(false);
   const diskCleanupStatusPreloadStartedRef = useRef(false);
-  const fleetShieldReportedStateRef = useRef<string | null>(null);
-  const fleetShieldReceivedStateRef = useRef<string | null>(null);
-  // A device-scoped Fleet Start/Stop carries a durable command id. Every
-  // media-free lifecycle receipt echoes only that id, never a camera detail.
-  const fleetShieldCommandIdRef = useRef<string | null>(null);
   useEffect(() => {
     modulesRef.current = modules;
     productivityQuietManagedRef.current = productivityQuietManaged;
@@ -190,214 +179,23 @@ export default function BackgroundPollers({
     return () => window.clearTimeout(timer);
   }, [getAutoEraseSchedules, getUserProfiles, startupComplete]);
 
-  // Fleet-managed Privacy Shield supervisor. Privacy Shield remains the sole
-  // local camera client; Fleet supplies signed policy and receives status/
-  // incident metadata only. If Meet, a browser, or another app owns the
-  // camera, the local start simply fails, is reported as `camera_busy`, and
-  // is retried on the next low-frequency tick without changing Windows camera
-  // permissions or uploading a frame.
+  // Fleet command application and ownership reports are handled by the native
+  // supervisor under its machine lock. Keep only the existing minute quota
+  // charge here; the native supervisor observes exhaustion and performs Stop.
   useEffect(() => {
-    if (!fleetPrivacySupervisor) return;
-    let cancelled = false;
-    let starting = false;
-    const report = async (status: string, detail?: string) => {
-      const commandId = fleetShieldCommandIdRef.current;
-      const key = `${commandId ?? ""}:${status}:${detail ?? ""}`;
-      if (fleetShieldReportedStateRef.current === key) return;
-      // Only deduplicate a state after Pro accepts it. Marking it before the
-      // IPC call made a transient sidecar failure suppress that lifecycle
-      // transition forever, leaving Fleet with stale Shield state.
+    if (!fleetPrivacyShield) return;
+    const charge = async () => {
+      if (appSettingsRef.current?.app?.fleet?.privacyShieldSessionOwned !== true) return;
       try {
-        await invoke("fleet_report_privacy_shield_status", { status, detail, commandId });
-        const lifecycle = status === "received" ? "delivered"
-          : status === "applying" ? "applying"
-            : ["running_fleet_session", "disabled_by_policy", "stopped"].includes(status) ? "applied"
-              : "verified";
-        const failed = ["camera_unavailable", "windows_server_camera_unavailable", "camera_busy", "start_failed", "quota_exhausted"].includes(status);
-        recordDiagnostic({ operationId: commandId ?? undefined, feature: "fleet", action: "privacy_shield_command",
-          stage: status === "received" ? "delivery" : lifecycle,
-          lifecycle, outcome: failed ? "failed" : status === "applying" ? "progress" : "succeeded",
-          errorCode: failed ? `PSH.FLEET.${status.toUpperCase()}` : undefined,
-          severity: failed ? "warn" : "info", retryability: failed ? "automatic" : "never",
-          suggestedNextAction: failed ? "retry" : "none", privacyClass: "local_sensitive",
-          context: { state: status, reason_category: failed ? "managed_outcome" : "managed_state" } });
-        fleetShieldReportedStateRef.current = key;
-        return true;
-      } catch {
-        // Keep the prior key so the next supervisor tick retries this state.
-        return false;
-      }
+        const status = await executeBackendCommand<{ running?: boolean }>("Get-PrivacyShieldStatus");
+        if (status.success && status.data?.running === true) {
+          await invoke("consume_shield_minutes", { minutes: 1.0 });
+        }
+      } catch { /* Retry on the next quota interval. */ }
     };
-    const tick = async () => {
-      if (cancelled || starting) return;
-      const settings = appSettingsRef.current;
-      const ps = settings?.ideal?.privacy?.privacyShield;
-      if (!settings?.app?.fleet?.enabled) return;
-      const fleetOwnsSession = settings.app.fleet.privacyShieldSessionOwned === true;
-      // Pull the latest admin desired-state (separate from policy epochs).
-      // Use this returned value in THIS tick too: patching settings alone only
-      // takes effect after React re-renders, which used to make a freshly
-      // delivered remote start look like an instruction that did nothing.
-      let desiredState = settings.app.fleet.shieldDesiredState ?? null;
-      try {
-        desiredState = await invoke<typeof desiredState>("fleet_sync_shield_state");
-      } catch { /* a later tick retries the authenticated state pull */ }
-      fleetShieldCommandIdRef.current = desiredState?.commandId ?? null;
-      const shieldControl = resolveFleetPrivacyShieldControl({
-        fleetEnabled: settings.app.fleet.enabled === true,
-        legacyManaged: ps?.fleetManaged === true,
-        legacyMonitoringEnabled: ps?.fleetMonitoringEnabled === true,
-        desiredState,
-      });
-      // These are durable, closed lifecycle receipts in the Pro-side protected
-      // state. They let Fleet distinguish delivery from actual application;
-      // no camera, application, or screen information is included.
-      const receiptKey = desiredState?.updatedAt ?? `${ps?.fleetManaged === true}:${ps?.fleetMonitoringEnabled === true}`;
-      if (shieldControl.managed && fleetShieldReceivedStateRef.current !== receiptKey) {
-        if (await report("received")) fleetShieldReceivedStateRef.current = receiptKey;
-      }
-      try {
-        const status = await executeBackendCommand<{ running?: boolean; cameraAvailable?: boolean; cameraMessage?: string; cameraStatus?: string }>("Get-PrivacyShieldStatus");
-        const running = status.success && status.data?.running === true;
-        // Capability comes before lifecycle policy. A stopped Shield on a
-        // camera-less device is not the same as a stopped Shield on a device
-        // where an administrator can start it. Report the endpoint's real,
-        // media-free camera fact before the unmanaged branch can emit
-        // `stopped` and overwrite it in Fleet.
-        if (!running && status.success && status.data?.cameraAvailable === false) {
-          // This is a closed, media-free protocol value — never the raw
-          // camera message.  Fleet must distinguish a Windows policy block
-          // from missing hardware so it never asks an operator to fix the
-          // wrong thing.
-          const cameraStatus = status.data.cameraStatus;
-          const issue = cameraStatus === "windows_camera_policy_denied"
-            || cameraStatus === "app_camera_permission_denied"
-            || cameraStatus === "hardware_unavailable"
-            || cameraStatus === "camera_busy"
-            || cameraStatus === "camera_feed_unavailable"
-            ? cameraStatus
-            : "camera_status_unknown";
-          await report(issue);
-          return;
-        }
-        const stopOwnedSession = async () => {
-          if (running) {
-            const stopped = await executeBackendCommand<{ success?: boolean; message?: string }>("Stop-PrivacyShield", {});
-            // Do not clear ownership or emit a false stop event on failure.
-            // Keeping it set makes the next supervisor tick retry the command.
-            if (!stopped.success || stopped.data?.success !== true) return false;
-          }
-          await invoke("patch_settings_cmd", { patch: { app: { fleet: { privacyShieldSessionOwned: false } } } }).catch(() => {});
-          await invoke("update_tray_shield_label", { running: false }).catch(() => {});
-          return true;
-        };
-        // Local/manual sessions are observable by Fleet whenever the endpoint
-        // is enrolled. They remain locally stoppable unless Fleet owns them.
-        // Reporting both transitions keeps the console's latest capability
-        // snapshot truthful even when an employee starts or stops the Shield.
-        if (!shieldControl.managed || !shieldControl.enabled) {
-          if (fleetOwnsSession) {
-            if (await stopOwnedSession()) await report("disabled_by_policy");
-          } else {
-            await report(running ? "running_local_session" : "stopped");
-          }
-          return;
-        }
-        if (running) {
-          // A session already running when the supervisor first sees a
-          // fleet mandate (started locally, or before this device's policy
-          // sync completed) must be claimed as fleet-owned immediately, not
-          // left "employee-owned" until the NEXT restart. Previously this
-          // branch only reported the session and never set
-          // privacyShieldSessionOwned, so PrivacyShieldCard's Stop button
-          // (which used to gate solely on that flag) stayed unlocked
-          // indefinitely for any session the supervisor didn't itself start.
-          // The card's lock now derives directly from policy
-          // (fleetShieldMandatesOn) so this claim is for reporting/quota
-          // consistency, not the sole lock mechanism — but it must still
-          // happen so quota charging and "who owns this session" state stay
-          // correct going forward.
-          if (!fleetOwnsSession) {
-            await invoke("patch_settings_cmd", { patch: { app: { fleet: { privacyShieldSessionOwned: true } } } }).catch(() => {});
-            await report("running_fleet_session");
-            return;
-          }
-          // Fleet service is paid, but the local Free Privacy Shield quota is
-          // intentionally still enforced. Stop and report exhaustion rather
-          // than silently allowing unlimited Fleet-run camera monitoring.
-          const quota = await invoke<{ is_unlimited: boolean; minutes_remaining: number }>("consume_shield_minutes", { minutes: 1.0 });
-          if (!quota.is_unlimited && quota.minutes_remaining <= 0) {
-            await executeBackendCommand("Stop-PrivacyShield", {});
-            await report("quota_exhausted", "Daily Privacy Shield quota exhausted.");
-          } else {
-            await report("running_fleet_session");
-          }
-          return;
-        }
-        await report("applying");
-        starting = true;
-        const mode = resolvePrivacyShieldMode({
-          fleetManaged: shieldControl.managed,
-          fleetMode: shieldControl.mode
-            ?? (ps?.gazeDetectionEnabled === false
-              && ps?.antiPeepingEnabled === false
-              && ps?.cameraHunterEnabled === false
-              ? "notify_only"
-              : undefined),
-          localMode: ps?.notifyMode,
-        });
-        const blurTriggers = privacyShieldBlurTriggers(mode, {
-          gaze: ps?.gazeDetectionEnabled === true,
-          faces: ps?.antiPeepingEnabled === true,
-          device: ps?.cameraHunterEnabled === true,
-        });
-        const result = await startPrivacyShield(
-          0,
-          // Always collect all attention classes for Fleet. The last three
-          // arguments keep visual blur bound to the signed/local card toggles.
-          true, true, true,
-          false, false,
-          ps?.modelSize ?? "medium",
-          ps?.confidenceThreshold ?? 0.5,
-          ps?.blurOpacity ?? 200,
-          ps?.wakeDelaySeconds ?? 150,
-          ps?.deviceWakeMultiplier ?? 5,
-          ps?.multiFaceWakeMultiplier ?? 5,
-          ps?.detectionBufferFrames ?? 2,
-          ps?.captureSpeed ?? 1,
-          blurTriggers.gaze,
-          blurTriggers.faces,
-          blurTriggers.device,
-        );
-        if (result.success) {
-          await invoke("patch_settings_cmd", { patch: { app: { fleet: { privacyShieldSessionOwned: true } } } }).catch(() => {});
-          await invoke("update_tray_shield_label", { running: true }).catch(() => {});
-          await report("running_fleet_session");
-        } else {
-          // Start failures are deliberately classified by the current
-          // structured probe. Raw stderr must never become Fleet telemetry.
-          const statusAfterFailure = await executeBackendCommand<{ cameraStatus?: string }>("Get-PrivacyShieldStatus");
-          const cameraStatus = statusAfterFailure.success ? statusAfterFailure.data?.cameraStatus : undefined;
-          const issue = cameraStatus === "windows_camera_policy_denied"
-            || cameraStatus === "app_camera_permission_denied"
-            || cameraStatus === "hardware_unavailable"
-            || cameraStatus === "camera_busy"
-            || cameraStatus === "camera_feed_unavailable"
-            ? cameraStatus
-            : "start_failed";
-          await report(issue);
-        }
-      } catch {
-        // The next tick retries. Never surface a noisy local toast for an
-        // administrator-managed background service.
-      } finally {
-        starting = false;
-      }
-    };
-    void tick();
-    const interval = setInterval(() => { void tick(); }, 60_000);
-    return () => { cancelled = true; clearInterval(interval); };
-  }, [fleetPrivacySupervisor, fleetPrivacyShield, fleetPrivacyMonitoringEnabled, startPrivacyShield]);
+    const interval = setInterval(() => { void charge(); }, 60_000);
+    return () => clearInterval(interval);
+  }, [fleetPrivacyShield]);
 
   // Buffers for batching rapid-fire shred-requested events. When a user
   // shift/ctrl-selects N files in Explorer and picks "Shred with
@@ -496,7 +294,7 @@ export default function BackgroundPollers({
           device: shield?.cameraHunterEnabled ?? true,
         };
         const blurTriggers = privacyShieldBlurTriggers(mode, detectorTriggers);
-        const res = await startPrivacyShield(0, detectorTriggers.gaze, detectorTriggers.faces, detectorTriggers.device, false, false, shield?.modelSize ?? "medium", shield?.confidenceThreshold ?? 0.5, shield?.blurOpacity ?? 200, shield?.wakeDelaySeconds ?? 150, shield?.deviceWakeMultiplier ?? 5, shield?.multiFaceWakeMultiplier ?? 5, shield?.detectionBufferFrames ?? 2, shield?.captureSpeed ?? 1, blurTriggers.gaze, blurTriggers.faces, blurTriggers.device);
+        const res = await startPrivacyShield(0, privacyShieldDetectorGaze(detectorTriggers.gaze, shield, fleetShieldDetectorPolicyActive(appSettingsRef.current?.app?.fleet?.enabled === true, appSettingsRef.current?.policy?.lockedPaths)), detectorTriggers.faces, detectorTriggers.device, false, false, shield?.modelSize ?? "medium", shield?.confidenceThreshold ?? 0.5, shield?.blurOpacity ?? 200, shield?.wakeDelaySeconds ?? 150, shield?.deviceWakeMultiplier ?? 5, shield?.multiFaceWakeMultiplier ?? 5, shield?.detectionBufferFrames ?? 2, shield?.captureSpeed ?? 1, blurTriggers.gaze, blurTriggers.faces, blurTriggers.device, privacyShieldLookAwayDelay(shield, fleetShieldDelayPolicyActive(appSettingsRef.current?.app?.fleet?.enabled === true, appSettingsRef.current?.policy?.lockedPaths), appSettingsRef.current?.app?.localPrivacyShieldLookAwayDelaySeconds));
         if (res.success) {
           await invoke("update_tray_shield_label", { running: true });
           recordDiagnostic({ operationId, feature: "privacy_shield", action: "tray_start", stage: "process",
@@ -945,7 +743,7 @@ export default function BackgroundPollers({
           device: shield?.cameraHunterEnabled ?? true,
         };
         const blurTriggers = privacyShieldBlurTriggers(mode, detectorTriggers);
-        const r = await startPrivacyShield(0, detectorTriggers.gaze, detectorTriggers.faces, detectorTriggers.device, false, false, shield?.modelSize ?? "medium", shield?.confidenceThreshold ?? 0.5, shield?.blurOpacity ?? 200, shield?.wakeDelaySeconds ?? 150, shield?.deviceWakeMultiplier ?? 5, shield?.multiFaceWakeMultiplier ?? 5, shield?.detectionBufferFrames ?? 2, shield?.captureSpeed ?? 1, blurTriggers.gaze, blurTriggers.faces, blurTriggers.device);
+        const r = await startPrivacyShield(0, privacyShieldDetectorGaze(detectorTriggers.gaze, shield, fleetShieldDetectorPolicyActive(appSettingsRef.current?.app?.fleet?.enabled === true, appSettingsRef.current?.policy?.lockedPaths)), detectorTriggers.faces, detectorTriggers.device, false, false, shield?.modelSize ?? "medium", shield?.confidenceThreshold ?? 0.5, shield?.blurOpacity ?? 200, shield?.wakeDelaySeconds ?? 150, shield?.deviceWakeMultiplier ?? 5, shield?.multiFaceWakeMultiplier ?? 5, shield?.detectionBufferFrames ?? 2, shield?.captureSpeed ?? 1, blurTriggers.gaze, blurTriggers.faces, blurTriggers.device, privacyShieldLookAwayDelay(shield, fleetShieldDelayPolicyActive(appSettingsRef.current?.app?.fleet?.enabled === true, appSettingsRef.current?.policy?.lockedPaths), appSettingsRef.current?.app?.localPrivacyShieldLookAwayDelaySeconds));
         if (r.success) {
           recordDiagnostic({ feature: "privacy", action: "shield_autostart", stage: "runtime",
             lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never",

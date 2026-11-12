@@ -92,9 +92,11 @@ mod tests {
             cooldown_seconds: 60,
             snoozable: true,
             locked: false,
+            options: Default::default(),
         };
         store
-            .install(&ClipboardPolicyResponse {
+            .install(&ClipboardPolicyResponse { reporting_binding:None,
+                content_rules: None,
                 policy_version: 42,
                 rules: vec![rule],
             })

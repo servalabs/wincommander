@@ -4389,6 +4389,30 @@ mod fleet_forensic_projection_tests {
         );
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn fleet_wlan_collector_loads_shared_helpers_and_never_requests_secrets() {
+        let script = fleet_forensic_collector_script().expect("load collector modules");
+        let prefix = script
+            .strip_suffix("Invoke-BackendCommand")
+            .expect("fixed collector entry point");
+        let fixture = r#"& { if (-not (Get-Command Get-WCWlanSnapshot -ErrorAction SilentlyContinue)) { throw 'WLAN helper is missing' }; function Get-WCWlanSnapshot { @{ InterfaceCount = 1; Interfaces = @('f2e4eb56-1b1a-4610-bf88-2ab291ef65c1'); Profiles = @(@{ Name = 'synthetic'; InterfaceId = 'f2e4eb56-1b1a-4610-bf88-2ab291ef65c1'; Flags = 0 }) } }; $script:keyRequests = 0; function Get-WCWlanKey { $script:keyRequests++; throw 'Fleet must not read WLAN credentials' }; $result = Get-FleetForensicProjection -Category wlan_profiles -FullDetail $true; if ($result.error -or $result.total -ne 1 -or $result.records[0].name -ne 'synthetic' -or $script:keyRequests -ne 0) { throw 'WLAN projection failed' }; 'fixture_passed' }"#;
+        let (mut command, _) = build_powershell_command();
+        let mut child = command.spawn().expect("start PowerShell fixture");
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(format!("{prefix}\n{fixture}\n").as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().expect("wait for PowerShell fixture");
+        assert!(output.status.success(), "PowerShell fixture failed");
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("fixture_passed"),
+            "WLAN projection fixture did not complete"
+        );
+    }
+
     #[test]
     fn debug_cleanup_collector_embeds_the_current_source_and_tracks_artifacts() {
         // Debug is the Fleet development path. It must use the same current
@@ -4868,23 +4892,67 @@ pub async fn run_backend_script(
         let runtime = tokio::runtime::Handle::current();
         return tokio::task::spawn_blocking(move || {
             let _guard = crate::paths::acquire_machine_state_lock("fleet-shield-policy")?;
-            if command == "Start-PrivacyShield" {
+            let fleet_policy_active = if command == "Start-PrivacyShield" {
                 crate::fleet_agent::require_single_interactive_shield_session()?;
-                runtime.block_on(crate::fleet_agent::verify_service_shield_profile())?;
-            }
+                Some(runtime.block_on(crate::fleet_agent::verify_service_shield_profile())?)
+            } else { None };
             let settings = crate::settings::read_settings()?;
+            if let Some(active) = fleet_policy_active {
+                let delay = crate::fleet_agent::effective_shield_look_away_delay(&settings, active.map(|policy| policy.0))?;
+                set_shield_parameter(&mut params, "LookAwayDelaySeconds", delay.to_string());
+                enforce_shield_look_away_detection(&mut params, active.map(|policy| policy.1));
+                if let Some(policy) = active {
+                    set_shield_parameter(&mut params, "CaptureOnDevice", policy.2.to_string());
+                    set_shield_parameter(&mut params, "CaptureOnMultiFace", policy.3.to_string());
+                    set_shield_parameter(&mut params, "FleetVideoOnly", "true".into());
+                }
+            }
             if settings.app.fleet.privacy_shield_policy_transaction.is_some() {
                 if command == "Start-PrivacyShield" {
                     return Err("Shield policy is transitioning; Start will be available after verification".into());
                 }
                 record_local_shield_stop_intent()?;
             }
-            runtime.block_on(run_backend_script_with_timeout(app, command, params, None))
+            let is_start = command == "Start-PrivacyShield";
+            let result = runtime.block_on(run_backend_script_with_timeout(app, command, params, None));
+            if is_start { remember_shield_launch(result.as_ref().ok(), Some("local")); }
+            result
         })
         .await
         .map_err(|error| format!("Shield action worker failed: {error}"))?;
     }
     run_backend_script_with_timeout(app, command, params, None).await
+}
+
+fn set_shield_parameter(params: &mut HashMap<String, String>, name: &str, value: String) {
+    params.retain(|key, _| !key.eq_ignore_ascii_case(name));
+    params.insert(name.to_string(), value);
+}
+
+/// A verified Fleet detector setting overrides every spelling supplied by a
+/// local caller. No Fleet projection leaves the caller's choice untouched.
+fn enforce_shield_look_away_detection(params: &mut HashMap<String, String>, fleet_detection: Option<bool>) {
+    if let Some(enabled) = fleet_detection {
+        set_shield_parameter(params, "CheckGaze", enabled.to_string());
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn verified_fleet_look_away_overrides_native_callers_only_when_managed() {
+    let mut supplied = HashMap::from([("checkgaze".into(), "true".into())]);
+    enforce_shield_look_away_detection(&mut supplied, Some(false));
+    assert_eq!(supplied.get("CheckGaze").map(String::as_str), Some("false"));
+    assert!(!supplied.contains_key("checkgaze"));
+    enforce_shield_look_away_detection(&mut supplied, Some(true));
+    assert_eq!(supplied.get("CheckGaze").map(String::as_str), Some("true"));
+    let before = supplied.clone();
+    enforce_shield_look_away_detection(&mut supplied, None);
+    assert_eq!(supplied, before);
+    supplied.insert("lookawaydelayseconds".into(), "999".into());
+    set_shield_parameter(&mut supplied, "LookAwayDelaySeconds", "10".into());
+    assert_eq!(supplied.get("LookAwayDelaySeconds").map(String::as_str), Some("10"));
+    assert!(!supplied.contains_key("lookawaydelayseconds"));
 }
 
 fn local_stop_owns_pending_restart(
@@ -4937,10 +5005,61 @@ fn record_local_shield_stop_intent() -> Result<(), String> {
 pub(crate) async fn run_backend_script_unlocked(
     app: AppHandle,
     command: String,
-    mut params: HashMap<String, String>,
+    params: HashMap<String, String>,
+) -> Result<serde_json::Value, String> {
+    run_backend_script_unlocked_with_origin(app, command, params, Some("fleet")).await
+}
+
+pub(crate) async fn run_backend_script_unlocked_with_origin(
+    app: AppHandle, command: String, mut params: HashMap<String, String>, origin: Option<&'static str>,
 ) -> Result<serde_json::Value, String> {
     authorize_backend_script(&app, &command, &mut params).await?;
-    run_backend_script_with_timeout(app, command, params, None).await
+    let is_start = command == "Start-PrivacyShield";
+    let result = run_backend_script_with_timeout(app, command, params, None).await;
+    if is_start { remember_shield_launch(result.as_ref().ok(), origin); }
+    result
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ShieldLaunchIdentity { pid: u64, start_ticks: String, origin: &'static str }
+
+fn shield_launch_identity() -> &'static std::sync::Mutex<Option<ShieldLaunchIdentity>> {
+    static IDENTITY: std::sync::OnceLock<std::sync::Mutex<Option<ShieldLaunchIdentity>>> = std::sync::OnceLock::new();
+    IDENTITY.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+fn remember_shield_launch(result: Option<&serde_json::Value>, origin: Option<&'static str>) {
+    let identity = result.and_then(|value| {
+        if value.get("success")?.as_bool()? != true { return None; }
+        let pid = value.get("processId")?.as_u64()?;
+        let ticks = value.get("processStartTicks")?.as_str()?;
+        if pid == 0 || ticks.is_empty() || !ticks.bytes().all(|ch| ch.is_ascii_digit()) { return None; }
+        Some(ShieldLaunchIdentity { pid, start_ticks: ticks.to_owned(), origin: origin? })
+    });
+    if let Ok(mut current) = shield_launch_identity().lock() { *current = identity; }
+}
+
+pub(crate) fn shield_launch_origin(status: &serde_json::Value) -> Option<&'static str> {
+    if status.get("running")?.as_bool()? != true { return None; }
+    let pid = status.get("processId")?.as_u64()?;
+    let ticks = status.get("processStartTicks")?.as_str()?;
+    let current = shield_launch_identity().lock().ok()?;
+    current.as_ref().filter(|known| known.pid == pid && known.start_ticks == ticks).map(|known| known.origin)
+}
+
+#[cfg(test)]
+mod shield_launch_origin_tests {
+    use serde_json::json;
+    #[test]
+    fn origin_requires_the_same_live_process_and_creation_time() {
+        super::remember_shield_launch(Some(&json!({"success": true, "processId": 51, "processStartTicks": "123"})), Some("local"));
+        assert_eq!(super::shield_launch_origin(&json!({"running": true, "processId": 51, "processStartTicks": "123"})), Some("local"));
+        assert_eq!(super::shield_launch_origin(&json!({"running": true, "processId": 51, "processStartTicks": "124"})), None);
+        assert_eq!(super::shield_launch_origin(&json!({"running": true, "processId": 52, "processStartTicks": "123"})), None);
+        assert_eq!(super::shield_launch_origin(&json!({"running": false, "processId": 51, "processStartTicks": "123"})), None);
+        super::remember_shield_launch(Some(&json!({"success": true, "processId": 51, "processStartTicks": "123"})), None);
+        assert_eq!(super::shield_launch_origin(&json!({"running": true, "processId": 51, "processStartTicks": "123"})), None);
+    }
 }
 
 async fn authorize_backend_script(
@@ -5437,6 +5556,19 @@ pub(crate) fn fleet_forensic_projection_category(
 /// authenticated Pro -> Free pipe. Keeping this runner closed prevents a
 /// recursive IPC future and, more importantly, prevents that pipe from
 /// becoming a general local command executor.
+fn fleet_forensic_collector_script() -> Result<String, String> {
+    let core_utils = load_module("core/utils")?;
+    let core_router = load_module("core/router")?;
+    // Cleanup's WLAN collector shares these helpers with the regular runner.
+    let shared_cleanup = load_module("core/auto-erase")?;
+    let cleanup = load_module("privacy/cleanup")?;
+    let security = load_module("tweaks/security")?;
+    Ok(format!(
+        "{}\n\n{}\n\n{}\n\n{}\n\n{}\n\nInvoke-BackendCommand",
+        core_utils, security, shared_cleanup, cleanup, core_router
+    ))
+}
+
 pub(crate) async fn run_fleet_forensic_projection(
     category: &str,
     full_detail: bool,
@@ -5454,17 +5586,7 @@ pub(crate) async fn run_fleet_forensic_projection(
         return Err("Fleet cleanup evidence requires the fixed full-detail request".to_string());
     }
 
-    let core_utils = load_module("core/utils")?;
-    let core_router = load_module("core/router")?;
-    let cleanup = load_module("privacy/cleanup")?;
-    // Browser footprints reuses the installed-browser discovery helper.  It is
-    // harmless to load for the other fixed projections and keeps the script
-    // shape independent of a caller-controlled category.
-    let security = load_module("tweaks/security")?;
-    let full_script = format!(
-        "{}\n\n{}\n\n{}\n\n{}\n\nInvoke-BackendCommand",
-        core_utils, security, cleanup, core_router
-    );
+    let full_script = fleet_forensic_collector_script()?;
 
     let (mut command, _ps_exe) = build_powershell_command();
     command.env("WINCMD_COMMAND", "Get-FleetForensicProjection");
@@ -7511,7 +7633,27 @@ fn queue_shield_transitions(
     classes: &[&'static str],
     timestamp: Option<f64>,
 ) {
-    let transitions = episodes.observe(classes, timestamp, || uuid::Uuid::new_v4().to_string());
+    queue_shield_transitions_with_capture_ids(sender, episodes, classes, timestamp, &serde_json::Value::Null, &mut std::collections::BTreeSet::new());
+}
+
+fn queue_shield_transitions_with_capture_ids(
+    sender: &tokio::sync::mpsc::Sender<Vec<shield_detection_episodes::Transition>>,
+    episodes: &mut shield_detection_episodes::Episodes,
+    classes: &[&'static str],
+    timestamp: Option<f64>,
+    capture_ids: &serde_json::Value,
+    seen: &mut std::collections::BTreeSet<String>,
+) {
+    let transitions = episodes.observe_with_ids(classes, timestamp, |class| {
+        let clip = matches!(class, "phone_detected" | "multiple_faces").then(|| capture_ids.get(class)).flatten().and_then(serde_json::Value::as_str)
+            .and_then(|value| uuid::Uuid::parse_str(value).ok().filter(|id| id.get_version_num() == 4 && id.to_string() == value))
+            .map(|id| id.to_string());
+        // An old recording must never be attached to a subsequent episode.
+        if let Some(id) = clip {
+            if seen.len() < 4096 && seen.insert(id.clone()) { return id; }
+        }
+        uuid::Uuid::new_v4().to_string()
+    });
     if !transitions.is_empty() && sender.try_send(transitions).is_err() {
         episodes.abandon();
         crate::flow_bridge::flow_trace(
@@ -7524,8 +7666,28 @@ fn queue_shield_transitions(
 mod shield_detection_bridge_tests {
     use super::{
         queue_shield_transitions,
+        queue_shield_transitions_with_capture_ids,
         shield_detection_episodes::{Episodes, Transition},
     };
+
+    #[test]
+    fn clip_id_binds_only_to_its_first_matching_episode() {
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(8);
+        let mut episodes = Episodes::default();
+        let mut seen = std::collections::BTreeSet::new();
+        let id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        let ids = serde_json::json!({"phone_detected": id});
+        queue_shield_transitions_with_capture_ids(&sender, &mut episodes, &["phone_detected"], Some(100.0), &ids, &mut seen);
+        assert!(matches!(&receiver.try_recv().unwrap()[0], Transition::Start { episode_id, .. } if episode_id == id));
+        queue_shield_transitions_with_capture_ids(&sender, &mut episodes, &[], Some(101.0), &ids, &mut seen);
+        receiver.try_recv().unwrap();
+        queue_shield_transitions_with_capture_ids(&sender, &mut episodes, &["phone_detected"], Some(102.0), &ids, &mut seen);
+        assert!(matches!(&receiver.try_recv().unwrap()[0], Transition::Start { episode_id, .. } if episode_id != id));
+        let injected = serde_json::json!({"look_away": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"});
+        queue_shield_transitions_with_capture_ids(&sender, &mut episodes, &["look_away"], Some(103.0), &injected, &mut seen);
+        let transitions = receiver.try_recv().unwrap();
+        assert!(transitions.iter().any(|transition| matches!(transition, Transition::Start { class: "look_away", episode_id, .. } if episode_id != "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")));
+    }
 
     #[test]
     fn a_fast_clear_queues_after_the_matching_start() {
@@ -7603,6 +7765,7 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32, start_at_end: bool) {
             sidecar.display()
         ));
         let mut last_activity = std::time::Instant::now();
+        let mut seen_capture_ids = std::collections::BTreeSet::new();
         let mut ticks: u64 = 0;
         loop {
             // Check before reading: a Stop may race an append from Python.
@@ -7719,11 +7882,13 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32, start_at_end: bool) {
                                     });
                                 }
 
-                                queue_shield_transitions(
+                                queue_shield_transitions_with_capture_ids(
                                     &fleet_reporter,
                                     &mut fleet_episodes,
                                     &event_classes,
                                     value.get("ts").and_then(|ts| ts.as_f64()),
+                                    value.get("capture_ids").unwrap_or(&serde_json::Value::Null),
+                                    &mut seen_capture_ids,
                                 );
                             }
                             Some("look_back") => {

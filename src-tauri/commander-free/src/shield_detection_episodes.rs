@@ -37,11 +37,21 @@ impl Episodes {
         self.last_timestamp = None;
     }
 
+    #[cfg(test)]
     pub(super) fn observe(
         &mut self,
         classes: &[&'static str],
         timestamp_seconds: Option<f64>,
         mut new_id: impl FnMut() -> String,
+    ) -> Vec<Transition> {
+        self.observe_with_ids(classes, timestamp_seconds, |_| new_id())
+    }
+
+    pub(super) fn observe_with_ids(
+        &mut self,
+        classes: &[&'static str],
+        timestamp_seconds: Option<f64>,
+        mut new_id: impl FnMut(&'static str) -> String,
     ) -> Vec<Transition> {
         let Some(timestamp) = timestamp_seconds
             .filter(|t| t.is_finite() && *t > 0.0 && *t < 253_402_300_799.0)
@@ -79,7 +89,7 @@ impl Episodes {
                 continue;
             }
             self.active.entry(class).or_insert_with(|| {
-                let episode_id = new_id();
+                let episode_id = new_id(class);
                 transitions.push(Transition::Start {
                     class,
                     episode_id: episode_id.clone(),
