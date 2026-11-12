@@ -104,6 +104,65 @@
         };
         if result < 0 { Err(result) } else { Ok(()) }
     }
+
+    // LAB MODEL ONLY. A synchronous mock transforms the very handle later
+    // handed to publication. This does not establish a broker, protect the
+    // parent namespace, isolate a helper process, handle helper-created
+    // replacement files, or recover after a crash. ExifTool/QPDF do not use
+    // this interface. Never route product operations through this model.
+    struct MockHandleScrubbedStage(File);
+    fn mock_scrub_into_new_held_file(
+        path: &Path,
+        scrub: impl FnOnce(&mut File) -> std::io::Result<()>,
+    ) -> std::io::Result<MockHandleScrubbedStage> {
+        let mut file = OpenOptions::new()
+            .read(true).write(true)
+            .access_mode(FILE_GENERIC_READ | FILE_GENERIC_WRITE | DELETE)
+            .share_mode(FILE_SHARE_READ)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .create_new(true)
+            .open(path)?;
+        scrub(&mut file)?;
+        file.sync_all()?;
+        Ok(MockHandleScrubbedStage(file))
+    }
+
+    #[test]
+    fn mock_scrub_and_publish_use_the_same_restrictively_shared_handle() {
+        let root = tempfile::tempdir().unwrap();
+        let staging = root.path().join("staging");
+        let destination = root.path().join("destination");
+        std::fs::create_dir(&staging).unwrap();
+        std::fs::create_dir(&destination).unwrap();
+        let source = staging.join("item");
+        let published = destination.join("item");
+        let parent = pin_directory(&destination);
+        let scrubbed = mock_scrub_into_new_held_file(&source, |file| {
+            file.write_all(b"synthetic scrubbed bytes")?;
+            assert!(OpenOptions::new().write(true).open(&source).is_err());
+            assert!(std::fs::rename(&source, staging.join("replacement")).is_err());
+            Ok(())
+        }).unwrap();
+        rename_handle_to(&scrubbed.0, &parent, OsStr::new("item")).unwrap();
+        assert!(!source.exists());
+        assert_eq!(std::fs::read(&published).unwrap(), b"synthetic scrubbed bytes");
+        assert!(OpenOptions::new().write(true).open(&published).is_err());
+        drop(scrubbed);
+    }
+
+    #[test]
+    fn mock_scrub_failure_cannot_return_a_publishable_handle() {
+        let root = tempfile::tempdir().unwrap();
+        let stage = root.path().join("stage");
+        let result = mock_scrub_into_new_held_file(&stage, |file| {
+            file.write_all(b"synthetic partial output")?;
+            Err(std::io::Error::from(std::io::ErrorKind::InvalidData))
+        });
+        assert!(result.is_err());
+        // Any partial output remains only in the disposable fixture, and no
+        // MockHandleScrubbedStage was returned for publication.
+        assert!(stage.exists());
+    }
     #[test]
     fn owned_handle_retains_identity_across_publish_and_rollback() {
         const CHILD: &str = "WINCMD_SAFE_PASTE_HANDLE_FIXTURE";
