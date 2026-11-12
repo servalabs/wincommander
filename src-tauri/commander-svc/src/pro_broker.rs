@@ -36,10 +36,14 @@ struct HashAcceptance {
     install_path_hash: Option<String>,
 }
 
-fn random_session_token() -> String {
+fn random_session_token() -> Result<String, ()> {
+    random_session_token_with(fill_random)
+}
+
+fn random_session_token_with(fill: impl FnOnce(&mut [u8]) -> Result<(), ()>) -> Result<String, ()> {
     let mut buf = [0u8; 32];
-    fill_random(&mut buf);
-    bytes_to_hex(&buf)
+    fill(&mut buf)?;
+    Ok(bytes_to_hex(&buf))
 }
 
 // A signed Pro error may carry this closed, path/credential-free native
@@ -62,17 +66,19 @@ fn native_mount_diagnostic(message: &str) -> Option<&'static str> {
     }
 }
 
-fn random_pipe_name() -> String {
-    let mut buf = [0u8; 8];
-    fill_random(&mut buf);
-    format!(r"\\.\pipe\wincmd-pro-{}", bytes_to_hex(&buf))
+fn random_pipe_name() -> Result<String, ()> {
+    random_pipe_name_with(fill_random)
 }
 
-fn fill_random(buf: &mut [u8]) {
-    use rand::rngs::OsRng;
-    use rand::RngCore;
+fn random_pipe_name_with(fill: impl FnOnce(&mut [u8]) -> Result<(), ()>) -> Result<String, ()> {
+    let mut buf = [0u8; 8];
+    fill(&mut buf)?;
+    Ok(format!(r"\\.\pipe\wincmd-pro-{}", bytes_to_hex(&buf)))
+}
 
-    OsRng.fill_bytes(buf);
+fn fill_random(buf: &mut [u8]) -> Result<(), ()> {
+    use rand::{rngs::SysRng, TryRng};
+    SysRng.try_fill_bytes(buf).map_err(|_| ())
 }
 
 fn bytes_to_hex(bytes: &[u8]) -> String {
@@ -329,8 +335,8 @@ async fn vault_call_until(
             }
         };
 
-    let pipe_name = random_pipe_name();
-    let session_token = random_session_token();
+    let pipe_name = random_pipe_name().map_err(|_| { zeroize_json(&mut args); VaultMountReason::BrokerUnavailable })?;
+    let session_token = random_session_token().map_err(|_| { zeroize_json(&mut args); VaultMountReason::BrokerUnavailable })?;
     let mut pipe_security = broker_pipe_security_attributes(caller_sid)?;
     let mut pipe = unsafe {
         ServerOptions::new()
@@ -1460,8 +1466,14 @@ mod tests {
     }
 
     #[test]
+    fn broker_randomness_failure_rejects_session_and_pipe() {
+        assert!(random_session_token_with(|_| Err(())).is_err());
+        assert!(random_pipe_name_with(|_| Err(())).is_err());
+    }
+
+    #[test]
     fn random_session_token_is_32_bytes_hex_encoded() {
-        let token = random_session_token();
+        let token = random_session_token().unwrap();
         assert_eq!(token.len(), 64);
         assert!(token.chars().all(|c| c.is_ascii_hexdigit()));
     }
@@ -1494,7 +1506,7 @@ mod tests {
 
     #[test]
     fn random_pipe_name_uses_per_session_wincmd_pro_namespace() {
-        let pipe = random_pipe_name();
+        let pipe = random_pipe_name().unwrap();
         assert!(pipe.starts_with(r"\\.\pipe\wincmd-pro-"));
         assert_eq!(pipe.len(), r"\\.\pipe\wincmd-pro-".len() + 16);
     }

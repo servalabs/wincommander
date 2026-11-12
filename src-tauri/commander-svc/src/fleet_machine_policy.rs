@@ -561,7 +561,7 @@ impl FleetMachinePolicy {
         allowed_origins: Vec<String>,
         transport_profile: Option<TransportProfile>,
     ) -> Result<String, &'static str> {
-        use rand::RngCore;
+        use rand::TryRng;
         let placeholder = FleetTrust {
             org_id: "pending".into(),
             device_id: device_id.clone(),
@@ -572,7 +572,7 @@ impl FleetMachinePolicy {
         let allowed_origins = origins::normalize(&allowed_origins)?;
         if let Some(profile) = &transport_profile { validate_transport_profile(profile)?; }
         let mut bytes = [0u8; 16];
-        rand::rngs::OsRng
+        rand::rngs::SysRng
             .try_fill_bytes(&mut bytes)
             .map_err(|_| "random_unavailable")?;
         bytes[6] = (bytes[6] & 0x0f) | 0x40;
@@ -752,7 +752,7 @@ impl FleetMachinePolicy {
     /// session, existing trust, and already-authorized HTTPS origin.
     pub fn begin_hybrid_enrollment(&self, expected: &FleetTrust, origin: &str, actor: &str, session: u32)
         -> Result<HybridEnrollmentOffer, &'static str> {
-        use rand::RngCore;
+        use rand::TryRng;
         validate_trust(expected)?;
         let audit = trust_audit("hybrid_enrollment_begin", actor, &expected.enrollment_generation)?;
         if session == 0 { return Err("invalid_session"); }
@@ -760,7 +760,7 @@ impl FleetMachinePolicy {
         let origin = normalized.first().filter(|value| value.starts_with("https://"))
             .ok_or("invalid_origin")?.clone();
         let mut random = [0u8; 32];
-        rand::rngs::OsRng.try_fill_bytes(&mut random).map_err(|_| "random_unavailable")?;
+        rand::rngs::SysRng.try_fill_bytes(&mut random).map_err(|_| "random_unavailable")?;
         random[6] = (random[6] & 0x0f) | 0x40;
         random[8] = (random[8] & 0x3f) | 0x80;
         random[22] = (random[22] & 0x0f) | 0x40;

@@ -4,7 +4,7 @@
 use crate::fleet_credential::{MachineDpapi, Protector};
 use crate::license_cache::{licence_device_anchor::Anchor, release_gate};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use rand::RngCore;
+use rand::TryRng;
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
 use zeroize::{Zeroize, Zeroizing};
@@ -380,7 +380,7 @@ fn begin_retirement_at(store: &Anchor, protector: &dyn Protector, pending: &Pend
     historical_retirement_evidence(&saved, now, trust, verify)?;
     if let Some(retirement) = &saved.retirement { return Ok(retirement.id.clone()); }
     let mut random = [0u8; 32];
-    rand::rngs::OsRng.try_fill_bytes(&mut random).map_err(|_| INVALID)?;
+    rand::rngs::SysRng.try_fill_bytes(&mut random).map_err(|_| INVALID)?;
     let id = random.iter().map(|byte| format!("{byte:02x}")).collect();
     random.zeroize();
     saved.retirement = Some(Retirement { id, receipt: None, retired: false });
@@ -489,9 +489,9 @@ fn begin_at(store: &Anchor, gate: &Anchor, protector: &dyn Protector, device_has
     let mut operation = [0u8; 32];
     let mut credential_id = [0u8; 32];
     let mut credential_secret = [0u8; 32];
-    rand::rngs::OsRng.try_fill_bytes(&mut operation).map_err(|_| INVALID)?;
-    rand::rngs::OsRng.try_fill_bytes(&mut credential_id).map_err(|_| INVALID)?;
-    rand::rngs::OsRng.try_fill_bytes(&mut credential_secret).map_err(|_| INVALID)?;
+    rand::rngs::SysRng.try_fill_bytes(&mut operation).map_err(|_| INVALID)?;
+    rand::rngs::SysRng.try_fill_bytes(&mut credential_id).map_err(|_| INVALID)?;
+    rand::rngs::SysRng.try_fill_bytes(&mut credential_secret).map_err(|_| INVALID)?;
     let operation_id = operation.iter().map(|byte| format!("{byte:02x}")).collect();
     operation.zeroize();
     let pending = PendingTrial { operation_id, device_hash: device_hash.into(), credential_id, credential_secret,

@@ -1021,7 +1021,7 @@ dependencies = [
  "ed25519-dalek 3.0.0",
  "fleet-agent-core",
  "fleet-proto",
- "rand 0.8.8",
+ "rand 0.10.3",
  "rcgen",
  "reqwest",
  "rustls",
