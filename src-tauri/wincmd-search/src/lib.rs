@@ -81,6 +81,22 @@ pub fn restore_experimental_legacy_backup(old: &std::path::Path, index_id: &[u8;
 /// Application policy, checked immediately before extraction and persistence.
 pub type PathPolicy = Arc<dyn Fn(&std::path::Path) -> bool + Send + Sync>;
 
+fn path_allowed_for_ingestion(path: &std::path::Path, skips: &[std::path::PathBuf], resolved: std::io::Result<std::path::PathBuf>) -> bool {
+    let acceptable = match &resolved {
+        Ok(_) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => false,
+        Err(_) => match std::fs::symlink_metadata(path) {
+            Ok(_) => restricted::safe_path(path),
+            // The parent may have been removed along with the file. Let the
+            // stale-hit cleanup proceed; broken links still have metadata and
+            // are rejected above. Extraction rechecks policy after reading.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+            Err(_) => false,
+        },
+    };
+    acceptable && !crawler::path_or_resolved_is_skipped(path, resolved.as_deref().ok(), skips)
+}
+
 /// Relocate stored paths only after the caller verifies the index's volume identity.
 pub type PathMapper = Arc<dyn Fn(&std::path::Path) -> Option<std::path::PathBuf> + Send + Sync>;
 
@@ -1051,6 +1067,13 @@ impl SearchEngine {
                 config.skip_paths.push(physical);
             }
         }
+        // Re-evaluate immediately before and after extraction, including aliases
+        // that changed since a crawl or watcher event was queued.
+        let skips = config.skip_paths.clone();
+        let original_policy = path_policy;
+        let path_policy: PathPolicy = Arc::new(move |path| {
+            path_allowed_for_ingestion(path, &skips, path.canonicalize()) && original_policy(path)
+        });
         let status = Arc::new(Mutex::new(IndexStatus::default()));
         Ok(Self {
             path_policy,
@@ -1573,6 +1596,32 @@ mod tests {
     }
 
     #[test]
+    fn canonicalization_failure_allows_ordinary_paths_but_not_permission_errors() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("ordinary.txt");
+        fs::write(&file, "ordinary").unwrap();
+        let unsupported = || std::io::Error::other("canonicalization unavailable");
+        assert!(path_allowed_for_ingestion(&file, &[], Err(unsupported())));
+        assert!(path_allowed_for_ingestion(dir.path(), &[], Err(unsupported())));
+        assert!(!path_allowed_for_ingestion(&file, &[], Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))));
+        assert!(!path_allowed_for_ingestion(&file, &[dir.path().to_path_buf()], Err(unsupported())));
+        let missing = dir.path().join("removed").join("gone.txt");
+        assert!(path_allowed_for_ingestion(&missing, &[], Err(std::io::Error::from(std::io::ErrorKind::NotFound))));
+        assert!(!path_allowed_for_ingestion(&missing, &[dir.path().to_path_buf()], Err(std::io::Error::from(std::io::ErrorKind::NotFound))));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn canonicalization_fallback_does_not_follow_links() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("ordinary.txt");
+        fs::write(&file, "ordinary").unwrap();
+        let link = dir.path().join("link.txt");
+        std::os::unix::fs::symlink(&file, &link).unwrap();
+        assert!(!path_allowed_for_ingestion(&link, &[], Err(std::io::Error::other("unavailable"))));
+    }
+
+    #[test]
     fn index_inside_root_is_excluded_from_crawl_and_events() {
         let root = TempDir::new().unwrap();
         let index_dir = root.path().join("index");
@@ -1591,6 +1640,25 @@ mod tests {
         assert!(watch::apply_fs_event(&event, &engine.config.skip_paths, &exclusions, u64::MAX).is_none());
         let ordinary = notify::Event { paths: vec![document], ..event };
         assert!(watch::apply_fs_event(&ordinary, &engine.config.skip_paths, &exclusions, u64::MAX).is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn queued_alias_replacement_is_rejected_but_missing_file_can_be_deleted() {
+        let root = TempDir::new().unwrap();
+        let index = root.path().join("index");
+        let queued = root.path().join("queued.json");
+        fs::write(&queued, "normal").unwrap();
+        let engine = SearchEngine::open(make_config(index.clone(), vec![root.path().to_path_buf()])).unwrap();
+        assert!((engine.path_policy)(&queued));
+        fs::remove_file(&queued).unwrap();
+        assert!((engine.path_policy)(&queued));
+        std::os::unix::fs::symlink(index.join("meta.json"), &queued).unwrap();
+        assert!(!(engine.path_policy)(&queued));
+        fs::remove_file(&queued).unwrap();
+        std::os::unix::fs::symlink(root.path().join("missing.json"), &queued).unwrap();
+        assert!(!(engine.path_policy)(&queued));
+        assert!(!(engine.path_policy)(&index.join("missing.json")));
     }
 
     /// Build a small tempdir tree, index it synchronously, then search.

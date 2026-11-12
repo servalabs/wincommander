@@ -26,18 +26,25 @@ fn is_reserved_backup(path: &Path, skip_paths: &[PathBuf]) -> bool {
     })
 }
 pub(crate) fn path_is_skipped(path: &Path, skip_paths: &[PathBuf]) -> bool {
+    let physical = path.canonicalize().ok();
+    path_or_resolved_is_skipped(path, physical.as_deref(), skip_paths)
+}
+
+pub(crate) fn path_or_resolved_is_skipped(path: &Path, physical: Option<&Path>, skip_paths: &[PathBuf]) -> bool {
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
-    if is_reserved_backup(path, skip_paths) { return true; }
+    if is_reserved_backup(path, skip_paths) || physical.is_some_and(|p| is_reserved_backup(p, skip_paths)) { return true; }
     if skip_paths.is_empty() {
         return false;
     }
     #[cfg(windows)]
     {
         crate::index::path_in_roots(&path.to_string_lossy(), skip_paths)
+            || physical.is_some_and(|p| crate::index::path_in_roots(&p.to_string_lossy(), skip_paths))
     }
     #[cfg(not(windows))]
     {
         skip_paths.iter().any(|skip| path.starts_with(skip))
+            || physical.is_some_and(|p| skip_paths.iter().any(|skip| p.starts_with(skip)))
     }
 }
 
@@ -157,6 +164,18 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_to_excluded_file_is_skipped() {
+        let dir = TempDir::new().unwrap();
+        let protected = dir.path().join("index");
+        fs::create_dir(&protected).unwrap();
+        fs::write(protected.join("meta.json"), "metadata").unwrap();
+        let alias = dir.path().join("alias.json");
+        std::os::unix::fs::symlink(protected.join("meta.json"), &alias).unwrap();
+        assert!(path_is_skipped(&alias, &[protected.canonicalize().unwrap()]));
+    }
 
     #[cfg(windows)]
     #[test]
