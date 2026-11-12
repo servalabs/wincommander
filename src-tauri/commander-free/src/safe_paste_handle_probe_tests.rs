@@ -91,3 +91,70 @@
         assert_eq!(std::fs::read(&src).unwrap(), b"other");
         assert_eq!(std::fs::read(&dst).unwrap(), b"ours");
     }
+
+    /// LAB ONLY: demonstrates that a retained directory handle is not a
+    /// guarantee against later reparse metadata changes. The fixture uses only
+    /// directories under a private temporary root. It uses the current token;
+    /// it does not establish another user's effective ACL rights.
+    #[test]
+    #[ignore = "requires an explicitly authorized disposable NTFS fixture"]
+    fn held_parent_can_become_a_junction() {
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+        use windows_sys::Win32::{Storage::FileSystem::{FILE_SHARE_DELETE, FILE_WRITE_ATTRIBUTES}, System::{Ioctl::{FSCTL_DELETE_REPARSE_POINT, FSCTL_SET_REPARSE_POINT}, IO::DeviceIoControl}};
+        let root = tempfile::Builder::new().prefix("wc-safe-paste-reparse-probe-").tempdir().unwrap().keep();
+        let parent_path = root.join("held-parent");
+        let target_path = root.join("synthetic-target");
+        let staging_path = root.join("staging");
+        std::fs::create_dir(&parent_path).unwrap();
+        std::fs::create_dir(&target_path).unwrap();
+        std::fs::create_dir(&staging_path).unwrap();
+        std::fs::write(target_path.join("sentinel"), b"synthetic").unwrap();
+        let parent = pin_directory(&parent_path);
+        let mutate = OpenOptions::new().access_mode(FILE_WRITE_ATTRIBUTES)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(&parent_path).expect("open disposable directory attributes");
+        let mut substitute = std::ffi::OsString::from_wide(&[92, 63, 63, 92]);
+        substitute.push(target_path.as_os_str());
+        let sub: Vec<u8> = substitute.encode_wide().flat_map(u16::to_le_bytes).collect();
+        let print: Vec<u8> = target_path.as_os_str().encode_wide().flat_map(u16::to_le_bytes).collect();
+        let length = 8 + sub.len() + 2 + print.len() + 2;
+        assert!(length <= u16::MAX as usize);
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&0xa0000003u32.to_le_bytes());
+        bytes.extend_from_slice(&(length as u16).to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        bytes.extend_from_slice(&(sub.len() as u16).to_le_bytes());
+        bytes.extend_from_slice(&((sub.len() + 2) as u16).to_le_bytes());
+        bytes.extend_from_slice(&(print.len() as u16).to_le_bytes());
+        bytes.extend_from_slice(&sub); bytes.extend_from_slice(&[0, 0]);
+        bytes.extend_from_slice(&print); bytes.extend_from_slice(&[0, 0]);
+        let mut returned = 0;
+        let changed = unsafe { DeviceIoControl(mutate.as_raw_handle(), FSCTL_SET_REPARSE_POINT,
+            bytes.as_ptr().cast(), bytes.len() as u32, std::ptr::null_mut(), 0, &mut returned, std::ptr::null_mut()) } != 0;
+        let result = if changed {
+            use std::os::windows::fs::MetadataExt;
+            let reparse = parent.metadata().unwrap().file_attributes() & 0x400 != 0;
+            let stage_path = staging_path.join("source");
+            std::fs::write(&stage_path, b"synthetic").unwrap();
+            let stage = pin_stage(&stage_path);
+            let rename_ok = rename_handle_to(&stage, &parent, OsStr::new("new-entry")).is_ok();
+            let target_observed = target_path.join("new-entry").exists();
+            drop(stage);
+            Some((reparse, rename_ok, target_observed))
+        } else { None };
+        // Always remove the fixture's reparse point before any recursive cleanup.
+        let mut delete = Vec::new(); delete.extend_from_slice(&0xa0000003u32.to_le_bytes());
+        delete.extend_from_slice(&0u16.to_le_bytes()); delete.extend_from_slice(&0u16.to_le_bytes());
+        let removed = !changed || unsafe { DeviceIoControl(mutate.as_raw_handle(), FSCTL_DELETE_REPARSE_POINT,
+            delete.as_ptr().cast(), delete.len() as u32, std::ptr::null_mut(), 0, &mut returned, std::ptr::null_mut()) } != 0;
+        drop(mutate); drop(parent);
+        assert!(removed, "temporary reparse point could not be removed; fixture was retained");
+        let sentinel = std::fs::read(target_path.join("sentinel")).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(sentinel, b"synthetic");
+        let (reparse, rename_ok, target_observed) = result.expect("local fixture filesystem refused junction mutation");
+        assert!(reparse, "the held directory must expose the changed reparse attribute");
+        println!("relative rename accepted={rename_ok}, synthetic target received entry={target_observed}");
+    }
