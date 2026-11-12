@@ -223,8 +223,15 @@ export interface VaultOwnerPrincipalList {
 export function vaultCanonicalPathDisplay(entry: Pick<VaultAccessEntry, "container_path" | "container_path_state" | "canonical_container_path">): string {
   if (entry.container_path_state === "unavailable") return "Path unavailable";
   if (entry.container_path_state === "available") {
-    return entry.canonical_container_path?.match(/^[a-z]:\\/i)
-      ? entry.canonical_container_path
+    // The broker returns Windows' extended-length canonical path (\\\\?\\C:\\...),
+    // which is correct for native file operations but not the human display
+    // contract. Strip only that prefix before validating the drive path.
+    const canonical = entry.canonical_container_path;
+    const displayCanonical = canonical?.startsWith("\\\\?\\")
+      ? canonical.slice(4)
+      : canonical;
+    return displayCanonical?.match(/^[a-z]:\\/i)
+      ? displayCanonical
       : "Path unavailable";
   }
   return entry.container_path;
