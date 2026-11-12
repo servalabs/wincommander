@@ -1596,6 +1596,20 @@ async fn get_license_status_inner() -> Result<serde_json::Value, String> {
 
 #[tauri::command]
 pub async fn activate_license(license_key: String) -> Result<serde_json::Value, String> {
+    #[cfg(all(windows, feature = "experimental-pq-licence"))]
+    {
+        let key = zeroize::Zeroizing::new(license_key);
+        let trimmed = key.trim();
+        if trimmed.is_empty() || trimmed.len() > 256 { return Err("License key is required.".into()); }
+        let response = crate::svc_client::call(wincmd_shared::svc::ACTIVATE_HYBRID_LICENSE_VERB,
+            serde_json::json!({"licenseKey": trimmed})).await;
+        if !matches!(response, Ok(value) if value == serde_json::json!({"activated": true})) {
+            return Err("Secure activation could not be confirmed. Keep WinCommander installed and retry.".into());
+        }
+        return get_license_status().await;
+    }
+    #[cfg(not(all(windows, feature = "experimental-pq-licence")))]
+    {
     let (api_base, public_key_b64) = get_config()?;
     let license_key = zeroize::Zeroizing::new(license_key);
     let trimmed = license_key.trim();
@@ -1680,6 +1694,7 @@ pub async fn activate_license(license_key: String) -> Result<serde_json::Value, 
 
     let status = status_from_cached(&cached, &claims, Some("License activated.".to_string()));
     serde_json::to_value(status).map_err(|e| e.to_string())
+    }
 }
 
 /// Background refresh path. A fresh, verified paid token is returned locally;
@@ -1885,14 +1900,20 @@ pub async fn clear_license_cache() -> Result<(), String> {
 /// starting a trial made zero network calls.
 #[tauri::command]
 pub async fn start_trial() -> Result<serde_json::Value, String> {
+    // The legacy desktop-owned exchange cannot be reconciled with a paid
+    // activation or protected service state after a lost response. Do not
+    // consume a trial until the service-owned protocol is paired end to end.
+    #[cfg(feature = "experimental-pq-licence")]
+    return Err("The free trial is temporarily unavailable while licence security is upgraded.".into());
+
     // Portable edition ships no trial — only a purchased key unlocks Pro, so the
     // most-copyable build has nothing to farm.
-    #[cfg(feature = "portable")]
+    #[cfg(all(feature = "portable", not(feature = "experimental-pq-licence")))]
     return Err(
         "The free trial isn't available in this edition — activate a license key.".to_string(),
     );
 
-    #[cfg(not(feature = "portable"))]
+    #[cfg(all(not(feature = "portable"), not(feature = "experimental-pq-licence")))]
     {
         // Local fast-path check: refuses immediately if this device already
         // has ANY cached token (paid licence, or a trial token from a prior
@@ -2065,9 +2086,11 @@ pub async fn deactivate_license_internal() -> Result<(), String> {
 pub async fn release_license_seat_if_present() -> Result<bool, String> {
     #[cfg(all(windows, feature = "experimental-pq-licence"))]
     {
-        require_license_removal_administrator()?;
-        release_hybrid_from_service().await?;
-        return Ok(true);
+        // Releasing the seat alone is insufficient: another process could
+        // reactivate after the service replies but before uninstall finishes.
+        // Keep uninstall closed until the service and server both own a
+        // durable retirement fence that survives that entire handoff.
+        return Err("Uninstall is temporarily unavailable while licence security is being upgraded.".into());
     }
     #[cfg(not(all(windows, feature = "experimental-pq-licence")))]
     {

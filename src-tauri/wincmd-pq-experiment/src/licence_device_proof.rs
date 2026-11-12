@@ -11,6 +11,49 @@ const DOMAIN: &[u8] = b"wincommander:licence-device-proof:v1\0";
 const REQUEST_DOMAIN: &[u8] = b"wincommander:licence-challenge-request:v1\0";
 const RELEASE_REQUEST_DOMAIN: &[u8] = b"wincommander:licence-release-challenge-request:v1\0";
 const RELEASE_ACK_DOMAIN: &[u8] = b"wincommander:licence-release-ack:v1\0";
+const ACTIVATION_ACK_DOMAIN: &[u8] = b"wincommander:licence-activation-ack:v1\0";
+const REACTIVATION_DOMAIN: &[u8] = b"wincommander:licence-reactivation:v1\0";
+const TRIAL_SETTLEMENT_DOMAIN: &[u8] = b"wincommander:licence-trial-settlement:v1\0";
+const TRIAL_RETIREMENT_DOMAIN: &[u8] = b"wincommander:licence-trial-retirement:v1\0";
+
+/// Candidate trial retirement transcript; no server endpoint is enabled yet.
+pub fn sign_trial_retirement(secret: &[u8; 32], payload: &[u8]) -> Result<[u8; 32], &'static str> {
+    if payload.is_empty() || payload.len() > 16 * 1024 { return Err("invalid trial retirement"); }
+    let mut message = Vec::with_capacity(TRIAL_RETIREMENT_DOMAIN.len() + payload.len());
+    message.extend_from_slice(TRIAL_RETIREMENT_DOMAIN);
+    message.extend_from_slice(payload);
+    let key = hmac::Key::new(hmac::HMAC_SHA256, secret);
+    Ok(hmac::sign(&key, &message).as_ref().try_into().unwrap())
+}
+
+/// Candidate trial settlement transcript; no server endpoint is enabled yet.
+pub fn sign_trial_settlement(secret: &[u8; 32], payload: &[u8]) -> Result<[u8; 32], &'static str> {
+    if payload.is_empty() || payload.len() > 16 * 1024 { return Err("invalid trial settlement"); }
+    let mut message = Vec::with_capacity(TRIAL_SETTLEMENT_DOMAIN.len() + payload.len());
+    message.extend_from_slice(TRIAL_SETTLEMENT_DOMAIN);
+    message.extend_from_slice(payload);
+    let key = hmac::Key::new(hmac::HMAC_SHA256, secret);
+    Ok(hmac::sign(&key, &message).as_ref().try_into().unwrap())
+}
+
+pub fn sign_reactivation(secret: &[u8; 32], payload: &[u8]) -> Result<[u8; 32], &'static str> {
+    if payload.is_empty() || payload.len() > 16 * 1024 { return Err("invalid reactivation witness"); }
+    let mut message = Vec::with_capacity(REACTIVATION_DOMAIN.len() + payload.len());
+    message.extend_from_slice(REACTIVATION_DOMAIN);
+    message.extend_from_slice(payload);
+    let key = hmac::Key::new(hmac::HMAC_SHA256, secret);
+    Ok(hmac::sign(&key, &message).as_ref().try_into().unwrap())
+}
+
+/// Bind an idempotent activation acknowledgement to exact canonical bytes.
+pub fn sign_activation_acknowledgement(secret: &[u8; 32], payload: &[u8]) -> Result<[u8; 32], &'static str> {
+    if payload.is_empty() || payload.len() > 16 * 1024 { return Err("invalid activation acknowledgement"); }
+    let mut message = Vec::with_capacity(ACTIVATION_ACK_DOMAIN.len() + payload.len());
+    message.extend_from_slice(ACTIVATION_ACK_DOMAIN);
+    message.extend_from_slice(payload);
+    let key = hmac::Key::new(hmac::HMAC_SHA256, secret);
+    Ok(hmac::sign(&key, &message).as_ref().try_into().unwrap())
+}
 
 /// Authenticate the request for a challenge; this tag is replayable and does
 /// not replace the one-use challenge or licence and device checks.
@@ -81,6 +124,16 @@ pub fn sign_release_acknowledgement(secret: &[u8; 32], challenge: &Challenge<'_>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn activation_acknowledgement_matches_independent_hmac_vector() {
+        let secret = std::array::from_fn(|i| i as u8);
+        let proof = sign_activation_acknowledgement(&secret, br#"{"kind":"test"}"#).unwrap();
+        assert_eq!(proof, [0x69, 0xa6, 0xdb, 0xd2, 0x70, 0x89, 0xc9, 0x83,
+            0xb5, 0xd3, 0xd0, 0x50, 0xbb, 0xca, 0x15, 0x9a, 0xb5, 0xbc, 0xe4, 0x55,
+            0x6b, 0x14, 0xc3, 0x04, 0x10, 0x91, 0x97, 0xbf, 0x77, 0x56, 0x53, 0xf5]);
+        assert_ne!(proof, sign_activation_acknowledgement(&secret, br#"{"kind":"TEST"}"#).unwrap());
+    }
 
     #[test]
     fn challenge_request_proof_binds_device_and_request() {

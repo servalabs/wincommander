@@ -37,7 +37,7 @@ use tokio::net::windows::named_pipe::{PipeMode, ServerOptions};
 use wincmd_shared::fleet::{Action, ClipboardEventReport};
 use wincmd_shared::svc::{
     classify_verb, is_known_verb, ApplyMachineSettingRequest, CapabilityClass,
-    APPLY_MACHINE_SETTING_VERB, ENROL_HYBRID_LICENSE_VERB, RENEW_HYBRID_LICENSE_VERB, RELEASE_HYBRID_LICENSE_VERB,
+    APPLY_MACHINE_SETTING_VERB, ACTIVATE_HYBRID_LICENSE_VERB, ENROL_HYBRID_LICENSE_VERB, RENEW_HYBRID_LICENSE_VERB, RELEASE_HYBRID_LICENSE_VERB,
     STORE_LICENSE_CACHE_VERB, SVC_PIPE_NAME, SVC_PROTOCOL_VERSION, VERIFY_LICENSE_CACHE_VERB,
 };
 use wincmd_shared::vault_access::VaultMountReason;
@@ -416,7 +416,7 @@ pub(crate) async fn handle_connection(
             }
         } else if matches!(
             req.feature_id.as_str(),
-            ENROL_HYBRID_LICENSE_VERB | RENEW_HYBRID_LICENSE_VERB | RELEASE_HYBRID_LICENSE_VERB
+            ACTIVATE_HYBRID_LICENSE_VERB | ENROL_HYBRID_LICENSE_VERB | RENEW_HYBRID_LICENSE_VERB | RELEASE_HYBRID_LICENSE_VERB
         ) {
             if req.feature_id == RELEASE_HYBRID_LICENSE_VERB && !caller_privileged {
                 Err("licence release requires an elevated WinCommander session".into())
@@ -716,6 +716,7 @@ async fn dispatch_verb(
 
         RENEW_HYBRID_LICENSE_VERB => handle_hybrid_license_renewal(args, trust_origin).await,
         ENROL_HYBRID_LICENSE_VERB => handle_hybrid_license_enrolment(args, trust_origin).await,
+        ACTIVATE_HYBRID_LICENSE_VERB => handle_hybrid_license_activation(args, trust_origin).await,
         RELEASE_HYBRID_LICENSE_VERB => handle_hybrid_license_release(args, trust_origin, caller_privileged).await,
 
         "svc.clipboard.get_policy" => fleet_machine_policy_store().and_then(|store| {
@@ -960,7 +961,7 @@ async fn handle_hybrid_license_release(
 ) -> Result<serde_json::Value, VerbError> {
     handle_hybrid_license_release_with(args, trust_origin, caller_privileged, || async {
         #[cfg(feature = "experimental-pq-licence")]
-        { crate::licence_device_credential::release_from_machine_cache().await }
+        { crate::licence_activation_intent::release_serialized().await }
         #[cfg(not(feature = "experimental-pq-licence"))]
         { Err("license release is unavailable") }
     }).await
@@ -978,6 +979,42 @@ where F: FnOnce() -> Fut, Fut: std::future::Future<Output = Result<(), &'static 
     }
     release().await.map(|_| serde_json::json!({"released": true})).map_err(|_| VerbError::new(
         "license_release_rejected", "License release could not be confirmed. Check the service and connection, then retry."))
+}
+
+async fn handle_hybrid_license_activation(
+    args: serde_json::Value, trust_origin: Option<TrustOrigin>,
+) -> Result<serde_json::Value, VerbError> {
+    handle_hybrid_license_activation_with(args, trust_origin, |key| async move {
+        #[cfg(feature = "experimental-pq-licence")]
+        { crate::licence_activation_intent::activate_from_key(&key).await }
+        #[cfg(not(feature = "experimental-pq-licence"))]
+        { let _ = key; Err("license activation is unavailable") }
+    }).await
+}
+
+async fn handle_hybrid_license_activation_with<F, Fut>(
+    mut args: serde_json::Value, trust_origin: Option<TrustOrigin>, activate: F,
+) -> Result<serde_json::Value, VerbError>
+where F: FnOnce(zeroize::Zeroizing<String>) -> Fut,
+      Fut: std::future::Future<Output = Result<(), &'static str>> {
+    let key = if trust_origin == Some(TrustOrigin::SessionHelperPinned) {
+        args.as_object_mut().filter(|map| map.len() == 1).and_then(|map| map.remove("licenseKey"))
+    } else { None };
+    wincmd_shared::zeroize_json(&mut args);
+    if trust_origin != Some(TrustOrigin::SessionHelperPinned) {
+        return Err(VerbError::new("forbidden", "protected WinCommander session required"));
+    }
+    let mut key = key.ok_or_else(|| VerbError::new("license_activation_rejected", "license activation is unavailable"))?;
+    let result = match &mut key {
+        serde_json::Value::String(value) if !value.is_empty() && value.len() <= 256 && value.trim() == value => {
+            let key = zeroize::Zeroizing::new(std::mem::take(value));
+            activate(key).await.map(|_| serde_json::json!({"activated": true})).map_err(|_| VerbError::new(
+                "license_activation_rejected", "Secure activation could not be confirmed. Keep WinCommander installed and retry."))
+        }
+        _ => Err(VerbError::new("license_activation_rejected", "license activation is unavailable")),
+    };
+    wincmd_shared::zeroize_json(&mut key);
+    result
 }
 
 async fn handle_hybrid_license_enrolment(
@@ -5924,6 +5961,27 @@ mod tests {
         assert!(authorize(RENEW_HYBRID_LICENSE_VERB, true, 1234, &gate)
             .await
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn hybrid_activation_requires_exact_pinned_peer_and_key() {
+        let pinned = Some(TrustOrigin::SessionHelperPinned);
+        for (args, peer, kind) in [
+            (serde_json::json!({"licenseKey":"key"}), None, "forbidden"),
+            (serde_json::json!({}), pinned, "license_activation_rejected"),
+            (serde_json::json!({"licenseKey":"key", "deviceHash":"other"}), pinned, "license_activation_rejected"),
+            (serde_json::json!({"licenseKey":" key "}), pinned, "license_activation_rejected"),
+        ] {
+            let result = handle_hybrid_license_activation_with(args, peer,
+                |_| async { panic!("invalid activation reached service") }).await.unwrap_err();
+            assert_eq!(result.kind, kind);
+        }
+        let result = handle_hybrid_license_activation_with(serde_json::json!({"licenseKey":"key"}), pinned,
+            |key| async move { assert_eq!(&*key, "key"); Ok(()) }).await.unwrap();
+        assert_eq!(result, serde_json::json!({"activated": true}));
+        let error = handle_hybrid_license_activation_with(serde_json::json!({"licenseKey":"key"}), pinned,
+            |_| async { Err("sensitive detail") }).await.unwrap_err();
+        assert!(!error.message.contains("sensitive"));
     }
 
     #[tokio::test]

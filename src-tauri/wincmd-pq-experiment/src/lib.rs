@@ -40,6 +40,9 @@ pub enum Purpose {
     FleetCommand = 5,
     FleetReceipt = 6,
     FleetEnrollment = 7,
+    LicenceActivationAck = 8,
+    LicenceTrialSettlement = 9,
+    LicenceTrialRetirement = 10,
 }
 
 /// Trust is local policy; none of these values may be selected by the sender.

@@ -62,11 +62,11 @@ fn shared_shortcuts_require_the_pinned_free_image_and_captured_session() {
 
 #[test]
 fn licence_relay_accepts_active_remote_session_but_rejects_untrusted_peers() {
-    use wincmd_shared::svc::{ENROL_HYBRID_LICENSE_VERB, RENEW_HYBRID_LICENSE_VERB, RELEASE_HYBRID_LICENSE_VERB};
+    use wincmd_shared::svc::{ACTIVATE_HYBRID_LICENSE_VERB, ENROL_HYBRID_LICENSE_VERB, RENEW_HYBRID_LICENSE_VERB, RELEASE_HYBRID_LICENSE_VERB};
     let gate = SessionHelperGate::with_allowed_root(Arc::new(Probe),
         Some(PathBuf::from(r"C:\ProgramData\WinCommander\bin")));
     let peer = identity(7); // The console session in this test is 1, not 7.
-    for verb in [ENROL_HYBRID_LICENSE_VERB, RENEW_HYBRID_LICENSE_VERB, RELEASE_HYBRID_LICENSE_VERB] {
+    for verb in [ACTIVATE_HYBRID_LICENSE_VERB, ENROL_HYBRID_LICENSE_VERB, RENEW_HYBRID_LICENSE_VERB, RELEASE_HYBRID_LICENSE_VERB] {
         assert_eq!(gate.authorize_licence_observation(&peer, verb, 7, true, || Ok(())),
             Ok(TrustOrigin::SessionHelperPinned));
         assert_eq!(gate.authorize_licence_observation(&peer, verb, 8, true, || Ok(())),

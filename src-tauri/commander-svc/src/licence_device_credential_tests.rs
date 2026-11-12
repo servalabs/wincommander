@@ -2,6 +2,29 @@
 use super::*;
 
 #[test]
+fn enrolment_reuses_only_the_precommitted_credential() {
+    let ed = [0u8; 32];
+    let pq = [0u8; wincmd_pq_experiment::ML_DSA_65_PUBLIC_KEY_LEN];
+    let trust = wincmd_pq_experiment::jws::Trust {
+        purpose: wincmd_pq_experiment::Purpose::LicenceEnrolment, minimum_epoch: 1,
+        ed_key_id: "ed", ed25519_public: &ed, pq_key_id: "pq", ml_dsa_65_public: &pq,
+    };
+    let binding = Binding { licence_id: "licence", device_hash: "device", issuer_origin: "https://license.example" };
+    let path = format!(r"SOFTWARE\WinCommanderPrecommittedEnrolTest-{}", uuid::Uuid::new_v4());
+    let store = anchor::Anchor::test_user(path.clone());
+    let credential = PendingCredential { id: [4; 32], secret: Zeroizing::new([5; 32]) };
+    for _ in 0..2 {
+        match enrolment_state_with_candidate(&store, &MachineDpapi, &binding, &trust, 100, Some(&credential)).unwrap() {
+            EnrolmentState::Pending(value) => { assert_eq!(value.id, credential.id); assert_eq!(value.secret(), credential.secret()); }
+            EnrolmentState::Confirmed(_) => panic!("unexpected confirmation"),
+        }
+    }
+    let other = PendingCredential { id: [4; 32], secret: Zeroizing::new([6; 32]) };
+    assert!(enrolment_state_with_candidate(&store, &MachineDpapi, &binding, &trust, 100, Some(&other)).is_err());
+    anchor::remove_test_key(&path).unwrap();
+}
+
+#[test]
 fn missing_cache_resumes_only_the_retained_gate_owner() {
     let current_missing = || Err::<u32, _>("cache missing");
     assert_eq!(select_release_snapshot(false, || Ok(7), || panic!("current wins"), |_| panic!("current wins")), Ok(7));

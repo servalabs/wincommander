@@ -5,6 +5,46 @@ use ed25519_dalek::{Signer, SigningKey};
 use wincmd_pq_experiment::{jws, Purpose, VerifyError};
 
 #[test]
+fn trial_retirement_removes_only_exact_verified_cache() {
+    let classical = SigningKey::from_bytes(&[7; 32]);
+    let ed = SigningKey::from_bytes(&[8; 32]);
+    let pq = PqdsaKeyPair::generate(&ML_DSA_65_SIGNING).unwrap();
+    let ed_public = ed.verifying_key().to_bytes();
+    let pq_public = pq.public_key().as_ref().try_into().unwrap();
+    let trust = jws::Trust { purpose: Purpose::Licence, minimum_epoch: 1, ed_key_id: "ed",
+        ed25519_public: &ed_public, pq_key_id: "pq", ml_dsa_65_public: pq_public };
+    let payload = serde_json::json!({"license_id":"trial-device", "device_hash":"device", "plan":"trial",
+        "iat":100, "exp":200, "iss":"wincommander-license-worker", "sub":"com.servalabs.wincommander", "is_portable":false}).to_string();
+    let signature = general_purpose::URL_SAFE_NO_PAD.encode(classical.sign(payload.as_bytes()).to_bytes());
+    let hybrid = String::from_utf8(jws::sign::assemble(payload.as_bytes(), 1, &trust,
+        |message| Ok(ed.sign(message).to_bytes().to_vec()), |message| {
+            let mut value = vec![0; 3309]; pq.sign(message, &mut value).map_err(|_| VerifyError::InvalidSignature)?; Ok(value)
+        }).unwrap()).unwrap();
+    let public = general_purpose::URL_SAFE_NO_PAD.encode(classical.verifying_key().to_bytes());
+    let envelope = crate::licence_trial_intent::TrialEnvelope { ok:true, payload, signature, hybrid };
+    let candidate = StoreLicenseCacheRequest { payload: envelope.payload.clone(), signature: envelope.signature.clone(),
+        hybrid: Some(envelope.hybrid.clone()), seats_used: None, seat_limit: None };
+    let bytes = serde_json::to_vec(&serde_json::json!({"token":{"payload":candidate.payload,"signature":candidate.signature,
+        "hybrid":candidate.hybrid},"last_verified_at":100})).unwrap();
+    let retained = ledger::advance(None, None, &candidate, &bytes, &public, &trust, None).unwrap();
+    let reg_path = format!(r"SOFTWARE\WinCommanderTrialRemovalTest-{}", uuid::Uuid::new_v4());
+    let anchor = anchor::Anchor::test_user(reg_path.clone());
+    anchor.write(&retained).unwrap();
+    let dir = std::env::temp_dir().join(format!("wincommander-trial-removal-{}", uuid::Uuid::new_v4()));
+    fs::create_dir(&dir).unwrap();
+    let path = dir.join("license_cache.json");
+    fs::write(&path, b"different cache").unwrap();
+    assert!(remove_trial_cache_locked(&path, &envelope, &public, &trust, None, &anchor, false).is_err());
+    assert_eq!(fs::read(&path).unwrap(), b"different cache");
+    fs::write(&path, &bytes).unwrap();
+    remove_trial_cache_locked(&path, &envelope, &public, &trust, None, &anchor, false).unwrap();
+    assert!(!path.exists());
+    remove_trial_cache_locked(&path, &envelope, &public, &trust, None, &anchor, false).unwrap();
+    fs::remove_dir(&dir).unwrap();
+    anchor::remove_test_key(&reg_path).unwrap();
+}
+
+#[test]
 fn planned_rotation_preserves_history_without_accepting_old_issuance() {
     let classic = SigningKey::from_bytes(&[7; 32]);
     let old_ed = SigningKey::from_bytes(&[31; 32]);

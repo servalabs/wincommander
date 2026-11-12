@@ -13,12 +13,53 @@ mod ledger;
 const CACHE_LIMIT: u64 = 64 * 1024;
 static WRITE_LOCK: Mutex<()> = Mutex::new(());
 
+/// Unwired retirement bridge. The durable trial fence is only completed
+/// after the exact protected cache is removed and its absence is confirmed.
+#[allow(dead_code)]
+pub(super) fn retire_trial(
+    path: &Path, pending: &crate::licence_trial_intent::PendingTrial, receipt: &str, now: u64,
+    public_key: &str, trust: &wincmd_pq_experiment::jws::Trust<'_>,
+) -> Result<(), &'static str> {
+    let old_trust = history::configured(trust)?;
+    let _lock = WRITE_LOCK.lock().map_err(|_| "license cache lock is unavailable")?;
+    let _process_lock = crate::licence_security_lock()?;
+    super::release_gate::ensure_idle()?;
+    crate::licence_trial_intent::finish_retirement_locked(pending, receipt, now, |envelope| {
+        let anchor = anchor::Anchor::machine_named(r"SOFTWARE\ServaLabs\WinCommander\HybridLicence");
+        remove_trial_cache_locked(path, envelope, public_key, trust, old_trust.as_ref(), &anchor, true)
+    })
+}
+
+fn remove_trial_cache_locked(path: &Path, envelope: &crate::licence_trial_intent::TrialEnvelope,
+    public_key: &str, trust: &wincmd_pq_experiment::jws::Trust<'_>, old_trust: Option<&history::HistoricalTrust>,
+    anchor: &anchor::Anchor, require_trusted_acl: bool) -> Result<(), &'static str> {
+    let Some(bytes) = read_cache(path)? else {
+        return match fs::symlink_metadata(path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            _ => Err("license cache is unavailable"),
+        };
+    };
+    let cached: ExistingCache = serde_json::from_slice(&bytes).map_err(|_| "license cache is invalid")?;
+    if cached.token.payload != envelope.payload || cached.token.signature != envelope.signature
+        || cached.token.hybrid.as_deref() != Some(envelope.hybrid.as_str()) {
+        return Err("license cache changed during trial retirement");
+    }
+    let expected_time = cached.last_verified_at.ok_or("license cache verification time is missing")?;
+    let request = StoreLicenseCacheRequest { payload: envelope.payload.clone(), signature: envelope.signature.clone(),
+        hybrid: Some(envelope.hybrid.clone()), seats_used: cached.seats_used, seat_limit: cached.seat_limit };
+    let retained = anchor.read().map_err(|_| "license security record is unavailable")?
+        .ok_or("license security record is unavailable")?;
+    ledger::verify_current(&retained, &request, expected_time, &bytes, public_key, trust, old_trust)?;
+    remove_exact_cache_with(path, &bytes, require_trusted_acl, || Ok(()))
+}
+
 pub(super) fn ensure_paid_history_released(
     public_key: &str, trust: &wincmd_pq_experiment::jws::Trust<'_>,
 ) -> Result<(), &'static str> {
     let historical = history::configured(trust)?;
     let _lock = WRITE_LOCK.lock().map_err(|_| "license cache lock is unavailable")?;
     let _process_lock = crate::licence_security_lock()?;
+    crate::licence_activation_intent::ensure_idle_locked()?;
     super::release_gate::ensure_idle()?;
     let anchor = anchor::Anchor::machine_named(r"SOFTWARE\ServaLabs\WinCommander\HybridLicence");
     let retained = anchor.read().map_err(|_| "license security record is unavailable")?
@@ -56,6 +97,14 @@ pub(super) fn write(
     write_with_anchor(path, candidate, bytes, public_key, trust, &anchor)
 }
 
+pub(super) fn write_activation(
+    path: &Path, candidate: &StoreLicenseCacheRequest, bytes: &[u8], public_key: &str,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>, pending: &crate::licence_activation_intent::PendingActivation,
+) -> Result<(), &'static str> {
+    let anchor = anchor::Anchor::machine_named(r"SOFTWARE\ServaLabs\WinCommander\HybridLicence");
+    write_with_gate_mode(path, candidate, bytes, public_key, trust, &anchor, &super::release_gate::machine(), Some(pending))
+}
+
 fn write_with_anchor(
     path: &Path,
     candidate: &StoreLicenseCacheRequest,
@@ -71,11 +120,24 @@ fn write_with_gate(
     path: &Path, candidate: &StoreLicenseCacheRequest, bytes: &[u8], public_key: &str,
     trust: &wincmd_pq_experiment::jws::Trust<'_>, anchor: &anchor::Anchor, gate: &anchor::Anchor,
 ) -> Result<(), &'static str> {
+    write_with_gate_mode(path, candidate, bytes, public_key, trust, anchor, gate, None)
+}
+
+fn write_with_gate_mode(
+    path: &Path, candidate: &StoreLicenseCacheRequest, bytes: &[u8], public_key: &str,
+    trust: &wincmd_pq_experiment::jws::Trust<'_>, anchor: &anchor::Anchor, gate: &anchor::Anchor,
+    pending: Option<&crate::licence_activation_intent::PendingActivation>,
+) -> Result<(), &'static str> {
     let old_trust = history::configured(trust)?;
     let _lock = WRITE_LOCK
         .lock()
         .map_err(|_| "license cache lock is unavailable")?;
     let _process_lock = crate::licence_security_lock()?;
+    match pending {
+        Some(pending) => crate::licence_activation_intent::ensure_matches_locked(pending)?,
+        None => crate::licence_activation_intent::ensure_idle_locked()?,
+    }
+    crate::licence_trial_intent::guard_cache_payload_locked(&candidate.payload)?;
     super::release_gate::ensure_idle_at(gate)?;
     let existing = read_cache(path)?;
     if let Some(existing) = existing.as_deref() {
@@ -146,6 +208,8 @@ fn write_renewal_with_gate(
         .lock()
         .map_err(|_| "license cache lock is unavailable")?;
     let _process_lock = crate::licence_security_lock()?;
+    crate::licence_activation_intent::ensure_idle_locked()?;
+    crate::licence_trial_intent::guard_cache_payload_locked(&candidate.payload)?;
     super::release_gate::ensure_idle_at(gate)?;
     let existing = read_cache(path)?.ok_or("license cache is unavailable")?;
     let retained = anchor
@@ -350,6 +414,7 @@ fn load_retained_release_with_anchor(
     let old_trust = history::configured(trust)?;
     let _lock = WRITE_LOCK.lock().map_err(|_| "license cache lock is unavailable")?;
     let _process_lock = crate::licence_security_lock()?;
+    crate::licence_trial_intent::ensure_idle_locked()?;
     if read_cache(path)?.is_some() { return Err("license cache changed during release"); }
     let retained = anchor.read().map_err(|_| "license security record is unavailable")?
         .ok_or("license security record is unavailable")?;
@@ -381,6 +446,7 @@ fn load_snapshot_with_anchor_mode(
     let old_trust = history::configured(trust)?;
     let _lock = WRITE_LOCK.lock().map_err(|_| "license cache lock is unavailable")?;
     let _process_lock = crate::licence_security_lock()?;
+    crate::licence_trial_intent::ensure_idle_locked()?;
     let bytes = read_cache(path)?.ok_or("license cache is unavailable")?;
     let cached: ExistingCache = serde_json::from_slice(&bytes).map_err(|_| "license cache is invalid")?;
     let last_verified_at = cached.last_verified_at.ok_or("license cache verification time is missing")?;
@@ -389,6 +455,7 @@ fn load_snapshot_with_anchor_mode(
         payload: cached.token.payload, signature: cached.token.signature,
         hybrid: Some(hybrid), seats_used: cached.seats_used, seat_limit: cached.seat_limit,
     };
+    crate::licence_trial_intent::guard_cache_payload_locked(&request.payload)?;
     let claims: RefreshClaims = serde_json::from_str(&request.payload).map_err(|_| "license cache is invalid")?;
     if claims.license_id.is_empty() || claims.license_id.len() > 512
         || claims.device_hash.is_empty() || claims.device_hash.len() > 512
@@ -418,7 +485,8 @@ pub(super) fn verify_current(
     public_key: &str,
     trust: &wincmd_pq_experiment::jws::Trust<'_>,
 ) -> Result<(), &'static str> {
-    with_verified_current(path, candidate, expected_time, public_key, trust, || Ok(()))
+    with_verified_current(path, candidate, expected_time, public_key, trust,
+        crate::licence_activation_intent::ensure_idle_locked)
 }
 
 /// Run a short, non-blocking operation while the verified cache cannot change.
@@ -467,6 +535,8 @@ fn with_verified_anchor_mode<T>(
         .lock()
         .map_err(|_| "license cache lock is unavailable")?;
     let _process_lock = crate::licence_security_lock()?;
+    crate::licence_trial_intent::ensure_idle_locked()?;
+    crate::licence_trial_intent::guard_cache_payload_locked(&candidate.payload)?;
     let retained = anchor
         .read()
         .map_err(|_| "license security record is unavailable")?
@@ -683,6 +753,13 @@ fn remove_prepared_cache_with(
     path: &Path, journal: &super::release_gate::PreparedRelease, require_trusted_acl: bool,
     before_delete: impl FnOnce() -> Result<(), &'static str>,
 ) -> Result<(), &'static str> {
+    remove_exact_cache_with(path, &journal.cache, require_trusted_acl, before_delete)
+}
+
+fn remove_exact_cache_with(
+    path: &Path, expected: &[u8], require_trusted_acl: bool,
+    before_delete: impl FnOnce() -> Result<(), &'static str>,
+) -> Result<(), &'static str> {
     use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
     use windows_sys::Win32::Storage::FileSystem::{GetFileInformationByHandle, SetFileInformationByHandle,
         BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_DIRECTORY, FILE_DISPOSITION_INFO, FILE_FLAG_BACKUP_SEMANTICS,
@@ -729,7 +806,7 @@ fn remove_prepared_cache_with(
     std::io::Read::by_ref(&mut file).take(CACHE_LIMIT + 1).read_to_end(&mut actual)
         .map_err(|_| "license cache is unavailable")?;
     if actual.len() as u64 > CACHE_LIMIT { return Err("license cache is unavailable"); }
-    if actual != journal.cache { return Err("license cache changed during release"); }
+    if actual != expected { return Err("license cache changed during release"); }
     before_delete()?;
     let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
     if unsafe { SetFileInformationByHandle(file.as_raw_handle(), FileDispositionInfo,
