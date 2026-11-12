@@ -7,6 +7,47 @@ use windows_sys::{
     Win32::{Foundation::{OBJ_CASE_INSENSITIVE, OBJ_DONT_REPARSE, UNICODE_STRING}, Storage::FileSystem::{DELETE, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ, FILE_SHARE_WRITE}, System::IO::IO_STATUS_BLOCK},
 };
 
+/// Deliberately has no production constructor. A future constructor must
+/// establish the Known Folder and all ancestors without pathname races, and
+/// retain that authority through every operation. Comparing arbitrary handles
+/// does not authorize a root.
+pub(super) struct DirectoryAuthority { handle: File }
+
+/// A directory whose identity was compared with an independently established
+/// authority. This does not make pathname-based operations safe.
+pub(super) struct BoundDirectory<'a> { handle: File, _authority: &'a DirectoryAuthority }
+
+impl<'a> BoundDirectory<'a> {
+    pub(super) fn bind(handle: File, authorized: &'a DirectoryAuthority) -> Result<Self, String> {
+        use windows_sys::Win32::Storage::FileSystem::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION};
+        let mut a = BY_HANDLE_FILE_INFORMATION::default();
+        let mut b = BY_HANDLE_FILE_INFORMATION::default();
+        // SAFETY: both handles and output structures remain valid for the calls.
+        if unsafe { GetFileInformationByHandle(handle.as_raw_handle(), &mut a) } == 0
+            || unsafe { GetFileInformationByHandle(authorized.handle.as_raw_handle(), &mut b) } == 0
+            || (a.dwVolumeSerialNumber, a.nFileIndexHigh, a.nFileIndexLow)
+                != (b.dwVolumeSerialNumber, b.nFileIndexHigh, b.nFileIndexLow)
+            || a.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+            || b.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+            || !handle.metadata().map_err(|_| "settings directory unavailable")?.is_dir()
+            || !authorized.handle.metadata().map_err(|_| "settings directory unavailable")?.is_dir() {
+            return Err("settings directory identity or type mismatch".into());
+        }
+        Ok(Self { handle, _authority: authorized })
+    }
+
+    /// Each component is opened relative to the held parent and rejects a
+    /// reparse point. Callers must retain this owner until their operation ends.
+    pub(super) fn open_child(&self, name: &OsStr, directory: bool) -> Result<File, String> {
+        open_component(&self.handle, name, directory, false)
+    }
+
+    /// Creates only a new child; never replaces a prior file.
+    pub(super) fn create_child(&self, name: &OsStr) -> Result<File, String> {
+        create_stage(&self.handle, name)
+    }
+}
+
 /// Opens an existing child or exclusively creates a new child relative to a
 /// held directory handle. It rejects path syntax, streams and reparse points.
 pub(super) fn open_component(parent: &File, name: &OsStr, directory: bool, create: bool) -> Result<File, String> {
@@ -86,6 +127,30 @@ mod tests {
     use super::*;
     use std::{fs::OpenOptions, io::Write, os::windows::fs::OpenOptionsExt};
     use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT};
+
+    fn directory(path: &std::path::Path) -> File {
+        OpenOptions::new().read(true)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path).unwrap()
+    }
+
+    #[test]
+    fn binding_requires_same_directory_identity_before_relative_access() {
+        let root = tempfile::tempdir().unwrap();
+        let first = root.path().join("first"); let second = root.path().join("second");
+        std::fs::create_dir(&first).unwrap(); std::fs::create_dir(&second).unwrap();
+        let second_authority = DirectoryAuthority { handle: directory(&second) };
+        assert!(BoundDirectory::bind(directory(&first), &second_authority).is_err());
+        let first_authority = DirectoryAuthority { handle: directory(&first) };
+        let bound = BoundDirectory::bind(directory(&first), &first_authority).unwrap();
+        let mut child = bound.create_child(OsStr::new("settings.dat")).unwrap();
+        child.write_all(b"fixture").unwrap(); drop(child);
+        let mut child = bound.open_child(OsStr::new("settings.dat"), false).unwrap();
+        let mut value = String::new();
+        use std::io::Read;
+        child.read_to_string(&mut value).unwrap(); assert_eq!(value, "fixture");
+        assert!(!second.join("settings.dat").exists());
+    }
 
     #[test]
     fn publication_refuses_replacement_and_preserves_both_files() {
