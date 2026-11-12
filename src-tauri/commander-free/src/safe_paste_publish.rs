@@ -55,6 +55,18 @@ mod tests {
     }
 
     #[test]
+    fn publishes_into_long_windows_path() {
+        let root = tempfile::tempdir().unwrap();
+        let parent = root.path().join("a".repeat(90)).join("b".repeat(90)).join("c".repeat(90));
+        std::fs::create_dir_all(&parent).unwrap();
+        let source = root.path().join("source");
+        let target = parent.join("target");
+        std::fs::write(&source, b"fixture").unwrap();
+        move_no_replace(&source, &target).unwrap();
+        assert_eq!(std::fs::read(target).unwrap(), b"fixture");
+    }
+
+    #[test]
     fn existing_directory_and_its_contents_are_preserved() {
         let root = tempfile::tempdir().unwrap();
         let source = root.path().join("source"); let target = root.path().join("target");
