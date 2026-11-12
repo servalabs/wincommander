@@ -37,6 +37,25 @@ use sysinfo::{Networks, System};
 use tauri::{AppHandle, Emitter};
 
 const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
+static LAST_SAMPLE: Lazy<Mutex<Option<Instant>>> = Lazy::new(|| Mutex::new(None));
+
+fn sample_is_current(sample: Option<Instant>, now: Instant) -> bool {
+    sample.is_some_and(|at| now.checked_duration_since(at).is_some_and(|age| age < Duration::from_secs(5)))
+}
+
+pub(crate) fn metric_sampler_available() -> bool {
+    sample_is_current(LAST_SAMPLE.lock().ok().and_then(|sample| *sample), Instant::now())
+}
+
+#[cfg(test)]
+#[test]
+fn unavailable_or_stale_sampler_is_never_reported_running() {
+    let now = Instant::now();
+    assert!(!sample_is_current(None, now));
+    assert!(!sample_is_current(Some(now - Duration::from_secs(5)), now));
+    assert!(!sample_is_current(Some(now + Duration::from_secs(1)), now));
+    assert!(sample_is_current(Some(now), now));
+}
 const BYTES_PER_MB: f64 = 1_000_000.0; // decimal MB/s (matches link-speed convention)
 
 /// One reusable metric alert. Same shape for every monitored metric; the unit
@@ -585,8 +604,20 @@ pub fn init(app: &AppHandle) {
 
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        let mut networks = Networks::new_with_refreshed_list();
-        let mut sys = System::new();
+        // Initialization can fail on unsupported or temporarily unavailable systems.
+        // Retry without emitting zero-valued samples or asserting alert health.
+        let (mut networks, mut sys) = loop {
+            match (Networks::new_with_refreshed_list(), System::new()) {
+                (Ok(networks), Ok(sys)) => break (networks, sys),
+                (networks, sys) => {
+                    crate::log_message_src("warn", "core", &format!(
+                        "Metrics sampler unavailable: network={:?}, system={:?}",
+                        networks.err(), sys.err()
+                    ));
+                    tokio::time::sleep(Duration::from_secs(30)).await;
+                }
+            }
+        };
         sys.refresh_cpu_all();
 
         let mut st_cpu = AlertState::new();
@@ -609,6 +640,7 @@ pub fn init(app: &AppHandle) {
                 down += data.received();
                 up += data.transmitted();
             }
+            if let Ok(mut sample) = LAST_SAMPLE.lock() { *sample = Some(Instant::now()); }
             let down_per_sec = (down as f64 / SAMPLE_INTERVAL.as_secs_f64()) as u64;
             let up_per_sec = (up as f64 / SAMPLE_INTERVAL.as_secs_f64()) as u64;
 

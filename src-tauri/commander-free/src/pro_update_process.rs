@@ -13,7 +13,7 @@ pub(super) fn stop_running_pro_at_path(path: &std::path::Path) -> Result<bool, S
 
     let expected = std::fs::canonicalize(path).map_err(|e| format!("Pro target identity: {e}"))?;
     let expected_name = path.file_name().ok_or("Pro target has no file name")?;
-    let mut system = System::new();
+    let mut system = System::new().map_err(|e| format!("Pro process enumeration unavailable: {e}"))?;
     system.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
     let mut stopped = false;
     let deadline = Instant::now() + Duration::from_secs(10);

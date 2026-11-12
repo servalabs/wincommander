@@ -171,7 +171,11 @@ pub(crate) async fn local_monitors(app: AppHandle, paid: bool) -> Vec<Value> {
             "download",
             "sustained-thresholds",
         ],
-        Ok(json!({ "running": metric_enabled > 0, "enabledCount": metric_enabled })),
+        if crate::net_traffic_alert::metric_sampler_available() {
+            Ok(json!({ "running": metric_enabled > 0, "enabledCount": metric_enabled }))
+        } else {
+            Err("metric sampler unavailable".into())
+        },
         None,
         Some(metric_enabled),
         false,
