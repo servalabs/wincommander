@@ -4,6 +4,8 @@ from pathlib import Path
 from types import SimpleNamespace
 import tempfile
 import unittest
+from unittest.mock import patch
+import sys
 
 SOURCE = Path(__file__).resolve().parents[1] / "src-tauri/commander-free/scripts/modules/privacy/privacy_shield.ps1"
 script = SOURCE.read_text(encoding="utf-8").split("$embeddedScript = @'", 1)[1].split("\n'@", 1)[0]
@@ -21,20 +23,25 @@ detect_code = compile(ast.Module(body=[detect], type_ignores=[]), str(SOURCE), "
 class LookAwayTimerTests(unittest.TestCase):
     def test_fleet_capture_records_webcam_without_screen_grab(self):
         method = next(node for node in worker.body if isinstance(node, ast.FunctionDef) and node.name == "_capture_incident")
-        captured = []
+        captured, records, screen_grabs = [], [], []
         local = {
-            "os": SimpleNamespace(makedirs=lambda *_args, **_kwargs: None, path=SimpleNamespace(join=lambda *parts: "/".join(parts))),
-            "time": SimpleNamespace(strftime=lambda *_args: "stamp"),
+            "os": SimpleNamespace(makedirs=lambda *_args, **_kwargs: None, environ={}, path=SimpleNamespace(join=lambda *parts: "/".join(parts))),
+            "time": SimpleNamespace(strftime=lambda *_args: "stamp", time=lambda: 100.0),
             "sys": SimpleNamespace(platform="win32"), "CAPTURES_DIR": "captures",
+            "write_capture_result": lambda _path, value: records.append(value),
             "uuid": SimpleNamespace(uuid4=lambda: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
             "log": lambda value: captured.append(value),
         }
         exec(compile(ast.Module(body=[method], type_ignores=[]), str(SOURCE), "exec"), local)
-        detector = SimpleNamespace(fleet_video_only=True, _capture_ids={}, _start_webcam_recording=lambda *args: captured.append(args) or True)
-        local["_capture_incident"](detector, object(), "PHONE DETECTED", "device")
+        detector = SimpleNamespace(fleet_video_only=True, _capture_ids={}, status_msg=SimpleNamespace(emit=lambda _: None), _start_webcam_recording=lambda *args: captured.append(args) or True)
+        fake_pil = SimpleNamespace(ImageGrab=SimpleNamespace(grab=lambda **_: screen_grabs.append(True)))
+        with patch.dict(sys.modules, {"PIL": fake_pil}):
+            local["_capture_incident"](detector, object(), "PHONE DETECTED", "device")
+        self.assertEqual(screen_grabs, [])
+        self.assertFalse(records[0]["screenSaved"])
+        self.assertTrue(records[0]["webcamStarted"])
         self.assertEqual(captured[0], ("clip_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "device"))
         self.assertEqual(detector._capture_ids["device"], "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
-        self.assertIn("webcam video", captured[1])
 
     def test_event_attaches_only_matching_capture_ids(self):
         app_class = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "ShieldApp")
@@ -60,37 +67,43 @@ class LookAwayTimerTests(unittest.TestCase):
         }
         exec(compile(ast.Module(body=[method], type_ignores=[]), str(SOURCE), "exec"), local)
         frame = SimpleNamespace(shape=(480, 640, 3))
-        detector = SimpleNamespace(_frame_buffer=[frame], _active_recordings=[], capture_speed=1, fleet_video_only=True)
+        detector = SimpleNamespace(_frame_buffer=[frame], _frame_times=[100.0], _active_recordings=[], capture_speed=1, fleet_video_only=True)
         self.assertTrue(local["_start_webcam_recording"](detector, "clip_id", "device"))
         self.assertEqual(detector._active_recordings[0]["max_until"], 130.0)
         self.assertEqual(detector._active_recordings[0]["path"], "captures/clip_id_pending.avi")
         self.assertEqual(detector._active_recordings[0]["final_path"], "captures/clip_id_webcam.avi")
 
     def test_fleet_video_is_published_only_after_writer_is_closed(self):
-        import os
-        method = next(node for node in worker.body if isinstance(node, ast.FunctionDef) and node.name == "_finish_webcam_recording")
-        local = {"os": os, "log": lambda _value: None}
+        import json, os
+        method = next(node for node in worker.body if isinstance(node, ast.FunctionDef) and node.name == "_finish_recording")
+        results = []
+        local = {"os": os, "json": json, "write_capture_result": lambda _path, value: results.append(value.copy())}
         exec(compile(ast.Module(body=[method], type_ignores=[]), str(SOURCE), "exec"), local)
         with tempfile.TemporaryDirectory() as directory:
-            pending, complete = Path(directory) / "clip_pending.avi", Path(directory) / "clip_webcam.avi"
+            pending, complete, meta = (Path(directory) / name for name in ("pending.avi", "ready.avi", "meta.json"))
             pending.write_bytes(b"video")
+            meta.write_text('{"screenSaved":false}', encoding="utf-8")
             released = []
             recording = {"out": SimpleNamespace(release=lambda: released.append(complete.exists())),
-                         "path": str(pending), "final_path": str(complete)}
-            local["_finish_webcam_recording"](None, recording)
+                         "path": str(pending), "final_path": str(complete), "metadata_path": str(meta)}
+            detector = SimpleNamespace(fleet_video_only=True, status_msg=SimpleNamespace(emit=lambda _: None))
+            local["_finish_recording"](detector, recording)
             self.assertEqual(released, [False])
             self.assertFalse(pending.exists())
             self.assertEqual(complete.read_bytes(), b"video")
+            self.assertTrue(results[-1]["webcamSaved"])
             pending.write_bytes(b"")
             complete.unlink()
-            local["_finish_webcam_recording"](None, recording)
+            local["_finish_recording"](detector, recording)
             self.assertTrue(pending.exists())
             self.assertFalse(complete.exists())
+            self.assertFalse(results[-1]["webcamSaved"])
             pending.write_bytes(b"partial")
             recording["out"] = SimpleNamespace(release=lambda: (_ for _ in ()).throw(OSError("release failed")))
-            local["_finish_webcam_recording"](None, recording)
+            local["_finish_recording"](detector, recording)
             self.assertTrue(pending.exists())
             self.assertFalse(complete.exists())
+            self.assertFalse(results[-1]["webcamSaved"])
 
     def test_failed_writer_is_closed_without_publishing_a_clip(self):
         method = next(node for node in worker.body if isinstance(node, ast.FunctionDef) and node.name == "_start_webcam_recording")
@@ -103,22 +116,27 @@ class LookAwayTimerTests(unittest.TestCase):
             "log": lambda _value: None,
         }
         exec(compile(ast.Module(body=[method], type_ignores=[]), str(SOURCE), "exec"), local)
-        detector = SimpleNamespace(_frame_buffer=[SimpleNamespace(shape=(480, 640, 3))],
+        detector = SimpleNamespace(_frame_buffer=[SimpleNamespace(shape=(480, 640, 3))], _frame_times=[100.0],
                                    _active_recordings=[], capture_speed=1, fleet_video_only=True)
         self.assertFalse(local["_start_webcam_recording"](detector, "clip_id", "device"))
         self.assertEqual(released, [True])
         self.assertEqual(detector._active_recordings, [])
 
     def test_oversized_completed_recording_is_not_published(self):
-        method = next(node for node in worker.body if isinstance(node, ast.FunctionDef) and node.name == "_finish_webcam_recording")
-        renamed = []
-        local = {"os": SimpleNamespace(path=SimpleNamespace(getsize=lambda _path: 50 * 1024 * 1024 + 1),
-                                       rename=lambda *args: renamed.append(args)),
-                 "log": lambda _value: None}
+        import json, os
+        method = next(node for node in worker.body if isinstance(node, ast.FunctionDef) and node.name == "_finish_recording")
+        local = {"os": os, "json": json, "write_capture_result": lambda *_: None}
         exec(compile(ast.Module(body=[method], type_ignores=[]), str(SOURCE), "exec"), local)
-        recording = {"out": SimpleNamespace(release=lambda: None), "path": "pending.avi", "final_path": "ready.avi"}
-        local["_finish_webcam_recording"](None, recording)
-        self.assertEqual(renamed, [])
+        with tempfile.TemporaryDirectory() as directory:
+            pending, complete, meta = (Path(directory) / name for name in ("pending.avi", "ready.avi", "meta.json"))
+            with pending.open("wb") as file: file.truncate(50 * 1024 * 1024 + 1)
+            meta.write_text('{"screenSaved":false}', encoding="utf-8")
+            recording = {"out": SimpleNamespace(release=lambda: None), "path": str(pending),
+                         "final_path": str(complete), "metadata_path": str(meta)}
+            detector = SimpleNamespace(fleet_video_only=True, status_msg=SimpleNamespace(emit=lambda _: None))
+            local["_finish_recording"](detector, recording)
+            self.assertFalse(complete.exists())
+            self.assertTrue(pending.exists())
     def test_default_gaze_and_explicit_all_off_are_distinct(self):
         app_class = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "ShieldApp")
         init = next(node for node in app_class.body if isinstance(node, ast.FunctionDef) and node.name == "__init__")
@@ -167,9 +185,11 @@ class LookAwayTimerTests(unittest.TestCase):
         detector.obj_detector = SimpleNamespace(detect=lambda _: SimpleNamespace(detections=[SimpleNamespace(categories=[SimpleNamespace(category_name="cell phone")])] if detector.phone else []))
         detector.face_detector = SimpleNamespace(detect=lambda _: SimpleNamespace(face_landmarks=[object()] if detector.face else []))
         detector.profile = False
-        detector._face_orientation = lambda _: "profile" if detector.profile else "away" if detector.away else "attentive"
+        detector._check_gaze = lambda _: "blackout" if detector.profile else "blur" if detector.away else "clear"
+        detector._gaze = SimpleNamespace(observe=lambda value: value)
+        detector._observe_missing_face = lambda: (True, False)
         def frame(now):
-            env = {"self": detector, "mp_image": object(), "is_clear": True, "reason": "", "time": SimpleNamespace(monotonic=lambda: now), "log": lambda _: None}
+            env = {"self": detector, "mp_image": object(), "is_clear": True, "reason": "", "time": SimpleNamespace(monotonic=lambda: now), "now_ts": now, "log": lambda _: None}
             exec(detect_code, env)
             return env["reason"]
         self.assertEqual(frame(1.0), "")
@@ -178,7 +198,7 @@ class LookAwayTimerTests(unittest.TestCase):
         detector.phone = False
         self.assertEqual(frame(3.0), "")
         detector.profile = True
-        self.assertEqual(frame(3.5), "PRESENCE LOST")  # independent of look-away delay
+        self.assertEqual(frame(3.5), "LOOK AWAY (FULL TURN)")  # independent of look-away delay
         detector.profile = False
         self.assertEqual(frame(4.0), "")  # profile resets the mild-away timer
         self.assertEqual(frame(5.0), "")
@@ -190,36 +210,37 @@ class LookAwayTimerTests(unittest.TestCase):
         self.assertEqual(frame(9.0), "")
 
     def test_real_orientation_classifies_slight_and_full_profile_without_extra_inference(self):
-        orientation = next(node for node in worker.body if isinstance(node, ast.FunctionDef) and node.name == "_face_orientation")
-        local = {}
-        exec(compile(ast.Module(body=[orientation], type_ignores=[]), str(SOURCE), "exec"), local)
+        import math
+        function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "classify_gaze_with_reason")
+        local = {"np": SimpleNamespace(isfinite=math.isfinite)}
+        exec(compile(ast.Module(body=[function], type_ignores=[]), str(SOURCE), "exec"), local)
         def classify(yaw):
-            points = [SimpleNamespace(x=0.0) for _ in range(455)]
-            points[234].x, points[454].x, points[1].x = 0, 1, 0.5 + yaw
-            return local["_face_orientation"](None, points)
-        self.assertEqual(classify(0.2), "attentive")
-        self.assertEqual(classify(0.4), "away")
-        self.assertEqual(classify(-0.48), "profile")
+            points = [SimpleNamespace(x=0.5, y=0.5) for _ in range(455)]
+            points[234].x, points[454].x = 0.25, 0.75
+            points[1].x = 0.5 + yaw * 0.5
+            return local["classify_gaze_with_reason"](points)[0]
+        self.assertEqual(classify(0.04), "clear")
+        self.assertEqual(classify(0.2), "blur")
+        self.assertEqual(classify(-0.48), "blackout")
 
     def test_overlay_uses_blur_for_mild_away_and_black_with_label_for_presence(self):
+        function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "overlay_presentation")
+        local = {}
+        exec(compile(ast.Module(body=[function], type_ignores=[]), str(SOURCE), "exec"), local)
         overlay_class = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "ShieldOverlay")
         method = next(node for node in overlay_class.body if isinstance(node, ast.FunctionDef) and node.name == "update_state")
-        local = {}
         exec(compile(ast.Module(body=[method], type_ignores=[]), str(SOURCE), "exec"), local)
         events = []
-        overlay = SimpleNamespace(opacity_val=200, hide=lambda: events.append("hide"),
-            show=lambda: events.append("show"), enable_blur=lambda: None,
-            setStyleSheet=lambda value: events.append(value),
-            label=SimpleNamespace(hide=lambda: events.append("hide label"),
-                show=lambda: events.append("show label"), setText=lambda text: events.append(text)))
-        update = local["update_state"]
-        update(overlay, False, "LOOK AWAY")
-        self.assertEqual(overlay._active_opacity, 120)
+        overlay = SimpleNamespace(blurred_screen=object(), hide=lambda: events.append("hide"),
+            show=lambda: events.append("show"), update=lambda: None,
+            label=SimpleNamespace(hide=lambda: events.append("hide label"), show=lambda: events.append("show label"),
+                                  setText=lambda text: events.append(text)))
+        local["update_state"](overlay, False, "LOOK AWAY")
+        self.assertEqual(overlay.presentation, "blur")
         self.assertIn("hide label", events)
         events.clear()
-        update(overlay, False, "PRESENCE LOST")
-        self.assertEqual(overlay._active_opacity, 255)
-        self.assertIn("QWidget#shieldOverlay { background-color: black; }", events)
+        local["update_state"](overlay, False, "PRESENCE LOST")
+        self.assertEqual(overlay.presentation, "blackout")
         self.assertIn("PRESENCE LOST", events)
         self.assertIn("show label", events)
 
