@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type MouseEvent as ReactMouseEvent } 
 import { invoke } from "@tauri-apps/api/core";
 import { useSearchPrivacy, refreshSearchPrivacy } from "./useSearchPrivacy";
 import { mayShowSearchPath, searchPrivacyLease } from "@/lib/searchPrivacy";
+import { requestDestructiveCapability } from "./destructiveAuthz";
 
 export type SearchContextAction =
   | "open"
@@ -88,12 +89,12 @@ export function useSearchResultContextMenu({ openPath, closeSearch, reportError 
         case "delete":
           await invoke("search_delete_to_recycle_bin", { path: target.path });
           break;
-        case "shred":
-          // The search result itself is the explicit target selection. Route
-          // it through the same guarded direct-shred backend as Explorer, so
-          // secure erase starts now and never opens the general in-app modal.
-          await invoke("search_shred_direct", { path: target.path });
+        case "shred": {
+          const capabilityToken = await requestDestructiveCapability({ command: "secure_erase", path: target.path });
+          if (!capabilityToken || !lease() || !mayShowSearchPath(target.path)) return;
+          await invoke("search_shred_direct", { path: target.path, capabilityToken });
           break;
+        }
       }
       closeSearch();
     } catch (error) {

@@ -56,6 +56,7 @@ use tokio::sync::Notify;
 
 const WEBHOOK_PORT: u16 = 47821;
 const MAX_BODY_BYTES: usize = 64 * 1024;
+const MAX_CONNECTIONS: usize = 32;
 const SIGNATURE_HEADER: &str = "X-Wincmd-Signature";
 
 // ── Route registry ──────────────────────────────────────────────────
@@ -191,6 +192,7 @@ async fn run_server(addr: SocketAddr, shutdown: std::sync::Arc<Notify>) -> Resul
         .await
         .map_err(|e| format!("bind {}: {}", addr, e))?;
     crate::log_message("info", &format!("[WebhookServer] listening on {}", addr));
+    let connections = std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
 
     loop {
         tokio::select! {
@@ -206,8 +208,13 @@ async fn run_server(addr: SocketAddr, shutdown: std::sync::Arc<Notify>) -> Resul
                         continue;
                     }
                 };
+                let Ok(permit) = connections.clone().try_acquire_owned() else {
+                    drop(stream);
+                    continue;
+                };
                 let io = TokioIo::new(stream);
                 tauri::async_runtime::spawn(async move {
+                    let _permit = permit;
                     // Per-connection 5s read timeout. Hard cap so a
                     // half-open client can't hold a slot forever.
                     let serve = hyper::server::conn::http1::Builder::new()
@@ -231,55 +238,36 @@ async fn handle(req: Request<Incoming>) -> Result<Response<Full<Bytes>>, hyper::
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
 
-    // Read body with a hard byte cap. http_body_util's `collect()`
-    // pulls the full body — we only need to reject when it overflows.
-    let body_bytes = match req.into_body().collect().await {
-        Ok(b) => {
-            let bytes = b.to_bytes();
-            if bytes.len() > MAX_BODY_BYTES {
+    let mut body = req.into_body();
+    let mut body_bytes = Vec::new();
+    while let Some(frame) = body.frame().await {
+        let frame = match frame {
+            Ok(frame) => frame,
+            Err(_) => return Ok(reply(StatusCode::BAD_REQUEST, "body read failed")),
+        };
+        if let Some(data) = frame.data_ref() {
+            if !append_body(&mut body_bytes, data) {
                 return Ok(reply(StatusCode::PAYLOAD_TOO_LARGE, "body too large"));
             }
-            bytes
         }
-        Err(_) => return Ok(reply(StatusCode::BAD_REQUEST, "body read failed")),
-    };
-
-    // Look up the route. Lock release ASAP so the long verify+fire
-    // doesn't block the registry.
-    let route_secret_fire = {
-        let state = STATE.lock().unwrap();
-        state.routes.get(&path).map(|r| {
-            // Can't clone the FireFn directly — call site invokes through
-            // a snapshot. Instead: copy the secret + leave fire-invocation
-            // for inside the lock-held closure below.
-            (r.secret.clone(),)
-        })
-    };
-
-    let secret = match route_secret_fire {
-        Some((s,)) => s,
-        None => return Ok(reply(StatusCode::NOT_FOUND, "no route")),
-    };
+    }
 
     let signature = match sig_header {
         Some(s) => s,
         None => return Ok(reply(StatusCode::UNAUTHORIZED, "missing signature")),
     };
+    // Verify and dispatch against one registry snapshot. A route replaced while
+    // a request is in flight must never accept its predecessor's secret.
+    let state = STATE.lock().unwrap();
+    let status = dispatch_authenticated(&state, &path, &body_bytes, &signature);
+    Ok(reply(status, if status == StatusCode::OK { "ok" } else { "not authorized" }))
+}
 
-    if !verify_hmac(&secret, &body_bytes, &signature) {
-        return Ok(reply(StatusCode::UNAUTHORIZED, "bad signature"));
-    }
-
-    // Fire under the lock (briefly) — the FireFn is cheap (just queues
-    // a trigger event on a channel).
-    {
-        let state = STATE.lock().unwrap();
-        if let Some(route) = state.routes.get(&path) {
-            (route.fire)();
-        }
-    }
-
-    Ok(reply(StatusCode::OK, "ok"))
+fn dispatch_authenticated(state: &ServerState, path: &str, body: &[u8], signature: &str) -> StatusCode {
+    let Some(route) = state.routes.get(path) else { return StatusCode::NOT_FOUND; };
+    if !verify_hmac(&route.secret, body, signature) { return StatusCode::UNAUTHORIZED; }
+    (route.fire)();
+    StatusCode::OK
 }
 
 fn reply(status: StatusCode, body: &str) -> Response<Full<Bytes>> {
@@ -288,6 +276,14 @@ fn reply(status: StatusCode, body: &str) -> Response<Full<Bytes>> {
         .header("content-type", "text/plain")
         .body(Full::new(Bytes::from(body.to_string())))
         .unwrap()
+}
+
+fn append_body(body: &mut Vec<u8>, chunk: &[u8]) -> bool {
+    if chunk.len() > MAX_BODY_BYTES.saturating_sub(body.len()) {
+        return false;
+    }
+    body.extend_from_slice(chunk);
+    true
 }
 
 // ── HMAC verify ─────────────────────────────────────────────────────
@@ -314,6 +310,65 @@ fn verify_hmac(secret: &str, body: &[u8], signature_hex: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn body_budget_rejects_before_accumulating_and_preserves_admitted_bytes() {
+        let mut body = vec![0; MAX_BODY_BYTES - 1];
+        assert!(!append_body(&mut body, &[1, 2]));
+        assert_eq!(body.len(), MAX_BODY_BYTES - 1);
+        assert!(append_body(&mut body, &[1]));
+        assert_eq!(body.len(), MAX_BODY_BYTES);
+        assert!(!append_body(&mut body, &[2]));
+        assert!(append_body(&mut body, &[]));
+    }
+
+    #[tokio::test]
+    async fn chunked_request_larger_than_budget_is_rejected() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let probe = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = probe.local_addr().unwrap();
+        drop(probe);
+        let shutdown = std::sync::Arc::new(Notify::new());
+        let server_shutdown = shutdown.clone();
+        let server = tokio::spawn(async move { run_server(addr, server_shutdown).await });
+        let mut stream = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                match tokio::net::TcpStream::connect(addr).await {
+                    Ok(stream) => break stream,
+                    Err(_) => tokio::task::yield_now().await,
+                }
+            }
+        }).await.unwrap();
+        let header = format!("POST /missing HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n{:x}\r\n", MAX_BODY_BYTES + 1);
+        stream.write_all(header.as_bytes()).await.unwrap();
+        stream.write_all(&vec![b'x'; MAX_BODY_BYTES + 1]).await.unwrap();
+        let _ = stream.write_all(b"\r\n0\r\n\r\n").await;
+        let mut response = Vec::new();
+        tokio::time::timeout(Duration::from_secs(2), stream.read_to_end(&mut response)).await.unwrap().unwrap();
+        assert!(String::from_utf8_lossy(&response).starts_with("HTTP/1.1 413"));
+        shutdown.notify_one();
+        tokio::time::timeout(Duration::from_secs(2), server).await.unwrap().unwrap().unwrap();
+    }
+
+    #[test]
+    fn route_replacement_does_not_accept_previous_secret() {
+        use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = calls.clone();
+        let mut state = ServerState { routes: HashMap::new(), shutdown: None };
+        state.routes.insert("/event".into(), Route { secret: "replacement-secret".into(), fire: Box::new(move || { observed.fetch_add(1, Ordering::SeqCst); }) });
+        let body = b"body";
+        let signature = |secret: &[u8]| {
+            let mut mac = Hmac::<Sha256>::new_from_slice(secret).unwrap();
+            mac.update(body);
+            hex::encode(mac.finalize().into_bytes())
+        };
+        assert_eq!(dispatch_authenticated(&state, "/event", body, &signature(b"previous-secret")), StatusCode::UNAUTHORIZED);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert_eq!(dispatch_authenticated(&state, "/event", body, &signature(b"replacement-secret")), StatusCode::OK);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(dispatch_authenticated(&state, "/missing", body, &signature(b"replacement-secret")), StatusCode::NOT_FOUND);
+    }
 
     #[test]
     fn hmac_verify_accepts_matching_signature() {

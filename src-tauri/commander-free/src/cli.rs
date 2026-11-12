@@ -426,6 +426,8 @@ const RISK_OVERRIDES: &[(&str, Risk)] = &[
     // clipboard respectively.
     ("tauri:search_rename_file", Risk::Mutating),
     ("tauri:search_set_file_clipboard", Risk::Mutating),
+    ("tauri:search_copy_path", Risk::Mutating),
+    ("tauri:check_distress_phrase", Risk::Destructive),
     // `export_` writes a new artefact.
     ("tauri:export_evidence_vault", Risk::Mutating),
     ("tauri:export_evidence_affidavit", Risk::Mutating),
