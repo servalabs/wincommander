@@ -11695,6 +11695,26 @@
       ]
     },
     {
+      "id": "tauri:vault_dismount_authorized_volumes",
+      "name": "vault_dismount_authorized_volumes",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useVaultAccess.ts"
+      ]
+    },
+    {
+      "id": "tauri:vault_dismount_personal_mount",
+      "name": "vault_dismount_personal_mount",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useVaultAccess.ts"
+      ]
+    },
+    {
       "id": "tauri:vault_list_authorized_entries",
       "name": "vault_list_authorized_entries",
       "transport": "tauri",
@@ -11705,8 +11725,28 @@
       ]
     },
     {
+      "id": "tauri:vault_list_personal_mounts",
+      "name": "vault_list_personal_mounts",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useVaultAccess.ts"
+      ]
+    },
+    {
       "id": "tauri:vault_mount_entry",
       "name": "vault_mount_entry",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useVaultAccess.ts"
+      ]
+    },
+    {
+      "id": "tauri:vault_mount_personal",
+      "name": "vault_mount_personal",
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,

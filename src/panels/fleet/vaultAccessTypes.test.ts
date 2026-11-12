@@ -13,7 +13,7 @@ import {
 describe("Vault Access service intent", () => {
   test("keeps every actionable Rust mount reason in the renderer vocabulary", () => {
     expect(VAULT_MOUNT_REASONS).toEqual([
-      "not_authorized", "invalid_request", "broker_unavailable", "broker_rejected",
+      "not_authorized", "invalid_request", "container_already_mounted", "broker_unavailable", "broker_rejected",
       "broker_identity_rejected", "broker_handshake_rejected", "broker_reply_rejected",
       "broker_plan_rejected",
       "presentation_rejected",

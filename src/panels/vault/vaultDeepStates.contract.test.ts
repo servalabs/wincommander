@@ -18,7 +18,7 @@ describe("secure storage deep-state contracts", () => {
   test("distinguishes initial loading from a confirmed empty volume list", () => {
     expect(vaultSource).toContain('initialLoading={loading.vault && encryptionStatus === null}');
     expect(vaultSource).toContain('aria-busy="true"');
-    expect(vaultSource).toContain("Checking encrypted volumes…");
+    expect(vaultSource).toContain("Checking mounted-volume access…");
   });
 
   test("partition discovery exposes progress instead of flashing an empty result", () => {
@@ -34,10 +34,14 @@ describe("secure storage deep-state contracts", () => {
     expect(vaultSource).toContain('className="mount-progress" role="status"');
     expect(vaultSource).toContain("Unlocking with your PIM can take several minutes. Your password was cleared for safety.");
     expect(vaultSource).toContain("const boundedMountError");
+    expect(vaultSource).toContain("vault_container_already_mounted");
+    expect(vaultSource).toContain("A container with this filename is already mounted.");
+    expect(vaultSource).toContain('return "VLT.CONTAINER.ALREADY_MOUNTED";');
     expect(vaultSource).toContain("installed WinCommander service still requires an NTFS permission check");
     expect(vaultSource).toContain("Repair or update the WinCommander service");
     expect(mountHandlerSource).toContain("setMountFailure(message);");
-    expect(mountHandlerSource).toContain("mountPasswordSelectedVolume(mountVolume");
+    expect(mountHandlerSource).toContain("mountPasswordSelectedVolume(async (params)");
+    expect(mountHandlerSource).toContain("mountPersonalVolume({");
     expect(mountHandlerSource).toContain("setMountPassword(\"\");");
     expect(mountHandlerSource).toContain("getAvailableDriveLetters()");
     expect(mountHandlerSource).toContain("is already in use. Dismount it first or choose a free drive letter.");
@@ -56,7 +60,7 @@ describe("secure storage deep-state contracts", () => {
     expect(cleanupMessage).not.toContain("safely unmounted");
     expect(vaultSource).not.toContain("vault_broker_failed");
     const failureBranch = mountHandlerSource.slice(
-      mountHandlerSource.indexOf("} catch"),
+      mountHandlerSource.lastIndexOf("} catch"),
       mountHandlerSource.indexOf("} finally"),
     );
     expect(failureBranch).not.toContain("setMountDialogOpen(false)");
@@ -82,22 +86,34 @@ describe("secure storage deep-state contracts", () => {
     expect(vaultSource).toContain("Not available in this Windows sign-in");
   });
 
-  test("Secure Storage mounts machine-wide and verifies the Explorer-facing drive", () => {
-    expect(vaultSource).toContain('scope: "machine"');
-    expect(vaultSource).toContain("hardenAcl: true");
+  test("Secure Storage follows saved mount visibility and verifies the Explorer-facing drive", () => {
+    expect(vaultSource).toContain("<MountScopeSelector");
+    expect(vaultSource).toContain("appSettings?.app?.vault?.mountScope ?? \"auto\"");
+    expect(vaultSource).toContain("resolveEffectiveMountScope(mountScopePreference, systemInfo?.osName)");
+    expect(vaultSource).toContain("scope: effectiveMountScope");
+    expect(vaultSource).toContain("requestedScope");
+    expect(vaultSource).toContain("mountPersonalVolume({");
     expect(vaultSource).toContain("await verifyVaultDrive(result.data.drive)");
     expect(vaultSource).toContain("setMountedVolume(result.data)");
     expect(vaultSource).toContain('icon="warning-sign"');
-    expect(sidebarSource).toContain('scope: "machine"');
+    expect(sidebarSource).toContain("presentation: quickMountScope");
     expect(sidebarSource).toContain('readOnly: false');
-    expect(sidebarSource).toContain("Mounts machine-wide, read/write. Existing file permissions still apply.");
-    expect(sidebarSource).toContain("hardenAcl: true");
-    expect(sidebarSource).toContain("await verifyVaultDrive(r.data.drive)");
+    expect(sidebarSource).toContain("resolveEffectiveMountScope(appSettings?.app?.vault?.mountScope, systemInfo?.osName)");
+    expect(sidebarSource).toContain("mountPersonalVolume({");
+    expect(sidebarSource).toContain("await verifyVaultDrive(r.drive)");
     expect(backendSource).toContain('invoke<{ drive: string; accessible: boolean }>("verify_vault_drive"');
     expect(appContextSource).toContain("setEncryptionStatus(null);");
     expect(vaultSource).not.toContain("Only this Windows account");
     expect(vaultSource).not.toContain("The drive will not appear in other users’ File Explorer sessions.");
     expect(backendSource).toContain("PresentedLetter: letter");
+  });
+
+  test("Secure Storage hides engine-only rows until caller authorization is verified", () => {
+    expect(vaultSource).toContain("const serviceAuthorityReady = !mountAuthoritiesLoading && !mountAuthoritiesUnavailable;");
+    expect(vaultSource).toContain("volumes.filter((volume) => secureStorageMountIsAuthorized(volume, personalMounts, fleetEntries))");
+    expect(vaultSource).toContain("{visibleVolumes.map((vol: any, idx: number) => (");
+    expect(vaultSource).toContain("Mounted volumes are hidden until the secure service can verify access.");
+    expect(vaultSource).not.toContain("{volumes.map((vol: any, idx: number) => (");
   });
 
   test("reports when a personal mount has no filesystem ACL attestation", () => {

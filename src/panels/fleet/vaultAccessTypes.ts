@@ -24,6 +24,7 @@ export type VaultMountState = "mounted" | "unmounted" | "denied" | "failed";
 export const VAULT_MOUNT_REASONS = [
   "not_authorized",
   "invalid_request",
+  "container_already_mounted",
   "broker_unavailable",
   "broker_rejected",
   "broker_identity_rejected",
@@ -45,6 +46,7 @@ export type VaultMountReason = typeof VAULT_MOUNT_REASONS[number];
 const VAULT_MOUNT_REASON_LABELS: Record<VaultMountReason, string> = {
   not_authorized: "Mount denied by the secure service",
   invalid_request: "The Vault request is invalid",
+  container_already_mounted: "This encrypted container is already mounted",
   broker_unavailable: "The secure Vault service is unavailable",
   broker_rejected: "The secure Vault service rejected the request",
   broker_identity_rejected: "The secure Vault helper identity could not be verified",
@@ -126,8 +128,36 @@ export interface VaultAuthorizedEntry {
   container_kind: VaultContainerKind;
   mount_state: VaultMountState;
   drive_letter: string | null;
+  /** Authenticated service ledger slot, used to disambiguate reused drive letters. */
+  internal_drive?: number | null;
   /** Service-derived: Fleet mount visibility never implies dismount authority. */
   can_dismount: boolean;
+}
+
+/** Caller-filtered ordinary Secure Storage mounts, projected from the service ledger. */
+export interface PersonalVaultMountedVolume {
+  drive_letter: string;
+  internal_drive: number;
+  presentation: VaultPresentation;
+  cleanup_required: boolean;
+}
+
+/** One-shot ordinary Secure Storage mount options. The service derives the
+ * caller identity and decides whether the selected file is Fleet-managed. */
+export interface PersonalVaultMountOptions {
+  containerPath: string;
+  password: string;
+  volumeKind: VaultContainerKind;
+  volumeRole: VaultVolumeRole;
+  presentation: VaultPresentation;
+  preferredLetter?: string;
+  readOnly: boolean;
+  pim?: number;
+  keyfiles: string[];
+  hiddenProtectionPassword?: string;
+  hiddenKeyfiles: string[];
+  hiddenPim?: number;
+  removable: boolean;
 }
 
 /**

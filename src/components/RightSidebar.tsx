@@ -14,12 +14,13 @@ import { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef } fro
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
-import { showSuccess, showError } from "../utils/toast";
+import { showSuccess, showError, showWarning } from "../utils/toast";
 import { runOperation } from "../context/OperationContext";
 import { DESTRUCT_STEPS, isStepEnabled } from "../types/lockdownSteps";
 import { DEFAULT_ALWAYS_HIDDEN_SIDEBAR_ACTIONS, DEFAULT_BORROWED_EXTRAS } from "../lib/visibilityDefaults";
 import { requestDestructiveCapability } from "../hooks/destructiveAuthz";
 import useVaultAccess from "../hooks/useVaultAccess";
+import { resolveEffectiveMountScope } from "../panels/vault/mountScope";
 import './RightSidebar.css';
 
 // This large, occasional dialog carries its own legacy UI bridge; keep it out
@@ -31,9 +32,6 @@ const MetadataScrubberDialog = lazy(() => import("./MetadataScrubberDialog"));
 // confirm tone on abort. Best-effort: silently no-ops if Web Audio is blocked.
 let _lockdownAudioCtx: AudioContext | null = null;
 
-const ACTION_LABELS: Record<string, string> = {
-    dismount: "Volumes & RAM disks dismounted",
-};
 function lockdownTone(freq: number, durationMs: number, type: OscillatorType = "sine", gain = 0.14) {
     try {
         const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
@@ -107,6 +105,7 @@ export default function RightSidebar() {
     } = useAppState();
     const needsElevation = isPrivilegedWriteBlocked(true, systemInfo?.isAdmin);
     const { productName } = getDisplayBranding(appSettings);
+    const quickMountScope = resolveEffectiveMountScope(appSettings?.app?.vault?.mountScope, systemInfo?.osName);
 
     // The 17-task parallel orchestration was replaced by the universal
     // `full_lockdown` Rust command (see fireSelfDestruct below).
@@ -116,13 +115,12 @@ export default function RightSidebar() {
         removeAllRamDisks,
         getAutoEraseSchedules,
         removeAutoEraseSchedule,
-        mountVolume,
         verifyVaultDrive,
         getEncryptionPartitions,
         safePastePrepare,
         scrubMetadataPaths,
     } = useBackend();
-    const { dismountAuthorizedVaults } = useVaultAccess<never, never>();
+    const { dismountAuthorizedVaults, mountPersonalVolume } = useVaultAccess<never, never>();
 
     const visibility = useVisibility();
     const { canUse } = useEntitlements();
@@ -249,45 +247,43 @@ export default function RightSidebar() {
         if (!slot || !qmPassword) return;
         setQmMountingIdx(qmSelectedIdx);
         try {
-            const r = await mountVolume({
-              volumePath: slot.filePath,
-              driveLetter: slot.driveLetter,
-              volumeKind: "standard",
-              volumeRole: "standard",
-              password: qmPassword,
-              // The shortcut is an ordinary personal mount, so it must retain
-              // the same read/write capability the user expects in Explorer.
-              // Hidden-volume protection is not enabled for this flow.
-              readOnly: false,
-              protectHidden: false,
-              scope: "machine",
-              hardenAcl: true,
+            const r = await mountPersonalVolume({
+                containerPath: slot.filePath,
+                preferredLetter: slot.driveLetter,
+                volumeKind: "standard",
+                volumeRole: "outer",
+                password: qmPassword,
+                presentation: quickMountScope,
+                // Quick Mount remains writable; existing NTFS permissions
+                // are preserved by the service and Pro broker.
+                readOnly: false,
+                keyfiles: [],
+                hiddenKeyfiles: [],
+                removable: false,
             });
-            if (r?.success && r.data?.scope === "machine") {
-                await verifyVaultDrive(r.data.drive);
+            if (r?.status === "mounted" && r.scope === quickMountScope) {
+                await verifyVaultDrive(r.drive);
                 const refreshed = await refreshVault(true);
                 const isVisibleInThisSession = refreshed?.volumes?.some((volume) =>
-                    volume.letter === r.data?.drive
-                    && volume.internalDrive === r.data?.internalDrive,
+                    volume.letter === r.drive
+                    && volume.internalDrive === r.internalDrive,
                 );
                 if (!isVisibleInThisSession) {
                     throw new Error("The encrypted volume was not available in this signed-in Windows session.");
                 }
-                showSuccess(`Volume mounted as ${r.data.drive}`);
+                showSuccess(`Volume mounted as ${r.drive} (${quickMountScope === "machine" ? "This PC" : "This session"}).`);
                 setQmOpen(false);
                 setQmPassword('');
             } else {
                 // Operational mount result → Notifications tab, not System Alerts.
-                showError(r?.error || (r?.success
-                    ? 'Machine-wide mounting was not confirmed. Update both WinCommander and Pro before retrying.'
-                    : 'Mount failed — check your credentials and service diagnostics.'), undefined, { kind: "notification" });
+                showError(`${quickMountScope === "machine" ? "This PC" : "This session"} mounting was not confirmed. Update WinCommander and Pro before retrying.`, undefined, { kind: "notification" });
             }
         } catch (e) {
             showError(`Mount failed: ${e}`, undefined, { kind: "notification" });
         } finally {
             setQmMountingIdx(null);
         }
-    }, [quickMountSlots, qmSelectedIdx, qmPassword, mountVolume, refreshVault, verifyVaultDrive]);
+    }, [quickMountSlots, qmSelectedIdx, qmPassword, mountPersonalVolume, quickMountScope, refreshVault, verifyVaultDrive]);
 
     // Listen for `scrub-requested` events from the single-instance handler.
     // Fires when Explorer's right-click "Scrub metadata with WinCommander"
@@ -680,22 +676,6 @@ export default function RightSidebar() {
         return () => { if (sdIntervalRef.current) clearInterval(sdIntervalRef.current); };
     }, [sdCountdown, fireSelfDestruct]);
 
-    const handleAction = useCallback(async (action: string, handler: () => Promise<any>) => {
-        setLoadingAction(action);
-        try {
-            await handler();
-            if (action === "dismount") {
-                await refreshVault(true);
-            }
-            showSuccess(ACTION_LABELS[action] || "Action completed");
-        } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            showError(`Failed: ${msg}`);
-        } finally {
-            setLoadingAction(null);
-        }
-    }, [refreshVault]);
-
     const handleDismountClick = useCallback(() => {
         if (!canUse("paid")) {
             window.dispatchEvent(
@@ -705,28 +685,58 @@ export default function RightSidebar() {
             );
             return;
         }
-        // The service owns every encrypted-volume target and checks the
-        // caller against its active-mount record before force-dismounting.
-        // Sending a second engine-wide request here would bypass that check.
-        void handleAction("dismount", async () => {
-            const authorized = await dismountAuthorizedVaults();
-            if (authorized.denied > 0 || authorized.failed > 0) {
-                throw new Error(
-                    "WinCommander could not safely dismount every encrypted volume authorized for this account. Other volumes were left unchanged."
-                );
+        // The service owns every encrypted-volume target. Always try the RAM
+        // disk operation too, then report each outcome instead of hiding a
+        // partial result behind one generic success/failure toast.
+        void (async () => {
+            setLoadingAction("dismount");
+            let authorized: { dismounted: number; denied: number; failed: number } | null = null;
+            let serviceFailed = false;
+            let ramFailed = false;
+            let ramWasAbsent = false;
+            try {
+                try {
+                    authorized = await dismountAuthorizedVaults();
+                } catch {
+                    serviceFailed = true;
+                }
+
+                try {
+                    const ram = await removeAllRamDisks();
+                    const ramData = ram?.data as { status?: string; error?: string } | undefined;
+                    const ramError = String(ram?.error ?? ramData?.error ?? "");
+                    ramWasAbsent = /not installed|no ram disks|none found/i.test(ramError)
+                        || /not installed|no ram disks|none found/i.test(String(ramData?.error ?? ""));
+                    ramFailed = (!ram?.success && !ramWasAbsent)
+                        || (ramData?.status === "error" && !ramWasAbsent);
+                } catch {
+                    ramFailed = true;
+                }
+            } finally {
+                // Even a partial service outcome can have changed several
+                // drives. Refresh the status view before returning control.
+                try { await refreshVault(true); } catch { /* fresh status is best-effort */ }
+                setLoadingAction(null);
             }
 
-            const ram = await removeAllRamDisks();
-            const ramData = ram?.data as { status?: string; error?: string } | undefined;
-            const ramError = String(ram?.error ?? ramData?.error ?? "");
-            if (!ram?.success && !/not installed|no ram disks|none found/i.test(ramError)) {
-                throw new Error(ramError || "Failed to dismount RAM disks.");
+            const encryptedSummary = authorized
+                ? `Encrypted volumes: ${authorized.dismounted} dismounted, ${authorized.denied} not authorized, ${authorized.failed} failed.`
+                : "Encrypted volumes: the result could not be confirmed.";
+            const ramSummary = ramFailed
+                ? "RAM disks: dismount failed."
+                : ramWasAbsent
+                    ? "RAM disks: none were available."
+                    : "RAM disks: dismount request completed.";
+
+            if (serviceFailed || ramFailed || (authorized?.failed ?? 0) > 0) {
+                showError(`Dismount incomplete. ${encryptedSummary} ${ramSummary} Any item not confirmed dismounted may still be mounted.`, undefined, { kind: "notification" });
+            } else if ((authorized?.denied ?? 0) > 0) {
+                showWarning(`Partial dismount. ${encryptedSummary} Volumes this account is not authorized to close were left mounted. ${ramSummary}`, undefined, { kind: "notification" });
+            } else {
+                showSuccess(`${encryptedSummary} ${ramSummary}`, 5000, { kind: "notification" });
             }
-            if (ramData?.status === "error" && !/not installed|no ram disks|none found/i.test(String(ramData.error ?? ""))) {
-                throw new Error(ramData.error || "Failed to dismount RAM disks.");
-            }
-        });
-    }, [canUse, dismountAuthorizedVaults, handleAction, removeAllRamDisks]);
+        })();
+    }, [canUse, dismountAuthorizedVaults, refreshVault, removeAllRamDisks]);
 
     // The tray action intentionally routes through this same handler instead
     // of maintaining a second native dismount implementation. This keeps the

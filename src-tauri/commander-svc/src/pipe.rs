@@ -652,7 +652,6 @@ async fn dispatch_verb(
             vault_mount,
             args,
             peer,
-            caller_is_administrator,
         ),
         "svc.vault.dismount_personal" => handle_personal_vault_dismount(
             request_id,
@@ -672,14 +671,9 @@ async fn dispatch_verb(
         ),
         "svc.vault.list_authorized" => {
             if args.get("personal").is_some() {
-                handle_personal_vault_list(vault_mount, &args, peer)
+                handle_personal_vault_list(vault_mount, &args, peer, caller_is_administrator)
             } else {
-                handle_vault_list_authorized(
-                    vault_access,
-                    vault_mount,
-                    peer,
-                    caller_is_administrator,
-                )
+                handle_vault_list_authorized(vault_access, vault_mount, peer)
             }
         }
         "svc.vault.capabilities" => {
@@ -1632,6 +1626,9 @@ async fn handle_personal_vault_mount(
         ));
     }
     let mut request = parse_personal_mount_request(&mut args)?;
+    let requested_read_only = request.read_only;
+    let requested_removable = request.removable;
+    let requested_hidden_protection = request.hidden_protection_password.is_some();
     let Some(peer) = peer else {
         zeroize_personal_mount(&mut request);
         return Err(VerbError::new(
@@ -1752,6 +1749,9 @@ async fn handle_personal_vault_mount(
         "drive": drive_letter,
         "internalDrive": internal_drive,
         "scope": record.scope,
+        "readOnly": requested_read_only,
+        "removable": requested_removable,
+        "hiddenProtection": requested_hidden_protection,
         "aclAttested": acl_attested,
     }))
 }
@@ -2185,7 +2185,6 @@ fn handle_vault_unmount(
     vault_mount: &VaultMountBroker,
     args: serde_json::Value,
     peer: Option<&AuthenticatedPipePeer>,
-    caller_is_administrator: bool,
 ) -> Result<serde_json::Value, VerbError> {
     let started = std::time::Instant::now();
     let request: wincmd_shared::vault_access::VaultUnmountRequest = serde_json::from_value(args)
@@ -2200,10 +2199,14 @@ fn handle_vault_unmount(
             );
             VerbError::new("vault_validation_failed", "unmount request is invalid")
         })?;
-    let result = if let Some(peer) = peer.filter(|_| caller_is_administrator) {
+    let result = if let Some(peer) = peer
+        .filter(|peer| !peer.caller_sid().is_empty() && peer_has_active_interactive_session(peer))
+    {
         // Authorization and the driver action share the broker gate. A group
         // or policy edit cannot slip between the current-token check and the
-        // actual dismount.
+        // actual dismount. Fleet membership, including a normal user's
+        // current Shared grant, is the authority; local administrator status
+        // is deliberately not an override for a Fleet policy.
         vault_mount.with_exclusive_operation(|| {
             let authorization = crate::vault_access::authorize_dismount_for_token(
                 vault_access,
@@ -2273,6 +2276,7 @@ fn handle_personal_vault_list(
     vault_mount: &VaultMountBroker,
     args: &serde_json::Value,
     peer: Option<&AuthenticatedPipePeer>,
+    caller_is_administrator: bool,
 ) -> Result<serde_json::Value, VerbError> {
     if !valid_personal_mount_query(args) {
         return Err(VerbError::new(
@@ -2282,7 +2286,11 @@ fn handle_personal_vault_list(
     }
     let peer = require_personal_mount_peer(peer)?;
     let mounts = vault_mount
-        .personal_mounts_for_caller(peer.session_id(), peer.caller_sid())
+        .personal_mounts_for_caller(
+            peer.session_id(),
+            peer.caller_sid(),
+            caller_is_administrator,
+        )
         .map_err(|reason| {
             VerbError::new(
                 VaultMountBroker::personal_mount_failure_code(reason),
@@ -2366,9 +2374,6 @@ fn handle_vault_dismount_authorized_volumes(
         peer.caller_sid(),
         caller_is_administrator,
         |entry_id| {
-            if !caller_is_administrator {
-                return None;
-            }
             crate::vault_access::authorize_dismount_for_token(vault_access, entry_id, peer.token())
                 .presentation
         },
@@ -2385,41 +2390,30 @@ fn handle_vault_list_authorized(
     vault_access: &VaultAccessStore,
     vault_mount: &VaultMountBroker,
     peer: Option<&AuthenticatedPipePeer>,
-    caller_is_administrator: bool,
 ) -> Result<serde_json::Value, VerbError> {
+    let peer = require_personal_mount_peer(peer)?;
     let entries: Vec<wincmd_shared::vault_access::VaultAuthorizedEntry> = vault_access
         .entry_summaries()
         .into_iter()
         .filter_map(|(entry_id, label, container_kind)| {
-            // Fleet policy is an administrator-only control surface. A
-            // non-administrator who is in a policy group may use the already
-            // mounted drive through its Windows ACL, but cannot discover,
-            // mount, or close the policy Vault through Secure Storage.
-            if !caller_is_administrator {
+            // Secure Storage exposes only the caller's currently authorized
+            // Fleet mounts. Group membership, not local-admin status, grants
+            // visibility for Shared mounts; Private mounts remain owner-only
+            // through the policy-store check below.
+            let authorization = crate::vault_access::authorize_mount_for_token(
+                vault_access,
+                &entry_id,
+                peer.token(),
+            );
+            let dismount_authorization = crate::vault_access::authorize_dismount_for_token(
+                vault_access,
+                &entry_id,
+                peer.token(),
+            );
+            if !authorization.allowed || !dismount_authorization.allowed {
                 return None;
             }
-            let authorization = peer
-                .map(|peer| {
-                    crate::vault_access::authorize_mount_for_token(
-                        vault_access,
-                        &entry_id,
-                        peer.token(),
-                    )
-                })
-                .unwrap_or_else(vault_authorization_denied);
-            if !authorization.allowed {
-                return None;
-            }
-            let (mount_state, drive_letter) = vault_mount.projection(&entry_id);
-            let can_dismount = caller_is_administrator
-                && peer.is_some_and(|peer| {
-                    crate::vault_access::authorize_dismount_for_token(
-                        vault_access,
-                        &entry_id,
-                        peer.token(),
-                    )
-                    .allowed
-                });
+            let (mount_state, drive_letter, internal_drive) = vault_mount.projection(&entry_id);
             Some(wincmd_shared::vault_access::VaultAuthorizedEntry {
                 entry_id,
                 label,
@@ -2428,7 +2422,8 @@ fn handle_vault_list_authorized(
                 container_kind,
                 mount_state,
                 drive_letter,
-                can_dismount,
+                internal_drive,
+                can_dismount: true,
             })
         })
         .collect();
@@ -3610,13 +3605,13 @@ mod tests {
     fn personal_file_create_target_keeps_the_existing_absolute_path_contract() {
         let args = serde_json::json!({
             "TargetKind": "file",
-            "Path": r"C:\Users\Parth\vault.hc",
+            "Path": r"C:\Users\fixture\vault.hc",
         });
         let target = parse_personal_vault_create_target(&args).expect("file target is valid");
         assert!(matches!(
             target,
             PersonalVaultCreateTarget::File { ref path }
-                if path == r"C:\Users\Parth\vault.hc"
+                if path == r"C:\Users\fixture\vault.hc"
         ));
     }
 

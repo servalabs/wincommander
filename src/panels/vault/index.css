@@ -772,6 +772,27 @@
   background: var(--color-bg-tertiary);
 }
 
+.mount-visibility-setting {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 12px 0 16px;
+}
+
+.mount-visibility-setting__label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--color-text-muted);
+}
+
+.mount-visibility-setting__hint {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--color-text-muted);
+}
+
 .mount-dialog-footer {
   display: flex;
   flex: 0 0 auto;

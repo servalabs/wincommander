@@ -4,7 +4,8 @@ import type {
   AccessGroupReconcileRequest, AccessGroupReconcileResponse, VaultAccessDirectory,
   VaultSaveAccessDirectoryResponse,
 } from "@/panels/fleet/accessControlTypes";
-import type { VaultAccessCapabilities, VaultAuthorizedDismountSummary, VaultAuthorizedEntry, VaultMountEntryResult, VaultVolumeRole } from "@/panels/fleet/vaultAccessTypes";
+import type { PersonalVaultMountOptions, PersonalVaultMountedVolume, VaultAccessCapabilities, VaultAuthorizedDismountSummary, VaultAuthorizedEntry, VaultMountEntryResult, VaultVolumeRole } from "@/panels/fleet/vaultAccessTypes";
+import type { MountVolumeResult } from "@/hooks/useBackend";
 import { newDiagnosticOperationId } from "@/lib/diagnostics";
 
 /** Typed renderer boundary for the service-owned Vault Access policy. */
@@ -55,6 +56,37 @@ export default function useVaultAccess<Policy, Status>() {
     () => invoke<VaultAuthorizedDismountSummary>("vault_dismount_authorized_volumes"),
     [],
   );
+  const listPersonalMounts = useCallback(
+    () => invoke<PersonalVaultMountedVolume[]>("vault_list_personal_mounts"),
+    [],
+  );
+  const mountPersonalVolume = useCallback(
+    (options: PersonalVaultMountOptions, operationId = newDiagnosticOperationId("vault")) =>
+      invoke<MountVolumeResult>("vault_mount_personal", {
+        request: {
+          container_path: options.containerPath,
+          password: options.password,
+          volume_kind: options.volumeKind,
+          volume_role: options.volumeRole,
+          presentation: options.presentation,
+          preferred_letter: options.preferredLetter ?? null,
+          read_only: options.readOnly,
+          pim: options.pim ?? null,
+          keyfiles: options.keyfiles,
+          hidden_protection_password: options.hiddenProtectionPassword ?? null,
+          hidden_keyfiles: options.hiddenKeyfiles,
+          hidden_pim: options.hiddenPim ?? null,
+          removable: options.removable,
+        },
+        diagnosticOperationId: operationId,
+      }),
+    [],
+  );
+  const dismountPersonalMount = useCallback(
+    (internalDrive: number, operationId = newDiagnosticOperationId("vault")) =>
+      invoke<VaultMountEntryResult>("vault_dismount_personal_mount", { internalDrive, diagnosticOperationId: operationId }),
+    [],
+  );
   const getCapabilities = useCallback(
     () => invoke<VaultAccessCapabilities>("get_vault_access_capabilities"),
     [],
@@ -75,7 +107,7 @@ export default function useVaultAccess<Policy, Status>() {
   );
 
   return {
-    getPolicy, getStatus, applyPolicy, forgetPolicy, mountEntry, unmountEntry, listAuthorizedEntries, dismountAuthorizedVaults, getCapabilities,
+    getPolicy, getStatus, applyPolicy, forgetPolicy, mountEntry, unmountEntry, listAuthorizedEntries, dismountAuthorizedVaults, listPersonalMounts, mountPersonalVolume, dismountPersonalMount, getCapabilities,
     reconcileAccessGroups, getAccessDirectory, saveAccessDirectory,
   };
 }

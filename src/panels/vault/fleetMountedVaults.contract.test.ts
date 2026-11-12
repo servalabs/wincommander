@@ -5,7 +5,7 @@ declare const Bun: {
 };
 
 describe("Fleet Vault dismount surfaces", () => {
-  test("Secure Storage lists only mounted Vaults the service says this admin may close", async () => {
+  test("Secure Storage lists only mounted Vaults the service says this account may close", async () => {
     const [panel, section] = await Promise.all([
       Bun.file("src/panels/vault/index.tsx").text(),
       Bun.file("src/panels/vault/FleetMountedVaultsSection.tsx").text(),
@@ -14,6 +14,7 @@ describe("Fleet Vault dismount surfaces", () => {
     expect(panel).toContain("<FleetMountedVaultsSection");
     expect(section).toContain('entry.mount_state === "mounted"');
     expect(section).toContain("entry.can_dismount");
+    expect(section).toContain("not Windows administrator status alone");
     expect(section).toContain("listAuthorizedEntries()");
     expect(section).toContain("unmountEntry(entry.entry_id)");
     expect(section).not.toContain("dismountAllVolumes");
@@ -26,8 +27,12 @@ describe("Fleet Vault dismount surfaces", () => {
     ]);
 
     expect(hook).toContain('invoke<VaultAuthorizedDismountSummary>("vault_dismount_authorized_volumes")');
+    expect(hook).toContain('invoke<PersonalVaultMountedVolume[]>("vault_list_personal_mounts")');
+    expect(hook).toContain('"vault_dismount_personal_mount", { internalDrive, diagnosticOperationId: operationId }');
     expect(sidebar).toContain("await dismountAuthorizedVaults()");
     expect(sidebar).not.toContain("dismountAllVolumes(true)");
-    expect(sidebar).toContain("authorized.denied > 0 || authorized.failed > 0");
+    expect(sidebar).toContain("Partial dismount.");
+    expect(sidebar).toContain("finally {");
+    expect(sidebar).toContain("await refreshVault(true)");
   });
 });

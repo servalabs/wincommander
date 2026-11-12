@@ -477,6 +477,7 @@ pub enum VaultMountState {
 pub enum VaultMountReason {
     NotAuthorized,
     InvalidRequest,
+    ContainerAlreadyMounted,
     BrokerUnavailable,
     BrokerRejected,
     BrokerIdentityRejected,
@@ -495,9 +496,10 @@ pub enum VaultMountReason {
 }
 
 impl VaultMountReason {
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::NotAuthorized,
         Self::InvalidRequest,
+        Self::ContainerAlreadyMounted,
         Self::BrokerUnavailable,
         Self::BrokerRejected,
         Self::BrokerIdentityRejected,
@@ -515,9 +517,10 @@ impl VaultMountReason {
         Self::DismountFailed,
     ];
 
-    pub const ALL_WIRE_VALUES: [&'static str; 17] = [
+    pub const ALL_WIRE_VALUES: [&'static str; 18] = [
         "not_authorized",
         "invalid_request",
+        "container_already_mounted",
         "broker_unavailable",
         "broker_rejected",
         "broker_identity_rejected",
@@ -539,6 +542,7 @@ impl VaultMountReason {
         match self {
             Self::NotAuthorized => "not_authorized",
             Self::InvalidRequest => "invalid_request",
+            Self::ContainerAlreadyMounted => "container_already_mounted",
             Self::BrokerUnavailable => "broker_unavailable",
             Self::BrokerRejected => "broker_rejected",
             Self::BrokerIdentityRejected => "broker_identity_rejected",
@@ -561,6 +565,7 @@ impl VaultMountReason {
         match value {
             "not_authorized" => Some(Self::NotAuthorized),
             "invalid_request" => Some(Self::InvalidRequest),
+            "container_already_mounted" => Some(Self::ContainerAlreadyMounted),
             "broker_unavailable" => Some(Self::BrokerUnavailable),
             "broker_rejected" => Some(Self::BrokerRejected),
             "broker_identity_rejected" => Some(Self::BrokerIdentityRejected),
@@ -591,9 +596,10 @@ pub struct VaultMountResult {
     pub reason: Option<VaultMountReason>,
 }
 
-/// Administrator projection for managed Fleet Vaults. It is deliberately not
-/// a policy view: a caller only receives entries its connected Windows token
-/// is authorized for, with no paths, grants, SIDs, ACLs, or other entries.
+/// Caller-filtered projection for managed Fleet Vault mounts. It is deliberately
+/// not a policy view: a caller only receives entries its connected Windows
+/// token is currently authorized to access and dismount, with no paths, grants,
+/// SIDs, ACLs, or other callers' entries.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VaultAuthorizedEntry {
@@ -605,9 +611,14 @@ pub struct VaultAuthorizedEntry {
     pub container_kind: VaultContainerKind,
     pub mount_state: VaultMountState,
     pub drive_letter: Option<String>,
-    /// Mount visibility and file access do not imply permission to close the
-    /// Fleet Vault. The service derives this from the current policy and the
-    /// caller's local-administrator status.
+    /// Service-owned driver slot used to correlate a visible engine row with
+    /// this caller-authorized mount without relying on a reused DOS letter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub internal_drive: Option<u8>,
+    /// The service derives this from the current Fleet policy and caller token:
+    /// any currently authorized Shared member may close a Shared mount, while
+    /// only the owner may close a Private mount. Local administrator status is
+    /// not an override for Fleet membership.
     #[serde(default)]
     pub can_dismount: bool,
 }

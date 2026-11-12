@@ -24,6 +24,11 @@ import './index.css';
 import DriveLetterPicker from "./DriveLetterPicker";
 import { mountPasswordSelectedVolume } from "./mountAutoMode";
 import FleetMountedVaultsSection from "./FleetMountedVaultsSection";
+import MountScopeSelector from "./MountScopeSelector";
+import { resolveEffectiveMountScope, type MountScopePreference } from "./mountScope";
+import useVaultAccess from "@/hooks/useVaultAccess";
+import type { PersonalVaultMountedVolume, VaultAuthorizedEntry } from "@/panels/fleet/vaultAccessTypes";
+import { secureStorageDismountTarget, secureStorageMountIsAuthorized } from "./mountDismountTarget";
 
 const validPim = (value: string) => !value || (Number.isInteger(Number(value)) && Number(value) >= 1 && Number(value) <= 2_147_468);
 const MOUNT_ERROR_MAX_LENGTH = 300;
@@ -36,6 +41,9 @@ const boundedMountError = (error: unknown) => {
   }
   if (normalized.includes("vault_engine_drive_letter_unavailable")) {
     return "That drive letter is already in use. Choose a free drive letter, then try again.";
+  }
+  if (normalized.includes("vault_container_already_mounted")) {
+    return "A container with this filename is already mounted. Dismount the existing container before mounting another file with the same name.";
   }
   if (normalized.includes("vault_acl_apply_failed") || normalized.includes("vault_acl_readback_failed")) {
     return "The installed WinCommander service still requires an NTFS permission check for this personal mount, so it safely unmounted the volume. Repair or update the WinCommander service, then mount it again from Secure Storage.";
@@ -94,6 +102,7 @@ const vaultMountErrorCode = (error: unknown) => {
   const message = error instanceof Error ? error.message : "";
   if (message.includes("vault_engine_unlock_failed")) return "VLT.UNLOCK.FAILED";
   if (message.includes("vault_engine_drive_letter_unavailable")) return "VLT.DRIVE_LETTER.UNAVAILABLE";
+  if (message.includes("vault_container_already_mounted")) return "VLT.CONTAINER.ALREADY_MOUNTED";
   if (message.includes("vault_acl_")) return "VLT.ACL.FAILED";
   if (message.includes("vault_policy_managed")) return "VLT.POLICY.MANAGED";
   if (message.includes("vault_policy_identity_changed")) return "VLT.POLICY.IDENTITY_CHANGED";
@@ -149,6 +158,8 @@ interface EncryptedVolumesTabProps {
 // owns them.
 function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: EncryptedVolumesTabProps) {
   const { theme } = useTheme();
+  const { appSettings, patchAppSettings, systemInfo } = useAppState();
+  const { listPersonalMounts, listAuthorizedEntries, mountPersonalVolume } = useVaultAccess<never, never>();
   const [mountDialogOpen, setMountDialogOpen] = useState(false);
   const [mountPath, setMountPath] = useState("");
   const [mountLetter, setMountLetter] = useState("Y");
@@ -156,6 +167,8 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
   const [mountKeyfile, setMountKeyfile] = useState("");
   const [mountPim, setMountPim] = useState("");
   const [mountReadOnly, setMountReadOnly] = useState(false);
+  const mountScopePreference: MountScopePreference = appSettings?.app?.vault?.mountScope ?? "auto";
+  const effectiveMountScope = resolveEffectiveMountScope(mountScopePreference, systemInfo?.osName);
   const [mountRemovable, setMountRemovable] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [createWizardOpen, setCreateWizardOpen] = useState(false);
@@ -166,9 +179,12 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
   const [mountedVolume, setMountedVolume] = useState<MountVolumeResult | null>(null);
   const [openingMountedVolume, setOpeningMountedVolume] = useState(false);
   const [mountFailure, setMountFailure] = useState("");
+  const [personalMounts, setPersonalMounts] = useState<PersonalVaultMountedVolume[]>([]);
+  const [fleetEntries, setFleetEntries] = useState<VaultAuthorizedEntry[]>([]);
+  const [mountAuthoritiesLoading, setMountAuthoritiesLoading] = useState(true);
+  const [mountAuthoritiesUnavailable, setMountAuthoritiesUnavailable] = useState(false);
 
   const {
-    mountVolume,
     verifyVaultDrive,
     openEncryptionVolume,
     getAvailableDriveLetters,
@@ -176,8 +192,34 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
     error
   } = useBackend();
   const { canUse } = useEntitlements();
-  const accessibleVolumes = volumes.filter((volume) => volume.accessible !== false);
-  const unavailableVolumes = volumes.filter((volume) => volume.accessible === false);
+  const serviceAuthorityReady = !mountAuthoritiesLoading && !mountAuthoritiesUnavailable;
+  const visibleVolumes = serviceAuthorityReady
+    ? volumes.filter((volume) => secureStorageMountIsAuthorized(volume, personalMounts, fleetEntries))
+    : [];
+  const accessibleVolumes = visibleVolumes.filter((volume) => volume.accessible !== false);
+  const unavailableVolumes = visibleVolumes.filter((volume) => volume.accessible === false);
+  const mountedVolumeSignature = volumes.map((volume) => `${volume.letter}:${volume.internalDrive ?? ""}`).join("|");
+
+  const refreshMountAuthorities = useCallback(async () => {
+    setMountAuthoritiesLoading(true);
+    try {
+      const [personal, fleet] = await Promise.all([listPersonalMounts(), listAuthorizedEntries()]);
+      setPersonalMounts(personal);
+      setFleetEntries(fleet);
+      setMountAuthoritiesUnavailable(false);
+    } catch {
+      // No service proof means no row is safe to reveal or act on.
+      setPersonalMounts([]);
+      setFleetEntries([]);
+      setMountAuthoritiesUnavailable(true);
+    } finally {
+      setMountAuthoritiesLoading(false);
+    }
+  }, [listAuthorizedEntries, listPersonalMounts]);
+
+  useEffect(() => {
+    void refreshMountAuthorities();
+  }, [refreshMountAuthorities, mountedVolumeSignature]);
 
   const [mounting, setMounting] = useState(false);
   const canMount = Boolean(
@@ -300,7 +342,33 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
       if (letters.success && letters.data && !letters.data.letters.includes(mountLetter)) {
         throw new Error(`Drive ${mountLetter}: is already in use. Dismount it first or choose a free drive letter.`);
       }
-      const result = await mountPasswordSelectedVolume(mountVolume, {
+      const result = await mountPasswordSelectedVolume(async (params) => {
+        try {
+          const data = await mountPersonalVolume({
+            containerPath: params.volumePath,
+            password: params.password,
+            volumeKind: params.volumeKind === "dual" ? "dual" : "standard",
+            // The shared service contract uses Outer for a standard volume;
+            // the service maps (standard, outer) to the engine's standard mode.
+            volumeRole: params.volumeRole === "hidden" ? "hidden" : "outer",
+            presentation: params.scope === "per-user" ? "per-user" : "machine",
+            preferredLetter: params.driveLetter,
+            readOnly: params.readOnly ?? false,
+            pim: params.pim ? Number(params.pim) : undefined,
+            keyfiles: params.keyfiles ?? [],
+            hiddenProtectionPassword: params.protectHidden ? params.hiddenPassword : undefined,
+            hiddenKeyfiles: params.hiddenKeyfiles ?? [],
+            hiddenPim: params.hiddenPim ? Number(params.hiddenPim) : undefined,
+            removable: params.removable ?? false,
+          });
+          return { success: true, data };
+        } catch (error) {
+          return {
+            success: false,
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+      }, {
         volumePath: mountPath,
         driveLetter: mountLetter,
         password: mountPassword,
@@ -312,16 +380,17 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
         removable: mountRemovable,
         protectHidden: false,
         hiddenKeyfiles: [],
-        scope: "machine",
-        hardenAcl: true,
+        scope: effectiveMountScope,
       });
       setMountPassword("");
       if (!result.success || !result.data) throw new Error(result.error || "Failed to mount volume");
-      if (result.data.scope !== "machine") {
-        throw new Error("The encrypted volume was not confirmed as machine-wide. Update both WinCommander and Pro before retrying.");
+      if (result.data.scope !== effectiveMountScope) {
+        const requestedScope = effectiveMountScope === "machine" ? "This PC" : "This session";
+        throw new Error(`The encrypted volume was not confirmed as ${requestedScope}. Update both WinCommander and Pro before retrying.`);
       }
       await verifyVaultDrive(result.data.drive);
       const refreshed = await refreshVault(true);
+      await refreshMountAuthorities();
       const isVisibleInThisSession = refreshed?.volumes?.some((volume) =>
         volume.letter === result.data?.drive
         && volume.internalDrive === result.data?.internalDrive,
@@ -347,7 +416,15 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
       setMountPassword("");
       setMounting(false);
     }
-  }, [getAvailableDriveLetters, mountKeyfile, mountLetter, mountPassword, mountPim, mountPath, mountReadOnly, mountRemovable, mountVolume, refreshVault, resetMountForm, verifyVaultDrive]);
+  }, [effectiveMountScope, getAvailableDriveLetters, mountKeyfile, mountLetter, mountPassword, mountPim, mountPath, mountPersonalVolume, mountReadOnly, mountRemovable, refreshMountAuthorities, refreshVault, resetMountForm, verifyVaultDrive]);
+
+  const updateMountScopePreference = useCallback(async (scope: MountScopePreference) => {
+    try {
+      await patchAppSettings({ app: { vault: { mountScope: scope } } });
+    } catch {
+      showError("The mount visibility preference could not be saved.");
+    }
+  }, [patchAppSettings]);
 
   const handleOpenMountedVolume = useCallback(async () => {
     if (!mountedVolume) return;
@@ -421,7 +498,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
                 icon="refresh"
                 minimal
                 small
-                onClick={() => refreshVault(true)}
+                onClick={() => { void Promise.all([refreshVault(true), refreshMountAuthorities()]); }}
                 aria-label="Refresh encryption volume status"
               />
             </Tooltip>
@@ -458,13 +535,18 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
           </TierGate>
         </div>
 
-        <div className={`vault-content ${volumes.length === 0 ? "vault-content--empty" : ""}`}>
-          {initialLoading ? (
+        <div className={`vault-content ${visibleVolumes.length === 0 ? "vault-content--empty" : ""}`}>
+          {initialLoading || mountAuthoritiesLoading ? (
             <div className="empty-state" role="status" aria-busy="true">
               <Icon icon="refresh" className="empty-icon" size={32} />
-              <p>Checking encrypted volumes…</p>
+              <p>Checking mounted-volume access…</p>
             </div>
-          ) : volumes.length > 0 ? (
+          ) : mountAuthoritiesUnavailable ? (
+            <div className="empty-state" role="alert">
+              <Icon icon="clean" className="empty-icon" size={32} />
+              <p>Mounted volumes are hidden until the secure service can verify access.</p>
+            </div>
+          ) : visibleVolumes.length > 0 ? (
             <table className="volumes-table wc-table wc-table--striped">
               <thead>
                 <tr>
@@ -482,7 +564,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
                   reflow. MotionConfig in App.tsx handles reduced-motion. */}
               <tbody>
                 <AnimatePresence initial={false}>
-                  {volumes.map((vol: any, idx: number) => (
+                  {visibleVolumes.map((vol: any, idx: number) => (
                     <motion.tr
                       key={vol.letter}
                       initial={{ opacity: 0 }}
@@ -511,9 +593,12 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
                           letter={vol.letter}
                           path={vol.path}
                           type={vol.type}
-                          internalDrive={vol.internalDrive}
                           accessible={vol.accessible !== false}
-                          onDismounted={() => refreshVault(true)}
+                          dismountTarget={secureStorageDismountTarget(vol, personalMounts, fleetEntries)}
+                          dismountAuthorityLoading={mountAuthoritiesLoading}
+                          onDismounted={async () => {
+                            await Promise.all([refreshVault(true), refreshMountAuthorities()]);
+                          }}
                         />
                       </td>
                     </motion.tr>
@@ -524,7 +609,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
           ) : (
             <div className="empty-state">
               <Icon icon="clean" className="empty-icon" size={32} />
-              <p>No encrypted volumes mounted</p>
+              <p>No mounted encrypted volumes are available to this Windows account</p>
             </div>
           )}
         </div>
@@ -664,6 +749,18 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
             </FormGroup>
           )}
 
+          <div className="mount-visibility-setting">
+            <span className="mount-visibility-setting__label">Drive visibility</span>
+            <MountScopeSelector
+              id="secure-storage-mount-scope"
+              value={mountScopePreference}
+              onChange={(scope) => void updateMountScopePreference(scope)}
+            />
+            <p className="mount-visibility-setting__hint">
+              This mount will resolve to {effectiveMountScope === "machine" ? "This PC" : "This session"}. Drive visibility does not change file permissions; existing Windows permissions still decide who can read or write files.
+            </p>
+          </div>
+
           <FormGroup label="Drive Letter" labelFor="drive-letter">
             <DriveLetterPicker
               id="drive-letter"
@@ -671,6 +768,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
               onChange={setMountLetter}
               onKeyDown={handleMountFieldEnter}
               letters={availableLetters}
+              effectiveScope={effectiveMountScope}
             />
           </FormGroup>
 
@@ -740,11 +838,6 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
               <span>Removable media</span>
               <span className="quick-desc">Reports the mounted volume as removable.</span>
             </label>
-            <div className="quick-toggle quick-toggle--locked" aria-label="Machine-wide drive mapping enabled">
-              <Icon icon="lock" size={14} />
-              <span>Machine-wide drive mapping</span>
-              <span className="quick-desc">Visible to all users on this PC. Existing file permissions are preserved; restricted files stay restricted.</span>
-            </div>
           </div>
 
         </div>
@@ -781,9 +874,9 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
             {mountedVolume?.aclAttested ? (
               <p>Private Windows permissions were applied and verified for this encrypted volume.</p>
             ) : (
-              <p>This encrypted volume is mounted machine-wide. Existing file permissions are preserved; a writable mount does not override them.</p>
+              <p>{mountedVolume?.scope === "machine" ? "This drive is visible to every signed-in Windows account on this PC." : "This drive is visible only in your current Windows sign-in."} Existing file permissions are preserved; a writable mount does not override them.</p>
             )}
-            <p className="mount-result-dialog__note">Dismount it when you are finished. Signing out of the session that mounted it also closes this shared drive. Windows administrators can still manage this computer.</p>
+            <p className="mount-result-dialog__note">Dismount it when you are finished. Drive visibility is separate from permission to open or change files.</p>
           </div>
         </div>
         <div className="mount-dialog-footer">

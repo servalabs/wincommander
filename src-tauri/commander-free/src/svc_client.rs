@@ -129,14 +129,23 @@ pub async fn call_via(pipe_name: &str, feature_id: &str, args: Value) -> Result<
 async fn call_via_with_timeout(
     pipe_name: &str,
     feature_id: &str,
-    args: Value,
+    mut args: Value,
     request_timeout: std::time::Duration,
     diagnostic_operation_id: Option<String>,
 ) -> Result<Value, String> {
     use tokio::time::timeout;
 
     let (mut client, session_token) =
-        open_authenticated_service_session(pipe_name, feature_id).await?;
+        match open_authenticated_service_session(pipe_name, feature_id).await {
+            Ok(session) => session,
+            Err(error) => {
+                // A mount request may contain passwords and keyfile paths. If
+                // the authenticated pipe cannot be opened, scrub the payload
+                // instead of leaving those values in an ordinary JSON drop.
+                zeroize_json(&mut args);
+                return Err(error);
+            }
+        };
 
     let request_id = next_request_id();
     let mut request = wincmd_shared::Envelope::Request(wincmd_shared::Request {

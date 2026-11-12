@@ -83,7 +83,7 @@ export default function FleetMountedVaultsSection({ onDismounted }: Props) {
       }
     >
       <p className="vault-fleet-description">
-        Only Fleet Vaults this administrator may safely close are shown here. Dismounting uses the local security service and never affects another user’s private Vault.
+        Only mounted Fleet Vaults the local security service authorizes this Windows account to dismount are shown. Eligibility follows the saved policy and Vault ownership—not Windows administrator status alone—and another user’s private Vault is never affected.
       </p>
       {loading ? (
         <div className="vault-fleet-empty" role="status" aria-busy="true">

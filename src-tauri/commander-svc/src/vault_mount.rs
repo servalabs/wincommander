@@ -8,6 +8,7 @@
 #![cfg(windows)]
 
 use std::collections::{HashMap, HashSet};
+use std::path::Path as FsPath;
 use std::sync::Mutex;
 
 use sha2::{Digest, Sha256};
@@ -34,6 +35,10 @@ struct ActiveMount {
     #[serde(default)]
     personal: bool,
     container_identity: String,
+    // Ephemeral collision key. Do not add user filenames to the durable crash
+    // registry: recovery closes every old slot before accepting new mounts.
+    #[serde(skip)]
+    container_filename_key: String,
     access: wincmd_shared::vault_access::VaultAccess,
     mounted_at: u64,
     #[serde(default)]
@@ -336,6 +341,7 @@ impl VaultMountBroker {
             VaultMountReason::BrokerReplyRejected => "vault_broker_reply_rejected",
             VaultMountReason::BrokerPlanRejected => "vault_broker_plan_rejected",
             VaultMountReason::PresentationRejected => "vault_presentation_rejected",
+            VaultMountReason::ContainerAlreadyMounted => "vault_container_already_mounted",
             VaultMountReason::EntitlementDenied => "vault_entitlement_denied",
             VaultMountReason::DismountFailed => "vault_cleanup_failed",
         }
@@ -456,8 +462,8 @@ impl VaultMountBroker {
     }
 
     /// Mount an ordinary, unmanaged file without creating a durable owner
-    /// record. The identity-only key prevents different local accounts from
-    /// concurrently mounting the same writable container.
+    /// record. The mount ledger prevents different accounts/scopes from
+    /// concurrently opening the same normalized filename or stable file.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn mount_unmanaged_authorized_locked(
         &self,
@@ -504,9 +510,34 @@ impl VaultMountBroker {
             request.zeroize_secrets();
             return Err(VaultMountReason::NotAuthorized);
         }
+        if record.container_identity.is_empty() || record.container_identity.len() > 256 {
+            request.zeroize_secrets();
+            return Err(VaultMountReason::InvalidRequest);
+        }
+        let filename_key = match mount_filename_key(&record.container_path) {
+            Some(key) => key,
+            None => {
+                request.zeroize_secrets();
+                return Err(VaultMountReason::InvalidRequest);
+            }
+        };
         if !self.recovery_allows_entry(&entry_id, store) {
             request.zeroize_secrets();
             return Err(VaultMountReason::DismountFailed);
+        }
+        // The caller holds the exclusive mount operation gate. Check before
+        // any replacement/dismount path so a duplicate attempt cannot disturb
+        // the already-mounted container.
+        match self.active_container_conflict(&record.container_identity, &filename_key) {
+            Ok(true) => {
+                request.zeroize_secrets();
+                return Err(VaultMountReason::ContainerAlreadyMounted);
+            }
+            Ok(false) => {}
+            Err(reason) => {
+                request.zeroize_secrets();
+                return Err(reason);
+            }
         }
         let access = if request.read_only {
             wincmd_shared::vault_access::VaultAccess::Read
@@ -529,34 +560,10 @@ impl VaultMountBroker {
             request.zeroize_secrets();
             return Err(VaultMountReason::InvalidRequest);
         }
-        if let Some(existing) = self
-            .active
-            .lock()
-            .ok()
-            .and_then(|active| active.get(&entry_id).cloned())
-        {
-            if !same_mount_owner(&existing, session_id, caller_sid) {
-                request.zeroize_secrets();
-                return Err(VaultMountReason::NotAuthorized);
-            }
-            if self
-                .dismount_entry_locked_for_client(
-                    operation_id,
-                    store,
-                    &entry_id,
-                    Some(caller_token),
-                )
-                .state
-                != VaultMountState::Unmounted
-            {
-                request.zeroize_secrets();
-                return Err(VaultMountReason::DismountFailed);
-            }
-        }
         let has_capacity = self
             .active
             .lock()
-            .map(|active| active.contains_key(&entry_id) || active.len() < MAX_DURABLE_MOUNTS)
+            .map(|active| active.len() < MAX_DURABLE_MOUNTS)
             .unwrap_or(false);
         if !has_capacity {
             request.zeroize_secrets();
@@ -621,6 +628,7 @@ impl VaultMountBroker {
             policy_version: 1,
             personal: true,
             container_identity: record.container_identity.clone(),
+            container_filename_key: filename_key,
             access,
             mounted_at,
             // Unmanaged mounts preserve the existing filesystem permissions;
@@ -684,6 +692,25 @@ impl VaultMountBroker {
             zeroize_mount_secrets(password, hidden_protection_password);
             return denied(entry_id, VaultMountReason::NotAuthorized);
         };
+        let filename_key = match normalized_container_filename(&plan.container) {
+            Some(key) => key,
+            None => {
+                zeroize_mount_secrets(password, hidden_protection_password);
+                return failed(
+                    entry_id,
+                    Some(presentation),
+                    VaultMountReason::InvalidRequest,
+                );
+            }
+        };
+        if container_identity.is_empty() || container_identity.len() > 256 {
+            zeroize_mount_secrets(password, hidden_protection_password);
+            return failed(
+                entry_id,
+                Some(presentation),
+                VaultMountReason::InvalidRequest,
+            );
+        }
         let profile = match mount_profile(
             container_kind,
             volume_role,
@@ -710,35 +737,28 @@ impl VaultMountBroker {
             return denied(entry_id, VaultMountReason::NotAuthorized);
         }
         let caller_sid = caller_sid.to_owned();
-        if let Some(existing) = self
-            .active
-            .lock()
-            .ok()
-            .and_then(|active| active.get(entry_id).cloned())
-        {
-            // A second authorized session must never evict a per-user mount.
-            // Only the same authenticated user in the same session may remount.
-            if existing.session_id != session_id || existing.caller_sid != caller_sid {
-                zeroize_mount_secrets(password, hidden_protection_password);
-                return denied(entry_id, VaultMountReason::NotAuthorized);
-            }
-            if self
-                .dismount_entry_locked_for_client(operation_id, store, entry_id, Some(caller_token))
-                .state
-                != VaultMountState::Unmounted
-            {
+        // This check and the eventual driver mount are serialized by the
+        // service operation gate. Reject before a remount could close the
+        // existing slot, across Fleet/personal scope and all user identities.
+        match self.active_container_conflict(&container_identity, &filename_key) {
+            Ok(true) => {
                 zeroize_mount_secrets(password, hidden_protection_password);
                 return failed(
                     entry_id,
                     Some(presentation),
-                    VaultMountReason::DismountFailed,
+                    VaultMountReason::ContainerAlreadyMounted,
                 );
+            }
+            Ok(false) => {}
+            Err(reason) => {
+                zeroize_mount_secrets(password, hidden_protection_password);
+                return failed(entry_id, Some(presentation), reason);
             }
         }
         let has_capacity = self
             .active
             .lock()
-            .map(|active| active.contains_key(entry_id) || active.len() < MAX_DURABLE_MOUNTS)
+            .map(|active| active.len() < MAX_DURABLE_MOUNTS)
             .unwrap_or(false);
         if !has_capacity {
             zeroize_mount_secrets(password, hidden_protection_password);
@@ -872,6 +892,7 @@ impl VaultMountBroker {
                     policy_version,
                     personal: false,
                     container_identity,
+                    container_filename_key: filename_key,
                     access: effective_access,
                     mounted_at,
                     cleanup_required: false,
@@ -1009,6 +1030,30 @@ impl VaultMountBroker {
         }
     }
 
+    /// Returns true when an active mounted file container has either the same
+    /// Windows-normalized filename or the same stable file identity. The
+    /// operation gate must remain held through the following mount call.
+    fn active_container_conflict(
+        &self,
+        container_identity: &str,
+        filename_key: &str,
+    ) -> Result<bool, VaultMountReason> {
+        let active = self
+            .active
+            .lock()
+            .map_err(|_| VaultMountReason::DismountFailed)?;
+        Ok(active.values().any(|mount| {
+            (!container_identity.is_empty()
+                && !mount.container_identity.is_empty()
+                && mount
+                    .container_identity
+                    .eq_ignore_ascii_case(container_identity))
+                || (!filename_key.is_empty()
+                    && !mount.container_filename_key.is_empty()
+                    && mount.container_filename_key == filename_key)
+        }))
+    }
+
     /// An already-authorized Fleet member can close a policy-managed mount
     /// opened in another user's Windows session.  The SYSTEM recovery broker
     /// receives only the service-owned driver slot, never a path, user token,
@@ -1091,19 +1136,11 @@ impl VaultMountBroker {
             if active.presentation != request.presentation {
                 return denied(request.entry_id, VaultMountReason::NotAuthorized);
             }
-            // A per-user Fleet policy is private. Its owner may recover a
-            // mount after reconnecting in another interactive session, but
-            // no other policy grant (including another administrator) can
-            // close it. The pipe has already verified current ownership.
-            if active.presentation == VaultPresentation::PerUser
-                && active.caller_sid != request.caller_sid
-            {
-                return denied(request.entry_id, VaultMountReason::NotAuthorized);
-            }
-            // The pipe has already rechecked the caller against this Fleet
-            // policy. An authorized member may close a machine-shared mount even
-            // when another Windows session opened it; use recovery so no
-            // foreign session token is ever reused.
+            // The pipe has already rechecked the caller against the current
+            // Fleet policy. For Private Vaults that check admits only the
+            // owner; the owner must still be able to close a slot another
+            // authorized principal opened. Use recovery for any foreign
+            // session so no other user's token is ever reused.
             if !same_mount_owner(&active, request.caller_session, request.caller_sid) {
                 return self.dismount_entry_locked_for_authorized_member(store, request.entry_id);
             }
@@ -1176,9 +1213,7 @@ impl VaultMountBroker {
                     reason: None,
                 };
             };
-            let owns_mount = mount.caller_sid == caller_sid
-                && (mount.presentation == VaultPresentation::Machine
-                    || mount.session_id == caller_session);
+            let owns_mount = personal_mount_owned_by(&mount, caller_session, caller_sid);
             if caller_sid.is_empty()
                 || (mount.presentation == VaultPresentation::PerUser && caller_session == 0)
                 || (!owns_mount && !caller_is_administrator)
@@ -1201,19 +1236,26 @@ impl VaultMountBroker {
         })
     }
 
-    pub fn projection(&self, entry_id: &str) -> (VaultMountState, Option<String>) {
+    pub fn projection(&self, entry_id: &str) -> (VaultMountState, Option<String>, Option<u8>) {
         self.active
             .lock()
             .ok()
             .and_then(|active| active.get(entry_id).cloned())
-            .map(|mount| (VaultMountState::Mounted, Some(mount.drive_letter)))
-            .unwrap_or((VaultMountState::Unmounted, None))
+            .map(|mount| {
+                (
+                    VaultMountState::Mounted,
+                    Some(mount.drive_letter),
+                    Some(mount.internal_drive),
+                )
+            })
+            .unwrap_or((VaultMountState::Unmounted, None, None))
     }
 
     pub(crate) fn personal_mounts_for_caller(
         &self,
         session_id: u32,
         caller_sid: &str,
+        caller_is_administrator: bool,
     ) -> Result<Vec<PersonalVaultMountedVolume>, VaultMountReason> {
         if session_id == 0 || caller_sid.is_empty() {
             return Err(VaultMountReason::NotAuthorized);
@@ -1231,7 +1273,11 @@ impl VaultMountBroker {
             .map_err(|_| VaultMountReason::BrokerRejected)?;
         let mut mounts = active
             .values()
-            .filter(|mount| mount.personal && same_mount_owner(mount, session_id, caller_sid))
+            .filter(|mount| {
+                mount.personal
+                    && (caller_is_administrator
+                        || personal_mount_owned_by(mount, session_id, caller_sid))
+            })
             .map(|mount| PersonalVaultMountedVolume {
                 drive_letter: mount.drive_letter.clone(),
                 internal_drive: mount.internal_drive,
@@ -1283,7 +1329,7 @@ impl VaultMountBroker {
                     let Some(active) = active else {
                         continue;
                     };
-                    let owns_mount = same_mount_owner(&active, caller_session, caller_sid);
+                    let owns_mount = personal_mount_owned_by(&active, caller_session, caller_sid);
                     if caller_sid.is_empty()
                         || (active.presentation == VaultPresentation::PerUser
                             && caller_session == 0)
@@ -1302,7 +1348,7 @@ impl VaultMountBroker {
                             Some(caller_token),
                         )
                     }
-                } else if caller_is_administrator {
+                } else {
                     match authorize_fleet(&entry_id) {
                         Some(presentation) => self.dismount_authorized_locked(
                             store,
@@ -1317,8 +1363,6 @@ impl VaultMountBroker {
                         ),
                         None => denied(&entry_id, VaultMountReason::NotAuthorized),
                     }
-                } else {
-                    denied(&entry_id, VaultMountReason::NotAuthorized)
                 };
                 match result.state {
                     VaultMountState::Unmounted => response.dismounted += 1,
@@ -1560,7 +1604,31 @@ fn valid_durable_mount(entry_id: &str, mount: &ActiveMount) -> bool {
         && mount.policy_version > 0
         && !mount.container_identity.is_empty()
         && mount.container_identity.len() <= 256
+        && mount.container_filename_key.len() <= 1024
         && mount.mounted_at > 0
+}
+
+/// Returns a case-insensitive Windows filename key, including its extension.
+/// Win32 treats trailing spaces and periods as aliases for the same ordinary
+/// name, so strip them before lower-casing. Stable file identity remains a
+/// separate collision check for hard links and other path aliases.
+fn normalized_container_filename(path: &FsPath) -> Option<String> {
+    let filename = path.file_name()?.to_string_lossy();
+    let filename = filename.trim_end_matches(|character| character == ' ' || character == '.');
+    if filename.is_empty() {
+        return None;
+    }
+    Some(filename.chars().flat_map(char::to_lowercase).collect())
+}
+
+/// Basename collisions apply only to file containers. A device target has no
+/// filename; its normalized device identity is the sole duplicate key.
+fn mount_filename_key(path: &str) -> Option<String> {
+    if wincmd_shared::vault_access::is_supported_vault_device_path(path) {
+        Some(String::new())
+    } else {
+        normalized_container_filename(FsPath::new(path))
+    }
 }
 
 #[cfg(test)]
@@ -1755,6 +1823,11 @@ fn same_mount_owner(active: &ActiveMount, session_id: u32, caller_sid: &str) -> 
     active.session_id == session_id && active.caller_sid == caller_sid
 }
 
+fn personal_mount_owned_by(active: &ActiveMount, session_id: u32, caller_sid: &str) -> bool {
+    active.caller_sid == caller_sid
+        && (active.presentation == VaultPresentation::Machine || active.session_id == session_id)
+}
+
 fn denied(entry_id: &str, reason: VaultMountReason) -> VaultMountResult {
     VaultMountResult {
         entry_id: entry_id.to_owned(),
@@ -1874,13 +1947,14 @@ mod tests {
             request: &mut InternalMountRequest,
         ) -> Result<InternalMountReply, VaultMountReason> {
             let mut events = self.0.lock().unwrap();
+            let slot = events.mounted.min(11) as u8;
             events.mounted += 1;
             events
                 .mount_options
                 .push((request.presentation, request.read_only, request.personal));
             Ok(InternalMountReply {
-                drive_letter: "P:".into(),
-                internal_drive: 12,
+                drive_letter: format!("{}:", char::from(b'P' + slot)),
+                internal_drive: 12 + slot,
                 acl_attested: true,
             })
         }
@@ -1969,6 +2043,210 @@ mod tests {
         }
     }
 
+    #[test]
+    fn container_filename_key_is_case_insensitive_and_keeps_extension() {
+        assert_eq!(
+            normalized_container_filename(Path::new(r"C:\Vault\Sales.HC")),
+            normalized_container_filename(Path::new(r"D:\Other\sales.hc")),
+        );
+        assert_eq!(
+            normalized_container_filename(Path::new(r"C:\Vault\sales.hc.")),
+            normalized_container_filename(Path::new(r"D:\Other\SALES.HC")),
+        );
+        assert_ne!(
+            normalized_container_filename(Path::new(r"C:\Vault\sales")),
+            normalized_container_filename(Path::new(r"C:\Vault\sales.hc")),
+        );
+    }
+
+    #[test]
+    fn partition_mounts_do_not_use_file_basename_collision_rules() {
+        assert_eq!(
+            mount_filename_key(r"\Device\Harddisk0\Partition1"),
+            Some(String::new())
+        );
+        assert_eq!(
+            mount_filename_key(r"\Device\Harddisk1\Partition1"),
+            Some(String::new())
+        );
+        assert_eq!(
+            mount_filename_key(r"C:\Vault\sales.hc"),
+            Some("sales.hc".into())
+        );
+    }
+
+    #[test]
+    fn durable_mount_schema_does_not_record_the_ephemeral_filename_key() {
+        let mut mount = active_mount_for_owner(7, "S-1-5-21-owner");
+        mount.container_filename_key = "private-container-name.hc".into();
+        let serialized = serde_json::to_value(&mount).unwrap();
+        assert!(serialized.get("container_filename_key").is_none());
+        let decoded: ActiveMount = serde_json::from_value(serialized).unwrap();
+        assert!(decoded.container_filename_key.is_empty());
+    }
+
+    #[test]
+    fn mount_rejects_same_filename_or_stable_identity_without_disturbing_active_slot() {
+        for (incoming_path, incoming_identity) in [
+            // Different folders, users, Fleet/personal scopes, but the same
+            // case-insensitive basename including extension.
+            (r"D:\Vaults\SALES.HC", "v:1:i:100"),
+            // Different names alias the same underlying file identity.
+            (r"D:\Vaults\alias.hc", "v:1:i:99"),
+        ] {
+            let store = mount_store(
+                Arc::new(Mutex::new(HashMap::new())),
+                Arc::new(AtomicBool::new(false)),
+            );
+            let events = Arc::new(Mutex::new(BrokerEvents::default()));
+            let broker = VaultMountBroker::with_broker(Box::new(MountBroker(events.clone())));
+            let mut active = active_mount_for_owner(19, "S-1-5-21-fleet-owner");
+            active.personal = false;
+            active.presentation = VaultPresentation::Machine;
+            active.container_identity = "v:1:i:99".into();
+            active.container_filename_key = "sales.hc".into();
+            assert!(broker.retain_cleanup_mount(&store, "fleet-sales", active));
+
+            let mut record = personal_record();
+            record.owner_sid = "S-1-5-21-personal-owner".into();
+            record.container_path = incoming_path.into();
+            record.container_identity = incoming_identity.into();
+            let mut request = personal_request();
+            request.container_path = record.container_path.clone();
+
+            assert_eq!(
+                broker.mount_personal_authorized(
+                    50,
+                    &store,
+                    &record,
+                    &mut request,
+                    std::ptr::null_mut(),
+                    22,
+                    "S-1-5-21-personal-owner",
+                    (0, 0),
+                ),
+                Err(VaultMountReason::ContainerAlreadyMounted)
+            );
+            assert_eq!(broker.projection("fleet-sales").0, VaultMountState::Mounted);
+            assert_eq!(broker.active.lock().unwrap().len(), 1);
+            let events = events.lock().unwrap();
+            assert_eq!(events.mounted, 0);
+            assert!(events.dismounted.is_empty());
+            assert!(events.recovered.is_empty());
+        }
+    }
+
+    #[test]
+    fn different_filenames_can_coexist_as_active_mounts() {
+        let store = mount_store(
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let events = Arc::new(Mutex::new(BrokerEvents::default()));
+        let broker = VaultMountBroker::with_broker(Box::new(MountBroker(events.clone())));
+        let first = personal_record();
+        let mut first_request = personal_request();
+        assert_eq!(
+            broker.mount_personal_authorized(
+                70,
+                &store,
+                &first,
+                &mut first_request,
+                std::ptr::null_mut(),
+                7,
+                "S-1-5-21-owner",
+                (0, 0),
+            ),
+            Ok(("P:".into(), 12, true))
+        );
+
+        let mut second = personal_record();
+        second.container_path = r"D:\vaults\archive.hc".into();
+        second.container_identity = "v:1:i:3".into();
+        second.owner_sid = "S-1-5-21-other-owner".into();
+        let mut second_request = personal_request();
+        second_request.container_path = second.container_path.clone();
+        assert_eq!(
+            broker.mount_personal_authorized(
+                71,
+                &store,
+                &second,
+                &mut second_request,
+                std::ptr::null_mut(),
+                8,
+                "S-1-5-21-other-owner",
+                (0, 0),
+            ),
+            Ok(("Q:".into(), 13, true))
+        );
+        assert_eq!(broker.active.lock().unwrap().len(), 2);
+        assert_eq!(events.lock().unwrap().mounted, 2);
+        assert!(events.lock().unwrap().dismounted.is_empty());
+    }
+
+    #[test]
+    fn concurrent_same_filename_mounts_allow_only_one_driver_mount() {
+        let store = Arc::new(mount_store(
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(AtomicBool::new(false)),
+        ));
+        let events = Arc::new(Mutex::new(BrokerEvents::default()));
+        let broker = Arc::new(VaultMountBroker::with_broker(Box::new(MountBroker(
+            events.clone(),
+        ))));
+        let start = Arc::new(std::sync::Barrier::new(3));
+
+        let launch = |mut record: PersonalVaultRecord, operation_id, session_id| {
+            let broker = Arc::clone(&broker);
+            let store = Arc::clone(&store);
+            let start = Arc::clone(&start);
+            std::thread::spawn(move || {
+                record.container_path = if session_id == 7 {
+                    r"C:\owner-a\Shared.HC".into()
+                } else {
+                    r"D:\owner-b\shared.hc".into()
+                };
+                record.container_identity = format!("v:1:i:{}", 100 + session_id);
+                record.owner_sid = format!("S-1-5-21-owner-{session_id}");
+                record.created_by_session = session_id;
+                let caller_sid = record.owner_sid.clone();
+                let mut request = personal_request();
+                request.container_path = record.container_path.clone();
+                start.wait();
+                broker.mount_personal_authorized(
+                    operation_id,
+                    &store,
+                    &record,
+                    &mut request,
+                    std::ptr::null_mut(),
+                    session_id,
+                    &caller_sid,
+                    (0, 0),
+                )
+            })
+        };
+        let first = launch(personal_record(), 72, 7);
+        let second = launch(personal_record(), 73, 8);
+        start.wait();
+        let results = [first.join().unwrap(), second.join().unwrap()];
+
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| {
+                    result.as_ref().err() == Some(&VaultMountReason::ContainerAlreadyMounted)
+                })
+                .count(),
+            1
+        );
+        assert_eq!(broker.active.lock().unwrap().len(), 1);
+        let events = events.lock().unwrap();
+        assert_eq!(events.mounted, 1);
+        assert!(events.dismounted.is_empty());
+        assert!(events.recovered.is_empty());
+    }
+
     fn active_mount_for_owner(session_id: u32, caller_sid: &str) -> ActiveMount {
         ActiveMount {
             drive_letter: "V:".into(),
@@ -1980,6 +2258,7 @@ mod tests {
             policy_version: 1,
             personal: false,
             container_identity: "identity".into(),
+            container_filename_key: "vault.hc".into(),
             access: wincmd_shared::vault_access::VaultAccess::Write,
             mounted_at: 1,
             cleanup_required: false,
@@ -2052,6 +2331,10 @@ mod tests {
                 "vault_broker_unavailable",
             ),
             (VaultMountReason::BrokerRejected, "vault_broker_rejected"),
+            (
+                VaultMountReason::ContainerAlreadyMounted,
+                "vault_container_already_mounted",
+            ),
             (VaultMountReason::DismountFailed, "vault_cleanup_failed"),
         ] {
             assert_eq!(
@@ -2099,23 +2382,31 @@ mod tests {
         ]);
 
         let other = broker
-            .personal_mounts_for_caller(8, "S-1-5-21-other")
+            .personal_mounts_for_caller(8, "S-1-5-21-other", false)
             .unwrap();
-        assert_eq!(other.len(), 1);
-        assert_eq!(other[0].internal_drive, 12);
-        assert!(other[0].cleanup_required);
+        assert!(other.is_empty());
         let owner = broker
-            .personal_mounts_for_caller(7, "S-1-5-21-owner")
+            .personal_mounts_for_caller(7, "S-1-5-21-owner", false)
             .unwrap();
         assert_eq!(owner.len(), 2);
         assert!(
+            owner
+                .iter()
+                .any(|mount| mount.internal_drive == 12 && mount.cleanup_required)
+        );
+        let administrator = broker
+            .personal_mounts_for_caller(8, "S-1-5-21-admin", true)
+            .unwrap();
+        assert_eq!(administrator.len(), 2);
+        assert!(administrator.iter().all(|mount| mount.internal_drive != 14));
+        assert!(
             broker
-                .personal_mounts_for_caller(0, "S-1-5-21-owner")
+                .personal_mounts_for_caller(0, "S-1-5-21-owner", false)
                 .is_err()
         );
         broker.mark_registry_untrusted();
         assert_eq!(
-            broker.personal_mounts_for_caller(7, "S-1-5-21-owner"),
+            broker.personal_mounts_for_caller(7, "S-1-5-21-owner", false),
             Err(VaultMountReason::DismountFailed)
         );
     }
@@ -2218,6 +2509,22 @@ mod tests {
             Ok(("P:".into(), 12, true))
         );
         assert_eq!(broker.projection(&entry_id).0, VaultMountState::Mounted);
+        let mut duplicate_request = personal_request();
+        assert_eq!(
+            broker.mount_personal_authorized(
+                42,
+                &store,
+                &record,
+                &mut duplicate_request,
+                std::ptr::null_mut(),
+                7,
+                "S-1-5-21-owner",
+                (0, 0),
+            ),
+            Err(VaultMountReason::ContainerAlreadyMounted)
+        );
+        assert_eq!(events.lock().unwrap().mounted, 1);
+        assert!(events.lock().unwrap().dismounted.is_empty());
         assert_eq!(
             events.lock().unwrap().mount_options,
             vec![(VaultPresentation::PerUser, false, true)]
@@ -2350,6 +2657,76 @@ mod tests {
                 .windows(11)
                 .any(|window| window == b"\"mounts\":{}")
         );
+
+        // Startup recovery closed the old slot before opening the pipe. A
+        // different file with the same basename may now mount because there
+        // is no active container to conflict with.
+        let mut replacement = record.clone();
+        replacement.container_identity = "v:1:i:3".into();
+        let mut replacement_request = personal_request();
+        assert_eq!(
+            restarted.mount_personal_authorized(
+                43,
+                &store,
+                &replacement,
+                &mut replacement_request,
+                std::ptr::null_mut(),
+                7,
+                "S-1-5-21-owner",
+                (0, 0),
+            ),
+            Ok(("P:".into(), 12, true))
+        );
+        assert_eq!(recovery_events.lock().unwrap().mounted, 1);
+    }
+
+    #[test]
+    fn failed_startup_recovery_blocks_new_mounts_even_when_filename_key_was_not_persisted() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let store = mount_store(files, Arc::new(AtomicBool::new(false)));
+        let initial = VaultMountBroker::with_broker(Box::new(MountBroker(Arc::new(Mutex::new(
+            BrokerEvents::default(),
+        )))));
+        let record = personal_record();
+        let mut request = personal_request();
+        initial
+            .mount_personal_authorized(
+                60,
+                &store,
+                &record,
+                &mut request,
+                std::ptr::null_mut(),
+                7,
+                "S-1-5-21-owner",
+                (0, 0),
+            )
+            .unwrap();
+
+        let restarted =
+            VaultMountBroker::with_broker(Box::new(FailingCleanupBroker { acl_attested: true }));
+        assert_eq!(
+            restarted.load_and_cleanup(&store),
+            Err(VaultMountReason::DismountFailed)
+        );
+        let mut replacement = record.clone();
+        replacement.container_identity = "v:1:i:3".into();
+        let mut replacement_request = personal_request();
+        assert_eq!(
+            restarted.mount_personal_authorized(
+                61,
+                &store,
+                &replacement,
+                &mut replacement_request,
+                std::ptr::null_mut(),
+                7,
+                "S-1-5-21-owner",
+                (0, 0),
+            ),
+            Err(VaultMountReason::DismountFailed)
+        );
+        let registry: DurableMountRegistry =
+            serde_json::from_slice(&store.read_active_mounts().unwrap()).unwrap();
+        assert_eq!(registry.mounts.len(), 1);
     }
 
     #[test]
@@ -2639,7 +3016,7 @@ mod tests {
     }
 
     #[test]
-    fn shared_mounts_can_only_be_dismounted_by_the_mounter() {
+    fn exact_mount_owner_requires_same_sid_and_session() {
         let mount = active_mount_for_owner(4, "S-1-5-21-owner");
         assert!(same_mount_owner(&mount, 4, "S-1-5-21-owner"));
         assert!(!same_mount_owner(&mount, 5, "S-1-5-21-owner"));
@@ -2647,7 +3024,7 @@ mod tests {
     }
 
     #[test]
-    fn secure_storage_bulk_dismount_requires_an_administrator_and_current_shared_membership() {
+    fn secure_storage_bulk_dismount_allows_current_shared_member_without_admin_role() {
         let store = mount_store(
             Arc::new(Mutex::new(HashMap::new())),
             Arc::new(AtomicBool::new(false)),
@@ -2669,27 +3046,14 @@ mod tests {
             false,
             |entry_id| (entry_id == "sales").then_some(VaultPresentation::Machine),
         );
-        assert_eq!(normal_member.dismounted, 0);
-        assert_eq!(normal_member.denied, 1);
-        assert_eq!(broker.projection("sales").0, VaultMountState::Mounted);
-
-        let response = broker.dismount_authorized_volumes_for_caller(
-            &store,
-            45,
-            std::ptr::null_mut(),
-            9,
-            "S-1-5-21-current-member",
-            true,
-            |entry_id| (entry_id == "sales").then_some(VaultPresentation::Machine),
-        );
-
-        assert_eq!(response.dismounted, 1);
-        assert_eq!(response.denied, 0);
+        assert_eq!(normal_member.dismounted, 1);
+        assert_eq!(normal_member.denied, 0);
+        assert_eq!(broker.projection("sales").0, VaultMountState::Unmounted);
         assert_eq!(events.lock().unwrap().recovered, vec![12]);
     }
 
     #[test]
-    fn secure_storage_bulk_dismount_denies_unrelated_admin_and_private_non_owner() {
+    fn secure_storage_bulk_dismount_denies_unrelated_admin_and_allows_private_owner() {
         let store = mount_store(
             Arc::new(Mutex::new(HashMap::new())),
             Arc::new(AtomicBool::new(false)),
@@ -2701,7 +3065,7 @@ mod tests {
             "shared",
             active_mount_for_owner(7, "S-1-5-21-owner"),
         ));
-        let mut private = active_mount_for_owner(7, "S-1-5-21-owner");
+        let mut private = active_mount_for_owner(7, "S-1-5-21-authorized-delegate");
         private.presentation = VaultPresentation::PerUser;
         private.internal_drive = 13;
         assert!(broker.retain_cleanup_mount(&store, "private", private));
@@ -2713,7 +3077,7 @@ mod tests {
             9,
             "S-1-5-21-unrelated-admin",
             true,
-            |entry_id| (entry_id == "private").then_some(VaultPresentation::PerUser),
+            |_| None,
         );
 
         assert_eq!(response.dismounted, 0);
@@ -2723,20 +3087,51 @@ mod tests {
         assert_eq!(broker.projection("private").0, VaultMountState::Mounted);
 
         // A private Fleet owner who reconnects in another interactive
-        // session remains the only eligible administrator. The recovery path
-        // closes the recorded slot without borrowing a foreign session token.
+        // session remains the only eligible caller, even as a normal user.
+        // Recovery closes the recorded slot without borrowing a foreign token.
         let owner = broker.dismount_authorized_volumes_for_caller(
             &store,
             46,
             std::ptr::null_mut(),
             9,
             "S-1-5-21-owner",
-            true,
+            false,
             |entry_id| (entry_id == "private").then_some(VaultPresentation::PerUser),
         );
         assert_eq!(owner.dismounted, 1);
         assert_eq!(owner.denied, 1);
         assert_eq!(broker.projection("private").0, VaultMountState::Unmounted);
+        assert_eq!(events.lock().unwrap().recovered, vec![13]);
+    }
+
+    #[test]
+    fn private_fleet_owner_can_dismount_a_mount_opened_by_another_principal() {
+        let store = mount_store(
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let events = Arc::new(Mutex::new(BrokerEvents::default()));
+        let broker = VaultMountBroker::with_broker(Box::new(MountBroker(events.clone())));
+        let mut private = active_mount_for_owner(7, "S-1-5-21-authorized-delegate");
+        private.presentation = VaultPresentation::PerUser;
+        private.internal_drive = 13;
+        assert!(broker.retain_cleanup_mount(&store, "private", private));
+
+        let result = broker.dismount_authorized(
+            &store,
+            AuthorizedDismount {
+                operation_id: 48,
+                entry_id: "private",
+                caller_token: std::ptr::null_mut(),
+                caller_session: 9,
+                caller_sid: "S-1-5-21-owner",
+                presentation: VaultPresentation::PerUser,
+            },
+        );
+
+        assert_eq!(result.state, VaultMountState::Unmounted);
+        assert_eq!(broker.projection("private").0, VaultMountState::Unmounted);
+        assert_eq!(events.lock().unwrap().recovered, vec![13]);
     }
 
     #[test]

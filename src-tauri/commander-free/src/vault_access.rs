@@ -19,6 +19,7 @@ const APPLY_POLICY: &str = "svc.vault.apply_policy";
 const FORGET_ENTRY_POLICY_ONLY: &str = "svc.vault.forget_entry_policy_only";
 const GET_STATUS: &str = "svc.vault.get_status";
 const UNMOUNT: &str = "svc.vault.unmount";
+const PERSONAL_DISMOUNT: &str = "svc.vault.dismount_personal";
 const DISMOUNT_AUTHORIZED_VOLUMES: &str = "svc.vault.dismount_authorized_volumes";
 const LIST_AUTHORIZED: &str = "svc.vault.list_authorized";
 const CAPABILITIES: &str = "svc.vault.capabilities";
@@ -523,6 +524,179 @@ pub async fn vault_dismount_authorized_volumes(
     result
 }
 
+/// Lists ordinary service-managed encrypted mounts that this Windows account
+/// may close. The service returns only the caller's own mounts to standard
+/// users; local administrators may also see other ordinary mounts. Fleet
+/// mounts are excluded and arrive only through `vault_list_authorized_entries`.
+#[tauri::command]
+pub async fn vault_list_personal_mounts() -> Result<Value, String> {
+    crate::svc_client::call(LIST_AUTHORIZED, json!({ "personal": true })).await
+}
+
+/// Mounts an ordinary Secure Storage selection through the same authenticated
+/// service ledger used for caller-filtered listing and dismount. Fleet-managed
+/// files are classified and rejected by the service instead of bypassing the
+/// saved policy through the legacy Pro command path.
+#[tauri::command]
+pub async fn vault_mount_personal(
+    mut request: wincmd_shared::vault_access::PersonalVaultMountRequest,
+    diagnostic_operation_id: Option<String>,
+) -> Result<Value, String> {
+    let operation_id = requested_operation_id(diagnostic_operation_id, "mount_personal");
+    let started = Instant::now();
+    record_vault_event(
+        &operation_id,
+        "mount_personal",
+        "requested",
+        DiagnosticLifecycle::Requested,
+        DiagnosticOutcome::Started,
+        DiagnosticSeverity::Info,
+        None,
+        DiagnosticRetryability::Never,
+        "none",
+        None,
+    );
+
+    let payload = personal_mount_payload(&request);
+    request.zeroize_secrets();
+    let payload = match payload {
+        Ok(payload) => payload,
+        Err(_) => {
+            record_vault_event(
+                &operation_id,
+                "mount_personal",
+                "requested",
+                DiagnosticLifecycle::Requested,
+                DiagnosticOutcome::Failed,
+                DiagnosticSeverity::Error,
+                Some("VLT.REQUEST.INVALID"),
+                DiagnosticRetryability::Never,
+                "review_request",
+                Some(started),
+            );
+            return Err("mount request could not be encoded".to_string());
+        }
+    };
+
+    let result =
+        crate::svc_client::call_vault_mount_with_operation(payload, Some(operation_id.clone()))
+            .await;
+    match &result {
+        Ok(value) if vault_result_failed(value) => record_vault_event(
+            &operation_id,
+            "mount_personal",
+            "applied",
+            DiagnosticLifecycle::Applied,
+            DiagnosticOutcome::Failed,
+            DiagnosticSeverity::Error,
+            Some("VLT.MOUNT.FAILED"),
+            DiagnosticRetryability::Manual,
+            "review_status",
+            Some(started),
+        ),
+        Ok(_) => record_vault_event(
+            &operation_id,
+            "mount_personal",
+            "applied",
+            DiagnosticLifecycle::Applied,
+            DiagnosticOutcome::Succeeded,
+            DiagnosticSeverity::Info,
+            None,
+            DiagnosticRetryability::Never,
+            "none",
+            Some(started),
+        ),
+        Err(error) => {
+            let (code, retryability, next) = vault_failure_code("mount", error);
+            record_vault_event(
+                &operation_id,
+                "mount_personal",
+                "applied",
+                DiagnosticLifecycle::Applied,
+                DiagnosticOutcome::Failed,
+                DiagnosticSeverity::Error,
+                Some(code),
+                retryability,
+                next,
+                Some(started),
+            );
+        }
+    }
+    result
+}
+
+fn personal_mount_payload(
+    request: &wincmd_shared::vault_access::PersonalVaultMountRequest,
+) -> Result<Value, String> {
+    let mut payload = serde_json::to_value(request)
+        .map_err(|_| "mount request could not be encoded".to_string())?;
+    let object = payload
+        .as_object_mut()
+        .ok_or_else(|| "mount request could not be encoded".to_string())?;
+    object.insert("personal".into(), Value::Bool(true));
+    Ok(payload)
+}
+
+/// Closes one ordinary Secure Storage mount by its service-ledger driver slot.
+/// The service re-resolves that slot under its mount-operation lock and
+/// authorizes the current caller; this request cannot target a Fleet entry.
+#[tauri::command]
+pub async fn vault_dismount_personal_mount(
+    internal_drive: u8,
+    diagnostic_operation_id: Option<String>,
+) -> Result<Value, String> {
+    let operation_id = requested_operation_id(diagnostic_operation_id, "dismount_personal");
+    let started = Instant::now();
+    let result = crate::svc_client::call_with_diagnostic_operation(
+        PERSONAL_DISMOUNT,
+        personal_dismount_payload(internal_drive),
+        Some(operation_id.clone()),
+    )
+    .await;
+    match &result {
+        Ok(value) if vault_result_failed(value) => record_vault_event(
+            &operation_id,
+            "dismount_personal",
+            "applied",
+            DiagnosticLifecycle::Applied,
+            DiagnosticOutcome::Failed,
+            DiagnosticSeverity::Error,
+            Some("VLT.DISMOUNT.FAILED"),
+            DiagnosticRetryability::Automatic,
+            "retry_cleanup",
+            Some(started),
+        ),
+        Ok(_) => record_vault_event(
+            &operation_id,
+            "dismount_personal",
+            "applied",
+            DiagnosticLifecycle::Applied,
+            DiagnosticOutcome::Succeeded,
+            DiagnosticSeverity::Info,
+            None,
+            DiagnosticRetryability::Never,
+            "none",
+            Some(started),
+        ),
+        Err(error) => {
+            let (code, retryability, next) = vault_failure_code("dismount", error);
+            record_vault_event(
+                &operation_id,
+                "dismount_personal",
+                "applied",
+                DiagnosticLifecycle::Applied,
+                DiagnosticOutcome::Failed,
+                DiagnosticSeverity::Error,
+                Some(code),
+                retryability,
+                next,
+                Some(started),
+            );
+        }
+    }
+    result
+}
+
 #[tauri::command]
 pub async fn vault_list_authorized_entries() -> Result<Value, String> {
     crate::svc_client::call(LIST_AUTHORIZED, json!({})).await
@@ -556,6 +730,10 @@ fn reconcile_access_groups_payload(groups: Value) -> Value {
 
 fn save_access_directory_payload(directory: Value) -> Value {
     json!({ "directory": directory })
+}
+
+fn personal_dismount_payload(internal_drive: u8) -> Value {
+    json!({ "personal": true, "internal_drive": internal_drive })
 }
 
 /// Reconcile Windows local groups (create/update membership) for the given
@@ -606,6 +784,7 @@ mod tests {
         );
         assert_eq!(GET_STATUS, "svc.vault.get_status");
         assert_eq!(UNMOUNT, "svc.vault.unmount");
+        assert_eq!(PERSONAL_DISMOUNT, "svc.vault.dismount_personal");
         assert_eq!(
             DISMOUNT_AUTHORIZED_VOLUMES,
             "svc.vault.dismount_authorized_volumes"
@@ -645,6 +824,52 @@ mod tests {
         assert_eq!(
             value.get("volume_role"),
             Some(&serde_json::Value::String("outer".into()))
+        );
+    }
+
+    #[test]
+    fn personal_mount_payload_uses_only_the_service_personal_route() {
+        let request = wincmd_shared::vault_access::PersonalVaultMountRequest {
+            container_path: r"D:\Vault\sales.hc".into(),
+            password: "secret".into(),
+            volume_kind: wincmd_shared::vault_access::VaultContainerKind::Standard,
+            volume_role: wincmd_shared::vault_access::VaultVolumeRole::Outer,
+            presentation: wincmd_shared::vault_access::VaultPresentation::Machine,
+            preferred_letter: Some("Y".into()),
+            read_only: true,
+            pim: Some(123),
+            keyfiles: vec![r"D:\keys\unlock.key".into()],
+            hidden_protection_password: None,
+            hidden_keyfiles: Vec::new(),
+            hidden_pim: None,
+            removable: false,
+        };
+        let payload = personal_mount_payload(&request).expect("valid personal mount request");
+
+        assert_eq!(payload["personal"], true);
+        assert_eq!(payload["container_path"], r"D:\Vault\sales.hc");
+        assert_eq!(payload["presentation"], "machine");
+        assert_eq!(payload["preferred_letter"], "Y");
+        assert_eq!(payload["read_only"], true);
+        assert_eq!(payload["pim"], 123);
+        assert_eq!(payload["keyfiles"][0], r"D:\keys\unlock.key");
+        assert!(payload.get("owner_sid").is_none());
+        assert!(payload.get("internal_drive").is_none());
+        assert!(payload.get("acl").is_none());
+    }
+
+    #[test]
+    fn personal_dismount_payload_contains_only_the_ledger_slot() {
+        assert_eq!(
+            personal_dismount_payload(12),
+            json!({ "personal": true, "internal_drive": 12 })
+        );
+        assert!(personal_dismount_payload(12).get("drive_letter").is_none());
+        assert!(personal_dismount_payload(12).get("entry_id").is_none());
+        assert!(
+            personal_dismount_payload(12)
+                .get("container_path")
+                .is_none()
         );
     }
 

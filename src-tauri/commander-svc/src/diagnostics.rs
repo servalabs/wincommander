@@ -671,6 +671,12 @@ fn reason_fields(
             false,
             "review_request",
         ),
+        Some(VaultMountReason::ContainerAlreadyMounted) => (
+            "VLT.CONTAINER.ALREADY_MOUNTED",
+            DiagnosticSeverity::Warn,
+            false,
+            "dismount_existing_container_or_choose_another_file",
+        ),
         Some(VaultMountReason::BrokerUnavailable) => (
             "VLT.BROKER.UNAVAILABLE",
             DiagnosticSeverity::Error,

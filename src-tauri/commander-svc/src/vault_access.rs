@@ -6428,12 +6428,74 @@ mod tests {
         private.entries[0].mount.preferred_letter = None;
         s.apply(private, 8).unwrap();
         assert!(
+            s.authorize_mount("shared", &["S-1-test-Partner".into()])
+                .allowed,
+            "this task must not narrow the existing Fleet mount grants"
+        );
+        assert!(
             s.authorize_dismount("shared", &["S-1-test-Admin".into()])
                 .allowed
         );
         assert!(
             !s.authorize_dismount("shared", &["S-1-test-Partner".into()])
                 .allowed
+        );
+        assert!(
+            !s.authorize_dismount("shared", &["S-1-test-UnrelatedAdmin".into()])
+                .allowed,
+            "local administrator status does not override Private Fleet ownership"
+        );
+    }
+
+    #[test]
+    fn shared_view_only_member_can_dismount_without_gaining_write_access() {
+        let s = store(Arc::new(Mutex::new(HashMap::new())));
+        let mut view_only = policy(1, 0);
+        view_only.entries[0]
+            .grants
+            .iter_mut()
+            .find(|grant| grant.principal_name == "Partner")
+            .expect("Partner grant")
+            .access = VaultAccess::Read;
+        s.apply(view_only, 7).unwrap();
+
+        let mount = s.authorize_mount("shared", &["S-1-test-Partner".into()]);
+        assert!(mount.allowed);
+        assert_eq!(mount.mode, Some(VaultAccess::Read));
+        assert!(
+            s.authorize_dismount("shared", &["S-1-test-Partner".into()])
+                .allowed,
+            "dismount authority follows current Shared membership, not file write access"
+        );
+    }
+
+    #[test]
+    fn shared_member_revoked_after_listing_is_denied_at_dismount_time() {
+        let s = store(Arc::new(Mutex::new(HashMap::new())));
+        s.apply(policy(1, 0), 7).unwrap();
+
+        // Model a caller rendering the currently authorized Fleet entry. The
+        // row/entry ID is stale once the administrator saves the next policy.
+        assert!(s.entry_summaries().iter().any(|(id, _, _)| id == "shared"));
+        let old_member_sids = vec!["S-1-test-Partner".into()];
+        assert!(s.authorize_dismount("shared", &old_member_sids).allowed);
+
+        let mut revoked = policy(2, 1);
+        let partner_grant = revoked.entries[0]
+            .grants
+            .iter_mut()
+            .find(|grant| grant.principal_name == "Partner")
+            .expect("Partner grant");
+        partner_grant.principal_name = "Replacement".into();
+        s.apply(revoked, 8).unwrap();
+
+        assert!(
+            !s.authorize_mount("shared", &old_member_sids).allowed,
+            "the old UI grant must not survive the current-policy recheck"
+        );
+        assert!(
+            !s.authorize_dismount("shared", &old_member_sids).allowed,
+            "service dismount authorization must evaluate the updated policy"
         );
     }
 
