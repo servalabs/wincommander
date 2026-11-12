@@ -21,9 +21,8 @@ function dnsLabel(s: DNSStatus | null): string {
   if (s.provider === "Swiss_Firewall") return "ServaLabs Netwall";
   if (s.provider === "ControlD") return "Simple Firewall";
   const ip = s.resolverIp ?? s.servers?.[0] ?? null;
-  const org = s.resolverOrg ?? null;
   if (!ip) return "—";
-  return org ? `${org}` : ip;
+  return "Configured";
 }
 
 /**
@@ -73,9 +72,9 @@ export default function RadarControlStrip() {
         <span className="rsr-value">{ip ?? "checking…"}</span>
       </div>
 
-      <div className="radar-strip-readout" title={networkDnsStatus?.resolverIp ?? networkDnsStatus?.servers?.join(", ") ?? undefined}>
+      <div className="radar-strip-readout" title={[networkDnsStatus?.resolverOrg, networkDnsStatus?.resolverIp ?? networkDnsStatus?.servers?.join(", ")].filter(Boolean).join(" · ") || undefined}>
         <Server size={12} className="rsr-icon" />
-        <span className="rsr-label">DNS</span>
+        <span className="rsr-label">ENTERPRISE DNS</span>
         <span className="rsr-value">{dnsLabel(networkDnsStatus)}</span>
       </div>
     </div>

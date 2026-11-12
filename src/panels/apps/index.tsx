@@ -6,6 +6,12 @@ import { PackageUpdateTools } from "./PackageUpdateTools";
 import PanelHeader from "../../components/shared/PanelHeader";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { Icon, Spinner } from "../../components/ui/bp";
+import { Button } from "../../components/ui/button";
+import { useBackend } from "../../hooks/useBackend";
+import { useAppState } from "../../context/AppContext";
+import { runQueuedPackageOperation } from "../../lib/packageOperationLock";
+import { runPackageUpdateInventoryCheck } from "../../lib/packageUpdateInventoryStore";
+import { describePackageRefresh, refreshPackageAndAppInventories } from "./packageUpdateDisplay";
 import { useAppsSessionState } from "./appsSessionState";
 import './index.css';
 
@@ -18,6 +24,14 @@ declare global {
 }
 
 export default function AppsPanel() {
+  const backend = useBackend();
+  const { runAppInventoryScan } = useAppState();
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshMessage, setRefreshMessage] = useState("");
+  const [refreshPhase, setRefreshPhase] = useState<"idle" | "queued" | "apps" | "managers" | "cancelling">("idle");
+  const refreshPhaseRef = useRef(refreshPhase);
+  const cancelPromiseRef = useRef<Promise<void> | null>(null);
+  const setPhase = (phase: typeof refreshPhase) => { refreshPhaseRef.current = phase; setRefreshPhase(phase); };
   const panelRef = useRef<HTMLDivElement>(null);
   const [activeTab, setActiveTab] = useAppsSessionState("apps.active-tab", "install");
   const [installerStatus, setInstallerStatus] = useState<AppInstallerStatus>({
@@ -25,6 +39,39 @@ export default function AppsPanel() {
     vulnerabilityTone: "is-neutral",
     vulnerabilityText: "SCANNING APP INVENTORY",
   });
+
+  const refreshInventory = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    setPhase("queued");
+    setRefreshMessage("Refreshing installed apps and package updates…");
+    try {
+      await runQueuedPackageOperation(async () => {
+        try {
+          const result = await runPackageUpdateInventoryCheck(() => refreshPackageAndAppInventories(
+            async () => { setPhase("apps"); await runAppInventoryScan(true, true); },
+            async () => { setPhase("managers"); try { return await backend.packageUpdatesInventory(); } finally { setPhase("queued"); } },
+          ));
+          setRefreshMessage(describePackageRefresh(result));
+        } finally {
+          if (cancelPromiseRef.current) await cancelPromiseRef.current;
+          cancelPromiseRef.current = null;
+        }
+      }, () => setRefreshMessage("Refresh queued until the current package operation finishes."));
+    } catch (error) {
+      setRefreshMessage(`Refresh failed: ${String(error)}`);
+    } finally {
+      setPhase("idle");
+      setRefreshing(false);
+    }
+  };
+
+  const cancelRefreshCheck = () => {
+    if (refreshPhaseRef.current !== "managers") return;
+    setPhase("cancelling");
+    setRefreshMessage("Cancelling the package manager check…");
+    cancelPromiseRef.current = backend.packageUpdatesCancel().catch(() => { setRefreshMessage("Could not cancel the package manager check."); });
+  };
 
   // Tabs share the shell scroller; clear the previous tab's offset before paint.
   useLayoutEffect(() => {
@@ -71,6 +118,11 @@ export default function AppsPanel() {
           title="Packages & Apps"
           description="Install, update, and remove software in bulk — and strip out the bloatware that ships with Windows."
         />
+        <div className="flex flex-wrap items-center justify-end gap-2 pb-2">
+          {refreshMessage && <span role="status" className="text-xs text-[var(--text-dim)]">{refreshMessage}</span>}
+          {refreshPhase === "managers" && <Button variant="outline" size="sm" onClick={cancelRefreshCheck} aria-label="Cancel refresh package check"><Icon icon="stop" />Cancel check</Button>}
+          <Button variant="outline" size="sm" disabled={refreshing} onClick={() => void refreshInventory()} aria-label="Refresh installed apps and package updates"><Icon icon="refresh" />{refreshing ? "Refreshing…" : "Refresh"}</Button>
+        </div>
         <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList className="apps-panel-tabs w-full flex-wrap justify-start">
             <TabsTrigger value="install">Install software</TabsTrigger>

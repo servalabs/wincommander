@@ -121,5 +121,6 @@ export interface DiskFileTypes {
     scanId: string;
     scopePath: string;
     categories: { category: string; fileCount: number; logicalSize: number }[];
+    extensions: { category: string; fileCount: number; logicalSize: number }[];
     complete: boolean;
 }

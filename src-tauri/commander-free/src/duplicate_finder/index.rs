@@ -89,8 +89,9 @@ impl ScanIndex {
                 row.get::<_, String>(0)
             })
             .map_err(|error| error.to_string())?;
+        let policy = super::safety::RemovalPolicy::load();
         let groups = ids
-            .map(|id| self.group(&id.map_err(|error| error.to_string())?, 0))
+            .map(|id| self.group_with_policy(&id.map_err(|error| error.to_string())?, 0, &policy))
             .collect::<Result<Vec<_>, _>>()?;
         let mut total_duplicate_bytes = 0u64;
         let mut sizes = self
@@ -135,6 +136,15 @@ impl ScanIndex {
     }
 
     pub fn group(&self, group_id: &str, offset: usize) -> Result<DuplicateGroup, String> {
+        self.group_with_policy(group_id, offset, &super::safety::RemovalPolicy::load())
+    }
+
+    fn group_with_policy(
+        &self,
+        group_id: &str,
+        offset: usize,
+        policy: &super::safety::RemovalPolicy,
+    ) -> Result<DuplicateGroup, String> {
         let (size, count): (u64, usize) = self
             .connection
             .query_row(
@@ -161,7 +171,7 @@ impl ScanIndex {
             )
             .map_err(|error| error.to_string())?;
         let display = |(id, path, modified): (String, String, Option<String>)| {
-            let removable = !super::safety::is_inside_system_root(&PathBuf::from(&path));
+            let reason = policy.protected_reason(&PathBuf::from(&path));
             DuplicateFile {
                 name: PathBuf::from(&path)
                     .file_name()
@@ -172,7 +182,8 @@ impl ScanIndex {
                 path,
                 size,
                 modified,
-                removable,
+                removable: reason.is_none(),
+                removal_block_reason: reason.map(super::safety::removal_block_code),
             }
         };
         files.push(display(keeper));

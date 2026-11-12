@@ -44,7 +44,7 @@ test("rendered backup pickers dispatch once, survive navigation, and explain rec
     const { default: Panel } = await import('./src/panels/vault/BackupRecoverySection');
     const host = document.getElementById('root');
     let root = createRoot(host);
-    const button = label => [...host.querySelectorAll('button')].find(node => node.textContent === label);
+    const button = label => [...host.querySelectorAll('button')].find(node => node.getAttribute('aria-label') === label || node.textContent === label);
     const click = async label => { assert.ok(button(label), label); await act(async () => { button(label).click(); }); };
     await act(async () => { root.render(h(Panel)); });
     assert.equal(button('Copy and check container').disabled, true);

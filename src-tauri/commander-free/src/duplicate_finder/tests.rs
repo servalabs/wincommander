@@ -344,9 +344,35 @@ fn native_inventory_skips_junctions_without_following_their_target() {
 
 #[test]
 fn verified_removal_deletes_selected_copy_and_retains_identical_copy() {
+    #[cfg(windows)]
+    let dir = tempfile::Builder::new()
+        .prefix("duplicate-test-")
+        .tempdir_in(std::env::var_os("USERPROFILE").unwrap())
+        .unwrap();
+    #[cfg(not(windows))]
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("a"), b"same").unwrap();
     std::fs::write(dir.path().join("b"), b"same").unwrap();
+    #[cfg(windows)]
+    {
+        let account = format!(
+            "{}\\{}",
+            std::env::var("USERDOMAIN").unwrap(),
+            std::env::var("USERNAME").unwrap()
+        );
+        for name in ["a", "b"] {
+            let status = std::process::Command::new("icacls.exe")
+                .arg(dir.path().join(name))
+                .arg("/setowner")
+                .arg(&account)
+                .status()
+                .unwrap();
+            assert!(
+                status.success(),
+                "test fixtures must be owned by the current user"
+            );
+        }
+    }
     let (_, files, _) = scan_fixture(
         &[std::fs::canonicalize(dir.path()).unwrap()],
         &AtomicBool::new(false),
@@ -447,4 +473,69 @@ fn result_paging_rejects_a_different_scan_capability() {
     assert!(with_index("previous-scan", |index| index.page(0)).is_err());
     assert!(with_index(&id, |index| index.page(0)).is_ok());
     *cache().lock().unwrap() = None;
+}
+
+#[test]
+fn protected_application_and_codec_types_cannot_be_removed() {
+    for name in [
+        "installer.EXE",
+        "library.dll",
+        "decoder.ax",
+        "codec.acm",
+        "driver.sys",
+    ] {
+        assert!(
+            safety::protected_removal_reason(std::path::Path::new(name)).is_some(),
+            "{name}"
+        );
+    }
+    assert!(
+        safety::protected_removal_reason(std::path::Path::new("AppData/local/settings.json"))
+            .is_some()
+    );
+}
+
+#[test]
+fn blocked_copies_expose_only_stable_non_sensitive_reason_codes() {
+    assert_eq!(
+        safety::removal_block_code("user profile locations could not be verified"),
+        "profiles_unavailable"
+    );
+    assert_eq!(
+        safety::removal_block_code("another user profile is protected"),
+        "other_profile"
+    );
+    assert_eq!(
+        safety::removal_block_code("unexpected private path"),
+        "unknown"
+    );
+}
+
+#[test]
+fn backend_refuses_executable_removal_even_if_selection_is_forged() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("one.exe"), b"same").unwrap();
+    std::fs::write(dir.path().join("two.exe"), b"same").unwrap();
+    let (page, files, _) = scan_fixture(
+        &[std::fs::canonicalize(dir.path()).unwrap()],
+        &AtomicBool::new(false),
+    );
+    let row = &page.groups[0].files[0];
+    assert!(!row.removable);
+    assert_eq!(row.removal_block_reason, Some("protected_type"));
+    assert_eq!(
+        serde_json::to_value(row).unwrap()["removalBlockReason"],
+        "protected_type"
+    );
+    let mut files = files.into_values();
+    let candidate = files.next().unwrap();
+    let keeper = files.next().unwrap();
+    let result = safety::remove_files(
+        vec![candidate.clone()],
+        vec![keeper],
+        &AtomicBool::new(false),
+    );
+    assert_eq!(result.files_removed, 0);
+    assert!(!result.errors.is_empty());
+    assert!(candidate.path.exists());
 }

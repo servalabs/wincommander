@@ -8,7 +8,6 @@ import { StartupDriverTools } from "./StartupDriverTools";
 import { AppBrowserCacheCard, WindowsStorageCard } from "./ReclaimSpaceCard";
 import { FileHygieneTools } from "./FileHygieneTools";
 import { MAINTENANCE_WORKSPACES, MaintenanceWorkspaceNav } from "./workspace/MaintenanceWorkspaceNav";
-import MaintenanceHistoryPanel from "./history/MaintenanceHistoryPanel";
 import DiskSpaceAnalyzerDialog from "./DiskSpaceAnalyzerDialog";
 import "./DiskSpaceAnalyzerDialog.css";
 import "./MaintenanceStorage.css";
@@ -54,7 +53,6 @@ export default function MaintenancePanel() {
         {active.id === "duplicates" && <FileHygieneTools />}
         {active.id === "registry" && <RegistryAndHygieneTools />}
         {active.id === "startup" && <StartupDriverTools />}
-        {active.id === "history" && <MaintenanceHistoryPanel />}
       </section>
     </div>
   </div>;

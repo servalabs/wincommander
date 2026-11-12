@@ -8,16 +8,31 @@
 
 .stego-header-actions { display: inline-flex; align-items: center; gap: 2px; }
 
+.stego-mode-picker { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.stego-mode {
+  display: flex; align-items: center; gap: 10px; min-width: 0; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: var(--radius-lg, 6px);
+  background: var(--surface-2); color: var(--text); text-align: left; cursor: pointer;
+}
+.stego-mode > .bp5-icon { color: var(--accent); flex: none; }
+.stego-mode span { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
+.stego-mode strong { font-size: 12px; }
+.stego-mode small { color: var(--text-dim); font-size: 11px; line-height: 1.35; }
+.stego-mode[aria-pressed="true"] { border-color: var(--accent); background: var(--surface-3); }
+.stego-mode:focus-visible, .stego-pick__choose:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.stego-mode:disabled, .stego-pick__choose:disabled { cursor: not-allowed; opacity: .6; }
+
 /* Create / Restore blocks — side by side on wide viewports, then a single
    focused workflow on narrow screens. */
 .stego-blocks-row {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
   align-items: start;
 }
 
 .stego-block { display: flex; flex-direction: column; gap: 8px; }
+.stego-block[hidden] { display: none; }
 .stego-block {
   padding: 12px;
   border: 1px solid var(--border);
@@ -32,7 +47,7 @@
 }
 
 @media (max-width: 700px) {
-  .stego-blocks-row { grid-template-columns: minmax(0, 1fr); }
+  .stego-mode-picker { grid-template-columns: minmax(0, 1fr); }
   .stego-block--restore {
     margin-top: 4px;
   }
@@ -86,10 +101,16 @@
 .stego-info-popover p { margin: 0; }
 
 /* ── File pickers ───────────────────────────────────────────────────────── */
-.stego-pick { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.stego-pick { display: flex; align-items: center; gap: 4px; min-width: 0; border: 1px solid var(--border); border-radius: var(--radius-md, 4px); background: var(--surface-3); }
+.stego-pick--selected { border-color: var(--accent); }
+.stego-pick__choose { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; padding: 8px; border: 0; background: transparent; color: var(--text); text-align: left; cursor: pointer; }
+.stego-pick__icon { display: grid; place-items: center; width: 34px; height: 34px; flex: none; color: var(--accent); }
+.stego-pick__content { display: flex; flex-direction: column; flex: 1; min-width: 0; gap: 2px; }
+.stego-pick__content strong { font-size: 12px; font-weight: 600; }
+.stego-pick__action { flex: none; color: var(--accent); font-size: 11px; font-weight: 600; }
 .stego-pick__name {
   font-family: var(--font-mono, monospace); font-size: 11px; color: var(--text);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: none; max-width: 45%;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;
 }
 /* The directory is context, not the answer — it yields space first. Kept LTR:
    direction:rtl would reorder the trailing separator on unicode paths. */

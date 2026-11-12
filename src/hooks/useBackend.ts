@@ -100,6 +100,8 @@ export interface DuplicateFile {
   modified: string | null;
   /** Missing only while an already-running older backend is being replaced. */
   removable?: boolean;
+  /** A bounded reason code; absent on older backends. */
+  removalBlockReason?: string | null;
 }
 
 export interface DuplicateGroup {

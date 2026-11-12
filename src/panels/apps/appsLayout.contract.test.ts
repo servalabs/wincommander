@@ -18,13 +18,13 @@ describe("Packages and Apps layout", () => {
     expect(installer).toContain("{updatesTools ||");
     expect(installer).not.toContain('divider-label">FROM THE CATALOG');
     expect(installer).not.toContain('divider-label">OTHER PACKAGES');
-    expect(updates).toContain('aria-label="Refresh app and package updates"');
-    expect(updates).toContain('onClick={() => void inspectPackages()} aria-label="Refresh app and package updates"');
-    const refresh = updates.slice(updates.indexOf("  const inspectPackages ="), updates.indexOf("  const applyPackages ="));
-    expect(refresh).toContain("refreshPackageAndAppInventories(");
-    expect(refresh).toContain("await refreshAppInventoryFully()");
-    expect(refresh).toContain("await backendRef.current.packageUpdatesInventory()");
-    expect(updates).toContain("await runAppInventoryScan(true, true)");
+    expect(panel).toContain('aria-label="Refresh installed apps and package updates"');
+    expect(panel).toContain("refreshPackageAndAppInventories(");
+    expect(panel).toContain("runAppInventoryScan(true, true)");
+    expect(panel).toContain("backend.packageUpdatesInventory()");
+    expect(panel).toContain('refreshPhaseRef.current !== "managers"');
+    expect(panel).toContain('refreshPhase === "managers"');
+    expect(panel).toContain("await cancelPromiseRef.current");
     expect(updates).not.toContain("Check for updates");
     expect(updates).not.toContain('aria-label="Package manager check results"');
     expect(updates).not.toContain('divider-label">OTHER PACKAGES');
@@ -58,7 +58,7 @@ describe("Packages and Apps layout", () => {
     const backend = await read("src/hooks/useBackend.ts");
 
     expect(updates).toContain('id="package-updates" className="flex scroll-mt-4 flex-col gap-4"');
-    expect(updates).toContain("rounded-lg border border-[var(--border)] bg-[var(--surface)] px-4 py-2.5");
+    expect(updates).not.toContain('>App and package updates</h3>');
     expect(updates).toContain("unavailableOptionalManagers.length > 0");
     expect(updates.match(/packages\?\.managers\?\.filter/g)).toHaveLength(2);
     expect(updates).toContain("Install missing");

@@ -1179,6 +1179,12 @@ fn handle_vault_apply_owner_fragment(
     peer: Option<&AuthenticatedPipePeer>,
     caller_privileged: bool,
 ) -> Result<serde_json::Value, VerbError> {
+    if !caller_privileged {
+        return Err(VerbError::new(
+            "vault_not_authorized",
+            "Administrator elevation is required to change Vault permissions.",
+        ));
+    }
     let started = std::time::Instant::now();
     let stage = std::cell::Cell::new("validation");
     let result = (|| {
@@ -1431,6 +1437,9 @@ fn vault_policy_capabilities(
     caller_privileged: bool,
     group_access: Result<Option<bool>, crate::vault_access::VaultError>,
 ) -> (bool, bool) {
+    if !caller_privileged {
+        return (false, false);
+    }
     let can_edit = match group_access {
             Ok(Some(true)) => owns_entry || caller_privileged,
             Ok(None) => owns_entry,
@@ -5160,7 +5169,7 @@ mod tests {
         );
         assert_eq!(
             vault_policy_capabilities(true, false, Ok(None)),
-            (true, true)
+            (false, false)
         );
         assert_eq!(
             vault_policy_capabilities(false, true, Ok(None)),
@@ -5321,7 +5330,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn owner_fragment_does_not_depend_on_transient_wts_state() {
+    async fn owner_fragment_requires_elevated_caller() {
         let result = authorize_with_interactive_session(
             "svc.vault.apply_owner_fragment",
             false,
@@ -5330,7 +5339,14 @@ mod tests {
             &passing_gate(),
         )
         .await;
-        assert_eq!(result, Ok(None));
+        assert_eq!(
+            result,
+            Err("privileged verb requires SYSTEM/Admin caller".to_string())
+        );
+        assert_eq!(
+            authorize("svc.vault.apply_owner_fragment", true, 1234, &passing_gate()).await,
+            Ok(None)
+        );
     }
 
     #[tokio::test]

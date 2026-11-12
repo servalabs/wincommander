@@ -8,6 +8,7 @@ import { formatBytes } from "./routineCleanerHelpers";
 import type { useFileHygiene } from "./useFileHygiene";
 import { toExplorerDisplayPath } from "./maintenancePathDisplay";
 import { hasExpandedDuplicateGroups, isDuplicateGroupExpanded, setDuplicateGroupExpanded, toggleDuplicateGroups } from "./duplicateGroupPresentation";
+import { duplicateRemovalReason } from "./duplicateRemovalReason";
 import "./DuplicateGroups.css";
 
 type Tools = ReturnType<typeof useFileHygiene>;
@@ -57,6 +58,7 @@ export function DuplicateGroups({ tools }: { tools: Tools }) {
     requestAnimationFrame(() => firstMatchRef.current?.querySelector("summary")?.focus());
   };
   return <section className="duplicate-workspace" aria-label="Discovered duplicate groups">
+    {groups?.some((group) => group.files.some((file) => file.removalBlockReason === "profiles_unavailable")) && <p role="status" className="text-xs text-[var(--warn)]">Windows user profile locations could not be verified, so removal is unavailable. Reconnect any offline profile drives or ask an administrator, then scan again.</p>}
     <form className="duplicate-filters" onSubmit={onSearch}>
       <label><Icon icon="search" size={14} /><input aria-label="Search duplicate files and locations" value={query} onChange={(event) => { setQuery(event.target.value); setVisibleCount(50); }} placeholder="Search file names or locations" /></label>
       <select aria-label="Duplicate file type" value={category} onChange={(event) => { setCategory(event.target.value); setVisibleCount(50); }}>
@@ -85,12 +87,11 @@ function DuplicateGroupRows({ group, tools, open, onOpenChange, groupRef }: { gr
       {group.files.slice(0, visibleCount).map((file) => {
         const retained = retainedId === file.id;
         const displayPath = toExplorerDisplayPath(file.path) ?? "Location unavailable";
-        // Older already-running backends do not include `removable`; treat the
-        // missing field as an ordinary reviewable file until the next rebuild.
-        const protectedForReview = file.removable === false;
+        const protectedForReview = file.removable !== true;
+        const profile = displayPath.match(/(?:^|[\\/])Users[\\/]([^\\/]+)/i)?.[1];
         return <div key={file.id} className="duplicate-member" data-retained={retained || undefined}>
           <CheckboxControl checked={tools.selected.has(file.id)} disabled={tools.busy || retained || protectedForReview} ariaLabel={`${tools.selected.has(file.id) ? "Deselect" : "Select"} ${file.name} at ${displayPath}`} onChange={() => tools.select(file.id)} />
-          <span className="duplicate-member-location"><strong>{file.name}</strong><small title={displayPath}>{displayPath} · {formatModified(file.modified)}</small></span>
+          <span className="duplicate-member-location"><strong>{file.name}</strong><small title={displayPath}>{displayPath} · {formatModified(file.modified)}{profile ? ` · Profile folder: ${profile}` : " · Profile not identified"}</small>{protectedForReview && <small>{duplicateRemovalReason(file.removalBlockReason)}</small>}</span>
           <span className="duplicate-member-size">{formatBytes(file.size)}</span>
           <Button size="sm" variant="ghost" disabled={tools.busy} aria-label={`Open ${file.name} in Explorer`} onClick={() => void tools.openDuplicate(file.id)}><Icon icon="folder-open" size={14} /> Open</Button>
           {protectedForReview ? <Badge tone="neutral">Protected · review only</Badge> : retained ? <Badge tone="success">Kept copy</Badge> : <Button size="sm" variant="ghost" disabled={tools.busy} aria-label={`Keep ${file.name} at ${displayPath}`} onClick={() => tools.keepFile(group.id, file.id)}>Keep selected</Button>}

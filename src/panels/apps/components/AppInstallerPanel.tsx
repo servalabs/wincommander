@@ -18,6 +18,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../../components/ui
 import { staggerDelay } from "../../../components/shared/AnimatedList";
 import { DURATION_S, EASE } from "../../../components/shared/motion";
 import SuccessFill from "../../../components/shared/SuccessFill";
+import { collectUnifiedPackageUpdates } from "../packageUpdateDisplay";
 import './AppInstallerPanel.css';
 
 
@@ -402,9 +403,9 @@ function AppInstallerPanel({
   const installedManifestCount = installedApps.size;
   // Count every pending update, not just manifest apps — non-manifest ("other")
   // packages returned by the inventory scan are also visible in the list below.
-  const outdatedInstalledCount = updateAvailableApps.size + otherUpgrades.length;
+  const outdatedInstalledCount = useMemo(() => collectUnifiedPackageUpdates([], appInventory).length, [appInventory]);
   const vulnerabilityBadge = useMemo(() => {
-    if (installedManifestCount === 0) {
+    if (!appInventory || (installedManifestCount === 0 && outdatedInstalledCount === 0)) {
       return {
         tone: "is-neutral",
         text: "NO INSTALLED APPS SCANNED",
@@ -426,10 +427,10 @@ function AppInstallerPanel({
 
     return {
       tone: vulnerabilityScore > 30 ? "is-risk" : "is-warning",
-      text: `${outdatedInstalledCount} APP${outdatedInstalledCount === 1 ? "" : "S"} NEED UPDATES`,
-      detail: `${vulnerabilityScore}% vulnerability score`,
+      text: `${outdatedInstalledCount} APP INVENTORY UPDATE${outdatedInstalledCount === 1 ? "" : "S"}`,
+      detail: "Additional package managers are shown in Updates",
     };
-  }, [installedManifestCount, outdatedInstalledCount]);
+  }, [appInventory, installedManifestCount, outdatedInstalledCount]);
 
   useEffect(() => {
     onStatusChange?.({

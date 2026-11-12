@@ -126,7 +126,7 @@ export default function WifiGuardSection({ embedded = false }: { expanded?: bool
   const body = <div className={embedded ? 'wifi-guard-embedded' : undefined} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
     <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
       {embedded && <strong>Wi-Fi Guard</strong>}
-      <Switch checked={enabled} disabled={busy || needsElevation} onChange={(event) => void toggle((event.target as HTMLInputElement).checked)} label="Enable Wi-Fi Guard" style={{ marginBottom: 0 }} />
+      <Switch checked={enabled} disabled={busy || needsElevation} onChange={(event) => void toggle((event.target as HTMLInputElement).checked)} aria-label="Enable Wi-Fi Guard" style={{ marginBottom: 0 }} />
       <Tag intent={guarding ? 'success' : 'warning'}>{label}</Tag>
       <InfoPopover iconOnly title="About Wi-Fi Guard">
         <p>Checks the Wi-Fi connection while WinCommander is running. SSID is the network name; BSSID identifies the access point. Alerts flag a change to review and do not prove that a hotspot is malicious.</p>
@@ -154,11 +154,11 @@ export default function WifiGuardSection({ embedded = false }: { expanded?: bool
     </div>)}
 
     <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-      <label>Check every (seconds)<InputGroup type="number" min={5} max={300} value={String(settings?.pollIntervalSecs ?? 10)} disabled={busy || needsElevation} onChange={(event) => {
+      <label style={{ maxWidth: 155, fontSize: 12 }}>Check every (seconds)<InputGroup type="number" min={5} max={300} value={String(settings?.pollIntervalSecs ?? 10)} disabled={busy || needsElevation} onChange={(event) => {
         const value = Number(event.target.value);
         if (Number.isInteger(value) && value >= 5 && value <= 300) void mutate(async () => { await patchAppSettings({ ideal: { network: { wifiGuard: { pollIntervalSecs: value } } } }); });
       }} /></label>
-      <label>Repeat alert (seconds)<InputGroup type="number" min={30} max={3600} value={String(settings?.alertDebounceSecs ?? 300)} disabled={busy || needsElevation} onChange={(event) => {
+      <label style={{ maxWidth: 155, fontSize: 12 }}>Repeat alert (seconds)<InputGroup type="number" min={30} max={3600} value={String(settings?.alertDebounceSecs ?? 300)} disabled={busy || needsElevation} onChange={(event) => {
         const value = Number(event.target.value);
         if (Number.isInteger(value) && value >= 30 && value <= 3600) void mutate(async () => { await patchAppSettings({ ideal: { network: { wifiGuard: { alertDebounceSecs: value } } } }); });
       }} /></label>
