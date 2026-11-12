@@ -49,6 +49,81 @@ use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
 
+#[cfg(any(test, feature = "experimental-settings-generation"))]
+#[path = "settings_generation_maintenance.rs"]
+mod settings_generation_maintenance;
+
+#[cfg(any(test, feature = "experimental-settings-generation"))]
+#[path = "settings_generation_bootstrap.rs"]
+mod settings_generation_bootstrap;
+
+#[cfg(any(test, feature = "experimental-settings-generation"))]
+#[path = "settings_generation_cutover.rs"]
+mod settings_generation_cutover;
+
+#[cfg(all(windows, any(test, feature = "experimental-settings-generation")))]
+#[path = "settings_generation_acl_windows.rs"]
+mod settings_generation_acl_windows;
+
+#[cfg(any(test, feature = "experimental-settings-generation"))]
+#[path = "settings_generation_ownership.rs"]
+mod settings_generation_ownership;
+
+#[cfg(any(test, feature = "experimental-settings-generation"))]
+#[path = "settings_section_envelope.rs"]
+mod settings_section_envelope;
+
+#[cfg(all(windows, feature = "experimental-settings-generation"))]
+pub(crate) fn settings_generation_lab_status() -> Result<&'static str, String> {
+    let (root, _pins, scope) = settings_rotation_trial::experimental_runtime_root()?;
+    match settings_rotation_trial::inspect_startup_once(&root, scope)? {
+        settings_rotation_trial::StartupView::Legacy => Ok("Legacy settings selected; migration has not run."),
+        settings_rotation_trial::StartupView::Selected { .. } => Ok("Protected settings generation selected."),
+        settings_rotation_trial::StartupView::RecoveryRequired => Err("Settings generation requires authorized recovery; original files were preserved.".into()),
+    }
+}
+/// Lab desktop startup must never silently return to the legacy store while a
+/// selected generation is incomplete or its paired service is stopped.
+#[cfg(all(windows, feature = "experimental-settings-generation"))]
+pub(crate) fn require_selected_settings_lab_startup() -> Result<(), String> {
+    if option_env!("WINCMD_SETTINGS_LAB_AUTOROUTE") != Some("1") { return Ok(()); }
+    settings_generation_maintenance::wait_for_running_service()?;
+    let (root, _pins, scope) = settings_rotation_trial::experimental_runtime_root()?;
+    settings_rotation_trial::require_selected_startup(
+        settings_rotation_trial::inspect_startup_once(&root, scope)?,
+        scope,
+        crate::settings::valid_fresh_machine_settings,
+    )
+}
+
+#[cfg(all(windows, feature = "experimental-settings-generation"))]
+pub(crate) fn settings_generation_lab_stage_proof() -> Result<(String, u8), String> {
+    settings_rotation_trial::stage_machine_with_proof()
+}
+#[cfg(all(windows, feature = "experimental-settings-generation"))]
+pub(crate) fn settings_generation_lab_install_proof(proof: &str) -> Result<(), String> {
+    settings_rotation_trial::install_machine_with_proof(proof)
+}
+#[cfg(all(windows, feature = "experimental-settings-generation"))]
+pub(crate) fn settings_generation_lab_create_new_identity() -> Result<(), String> {
+    settings_rotation_trial::create_new_machine_identity_explicitly()
+}
+
+#[cfg(all(windows, feature = "experimental-settings-generation"))]
+pub(crate) fn settings_generation_lab_stage_user(expected_sid: &str) -> Result<(), String> {
+    let actual = settings_generation_acl_windows::current_user_sid()
+        .map_err(|_| "Cannot verify the Windows user; existing settings preserved.")?;
+    if !crate::settings_generation_lab::user_sid_matches(expected_sid, &actual) {
+        return Err("The original Windows user must run settings staging; existing settings preserved.".into());
+    }
+    settings_rotation_trial::stage_existing_explicitly(settings_rotation_trial::StoreScope::CurrentUser)
+}
+
+#[cfg(all(windows, feature = "experimental-settings-generation"))]
+pub(crate) fn hold_search_fence_for_installer(pid: u32) -> Result<(), String> {
+    settings_rotation_trial::prepare_installer_search_fence(pid)
+}
+
 const MATERIAL_FILENAME: &str = ".install.material";
 const USER_MATERIAL_FILENAME: &str = ".user-store.material";
 const PERSONAL_SECRETS_KEY_MARKER: &str = "personal-secrets-key.in-use";
@@ -612,6 +687,31 @@ fn atomic_write_bytes(path: &std::path::Path, data: &[u8]) -> Result<(), String>
 /// file does not yet exist (first run). Returns an error on I/O or decode failure.
 pub fn load(section: &str) -> Result<Value, String> {
     validate_section_name(section)?;
+    #[cfg(all(windows, feature = "experimental-settings-generation"))]
+    if experimental_generation_routing_enabled() {
+        let (root, _pins, scope) = settings_rotation_trial::experimental_runtime_root()?;
+        return settings_rotation_trial::read_with_legacy(&root, scope, section, || load_legacy_guarded(section));
+    }
+    load_legacy(section)
+}
+
+#[cfg(all(windows, feature = "experimental-settings-generation"))]
+pub(crate) fn experimental_generation_routing_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    // Automatic routing is restricted to explicitly opted-in lab builds. The
+    // installer must complete migration before starting the new application.
+    *ENABLED.get_or_init(|| generation_lab_routing_requested(
+        option_env!("WINCMD_SETTINGS_LAB_AUTOROUTE"),
+        std::env::var_os("WINCOMMANDER_EXPERIMENTAL_SETTINGS_GENERATION").as_deref(),
+    ))
+}
+
+#[cfg(any(test, all(windows, feature = "experimental-settings-generation")))]
+fn generation_lab_routing_requested(build_opt_in: Option<&str>, runtime_opt_in: Option<&std::ffi::OsStr>) -> bool {
+    build_opt_in == Some("1") || runtime_opt_in.is_some_and(|value| value == "1")
+}
+
+fn load_legacy(section: &str) -> Result<Value, String> {
     // Reading a first-run store must not require creating an administrator-owned
     // subdirectory. Only NotFound means defaults; denied/corrupt policy stays an error.
     let path = crate::paths::datastore_data_dir()?
@@ -626,6 +726,19 @@ pub fn load(section: &str) -> Result<Value, String> {
     serde_json::from_slice(&bytes).map_err(|e| format!("Failed to parse section '{section}': {e}"))
 }
 
+#[cfg(all(windows, feature = "experimental-settings-generation"))]
+fn load_legacy_guarded(section: &str) -> Result<Value, String> {
+    let value = load_legacy(section)?;
+    if section.eq_ignore_ascii_case("f6-keystore") {
+        let path = crate::paths::datastore_data_dir()?.join(STORE_SUBDIR).join(format!("{section}.dat"));
+        let exists = path.try_exists().map_err(|_| "cannot inspect device signing key; existing data preserved")?;
+        if exists && !settings_rotation_trial::valid_f6(&value) {
+            return Err("device signing key is empty or invalid; existing data preserved".into());
+        }
+    }
+    Ok(value)
+}
+
 fn read_section_file(path: &std::path::Path, section: &str) -> Result<Option<String>, String> {
     match fs::read_to_string(path) {
         Ok(raw) => Ok(Some(raw)),
@@ -638,15 +751,25 @@ fn read_section_file(path: &std::path::Path, section: &str) -> Result<Option<Str
 // not be written unless the material used for it has been protected and can
 // still be reopened; otherwise a copied disk exposes both ciphertext and key.
 pub(crate) struct SettingsWriteMaterial {
-    material: zeroize::Zeroizing<[u8; 32]>,
+    material: Option<zeroize::Zeroizing<[u8; 32]>>,
+    #[cfg(all(windows, feature = "experimental-settings-generation"))]
+    runtime: Option<settings_rotation_trial::RuntimeWriteGuard>,
     _material_guard: Option<std::fs::File>,
 }
 
 pub(crate) fn settings_write_material() -> Result<SettingsWriteMaterial, String> {
+    #[cfg(all(windows, feature = "experimental-settings-generation"))]
+    let runtime = if experimental_generation_routing_enabled() {
+        Some(settings_rotation_trial::begin_experimental_write()?)
+    } else { None };
+    #[cfg(all(windows, feature = "experimental-settings-generation"))]
+    if runtime.as_ref().is_some_and(|guard| guard.selected()) {
+        return Ok(SettingsWriteMaterial { material: None, runtime, _material_guard: None });
+    }
     let material = install_material()?;
     #[cfg(not(windows))]
     return Ok(SettingsWriteMaterial {
-        material: zeroize::Zeroizing::new(material),
+        material: Some(zeroize::Zeroizing::new(material)),
         _material_guard: None,
     });
 
@@ -666,7 +789,9 @@ pub(crate) fn settings_write_material() -> Result<SettingsWriteMaterial, String>
             }
         })?;
         Ok(SettingsWriteMaterial {
-            material: zeroize::Zeroizing::new(material),
+            material: Some(zeroize::Zeroizing::new(material)),
+            #[cfg(feature = "experimental-settings-generation")]
+            runtime,
             _material_guard: Some(file),
         })
     }
@@ -736,8 +861,54 @@ pub(crate) fn save_with_material(
     data: &Value,
     material: &SettingsWriteMaterial,
 ) -> Result<(), String> {
+    #[cfg(all(windows, feature = "experimental-settings-generation"))]
+    if let Some(runtime) = &material.runtime {
+        if runtime.selected() { return runtime.write(section, data); }
+        if section.eq_ignore_ascii_case("f6-keystore") {
+            if !settings_rotation_trial::valid_f6(data) { return Err("device signing key is empty or invalid; existing key preserved".into()); }
+            let previous = load_legacy_guarded(section)?;
+            if settings_rotation_trial::valid_f6(&previous)
+                && !previous["signing_seed_hex"].as_str().unwrap_or("").eq_ignore_ascii_case(data["signing_seed_hex"].as_str().unwrap_or("")) {
+                return Err("replacing an existing device signing key is not allowed".into());
+            }
+        }
+        // The same runtime guard remains held throughout this legacy write.
+    }
+    save_legacy_with_material(section, data, material)
+}
+
+/// The experimental F6 path holds the same exclusive guard while inspecting,
+/// generating, saving and reopening the committed value in either generation.
+#[cfg(all(windows, feature = "experimental-settings-generation"))]
+pub(crate) fn guarded_f6_get_or_create(create: impl FnOnce() -> Result<Value, String>) -> Result<Value, String> {
+    let (root, _pins, scope) = settings_rotation_trial::experimental_runtime_root()?;
+    settings_rotation_trial::read_f6_or_create(&root, scope,
+        || load_legacy_guarded("f6-keystore"),
+        || guarded_f6_create_exclusive(create))
+}
+
+#[cfg(all(windows, feature = "experimental-settings-generation"))]
+fn guarded_f6_create_exclusive(create: impl FnOnce() -> Result<Value, String>) -> Result<Value, String> {
+    // Reacquire exclusive ownership and re-read after releasing the shared
+    // guard: another process may have created the key in the intervening time.
+    let material = settings_write_material()?;
+    let runtime = material.runtime.as_ref().ok_or("settings generation ownership unavailable")?;
+    if runtime.selected() { return runtime.get_or_create_f6(create); }
+    let current = load_legacy_guarded("f6-keystore")?;
+    if settings_rotation_trial::valid_f6(&current) { return Ok(current); }
+    if current != Value::Object(Default::default()) { return Err("device signing key is invalid; existing data preserved".into()); }
+    let created = create()?;
+    if !settings_rotation_trial::valid_f6(&created) { return Err("new device signing key is invalid".into()); }
+    save_legacy_with_material("f6-keystore", &created, &material)?;
+    let observed = load_legacy_guarded("f6-keystore")?;
+    if observed != created { return Err("committed device signing key did not verify".into()); }
+    Ok(created)
+}
+
+fn save_legacy_with_material(section: &str, data: &Value, material: &SettingsWriteMaterial) -> Result<(), String> {
     let path = section_path(section)?;
-    let key = derive_section_key(&material.material, None)?;
+    let source = material.material.as_ref().ok_or("legacy settings key unavailable")?;
+    let key = derive_section_key(source, None)?;
     let bytes = serde_json::to_vec(data)
         .map_err(|e| format!("Failed to serialise section '{section}': {e}"))?;
     let encoded = encode_section(&key, &bytes, &format!("machine:{section}"))?;
@@ -1054,6 +1225,15 @@ pub fn log_decrypt_line(line: &str) -> Option<(String, String)> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn settings_generation_routing_requires_explicit_lab_opt_in() {
+        use std::ffi::OsStr;
+        assert!(!super::generation_lab_routing_requested(None, None));
+        assert!(!super::generation_lab_routing_requested(Some("true"), Some(OsStr::new("0"))));
+        assert!(super::generation_lab_routing_requested(Some("1"), None));
+        assert!(super::generation_lab_routing_requested(None, Some(OsStr::new("1"))));
+    }
+
     #[cfg(windows)]
     #[test]
     fn settings_writes_require_the_current_protected_material() {
@@ -1487,3 +1667,8 @@ mod tests {
         assert_eq!(decrypted, plaintext);
     }
 }
+
+#[cfg(any(test, feature = "experimental-settings-generation"))]
+#[allow(dead_code)] // Cutover stays disabled pending ownership and recovery validation.
+#[path = "settings_rotation_trial.rs"]
+mod settings_rotation_trial;

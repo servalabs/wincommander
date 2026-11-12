@@ -8,7 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openFolderPicker } from "@tauri-apps/plugin-dialog";
 import { useAppState } from "../context/AppContext";
-import { buildContentQueryArgs, chunksToText, contentHitToDisplayRow } from "@/lib/contentSearch";
+import { buildContentQueryArgs, chunksToText, contentHitToDisplayRow, indexStatusErrorMessage } from "@/lib/contentSearch";
 import { mergeIndexedRoots, removeIndexedRoot } from "@/lib/searchFilesPanel";
 import type { ContentDisplayRow } from "@/lib/contentSearch";
 import type { Chunk, ContentHit, IndexStatus } from "@/types/wincmd-search";
@@ -27,6 +27,7 @@ export interface ContentIndexState {
   clearContent: () => void;
   indexStatus: IndexStatus | null;
   indexStatusError: string | null;
+  interruptedSearchCandidate: boolean;
   currentRoots: string[];
   foldersReindexing: boolean;
   managementError: string | null;
@@ -64,6 +65,7 @@ export function useContentIndex(query: string, filterTokens: string): ContentInd
   const [contentQuery, setContentQuery] = useState<string | null>(null);
   const [indexStatus, setIndexStatus] = useState<IndexStatus | null>(null);
   const [indexStatusError, setIndexStatusError] = useState<string | null>(null);
+  const [interruptedSearchCandidate, setInterruptedSearchCandidate] = useState(false);
   const [foldersReindexing, setFoldersReindexing] = useState(false);
   const [reindexing, setReindexing] = useState(false);
   const [rescanning, setRescanning] = useState(false);
@@ -226,14 +228,16 @@ export function useContentIndex(query: string, filterTokens: string): ContentInd
         if (lease()) {
           setIndexStatus(s);
           setIndexStatusError(null);
+          setInterruptedSearchCandidate(false);
           // Synced edits can change matches without changing the document count.
           if (!searchInFlight.current) setSearchRefresh((value) => value + 1);
         }
         id = setTimeout(poll, s.is_indexing ? 3000 : 15000);
-      } catch {
+      } catch (error) {
         if (!cancelled) {
           setIndexStatus(null);
-          setIndexStatusError("Index status is unavailable. Check that your indexed volumes are accessible, then retry.");
+          setIndexStatusError(indexStatusErrorMessage(error));
+          setInterruptedSearchCandidate(String(error) === "SEARCH_INTERRUPTED_CANDIDATE");
           id = setTimeout(poll, 3000);
         }
       }
@@ -355,6 +359,7 @@ export function useContentIndex(query: string, filterTokens: string): ContentInd
     clearContent,
     indexStatus,
     indexStatusError,
+    interruptedSearchCandidate,
     currentRoots,
     foldersReindexing,
     managementError,

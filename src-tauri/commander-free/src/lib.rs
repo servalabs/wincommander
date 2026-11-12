@@ -49,6 +49,8 @@ mod context_scrub_failure;
 mod context_scrub_notification;
 mod context_scrub_outcome;
 mod datastore;
+#[cfg(all(windows, feature = "experimental-settings-generation"))]
+pub mod settings_generation_lab;
 mod datastore_io;
 mod devtools;
 mod diagnostics;
@@ -1595,9 +1597,41 @@ fn setup_tauri_cli_runtime(app: &mut tauri::App) -> Result<(), Box<dyn std::erro
     Ok(())
 }
 
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
+pub mod search_migration_cli;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(all(windows, feature = "experimental-settings-generation"))]
+    if let Err(message) = datastore::require_selected_settings_lab_startup() {
+        if cli::tauri_runtime_active() {
+            cli::report_cli_startup_failure("settings_setup_incomplete", message);
+            return;
+        }
+        use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+        let text: Vec<u16> = format!("{message}\0").encode_utf16().collect();
+        let title: Vec<u16> = "WinCommander\0".encode_utf16().collect();
+        unsafe { MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), MB_OK | MB_ICONERROR); }
+        return;
+    }
+    // Keep the cooperating user-profile launch fence for this process lifetime.
+    // The installer helper runs through a separate early CLI entrypoint.
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    match file_search::install_runtime_fence() {
+        Ok(()) => {},
+        Err(message) => {
+            if cli::tauri_runtime_active() {
+                cli::report_cli_startup_failure("search_setup_incomplete", message);
+                return;
+            }
+            use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+            let text: Vec<u16> = format!("{message}\0").encode_utf16().collect();
+            let title: Vec<u16> = "WinCommander\0".encode_utf16().collect();
+            unsafe { MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), MB_OK | MB_ICONERROR); }
+            return;
+        }
+    };
     let cli_mode = cli::tauri_runtime_active();
+    if cli_mode { cli::acknowledge_terminal_after_startup_guards(); }
     startup_trace::init();
     startup_trace::pre_window_milestone("process_start");
     dev_startup_trace("process start");
@@ -3050,6 +3084,8 @@ pub fn run() {
             file_search::content_rescan,
             file_search::content_reindex,
             file_search::content_get_doc,
+            file_search::content_cleanup_old_cache,
+            file_search::content_recover_interrupted_cache,
             backend::get_file_icon_data,
             backend::open_path,
             backend::open_event_log,

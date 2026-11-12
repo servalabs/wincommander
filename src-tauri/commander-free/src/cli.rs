@@ -706,6 +706,12 @@ fn run_command(request: RunRequest) -> i32 {
             return 3;
         }
     }
+    // This must precede even the terminal-command acknowledgement: an
+    // incomplete lab setup must never report a command as dispatched.
+    #[cfg(all(windows, feature = "experimental-settings-generation"))]
+    if let Err(message) = crate::datastore::require_selected_settings_lab_startup() {
+        return fail(1, "settings_setup_incomplete", message);
+    }
     let _execution_lock = if description.risk == Risk::ReadOnly {
         None
     } else {
@@ -726,23 +732,6 @@ fn run_command(request: RunRequest) -> i32 {
         }));
         return 0;
     }
-    // `lockdown` and `full_lockdown` launch their cleanup worker and then tear
-    // the process down, so no IPC completion ever arrives — and Tauri's
-    // `App::run` exits the process directly rather than returning, so nothing
-    // after `crate::run()` executes either. Emit the acknowledgement here,
-    // while stdout is still certainly ours, or automation gets no JSON at all.
-    // It acknowledges the dispatch, never the outcome: verify the wipe
-    // independently.
-    if entry.transport == Transport::Tauri && is_terminal_tauri_command(&entry.name) {
-        TAURI_RESULT_EMITTED.store(true, Ordering::SeqCst);
-        print_json(&json!({
-            "ok": true,
-            "command": description.id,
-            "result": { "detached": true, "processExitRequested": true }
-        }));
-        use std::io::Write;
-        let _ = std::io::stdout().flush();
-    }
     let wait_deadline = (description.risk == Risk::ReadOnly).then_some(request.timeout_ms);
     match entry.transport {
         Transport::BackendScript => match backend_params(&request.params) {
@@ -760,6 +749,19 @@ fn run_command(request: RunRequest) -> i32 {
 
 fn run_backend(command: String, params: HashMap<String, String>, timeout_ms: Option<u64>) -> i32 {
     let command_id = format!("backend:{command}");
+    // Backend CLI commands use their own Tauri builder and do not pass through
+    // the desktop startup gate. Keep installer maintenance entrypoints outside
+    // this route so an incomplete lab setup can still be recovered.
+    #[cfg(all(windows, feature = "experimental-settings-generation"))]
+    if let Err(message) = crate::datastore::require_selected_settings_lab_startup() {
+        print_json(&json!({
+            "ok": false,
+            "command": command_id,
+            "error": "settings_setup_incomplete",
+            "message": message,
+        }));
+        return 1;
+    }
     let output_id = command_id.clone();
     let execution_code = Arc::new(AtomicI32::new(9));
     let result_code = execution_code.clone();
@@ -870,6 +872,28 @@ fn is_terminal_tauri_command(command: &str) -> bool {
 
 pub(crate) fn tauri_runtime_active() -> bool {
     TAURI_RUN_ACTIVE.load(Ordering::SeqCst)
+}
+
+/// Report a startup failure without displaying a modal to headless callers.
+#[cfg(all(windows, any(feature = "experimental-settings-generation", feature = "experimental-encrypted-search")))]
+pub(crate) fn report_cli_startup_failure(kind: &str, message: String) {
+    if !TAURI_RUN_ACTIVE.swap(false, Ordering::SeqCst) { return; }
+    let id = TAURI_RUN.lock().ok().and_then(|mut slot| slot.take()).map(|spec| spec.id);
+    if !TAURI_RESULT_EMITTED.swap(true, Ordering::SeqCst) {
+        print_json(&json!({"ok": false, "command": id, "error": kind, "message": message}));
+    }
+    TAURI_RUN_EXIT_CODE.store(1, Ordering::SeqCst);
+}
+
+/// Terminal commands need a receipt before the handler tears the process
+/// down, but only after every early desktop readiness gate has passed.
+pub(crate) fn acknowledge_terminal_after_startup_guards() {
+    let spec = TAURI_RUN.lock().ok().and_then(|slot| slot.clone());
+    let Some(spec) = spec else { return; };
+    if !is_terminal_tauri_command(&spec.command) || TAURI_RESULT_EMITTED.swap(true, Ordering::SeqCst) { return; }
+    print_json(&json!({"ok": true, "command": spec.id, "result": {"detached": true, "processExitRequested": true}}));
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
 }
 
 pub(crate) fn tauri_initialization_script() -> Result<String, String> {

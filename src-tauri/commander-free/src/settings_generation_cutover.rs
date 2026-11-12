@@ -1,0 +1,224 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//! Gated cutover protocol; no runtime provider is wired.
+//! The caller must hold exclusive generation ownership and a trusted/pinned
+//! root throughout every operation. The anchor provider must authenticate,
+//! authorize and durably publish records independently of the selected file.
+//! Restoring both an old valid anchor and an old valid file still requires an
+//! external anti-rollback policy. This module never deletes legacy files.
+#![allow(dead_code)]
+use base64::{engine::general_purpose::STANDARD as B64, Engine};
+use sha2::{Digest, Sha256};
+use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
+use std::path::{Path, PathBuf};
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", deny_unknown_fields)]
+pub(super) enum AnchorState {
+    Legacy,
+    Preparing { next: String },
+    Active { digest: String },
+    Updating { prior: String, next: String },
+}
+/// A real implementation must authenticate the record and restrict its
+/// independent storage to the authorized system/user identity. Absence is an
+/// error: an installed legacy state must itself be explicitly provisioned.
+pub(super) trait Anchor {
+    fn read(&self) -> Result<Option<AnchorState>, String>;
+    fn write(&self, value: &AnchorState) -> Result<(), String>;
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProtectedRecord {
+    format: String,
+    scope: super::settings_rotation_trial::StoreScope,
+    anchor: AnchorState,
+}
+/// File-backed draft provider. The root must be independently authorized and
+/// pinned; it is not a trusted hardware/registry rollback anchor. Never deploy
+/// solely on the basis of this provider or silently recreate a missing anchor.
+pub(super) struct ProtectedFileAnchor {
+    path: PathBuf,
+    scope: super::settings_rotation_trial::StoreScope,
+}
+impl ProtectedFileAnchor {
+    pub(super) fn new(root: &Path, scope: super::settings_rotation_trial::StoreScope) -> Self {
+        Self { path: root.join(".settings-cutover-anchor.v1"), scope }
+    }
+    fn encode(&self, state: &AnchorState) -> Result<Vec<u8>, String> {
+        let record = ProtectedRecord { format: "wincommander-settings-cutover-anchor-v1".into(), scope: self.scope, anchor: state.clone() };
+        let plain = Zeroizing::new(serde_json::to_vec(&record).map_err(|_| "cannot encode settings cutover anchor")?);
+        let protected = self.scope.protect(&plain)?;
+        let reopened = Zeroizing::new(self.scope.unprotect(&protected)?);
+        if reopened.as_slice() != plain.as_slice() || protected.len() > 65_536 || protected.is_empty() {
+            return Err("settings cutover anchor protection failed".into());
+        }
+        Ok(protected)
+    }
+    /// Explicit install-time initialization only. A missing anchor must never be
+    /// recreated as Legacy during normal startup or recovery.
+    pub(super) fn provision_legacy(&self) -> Result<(), String> {
+        let bytes = self.encode(&AnchorState::Legacy)?;
+        if !crate::datastore_io::publish_new(&self.path, &bytes)? { return Err("settings cutover anchor already exists".into()); }
+        if self.read()? != Some(AnchorState::Legacy) { return Err("settings cutover anchor initialization did not verify".into()); }
+        Ok(())
+    }
+}
+impl Anchor for ProtectedFileAnchor {
+    fn read(&self) -> Result<Option<AnchorState>, String> {
+        let Some(bytes) = super::settings_rotation_trial::read_generation_file(&self.path, 65_536)? else { return Ok(None); };
+        let plain = Zeroizing::new(self.scope.unprotect(&bytes)?);
+        if plain.len() > 65_536 { return Err("settings cutover anchor too large".into()); }
+        let record: ProtectedRecord = serde_json::from_slice(&plain).map_err(|_| "invalid settings cutover anchor")?;
+        if record.format != "wincommander-settings-cutover-anchor-v1" || record.scope != self.scope { return Err("invalid settings cutover anchor scope".into()); }
+        Ok(Some(record.anchor))
+    }
+    fn write(&self, state: &AnchorState) -> Result<(), String> {
+        if self.read()?.is_none() { return Err("settings cutover anchor is missing".into()); }
+        let bytes = self.encode(state)?;
+        crate::datastore_io::atomic_write(&self.path, &bytes)?;
+        if self.read()?.as_ref() != Some(state) { return Err("settings cutover anchor publication did not verify".into()); }
+        Ok(())
+    }
+}
+
+pub(super) fn digest(bytes: &[u8]) -> String { B64.encode(Sha256::digest(bytes)) }
+fn set_anchor(anchor: &impl Anchor, state: AnchorState) -> Result<(), String> {
+    anchor.write(&state)?;
+    if anchor.read()?.as_ref() != Some(&state) { return Err("settings cutover anchor readback mismatch".into()); }
+    Ok(())
+}
+
+/// The selected file is separate from the old store. This helper does not
+/// itself establish directory ACLs or the identity of the pinned root.
+pub(super) struct SelectedFile { path: PathBuf }
+impl SelectedFile {
+    pub(super) fn new(root: &Path) -> Self { Self { path: root.join(".settings-generation.v1") } }
+    fn read(&self) -> Result<Option<Vec<u8>>, String> {
+        super::settings_rotation_trial::read_generation_file(&self.path, 16 * 1024 * 1024 * 2 + 65_536)
+    }
+    fn create(&self, bytes: &[u8]) -> Result<(), String> {
+        if !crate::datastore_io::publish_new(&self.path, bytes)? { return Err("selected settings already exist".into()); }
+        Ok(())
+    }
+    fn replace(&self, bytes: &[u8]) -> Result<(), String> { crate::datastore_io::atomic_write(&self.path, bytes) }
+}
+
+/// Explicit first migration only. The caller must provide an independently
+/// verified current source and enforce maintenance for all ordinary writers.
+/// Marker absence cannot detect restoration/deletion of a previous cutover;
+/// this is acceptable only under the documented first-rollout assumption.
+#[cfg(test)]
+pub(super) fn provision_first_migration(
+    guard: &super::settings_generation_ownership::SettingsGenerationLock,
+    anchor: &ProtectedFileAnchor, root: &Path, verify_source_and_maintenance: &impl Fn() -> Result<(), String>,
+) -> Result<(), String> {
+    provision_first_migration_with_stage(guard, anchor, root, &|stage| {
+        if stage.is_some() { return Err("existing settings cutover artifacts require recovery".into()); }
+        verify_source_and_maintenance()
+    })
+
+}
+
+/// Accept an unselected staged candidate only after verifying it against the
+/// currently held source. Never overwrite stale or unauthentic staged bytes.
+pub(super) fn provision_first_migration_with_stage(
+    guard: &super::settings_generation_ownership::SettingsGenerationLock,
+    anchor: &ProtectedFileAnchor, root: &Path,
+    verify_source_and_maintenance: &impl Fn(Option<&[u8]>) -> Result<(), String>,
+) -> Result<(), String> {
+    guard.require_exclusive().map_err(|e| e.to_string())?;
+    if anchor.read()?.is_some() { return Err("settings cutover anchor already exists".into()); }
+    let stage_path = root.join(".settings-cutover-candidate.v1");
+    let selected = root.join(".settings-generation.v1");
+    let read = |path: &Path| super::settings_rotation_trial::read_generation_file(path, 16 * 1024 * 1024 * 2 + 65_536);
+    if read(&selected)?.is_some() { return Err("existing selected settings require recovery".into()); }
+    let stage = read(&stage_path)?;
+    verify_source_and_maintenance(stage.as_deref())?;
+    if read(&stage_path)? != stage || read(&selected)?.is_some() {
+        return Err("settings cutover artifacts changed; originals preserved".into());
+    }
+    anchor.provision_legacy()?;
+    verify_source_and_maintenance(stage.as_deref())?;
+    if read(&stage_path)? != stage || read(&selected)?.is_some() {
+        return Err("settings cutover artifacts changed; recovery required".into());
+    }
+    Ok(())
+}
+
+/// Start or resume initial selection. A crash after writing Preparing cannot
+/// fall back to legacy; retry requires the exact candidate and a fresh source
+/// verification under the same ownership/fencing rules as initial selection.
+pub(super) fn select_initial(
+    _guard: &super::settings_generation_ownership::SettingsGenerationLock,
+    anchor: &impl Anchor, file: &SelectedFile, candidate: &[u8],
+    verify_source: &impl Fn(&[u8]) -> Result<(), String>,
+) -> Result<(), String> {
+    _guard.require_exclusive().map_err(|e| e.to_string())?;
+    verify_source(candidate)?;
+    let wanted = digest(candidate);
+    match anchor.read()? {
+        Some(AnchorState::Legacy) => {
+            if file.read()?.is_some() { return Err("unexpected selected settings before cutover".into()); }
+            set_anchor(anchor, AnchorState::Preparing { next: wanted.clone() })?;
+        },
+        Some(AnchorState::Preparing { next }) if next == wanted => {},
+        _ => return Err("settings cutover anchor is unavailable or inconsistent".into()),
+    }
+    verify_source(candidate)?;
+    match file.read()? {
+        None => file.create(candidate)?,
+        Some(existing) if existing == candidate => {},
+        Some(_) => return Err("selected settings differ from prepared cutover".into()),
+    }
+    if file.read()?.as_deref() != Some(candidate) { return Err("selected settings publication did not verify".into()); }
+    verify_source(candidate)?;
+    set_anchor(anchor, AnchorState::Active { digest: wanted })
+}
+
+/// Open the selected generation only when the separately trusted anchor is
+/// active and matches authenticated bytes. Pending/absent state never falls
+/// back to the legacy store.
+pub(super) fn read_active(_guard: &super::settings_generation_ownership::SettingsGenerationLock, anchor: &impl Anchor, file: &SelectedFile, verify: &impl Fn(&[u8]) -> Result<(), String>) -> Result<Vec<u8>, String> {
+    let Some(AnchorState::Active { digest: expected }) = anchor.read()? else { return Err("settings cutover is not active".into()); };
+    let bytes = file.read()?.ok_or("selected settings are missing")?;
+    if digest(&bytes) != expected { return Err("selected settings do not match cutover anchor".into()); }
+    verify(&bytes)?;
+    Ok(bytes)
+}
+
+/// Atomically publish a new generation after journaling its old/new digests.
+/// A failed operation remains Updating and must be explicitly recovered.
+pub(super) fn update(
+    _guard: &super::settings_generation_ownership::SettingsGenerationLock,
+    anchor: &impl Anchor, file: &SelectedFile, candidate: &[u8], verify: &impl Fn(&[u8]) -> Result<(), String>,
+) -> Result<(), String> {
+    _guard.require_exclusive().map_err(|e| e.to_string())?;
+    let old = read_active(_guard, anchor, file, verify)?;
+    verify(candidate)?;
+    let prior = digest(&old); let next = digest(candidate);
+    if prior == next { return Ok(()); }
+    set_anchor(anchor, AnchorState::Updating { prior, next: next.clone() })?;
+    file.replace(candidate)?;
+    let observed = file.read()?.ok_or("selected settings missing after update")?;
+    if observed != candidate { return Err("settings update readback mismatch".into()); }
+    verify(&observed)?;
+    set_anchor(anchor, AnchorState::Active { digest: next })
+}
+
+pub(super) fn recover_update(
+    _guard: &super::settings_generation_ownership::SettingsGenerationLock,
+    anchor: &impl Anchor, file: &SelectedFile, verify: &impl Fn(&[u8]) -> Result<(), String>,
+) -> Result<(), String> {
+    _guard.require_exclusive().map_err(|e| e.to_string())?;
+    let Some(AnchorState::Updating { prior, next }) = anchor.read()? else { return Err("no interrupted settings update".into()); };
+    let bytes = file.read()?.ok_or("interrupted settings generation is missing")?;
+    let current = digest(&bytes);
+    if current != prior && current != next { return Err("interrupted settings generation does not match anchor".into()); }
+    verify(&bytes)?;
+    set_anchor(anchor, AnchorState::Active { digest: current })
+}
+
+#[cfg(test)]
+#[path = "settings_generation_cutover_tests.rs"]
+mod tests;

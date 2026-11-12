@@ -1,13 +1,32 @@
 import { copyFileSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { assertSharedAssets } from "./check-shared-assets";
+import { pairedServiceHash, pairedSearchTemplate } from "./paired-search-release-contract";
 
 const root = resolve(import.meta.dirname, "..");
 assertSharedAssets(root);
 const configPath = resolve(root, "src-tauri", "commander-free", "tauri.conf.json");
 const generatedConfigPath = resolve(root, "src-tauri", "commander-free", "tauri.release.generated.json");
 const contextShredBuildPath = resolve(root, "src-tauri", "target", "release", "wincommander-context-shred.exe");
-const serviceBuildPath = resolve(root, "src-tauri", "target", "release", "wincommander-svc.exe");
+const pairedSearch = process.argv.includes("--experimental-paired-search-lab");
+const pairedSettings = process.argv.includes("--experimental-paired-settings-lab");
+if (pairedSettings && !pairedSearch) throw new Error("Settings migration lab requires the paired search lab build.");
+if (!pairedSettings && process.env.WINCMD_SETTINGS_LAB_AUTOROUTE) {
+  throw new Error("Settings autorouting requires the explicit paired settings lab option.");
+}
+if (pairedSearch) {
+  for (const key of ["RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER"]) {
+    if (process.env[key]) throw new Error(`Paired lab build rejects untrusted compiler override: ${key}`);
+  }
+}
+const pairedTemplatePath = resolve(root, "src-tauri", "commander-free", "nsis", "installer.paired.generated.nsi");
+const serviceBuildPath = pairedSearch
+  ? resolve(process.env.WINCMD_FENCED_SERVICE_PATH ?? "")
+  : resolve(root, "src-tauri", "target", "release", "wincommander-svc.exe");
+if (pairedSearch && !process.env.WINCMD_FENCED_SERVICE_PATH) {
+  throw new Error("Paired build requires the final signed guarded service path.");
+}
+if (pairedSearch) pairedServiceHash(readFileSync(serviceBuildPath), process.env.WINCMD_FENCED_SERVICE_SHA256 ?? "");
 const calculatorBuildPath = resolve(root, "src-tauri", "target", "release", "Calculator.exe");
 const contextDeleteIconPath = resolve(
   root,
@@ -42,6 +61,8 @@ const releaseBuildEnv = {
   ...process.env,
   RUSTFLAGS: rustflags,
   CARGO_PROFILE_RELEASE_LTO: "false",
+  ...(pairedSearch ? { WINCMD_PAIRED_LAB_BUILD: "1" } : {}),
+  ...(pairedSettings ? { WINCMD_SETTINGS_LAB_AUTOROUTE: "1" } : {}),
 };
 
 function run(command: string[], label: string) {
@@ -58,16 +79,18 @@ run(
   ["cargo", "build", "--manifest-path", "src-tauri/Cargo.toml", "-p", "commander-context-shred", "--release"],
   "WinCommander context-delete helper release build",
 );
-run(
-  ["cargo", "build", "--manifest-path", "src-tauri/Cargo.toml", "-p", "commander-svc", "--release"],
-  "WinCommander machine-service release build",
-);
+if (!pairedSearch) {
+  run(
+    ["cargo", "build", "--manifest-path", "src-tauri/Cargo.toml", "-p", "commander-svc", "--release"],
+    "WinCommander machine-service release build",
+  );
+}
 run(
   ["cargo", "build", "--manifest-path", "src-tauri/Cargo.toml", "-p", "commander-calculator-launcher", "--release"],
   "Calculator launcher release build",
 );
 const config = JSON.parse(readFileSync(configPath, "utf8")) as {
-  bundle: { resources: string[]; targets: string | string[] };
+  bundle: { resources: string[]; targets: string | string[]; windows: { nsis: { template: string } } };
 };
 const contextShredResource = "resources/wincommander-context-shred.exe";
 const contextDeleteIconResource = "resources/context-delete.ico";
@@ -89,16 +112,25 @@ config.bundle.resources = [
 // places the immutable application binary in Program Files, while each person
 // still gets their own settings when they run it without elevation.
 config.bundle.targets = ["nsis"];
+if (pairedSearch) {
+  const originalTemplate = resolve(root, "src-tauri", "commander-free", config.bundle.windows.nsis.template);
+  writeFileSync(pairedTemplatePath, pairedSearchTemplate(readFileSync(originalTemplate, "utf8"), pairedSettings));
+  config.bundle.windows.nsis.template = "nsis/installer.paired.generated.nsi";
+}
 
 copyFileSync(contextShredBuildPath, stagedContextShredPath);
 copyFileSync(contextDeleteIconPath, stagedContextDeleteIconPath);
 copyFileSync(serviceBuildPath, stagedServicePath);
+if (pairedSearch) pairedServiceHash(readFileSync(stagedServicePath), process.env.WINCMD_FENCED_SERVICE_SHA256 ?? "");
 copyFileSync(calculatorBuildPath, stagedCalculatorPath);
 writeFileSync(generatedConfigPath, `${JSON.stringify(config, null, 2)}\n`);
 try {
-  run(["bun", "x", "--package", "@tauri-apps/cli@2.12.4", "tauri", "build", "--config", generatedConfigPath], "Tauri release bundle");
+  run(["bun", "x", "--package", "@tauri-apps/cli@2.12.4", "tauri", "build", "--config", generatedConfigPath,
+    ...(pairedSearch ? ["--features", pairedSettings ? "experimental-encrypted-search,experimental-settings-generation" : "experimental-encrypted-search"] : [])], "Tauri release bundle");
+  if (pairedSearch) pairedServiceHash(readFileSync(stagedServicePath), process.env.WINCMD_FENCED_SERVICE_SHA256 ?? "");
 } finally {
   rmSync(generatedConfigPath, { force: true });
+  if (pairedSearch) rmSync(pairedTemplatePath, { force: true });
   rmSync(stagedContextShredPath, { force: true });
   rmSync(stagedContextDeleteIconPath, { force: true });
   rmSync(stagedServicePath, { force: true });

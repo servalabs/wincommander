@@ -7,6 +7,10 @@
 #[path = "../../runtime-support/pro_update_guard.rs"]
 mod update_guard;
 
+#[cfg(all(windows, feature = "experimental-search-broker-fence"))]
+#[path = "pro_broker_search_fence.rs"]
+mod search_fence;
+
 #[cfg(windows)]
 #[path = "pro_broker_acl.rs"]
 mod root_acl;
@@ -14,6 +18,15 @@ mod root_acl;
 #[cfg(windows)]
 #[path = "pro_broker_prepare.rs"]
 mod prepare;
+
+/// Describes the gated build contract; the client must separately authenticate
+/// this exact running service image against its trusted release pin.
+pub(crate) fn search_fence_capabilities() -> serde_json::Value {
+    #[cfg(all(windows, feature = "experimental-search-broker-fence"))]
+    { search_fence::capability() }
+    #[cfg(not(all(windows, feature = "experimental-search-broker-fence")))]
+    { serde_json::json!({"protocol": 1, "epoch": "wincommander-paired-search-fence-2026-11-v1", "broker_user_fence": false, "system_search_disabled": false, "app_dir": option_env!("WINCMD_APP_DIR").unwrap_or("WinCommander")}) }
+}
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct HashAcceptance {
@@ -334,6 +347,27 @@ async fn vault_call_until(
     eprintln!(
         "[wincommander-svc] vault_call({feature_id}, operation={request_id}): spawning broker helper"
     );
+    #[cfg(feature = "experimental-search-broker-fence")]
+    let pinned_fenced_pro = match search_fence::pin_expected_pro(&fixed_pro_path()) {
+        Ok(file) => file,
+        Err(_) => { zeroize_json(&mut args); return Err(VaultMountReason::BrokerIdentityRejected); },
+    };
+    #[cfg(feature = "experimental-search-broker-fence")]
+    let fence = match presentation {
+        wincmd_shared::vault_access::VaultPresentation::PerUser => {
+            let result = match caller_token {
+                Some(token) => search_fence::acquire_for_user_token(token, target_session_id, caller_sid),
+                None if per_user_wts_fallback_allowed(feature_id) => search_fence::acquire_for_session(target_session_id, caller_sid),
+                None => Err(std::io::Error::other("missing authenticated user token")),
+            };
+            match result {
+                Ok(fence) => Some(fence),
+                Err(_) => { zeroize_json(&mut args); return Err(VaultMountReason::BrokerUnavailable); },
+            }
+        }
+        // SYSTEM helper scope is different. Do not claim user-profile fencing.
+        wincmd_shared::vault_access::VaultPresentation::Machine => None,
+    };
     let process = spawn_pro_for_presentation(
         target_session_id,
         caller_sid,
@@ -345,10 +379,20 @@ async fn vault_call_until(
         &session_token,
     )
     .map_err(broker_transport_reason)?;
+    #[cfg(feature = "experimental-search-broker-fence")]
+    if let Some(fence) = fence {
+        // A dedicated supervisor owns the lease until OS-confirmed child exit,
+        // even if this async request is cancelled after the process was started.
+        if search_fence::hold_until_process_exit(fence, process).is_err() {
+            zeroize_json(&mut args);
+            return Err(VaultMountReason::BrokerUnavailable);
+        }
+    }
     eprintln!("[wincommander-svc] vault_call({feature_id}, operation={request_id}): broker spawned, waiting for connect");
     let result = async {
         connect_broker_pipe(&pipe, process, deadline).await?;
-        let connected_hash = verified_connected_process_hash(&pipe, process)
+        let connected_hash = verified_connected_process_hash(&pipe, process,
+            #[cfg(feature = "experimental-search-broker-fence")] &pinned_fenced_pro)
             .ok_or(VaultMountReason::BrokerIdentityRejected)?;
         if !hash_matches_fixed_pro(&connected_hash) {
             return Err(VaultMountReason::BrokerIdentityRejected);
@@ -464,6 +508,7 @@ async fn vault_call_until(
 fn verified_connected_process_hash(
     pipe: &tokio::net::windows::named_pipe::NamedPipeServer,
     process: windows_sys::Win32::Foundation::HANDLE,
+    #[cfg(feature = "experimental-search-broker-fence")] pinned: &search_fence::PinnedPro,
 ) -> Option<String> {
     use sha2::{Digest, Sha256};
     use std::io::Read;
@@ -504,6 +549,8 @@ fn verified_connected_process_hash(
         .share_mode(FILE_SHARE_READ | FILE_SHARE_DELETE)
         .open(actual)
         .ok()?;
+    #[cfg(feature = "experimental-search-broker-fence")]
+    if !pinned.matches(&image) { return None; }
     let mut digest = Sha256::new();
     let mut buffer = [0u8; 64 * 1024];
     loop {

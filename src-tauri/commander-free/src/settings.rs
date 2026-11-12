@@ -2616,6 +2616,36 @@ pub(crate) fn create_default_settings() -> AppSettings {
     }
 }
 
+#[cfg(all(windows, feature = "experimental-settings-generation"))]
+pub(crate) fn fresh_machine_settings() -> Result<serde_json::Value, String> {
+    let value = serde_json::to_value(create_default_settings())
+        .map_err(|_| "Could not create fresh machine settings".to_string())?;
+    Ok(split_settings_value(value)?.0)
+}
+
+#[cfg(all(windows, feature = "experimental-settings-generation"))]
+pub(crate) fn valid_fresh_machine_settings(value: &serde_json::Value) -> bool {
+    value.get("deviceId").and_then(serde_json::Value::as_str)
+        .is_some_and(|id| Uuid::parse_str(id).is_ok())
+        && serde_json::from_value::<AppSettings>(value.clone()).is_ok()
+}
+
+#[cfg(all(test, windows, feature = "experimental-settings-generation"))]
+#[test]
+fn fresh_machine_readiness_rejects_missing_or_invalid_identity_and_schema() {
+    let valid = fresh_machine_settings().unwrap();
+    assert!(valid_fresh_machine_settings(&valid));
+    let mut missing = valid.clone();
+    missing.as_object_mut().unwrap().remove("deviceId");
+    assert!(!valid_fresh_machine_settings(&missing));
+    let mut invalid = valid.clone();
+    invalid["deviceId"] = serde_json::json!("invalid");
+    assert!(!valid_fresh_machine_settings(&invalid));
+    let mut malformed = valid;
+    malformed["policy"] = serde_json::json!("invalid");
+    assert!(!valid_fresh_machine_settings(&malformed));
+}
+
 fn apply_runtime_defaults(settings: &mut AppSettings) {
     match settings.app.permanently_hidden_panels.as_mut() {
         Some(panels) => {
