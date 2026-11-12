@@ -7,7 +7,7 @@ use super::{
 };
 use super::settings_generation_cutover::{self as cutover, Anchor, AnchorState, ProtectedFileAnchor, SelectedFile};
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
-use rand::{rngs::OsRng, RngCore};
+use rand::{rngs::SysRng, TryRng};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -167,7 +167,7 @@ fn seal_generation(generation: &Generation) -> Result<Vec<u8>, String> {
         return Err("settings snapshot too large".into());
     }
     let mut material = Zeroizing::new([0u8; 32]);
-    OsRng.fill_bytes(material.as_mut());
+    SysRng.try_fill_bytes(material.as_mut()).map_err(|_| "randomness unavailable")?;
     let protected = Zeroizing::new(generation.scope.protect(material.as_ref())?);
     let key = Zeroizing::new(derive_section_key(&material, None)?);
     let ciphertext = encode_section(&key, &plain, SCOPE)?;

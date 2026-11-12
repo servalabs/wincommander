@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-use rand::{rngs::OsRng, RngCore};
+use rand::{rngs::SysRng, TryRng};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -80,7 +80,7 @@ fn key(
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound && initial.is_some() => {
             let mut material = [0u8; 32];
-            OsRng.fill_bytes(&mut material);
+            SysRng.try_fill_bytes(&mut material).map_err(|_| "randomness unavailable")?;
             let pending = initial.unwrap();
             save_key(
                 path,

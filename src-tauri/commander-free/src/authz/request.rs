@@ -299,5 +299,5 @@ pub(super) async fn request_destructive_confirmation_impl(
     if !authorized {
         return Err("confirmation failed".into());
     }
-    Ok(mint(action, &args_canonical))
+    mint(action, &args_canonical)
 }

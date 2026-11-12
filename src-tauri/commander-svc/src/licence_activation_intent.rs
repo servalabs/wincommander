@@ -4,7 +4,7 @@
 use crate::fleet_credential::{MachineDpapi, Protector};
 use crate::license_cache::{licence_device_anchor::Anchor, release_gate};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use rand::RngCore;
+use rand::TryRng;
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
 use zeroize::{Zeroize, Zeroizing};
@@ -503,7 +503,7 @@ fn begin_locked(store: &Anchor, gate: &Anchor, protector: &dyn Protector,
         return Ok(pending);
     }
     let mut random = [0u8; 32];
-    rand::rngs::OsRng.try_fill_bytes(&mut random).map_err(|_| INVALID)?;
+    rand::rngs::SysRng.try_fill_bytes(&mut random).map_err(|_| INVALID)?;
     use std::fmt::Write as _;
     let mut operation_id = String::with_capacity(64);
     for byte in random { write!(&mut operation_id, "{byte:02x}").map_err(|_| INVALID)?; }
@@ -514,8 +514,8 @@ fn begin_locked(store: &Anchor, gate: &Anchor, protector: &dyn Protector,
         credential_id.copy_from_slice(old.id);
         credential_secret.copy_from_slice(old.secret);
     } else {
-        rand::rngs::OsRng.try_fill_bytes(&mut credential_id).map_err(|_| INVALID)?;
-        rand::rngs::OsRng.try_fill_bytes(&mut credential_secret).map_err(|_| INVALID)?;
+        rand::rngs::SysRng.try_fill_bytes(&mut credential_id).map_err(|_| INVALID)?;
+        rand::rngs::SysRng.try_fill_bytes(&mut credential_secret).map_err(|_| INVALID)?;
     }
     let credential_commitment = credential_commitment(&credential_id, &credential_secret);
     let reactivation = previous.as_ref().map(|old| reactivation_witness(&operation_id, device, old)).transpose()?;

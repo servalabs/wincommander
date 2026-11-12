@@ -428,7 +428,7 @@ mod tests {
     }
 
     fn test_signing_key() -> SigningKey {
-        SigningKey::generate(&mut rand10::rng())
+        SigningKey::generate(&mut rand::rng())
     }
 
     /// Builds a `SignedCommand` the way the REAL system does: the signer signs

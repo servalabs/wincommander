@@ -861,7 +861,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "clipboard-win",
- "rand 0.8.8",
+ "rand 0.10.3",
  "serde",
  "serde_json",
  "tokio",
@@ -929,7 +929,7 @@ name = "commander-context-shred"
 version = "3.5.1"
 dependencies = [
  "embed-resource",
- "rand 0.8.8",
+ "rand 0.10.3",
  "tempfile",
  "windows-sys 0.61.2",
 ]
@@ -966,7 +966,6 @@ dependencies = [
  "notify",
  "once_cell",
  "rand 0.10.3",
- "rand 0.8.8",
  "raw-window-handle",
  "rcgen",
  "regex",
@@ -1021,7 +1020,7 @@ dependencies = [
  "ed25519-dalek 3.0.0",
  "fleet-agent-core",
  "fleet-proto",
- "rand 0.8.8",
+ "rand 0.10.3",
  "rcgen",
  "reqwest",
  "rustls",
@@ -2017,7 +2016,6 @@ dependencies = [
  "hex",
  "hmac",
  "rand 0.10.3",
- "rand 0.8.8",
  "rcgen",
  "reqwest",
  "rustls",

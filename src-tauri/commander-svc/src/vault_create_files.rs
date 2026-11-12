@@ -135,10 +135,10 @@ pub(super) struct Stage {
 
 impl Stage {
     pub fn create() -> Result<Self, VaultError> {
-        use rand::{rngs::OsRng, RngCore};
+        use rand::{rngs::SysRng, TryRng};
         let base = std::env::var_os("ProgramData").ok_or(VaultError::Persistence)?;
         let mut nonce = [0u8; 16];
-        OsRng
+        SysRng
             .try_fill_bytes(&mut nonce)
             .map_err(|_| VaultError::Persistence)?;
         let suffix = nonce.iter().map(|b| format!("{b:02x}")).collect::<String>();

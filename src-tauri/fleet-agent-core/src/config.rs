@@ -257,7 +257,7 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn fleet_config_default_skew_is_300s() {
-        let key = SigningKey::generate(&mut rand10::rng());
+        let key = SigningKey::generate(&mut rand::rng());
         let pubkey_b64 = B64.encode(key.verifying_key().to_bytes());
         let prefix = "TAC_TEST_SKEW";
 
@@ -277,7 +277,7 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn fleet_config_trims_trailing_slash_from_url() {
-        let key = SigningKey::generate(&mut rand10::rng());
+        let key = SigningKey::generate(&mut rand::rng());
         let pubkey_b64 = B64.encode(key.verifying_key().to_bytes());
         let prefix = "TAC_TEST_SLASH";
 
@@ -294,7 +294,7 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn fleet_config_checkin_secret_is_raw_utf8_bytes() {
-        let key = SigningKey::generate(&mut rand10::rng());
+        let key = SigningKey::generate(&mut rand::rng());
         let pubkey_b64 = B64.encode(key.verifying_key().to_bytes());
         let prefix = "TAC_TEST_SECRETBYTES";
 
@@ -311,7 +311,7 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn fleet_config_pin_spki_absent_by_default() {
-        let key = SigningKey::generate(&mut rand10::rng());
+        let key = SigningKey::generate(&mut rand::rng());
         let pubkey_b64 = B64.encode(key.verifying_key().to_bytes());
         let prefix = "TAC_TEST_PIN_ABSENT";
 
@@ -329,7 +329,7 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn fleet_config_pin_spki_parsed_when_set() {
-        let key = SigningKey::generate(&mut rand10::rng());
+        let key = SigningKey::generate(&mut rand::rng());
         let pubkey_b64 = B64.encode(key.verifying_key().to_bytes());
         let prefix = "TAC_TEST_PIN_SET";
         let pin_hex = "a".repeat(64); // valid-shape 32-byte hex
@@ -352,7 +352,7 @@ mod tests {
     fn fleet_config_pin_spki_parses_rotation_overlap_pin_set() {
         // Two comma-separated pins: the primary + a retired/next pin kept
         // during a cert-rotation overlap window.
-        let key = SigningKey::generate(&mut rand10::rng());
+        let key = SigningKey::generate(&mut rand::rng());
         let pubkey_b64 = B64.encode(key.verifying_key().to_bytes());
         let prefix = "TAC_TEST_PIN_ROTATION";
         let pin_a = "a".repeat(64);
@@ -379,7 +379,7 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn fleet_config_pin_spki_malformed_falls_back_to_none() {
-        let key = SigningKey::generate(&mut rand10::rng());
+        let key = SigningKey::generate(&mut rand::rng());
         let pubkey_b64 = B64.encode(key.verifying_key().to_bytes());
         let prefix = "TAC_TEST_PIN_BAD";
 
@@ -397,8 +397,8 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn fleet_config_different_prefixes_do_not_collide() {
-        let key_a = SigningKey::generate(&mut rand10::rng());
-        let key_b = SigningKey::generate(&mut rand10::rng());
+        let key_a = SigningKey::generate(&mut rand::rng());
+        let key_b = SigningKey::generate(&mut rand::rng());
         set_all("TAC_TEST_A", &B64.encode(key_a.verifying_key().to_bytes()));
         // Deliberately leave prefix B unset.
         clear_all("TAC_TEST_B");
@@ -415,7 +415,7 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn traffic_shaping_defaults_are_sane_when_unset() {
-        let key = SigningKey::generate(&mut rand10::rng());
+        let key = SigningKey::generate(&mut rand::rng());
         let pubkey_b64 = B64.encode(key.verifying_key().to_bytes());
         let prefix = "TAC_TEST_SHAPE_DEFAULTS";
 
@@ -434,7 +434,7 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn traffic_shaping_jitter_window_is_configurable() {
-        let key = SigningKey::generate(&mut rand10::rng());
+        let key = SigningKey::generate(&mut rand::rng());
         let pubkey_b64 = B64.encode(key.verifying_key().to_bytes());
         let prefix = "TAC_TEST_SHAPE_WINDOW";
 
@@ -454,7 +454,7 @@ mod tests {
     fn traffic_shaping_jitter_window_falls_back_when_inverted() {
         // min > max is nonsensical — must fall back to the safe default
         // window rather than construct a backwards (or panicking) range.
-        let key = SigningKey::generate(&mut rand10::rng());
+        let key = SigningKey::generate(&mut rand::rng());
         let pubkey_b64 = B64.encode(key.verifying_key().to_bytes());
         let prefix = "TAC_TEST_SHAPE_INVERTED";
 
@@ -472,7 +472,7 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn traffic_shaping_padding_bytes_configurable_and_zero_disables() {
-        let key = SigningKey::generate(&mut rand10::rng());
+        let key = SigningKey::generate(&mut rand::rng());
         let pubkey_b64 = B64.encode(key.verifying_key().to_bytes());
         let prefix = "TAC_TEST_SHAPE_PAD";
 
@@ -488,7 +488,7 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn traffic_shaping_decoy_enabled_parses_truthy_strings() {
-        let key = SigningKey::generate(&mut rand10::rng());
+        let key = SigningKey::generate(&mut rand::rng());
         let pubkey_b64 = B64.encode(key.verifying_key().to_bytes());
         let prefix = "TAC_TEST_SHAPE_DECOY";
 
