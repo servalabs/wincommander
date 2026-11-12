@@ -4,7 +4,7 @@
 use crate::{fleet_credential::Protector, fleet_machine_policy::FleetTrust, policy_store::PolicyFs};
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use ed25519_dalek::{Signer, SigningKey, Signature, VerifyingKey};
-use rand::{rngs::OsRng, RngCore};
+use rand::{rngs::SysRng, TryRng};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{path::PathBuf, sync::Mutex};
@@ -178,7 +178,7 @@ impl<'a> CandidateStore<'a> {
             _=>return Err(INVALID),
         }
         let mut seed = Zeroizing::new([0u8;32]);
-        OsRng.try_fill_bytes(seed.as_mut()).map_err(|_| INVALID)?;
+        SysRng.try_fill_bytes(seed.as_mut()).map_err(|_| INVALID)?;
         let key = SigningKey::from_bytes(&seed);
         let sealed = self.protector.protect(seed.as_ref(), &entropy(trust, &receipt.retirement_id)?)?;
         if sealed.is_empty() || sealed.len() > 32768 { return Err(INVALID); }
@@ -193,7 +193,7 @@ impl<'a> CandidateStore<'a> {
         let _guard = LOCK.lock().map_err(|_| INVALID)?;
         let candidate = self.read_for(trust,retirement)?;
         let key = self.signing_key(&candidate, trust, retirement)?;
-        let mut nonce = [0u8; 16]; OsRng.try_fill_bytes(&mut nonce).map_err(|_| INVALID)?;
+        let mut nonce = [0u8; 16]; SysRng.try_fill_bytes(&mut nonce).map_err(|_| INVALID)?;
         nonce[6] = (nonce[6] & 15) | 64; nonce[8] = (nonce[8] & 63) | 128;
         let nonce = uuid::Uuid::from_bytes(nonce).to_string();
         let preimage = serde_json::to_vec(&("wincommander:fleet:identity-handoff-request:v1", "POST",
@@ -212,7 +212,7 @@ impl<'a> CandidateStore<'a> {
         let candidate=self.read_for(trust,retirement)?;
         let key=self.signing_key(&candidate,trust,retirement)?;
         if Sha256::digest(key.verifying_key().as_bytes()).as_slice()!=fingerprint { return Err(INVALID); }
-        let mut nonce=[0u8;16]; OsRng.try_fill_bytes(&mut nonce).map_err(|_| INVALID)?;
+        let mut nonce=[0u8;16]; SysRng.try_fill_bytes(&mut nonce).map_err(|_| INVALID)?;
         nonce[6]=(nonce[6]&15)|64; nonce[8]=(nonce[8]&63)|128;
         let nonce=uuid::Uuid::from_bytes(nonce).to_string();
         let bytes=serde_json::to_vec(&("wincommander:fleet:identity-handoff-confirmation:v1","POST",
@@ -231,7 +231,7 @@ impl<'a> CandidateStore<'a> {
         let key=self.signing_key(&candidate,trust,expected.recovery_id())?;
         let fingerprint=Sha256::digest(key.verifying_key().as_bytes()).iter().map(|b|format!("{b:02x}")).collect::<String>();
         if fingerprint!=expected.candidate_fingerprint() { return Err(INVALID); }
-        let mut nonce=[0u8;16]; OsRng.try_fill_bytes(&mut nonce).map_err(|_| INVALID)?;
+        let mut nonce=[0u8;16]; SysRng.try_fill_bytes(&mut nonce).map_err(|_| INVALID)?;
         nonce[6]=(nonce[6]&15)|64; nonce[8]=(nonce[8]&63)|128;
         let nonce=uuid::Uuid::from_bytes(nonce).to_string();
         let bytes=serde_json::to_vec(&("wincommander:fleet:identity-handoff-commit:v1","POST",
@@ -281,7 +281,7 @@ impl<'a> CandidateStore<'a> {
         obj.insert("enrollment_proof_version".into(), 1.into());
         obj.insert("enrollment_server_key_b64".into(), trust.signer_key.clone().into());
         obj.insert("enrollment_ts".into(), now.into());
-        let mut nonce = [0u8;16]; OsRng.try_fill_bytes(&mut nonce).map_err(|_| INVALID)?;
+        let mut nonce = [0u8;16]; SysRng.try_fill_bytes(&mut nonce).map_err(|_| INVALID)?;
         nonce[6] = (nonce[6] & 15) | 64; nonce[8] = (nonce[8] & 63) | 128;
         obj.insert("enrollment_nonce".into(), uuid::Uuid::from_bytes(nonce).to_string().into());
         let mut bytes = b"WinCommander Fleet enrollment proof v1\nPOST\n/v1/agents/enroll\n".to_vec();

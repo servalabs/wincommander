@@ -236,7 +236,7 @@ impl Store {
 /// a privileged user cannot deliberately start an old executable later.
 #[allow(dead_code)]
 pub(crate) fn recovery_boot_token()->Result<[u8;32],&'static str> {
-    use rand::{rngs::OsRng,RngCore};
+    use rand::{rngs::SysRng,TryRng};
     use std::sync::Mutex;
     use windows_sys::Win32::System::Registry::REG_OPTION_VOLATILE;
     static LOCK:Mutex<()>=Mutex::new(());
@@ -249,7 +249,7 @@ pub(crate) fn recovery_boot_token()->Result<[u8;32],&'static str> {
     let status=unsafe { RegQueryValueExW(store.0,name.as_ptr(),std::ptr::null(),&mut kind,token.as_mut_ptr(),&mut size) };
     if status==0 && kind==REG_BINARY && size==32 && token.iter().any(|b|*b!=0) { return Ok(token); }
     if status!=2 || !created { return Err("reboot witness unavailable"); }
-    OsRng.try_fill_bytes(&mut token).map_err(|_| "reboot witness unavailable")?;
+    SysRng.try_fill_bytes(&mut token).map_err(|_| "reboot witness unavailable")?;
     if token.iter().all(|b|*b==0) || unsafe { RegSetValueExW(store.0,name.as_ptr(),0,REG_BINARY,token.as_ptr(),32) }!=0 { return Err("reboot witness unavailable"); }
     Ok(token)
 }

@@ -3,7 +3,7 @@
 #![allow(dead_code)]
 use super::{peer_has_active_interactive_session, service_peer_identity, service_peer_privileges, AuthenticatedPipePeer};
 use crate::fleet_identity_handoff::{Handoff, VerifiedHandoff};
-use rand::{rngs::OsRng, RngCore};
+use rand::{rngs::SysRng, TryRng};
 use sha2::{Digest, Sha256};
 use std::{collections::HashMap, sync::Mutex, time::{Duration, Instant, SystemTime, UNIX_EPOCH}};
 use windows_sys::Win32::{Foundation::CloseHandle,
@@ -86,7 +86,7 @@ pub(super) fn issue_upgrade_challenge(store:&crate::fleet_machine_policy::FleetM
     store.with_handoff_trust(|trust| {
         if device!=trust.device_id { return Err("upgrade witness unavailable"); }
         let (_,_,boot_sha256)=verified_upgrade_record(fs,dir,trust,recovery,&boot)?;
-        let mut token=zeroize::Zeroizing::new([0u8;32]);OsRng.try_fill_bytes(token.as_mut()).map_err(|_| "randomness unavailable")?;
+        let mut token=zeroize::Zeroizing::new([0u8;32]);SysRng.try_fill_bytes(token.as_mut()).map_err(|_| "randomness unavailable")?;
         let digest:[u8;32]=Sha256::digest(token.as_slice()).into();
         let mut pending=UPGRADE_CHALLENGES.get_or_init(||Mutex::new(HashMap::new())).lock().map_err(|_| "upgrade witness unavailable")?;
         pending.retain(|_,value|value.expires>Instant::now());if pending.len()>=64 || pending.contains_key(&digest) { return Err("upgrade witness unavailable"); }
@@ -253,8 +253,8 @@ pub(super) async fn probe_upgrade_after_restart(store:&crate::fleet_machine_poli
     use base64::{engine::general_purpose::STANDARD,Engine};
     use wincmd_shared::vault_access::VaultPresentation;
     if !witness.still_authorized() || approval.expires<=Instant::now() { return Err("upgrade authorization unavailable"); }
-    let mut token=zeroize::Zeroizing::new([0u8;32]);OsRng.try_fill_bytes(token.as_mut()).map_err(|_| "randomness unavailable")?;
-    let encoded=zeroize::Zeroizing::new(STANDARD.encode(token.as_slice()));let mut random=[0u8;8];OsRng.try_fill_bytes(&mut random).map_err(|_| "randomness unavailable")?;
+    let mut token=zeroize::Zeroizing::new([0u8;32]);SysRng.try_fill_bytes(token.as_mut()).map_err(|_| "randomness unavailable")?;
+    let encoded=zeroize::Zeroizing::new(STANDARD.encode(token.as_slice()));let mut random=[0u8;8];SysRng.try_fill_bytes(&mut random).map_err(|_| "randomness unavailable")?;
     let result=crate::pro_broker::vault_call(crate::pro_broker::VaultCall { request_id:u64::from_le_bytes(random),target_session_id:0,
         caller_sid:"S-1-5-18",caller_token:None,caller_authentication_id:None,presentation:VaultPresentation::Machine,
         feature_id:"fleet.recovery.upgrade_probe",args:serde_json::json!({"challenge":encoded.as_str(),"protocol_version":UPGRADE_RECOVERY_PROTOCOL}) })
@@ -298,7 +298,7 @@ impl GrantStore {
             let now = Instant::now();
             grants.retain(|_, grant| grant.expires > now);
             if grants.len() >= 64 { return Err("handoff authorization unavailable"); }
-            let mut token=[0;32]; OsRng.try_fill_bytes(&mut token).map_err(|_| "randomness unavailable")?;
+            let mut token=[0;32]; SysRng.try_fill_bytes(&mut token).map_err(|_| "randomness unavailable")?;
             let hash: [u8;32] = Sha256::digest(token).into();
             if grants.contains_key(&hash) { return Err("handoff authorization unavailable"); }
             grants.insert(hash, Grant { approval, expires: now + Duration::from_secs(120) });
@@ -446,7 +446,7 @@ fn start_legacy_work(fs:&dyn crate::policy_store::PolicyFs,dir:&std::path::Path,
         let index=ledger.entries.iter().position(|entry|entry.state=="complete").ok_or("legacy work unavailable")?;
         ledger.entries.remove(index);
     }
-    let mut token=zeroize::Zeroizing::new([0u8;32]);OsRng.try_fill_bytes(token.as_mut()).map_err(|_| "randomness unavailable")?;
+    let mut token=zeroize::Zeroizing::new([0u8;32]);SysRng.try_fill_bytes(token.as_mut()).map_err(|_| "randomness unavailable")?;
     ledger.entries.push(LegacyWorkEntry { kind:kind.into(),work_id:work_id.into(),state:"active".into(),owner:StopOwner { sid:peer.sid.clone(),session:peer.session,
         logon:peer.logon,pid:peer.pid,process_created:peer.process_created,token_sha256:lower_hex(&Sha256::digest(token.as_slice())) } });
     fs.atomic_write(&legacy_work_path(dir,trust)?,&serde_json::to_vec(&ledger).map_err(|_| "legacy work unavailable")?).map_err(|_| "legacy work unavailable")?;
@@ -477,7 +477,7 @@ fn poll_stop_request(fs:&dyn crate::policy_store::PolicyFs,dir:&std::path::Path,
     let Some(mut request)=read_stop(fs,dir,trust)? else { return Ok(serde_json::json!({"pending":false})); };
     if request.state=="joined" { return Ok(serde_json::json!({"pending":false})); }
     if request.owner.as_ref().is_some_and(|owner|!same_stop_owner(owner,peer)) { return Err("stop owner changed"); }
-    let mut token=zeroize::Zeroizing::new([0u8;32]);OsRng.try_fill_bytes(token.as_mut()).map_err(|_| "randomness unavailable")?;
+    let mut token=zeroize::Zeroizing::new([0u8;32]);SysRng.try_fill_bytes(token.as_mut()).map_err(|_| "randomness unavailable")?;
     request.owner=Some(StopOwner { sid:peer.sid.clone(),session:peer.session,logon:peer.logon,pid:peer.pid,
         process_created:peer.process_created,token_sha256:lower_hex(&Sha256::digest(token.as_slice())) });
     fs.atomic_write(&dir.join("recovery-stop-request.json"),&serde_json::to_vec(&request).map_err(|_| "stop request unavailable")?)
@@ -997,7 +997,7 @@ pub(super) async fn archive_review_with_broker(store:&crate::fleet_machine_polic
         || consumed.approval.fingerprint!=*verified.fingerprint() || consumed.approval.sid!=witness.sid
         || consumed.approval.session!=witness.session || consumed.approval.logon!=witness.logon
         || !witness.still_authorized() { return Err("handoff authorization changed"); }
-    let mut random=[0u8;8]; OsRng.try_fill_bytes(&mut random).map_err(|_| "randomness unavailable")?;
+    let mut random=[0u8;8]; SysRng.try_fill_bytes(&mut random).map_err(|_| "randomness unavailable")?;
     let operation=u64::from_le_bytes(random);
     let mut stored_receipt=None;
     let mut receive=|payload| {
@@ -1936,7 +1936,7 @@ async fn check_recovered_leave(store:&crate::fleet_machine_policy::FleetMachineP
     let snapshot=store.credential_snapshot(protector)?.ok_or("leave status unavailable")?;
     if !snapshot.is_recovered || !store.credential_is_current(&snapshot)
         || crate::fleet_runtime_env::fingerprint().as_deref()!=Some(snapshot.profile.environment_fingerprint.as_str()) { return Err("leave status unavailable") }
-    let mut random=[0u8;32]; OsRng.try_fill_bytes(&mut random).map_err(|_|"randomness unavailable")?;
+    let mut random=[0u8;32]; SysRng.try_fill_bytes(&mut random).map_err(|_|"randomness unavailable")?;
     let nonce=lower_hex(&random);
     let request=store.with_leave_identity(&snapshot,|current,old,recovery,fingerprint| {
         if fingerprint.len()!=64 || !fingerprint.bytes().all(|b|b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {return Err("invalid recovery identity")}
@@ -2021,7 +2021,7 @@ fn issue_drain_statement(store:&crate::fleet_machine_policy::FleetMachinePolicy,
         let next=handoff.verify(current,next_id,next_generation,&key,now)?;
         mutate_unified_journal_inner(fs,dir,protector,current,old,previous,archive,operator,true,|journal,inbox| {
             let snapshot=freeze_for_next(journal,inbox,&next)?;
-            let mut random=[0u8;16];OsRng.try_fill_bytes(&mut random).map_err(|_| "randomness unavailable")?;
+            let mut random=[0u8;16];SysRng.try_fill_bytes(&mut random).map_err(|_| "randomness unavailable")?;
             random[6]=(random[6]&15)|64;random[8]=(random[8]&63)|128;let nonce=uuid::Uuid::from_bytes(random).to_string();
             let signature=candidate.sign_drain(old,current,previous.retirement_id(),&next,&snapshot,now,&nonce)?;
             Ok(serde_json::json!({"org_id":current.org_id,"device_id":current.device_id,"current_generation":current.enrollment_generation,
@@ -2047,7 +2047,7 @@ fn issue_cancel_request(store:&crate::fleet_machine_policy::FleetMachinePolicy,f
                 || approval.decision_digest!=freeze.decision_digest || drain_snapshot(journal,inbox)?!=freeze.snapshot_sha256
                 || approval.expires<=Instant::now() || !witness.still_authorized() { return Err("cancellation unavailable"); }
             let now=i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_| "clock unavailable")?.as_secs()).map_err(|_| "clock unavailable")?;
-            let mut random=[0u8;16];OsRng.try_fill_bytes(&mut random).map_err(|_| "randomness unavailable")?;
+            let mut random=[0u8;16];SysRng.try_fill_bytes(&mut random).map_err(|_| "randomness unavailable")?;
             random[6]=(random[6]&15)|64;random[8]=(random[8]&63)|128;let nonce=uuid::Uuid::from_bytes(random).to_string();
             let signature=candidate.sign_cancel(old,current,previous.retirement_id(),&freeze.next_recovery_id,&freeze.next_generation,&freeze.decision_digest,now,&nonce)?;
             Ok(serde_json::json!({"org_id":current.org_id,"device_id":current.device_id,"current_generation":current.enrollment_generation,
@@ -2288,7 +2288,7 @@ async fn upload_late_evidence(store:&crate::fleet_machine_policy::FleetMachinePo
     if uuid::Uuid::parse_str(command_id).ok().is_none_or(|id|id.is_nil() || id.to_string()!=command_id)
         || matches!(late.outcome.outcome,fleet_proto::ActionOutcomeState::Unknown) { return Err("late evidence upload unavailable"); }
     let now=i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_| "clock unavailable")?.as_secs()).map_err(|_| "clock unavailable")?;
-    let mut random=[0u8;16];OsRng.try_fill_bytes(&mut random).map_err(|_| "randomness unavailable")?;
+    let mut random=[0u8;16];SysRng.try_fill_bytes(&mut random).map_err(|_| "randomness unavailable")?;
     let nonce=format!("ci-{}",lower_hex(&random));
     let mut payload=SensitivePayload(serde_json::json!({"org_id":snapshot.trust.org_id,"device_id":snapshot.trust.device_id,
         "recovery_id":recovery,"command_id":command_id,"unknown_receipt_id":review.receipt_id,"unknown_record_hash":review.record_hash,
@@ -2422,7 +2422,7 @@ fn issue_unified_grant(fs:&dyn crate::policy_store::PolicyFs,dir:&std::path::Pat
     mutate_unified_journal(fs,dir,protector,current,old,verified,archive,operator,|_,inbox| {
         let entry=inbox.entries.iter_mut().find(|entry|entry.command.command_id==command_id).ok_or("command unavailable")?;
         if entry.state!="ready" || entry.command.epoch_version!=epoch { return Err("command unavailable"); }
-        let mut token=zeroize::Zeroizing::new([0u8;32]); OsRng.try_fill_bytes(token.as_mut()).map_err(|_| "randomness unavailable")?;
+        let mut token=zeroize::Zeroizing::new([0u8;32]); SysRng.try_fill_bytes(token.as_mut()).map_err(|_| "randomness unavailable")?;
         entry.state="in_flight".into(); entry.grant=Some(InboxGrant { token_sha256:lower_hex(&Sha256::digest(token.as_slice())),
             sid:peer.sid.clone(),session:peer.session,logon:peer.logon,pid:peer.pid,process_created:peer.process_created,expires:now.checked_add(120).ok_or("clock unavailable")?,start_epoch:Some(epoch),started_at:None });
         Ok((entry.command.clone(),token))
@@ -2476,7 +2476,7 @@ fn finish_unified_grant(fs:&dyn crate::policy_store::PolicyFs,dir:&std::path::Pa
             authorize_result(AuthenticatedDelivery { command:entry.command.clone() },AuthenticatedExecution {
                 outcome:execution.outcome.clone(),ack:execution.ack.clone() },current,operator,entry.command.epoch_version)?;
             let review=entry.unknown_review.as_ref().ok_or("unknown review unavailable")?;
-            let mut raw=[0u8;16];OsRng.try_fill_bytes(&mut raw).map_err(|_| "randomness unavailable")?;
+            let mut raw=[0u8;16];SysRng.try_fill_bytes(&mut raw).map_err(|_| "randomness unavailable")?;
             raw[6]=(raw[6]&15)|64;raw[8]=(raw[8]&63)|128;let evidence_id=uuid::Uuid::from_bytes(raw).to_string();
             let signature=candidate.sign_late_evidence(old,verified.retirement_id(),verified.fingerprint(),command_id,
                 &evidence_id,&review.receipt_id,&review.record_hash,&result_hash)?;
@@ -2532,7 +2532,7 @@ fn acknowledge_unknown(fs:&dyn crate::policy_store::PolicyFs,dir:&std::path::Pat
         if command_digest(&entry.command)?!=approval.command_digest { return Err("unknown review changed"); }
         if entry.state=="unknown" { return Ok(()); }
         if !matches!(entry.state.as_str(),"in_flight"|"running") { return Err("unknown review changed"); }
-        let mut random=[0u8;32]; OsRng.try_fill_bytes(&mut random).map_err(|_| "randomness unavailable")?;
+        let mut random=[0u8;32]; SysRng.try_fill_bytes(&mut random).map_err(|_| "randomness unavailable")?;
         let mut receipt=[0u8;16];receipt.copy_from_slice(&random[..16]);receipt[6]=(receipt[6]&15)|64;receipt[8]=(receipt[8]&63)|128;
         let mut report=[0u8;16];report.copy_from_slice(&random[16..]);report[6]=(report[6]&15)|64;report[8]=(report[8]&63)|128;
         let result=serde_json::json!({"state":"execution_unknown"});
@@ -2643,7 +2643,7 @@ fn issue_execution_grant(fs:&dyn crate::policy_store::PolicyFs,dir:&std::path::P
         || !ids.insert(entry.command.command_id.clone())) { return Err("command inbox unavailable"); }
     let entry=inbox.entries.iter_mut().find(|entry|entry.command.command_id==command_id).ok_or("command unavailable")?;
     if entry.state!="ready" || entry.command.epoch_version!=epoch { return Err("command unavailable"); }
-    let mut token=zeroize::Zeroizing::new([0u8;32]); OsRng.try_fill_bytes(token.as_mut()).map_err(|_| "randomness unavailable")?;
+    let mut token=zeroize::Zeroizing::new([0u8;32]); SysRng.try_fill_bytes(token.as_mut()).map_err(|_| "randomness unavailable")?;
     entry.state="in_flight".into();
     entry.grant=Some(InboxGrant { token_sha256:lower_hex(&Sha256::digest(token.as_slice())),sid:principal.sid.clone(),
         session:principal.session,logon:principal.logon,pid:principal.pid,process_created:principal.process_created,expires:now.checked_add(120).ok_or("clock unavailable")?,start_epoch:Some(epoch),started_at:None });
@@ -2875,7 +2875,7 @@ pub(crate) async fn run_automatic_recovery_contact() {
                 }
             }
             let mut random=[0u8;1];
-            if OsRng.try_fill_bytes(&mut random).is_ok() {
+            if SysRng.try_fill_bytes(&mut random).is_ok() {
                 tokio::time::sleep(Duration::from_secs(15+u64::from(random[0])%31)).await;
                 let _=recovery_contact(store,true,false).await;
             }
@@ -2903,7 +2903,7 @@ fn prepare_recovery_checkin_inner(snapshot:&crate::fleet_machine_policy::Credent
         || snapshot.secret.len()!=32 { return Err("invalid recovery check-in"); }
     let operator_key=snapshot.operator_key.as_deref().ok_or("operator_key_not_pinned")?;
     crate::fleet_machine_policy::validate_operator_key(&snapshot.trust,operator_key)?;
-    let mut random=[0u8;16]; OsRng.try_fill_bytes(&mut random).map_err(|_| "randomness unavailable")?;
+    let mut random=[0u8;16]; SysRng.try_fill_bytes(&mut random).map_err(|_| "randomness unavailable")?;
     let nonce=format!("ci-{}",lower_hex(&random));
     request.protocol_version=fleet_proto::CHECKIN_PROTOCOL_VERSION;
     request.device_id=snapshot.trust.device_id.clone(); request.ts=now; request.nonce=nonce.clone();
