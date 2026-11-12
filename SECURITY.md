@@ -377,6 +377,9 @@ with sensitive fixture files omitted; they are not operational release trees.
 An incomplete Fleet authority source snapshot is also retained in history only:
 its test-only code, fixtures and integration wiring were omitted, and it does
 not implement or enable a recovery authorization boundary.
+A separate partial Fleet admission source snapshot is also retained in history
+only; files with secret or personal-data indicators and dependent integration
+files were omitted. It does not enable or complete Fleet recovery.
 
 ## Local maintenance
 
