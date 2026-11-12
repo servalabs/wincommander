@@ -77,11 +77,11 @@ describe("areResultsFresh", () => {
 
 describe("currentQueryRows", () => {
   it("hides a previous query's rows while a shortcut handoff is loading", () => {
-    expect(currentQueryRows("parth", "old query", ["old-result"])).toEqual([]);
+    expect(currentQueryRows("example", "old query", ["old-result"])).toEqual([]);
   });
 
   it("shows rows only after their own query completes", () => {
-    expect(currentQueryRows("parth", "parth", ["current-result"])).toEqual(["current-result"]);
+    expect(currentQueryRows("example", "example", ["current-result"])).toEqual(["current-result"]);
   });
 });
 

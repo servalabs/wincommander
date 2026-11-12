@@ -2331,7 +2331,7 @@ mod tests {
     fn short_identifiers_and_managed_phrases_reach_the_shared_detector() {
         assert!(should_evaluate_clipboard_text("12345678Z"));
         assert!(should_evaluate_clipboard_text("X1234567L"));
-        assert!(should_evaluate_clipboard_text("Parth"));
+        assert!(should_evaluate_clipboard_text("Example"));
         assert!(!should_evaluate_clipboard_text(""));
     }
 
@@ -2978,25 +2978,25 @@ mod tests {
     #[test]
     fn local_short_phrase_emits_its_configured_notification_action() {
         let mut store = PolicyStore::new();
-        let mut parth_rule = custom_rule(
+        let mut example_rule = custom_rule(
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             vec![Action::NotifyUser],
             true,
         );
-        parth_rule.matcher = MatchKind::Phrase {
-            value: "Parth".to_string(),
+        example_rule.matcher = MatchKind::Phrase {
+            value: "Example".to_string(),
             case_sensitive: false,
         };
         store
             .install_local(&ClipboardPolicyResponse { reporting_binding:None,
                 content_rules: None,
                 policy_version: 0,
-                rules: vec![parth_rule],
+                rules: vec![example_rule],
             })
             .expect("a valid personal phrase rule must compile");
         let mut engine = MatchEngine::new();
 
-        let outcome = engine.observe_sources(&store, "Parth", Instant::now());
+        let outcome = engine.observe_sources(&store, "Example", Instant::now());
         let CombinedMatchOutcome::Emit { verdict } = outcome else {
             panic!("an enabled local phrase must emit for its exact short text");
         };
