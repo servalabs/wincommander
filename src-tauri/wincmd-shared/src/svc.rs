@@ -97,10 +97,6 @@ pub const VERIFY_LICENSE_CACHE_VERB: &str = "svc.license.verify_cache";
 pub const RENEW_HYBRID_LICENSE_VERB: &str = "svc.license.renew_hybrid";
 /// Register the service-owned device identity for the current protected licence.
 pub const ENROL_HYBRID_LICENSE_VERB: &str = "svc.license.enrol_hybrid";
-/// Release only the service-owned hybrid licence; requires an elevated pinned peer.
-pub const RELEASE_HYBRID_LICENSE_VERB: &str = "svc.license.release_hybrid";
-/// Activate using a service-owned machine identity and protected retry intent.
-pub const ACTIVATE_HYBRID_LICENSE_VERB: &str = "svc.license.activate_hybrid";
 
 /// Exact verbs implemented by the current service dispatcher.
 ///
@@ -127,8 +123,6 @@ pub fn is_known_verb(feature_id: &str) -> bool {
             | VERIFY_LICENSE_CACHE_VERB
             | RENEW_HYBRID_LICENSE_VERB
             | ENROL_HYBRID_LICENSE_VERB
-            | RELEASE_HYBRID_LICENSE_VERB
-            | ACTIVATE_HYBRID_LICENSE_VERB
             | "svc.clipboard.get_policy"
             | "svc.clipboard.report_event"
             | "svc.clipboard.set_enabled"
@@ -138,11 +132,6 @@ pub fn is_known_verb(feature_id: &str) -> bool {
             | "svc.fleet.replace_trust"
             | "svc.fleet.bind_origins"
             | "svc.fleet.get_trust"
-            | "svc.fleet.provision_hybrid_trust"
-            | "svc.fleet.get_hybrid_trust"
-            | "svc.fleet.read_hybrid_trust"
-            | "svc.fleet.begin_hybrid_enrollment"
-            | "svc.fleet.cancel_hybrid_enrollment"
             | "svc.fleet.operator_key.pin"
             | "svc.fleet.recovery.stage"
             | "svc.fleet.recovery.handoff"
@@ -159,7 +148,7 @@ pub fn is_known_verb(feature_id: &str) -> bool {
             | "svc.fleet.recovery.upgrade_confirm"
             | "svc.fleet.recovery.stop_complete"
             | "svc.fleet.recovery.execute_start"
-            | "svc.fleet.recovery.leave_request" | "svc.fleet.recovery.leave_status" | "svc.fleet.recovery.execute_result"
+            | "svc.fleet.recovery.execute_result"
             | "svc.fleet.recovery.resume"
             | "svc.fleet.install_policy"
             | "svc.fleet.get_policy"
@@ -182,7 +171,6 @@ pub fn is_known_verb(feature_id: &str) -> bool {
             | "svc.vault.list_authorized"
             | "svc.vault.drive_letters"
             | "svc.vault.capabilities"
-            | "svc.search.fence_capabilities"
             | "svc.vault.reconcile_access_groups"
             | "svc.vault.get_access_directory"
             | "svc.vault.save_access_directory"
@@ -362,8 +350,7 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         // fixed machine licence cache, so this is deliberately not a broad
         // ProgramData-write or administrator capability.
         STORE_LICENSE_CACHE_VERB | VERIFY_LICENSE_CACHE_VERB => CapabilityClass::InteractiveSession,
-        RENEW_HYBRID_LICENSE_VERB | ENROL_HYBRID_LICENSE_VERB | ACTIVATE_HYBRID_LICENSE_VERB => CapabilityClass::SessionHelper,
-        RELEASE_HYBRID_LICENSE_VERB => CapabilityClass::Privileged,
+        RENEW_HYBRID_LICENSE_VERB | ENROL_HYBRID_LICENSE_VERB => CapabilityClass::SessionHelper,
         // ── Existing read-only verbs (unchanged) ──────────────────────────
         "svc.status" => CapabilityClass::ReadOnly,
         "svc.get_settings" => CapabilityClass::ReadOnly,
@@ -400,8 +387,8 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         // the active ruleset — SessionHelper only says "a pinned, in-session
         // peer may call this verb", not "trust its payload".
         "svc.policy.install_epoch" => CapabilityClass::SessionHelper,
-        "svc.fleet.begin_enrollment" | "svc.fleet.provision_trust" | "svc.fleet.replace_trust" | "svc.fleet.bind_origins" | "svc.fleet.get_trust" | "svc.fleet.provision_hybrid_trust" | "svc.fleet.get_hybrid_trust" | "svc.fleet.begin_hybrid_enrollment" | "svc.fleet.cancel_hybrid_enrollment" | "svc.fleet.operator_key.pin" | "svc.fleet.recovery.stage" | "svc.fleet.recovery.handoff" | "svc.fleet.recovery.finish" | "svc.fleet.recovery.resolve_unknown" | "svc.fleet.recovery.resume" => CapabilityClass::Privileged,
-        "svc.fleet.install_policy" | "svc.fleet.get_policy" | "svc.fleet.contact_observation" | "svc.fleet.read_hybrid_trust" | "svc.fleet.recovery.contact" | "svc.fleet.recovery.stop_poll" | "svc.fleet.recovery.stop_complete" | "svc.fleet.recovery.legacy_work_start" | "svc.fleet.recovery.legacy_work_complete" | "svc.fleet.recovery.upgrade_challenge" | "svc.fleet.recovery.upgrade_confirm" | "svc.fleet.recovery.execution_status" | "svc.fleet.recovery.execute_list" | "svc.fleet.recovery.execute_grant" | "svc.fleet.recovery.execute_start" | "svc.fleet.recovery.leave_request" | "svc.fleet.recovery.leave_status" | "svc.fleet.recovery.execute_result" => CapabilityClass::SessionHelper,
+        "svc.fleet.begin_enrollment" | "svc.fleet.provision_trust" | "svc.fleet.replace_trust" | "svc.fleet.bind_origins" | "svc.fleet.get_trust" | "svc.fleet.operator_key.pin" | "svc.fleet.recovery.stage" | "svc.fleet.recovery.handoff" | "svc.fleet.recovery.finish" | "svc.fleet.recovery.resolve_unknown" | "svc.fleet.recovery.resume" => CapabilityClass::Privileged,
+        "svc.fleet.install_policy" | "svc.fleet.get_policy" | "svc.fleet.contact_observation" | "svc.fleet.recovery.contact" | "svc.fleet.recovery.stop_poll" | "svc.fleet.recovery.stop_complete" | "svc.fleet.recovery.legacy_work_start" | "svc.fleet.recovery.legacy_work_complete" | "svc.fleet.recovery.upgrade_challenge" | "svc.fleet.recovery.upgrade_confirm" | "svc.fleet.recovery.execution_status" | "svc.fleet.recovery.execute_list" | "svc.fleet.recovery.execute_grant" | "svc.fleet.recovery.execute_start" | "svc.fleet.recovery.execute_result" => CapabilityClass::SessionHelper,
         "svc.shared_shortcuts.set_claim" => CapabilityClass::SessionHelper,
 
         // ── Ink Receipt (D-2 / plan §4.3, §5) ─────────────────────────────
@@ -432,8 +419,7 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         | "svc.vault.get_policy"
         | "svc.vault.get_status"
         | "svc.vault.apply_owner_fragment"
-        | "svc.vault.capabilities"
-        | "svc.search.fence_capabilities" => CapabilityClass::ReadOnly,
+        | "svc.vault.capabilities" => CapabilityClass::ReadOnly,
 
         // The principal directory contains local account/SID information.
         // It is therefore a local-administrator management read, rather
@@ -486,11 +472,6 @@ pub fn hello_from_ui(session_token: impl Into<String>) -> crate::Hello {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn search_fence_capability_is_known_and_read_only() {
-        assert!(super::is_known_verb("svc.search.fence_capabilities"));
-        assert_eq!(super::classify_verb("svc.search.fence_capabilities"), super::CapabilityClass::ReadOnly);
-    }
     use super::*;
 
     #[test]
@@ -499,22 +480,10 @@ mod tests {
         assert!(!is_known_verb("svc.bluetooth.set_blocked"));
         assert!(is_known_verb("svc.bluetooth.policy.status"));
         assert!(is_known_verb("svc.bluetooth.policy.set_blocked"));
-        assert_eq!(
-            classify_verb("svc.bluetooth.policy.status"),
-            CapabilityClass::ReadOnly
-        );
-        assert_eq!(
-            classify_verb("svc.bluetooth.policy.set_blocked"),
-            CapabilityClass::Privileged
-        );
-        assert!(serde_json::from_value::<BluetoothSetBlockedRequest>(
-            serde_json::json!({"blocked":true,"path":"arbitrary"})
-        )
-        .is_err());
-        assert!(serde_json::from_value::<BluetoothSetBlockedRequest>(
-            serde_json::json!({"blocked":"false"})
-        )
-        .is_err());
+        assert_eq!(classify_verb("svc.bluetooth.policy.status"), CapabilityClass::ReadOnly);
+        assert_eq!(classify_verb("svc.bluetooth.policy.set_blocked"), CapabilityClass::Privileged);
+        assert!(serde_json::from_value::<BluetoothSetBlockedRequest>(serde_json::json!({"blocked":true,"path":"arbitrary"})).is_err());
+        assert!(serde_json::from_value::<BluetoothSetBlockedRequest>(serde_json::json!({"blocked":"false"})).is_err());
     }
 
     // ── classify_verb: read-only verbs ───────────────────────────────────────
@@ -561,20 +530,10 @@ mod tests {
             CapabilityClass::InteractiveSession
         );
         assert!(is_known_verb(VERIFY_LICENSE_CACHE_VERB));
-        assert_eq!(
-            classify_verb(RENEW_HYBRID_LICENSE_VERB),
-            CapabilityClass::SessionHelper
-        );
+        assert_eq!(classify_verb(RENEW_HYBRID_LICENSE_VERB), CapabilityClass::SessionHelper);
         assert!(is_known_verb(RENEW_HYBRID_LICENSE_VERB));
-        assert_eq!(
-            classify_verb(ENROL_HYBRID_LICENSE_VERB),
-            CapabilityClass::SessionHelper
-        );
+        assert_eq!(classify_verb(ENROL_HYBRID_LICENSE_VERB), CapabilityClass::SessionHelper);
         assert!(is_known_verb(ENROL_HYBRID_LICENSE_VERB));
-        assert_eq!(classify_verb(RELEASE_HYBRID_LICENSE_VERB), CapabilityClass::Privileged);
-        assert!(is_known_verb(RELEASE_HYBRID_LICENSE_VERB));
-        assert_eq!(classify_verb(ACTIVATE_HYBRID_LICENSE_VERB), CapabilityClass::SessionHelper);
-        assert!(is_known_verb(ACTIVATE_HYBRID_LICENSE_VERB));
     }
 
     #[test]
@@ -785,11 +744,11 @@ mod tests {
 
     #[test]
     fn machine_fleet_trust_requires_admin_and_policy_requires_pinned_helper() {
-        for verb in ["svc.fleet.begin_enrollment", "svc.fleet.provision_trust", "svc.fleet.replace_trust", "svc.fleet.bind_origins", "svc.fleet.get_trust", "svc.fleet.provision_hybrid_trust", "svc.fleet.get_hybrid_trust", "svc.fleet.begin_hybrid_enrollment", "svc.fleet.cancel_hybrid_enrollment"] {
+        for verb in ["svc.fleet.begin_enrollment", "svc.fleet.provision_trust", "svc.fleet.replace_trust", "svc.fleet.bind_origins", "svc.fleet.get_trust", "svc.fleet.operator_key.pin", "svc.fleet.recovery.stage", "svc.fleet.recovery.handoff", "svc.fleet.recovery.finish", "svc.fleet.recovery.resolve_unknown", "svc.fleet.recovery.resume"] {
             assert!(is_known_verb(verb));
             assert_eq!(classify_verb(verb), CapabilityClass::Privileged);
         }
-        for verb in ["svc.fleet.install_policy", "svc.fleet.get_policy", "svc.fleet.contact_observation", "svc.fleet.read_hybrid_trust"] {
+        for verb in ["svc.fleet.install_policy", "svc.fleet.get_policy", "svc.fleet.contact_observation", "svc.fleet.recovery.contact", "svc.fleet.recovery.stop_poll", "svc.fleet.recovery.stop_complete", "svc.fleet.recovery.execution_status", "svc.fleet.recovery.execute_list", "svc.fleet.recovery.execute_grant", "svc.fleet.recovery.execute_start", "svc.fleet.recovery.execute_result"] {
             assert!(is_known_verb(verb));
             assert_eq!(classify_verb(verb), CapabilityClass::SessionHelper);
         }
@@ -840,16 +799,4 @@ mod tests {
         assert!(CapabilityClass::InteractiveSession.rank() < CapabilityClass::SessionHelper.rank());
         assert!(CapabilityClass::SessionHelper.rank() < CapabilityClass::Privileged.rank());
     }
-    #[test]
-    fn recovery_verbs_keep_distinct_administrator_and_helper_gates() {
-        for verb in ["svc.fleet.operator_key.pin", "svc.fleet.recovery.stage", "svc.fleet.recovery.handoff", "svc.fleet.recovery.finish", "svc.fleet.recovery.resolve_unknown", "svc.fleet.recovery.resume"] {
-            assert!(is_known_verb(verb));
-            assert_eq!(classify_verb(verb), CapabilityClass::Privileged);
-        }
-        for verb in ["svc.fleet.recovery.contact", "svc.fleet.recovery.stop_poll", "svc.fleet.recovery.stop_complete", "svc.fleet.recovery.legacy_work_start", "svc.fleet.recovery.legacy_work_complete", "svc.fleet.recovery.upgrade_challenge", "svc.fleet.recovery.upgrade_confirm", "svc.fleet.recovery.execution_status", "svc.fleet.recovery.execute_list", "svc.fleet.recovery.execute_grant", "svc.fleet.recovery.execute_start", "svc.fleet.recovery.leave_request", "svc.fleet.recovery.leave_status", "svc.fleet.recovery.execute_result"] {
-            assert!(is_known_verb(verb));
-            assert_eq!(classify_verb(verb), CapabilityClass::SessionHelper);
-        }
-    }
-
 }

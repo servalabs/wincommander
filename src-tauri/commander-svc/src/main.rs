@@ -27,21 +27,21 @@ fn main() {
 
 // ── Windows implementation ───────────────────────────────────────────────────
 
-#[cfg(any(windows, test))]
-mod managed_deployment;
-#[cfg(windows)]
-mod peer_auth_deployment_acl;
 #[cfg(windows)]
 mod personal_settings;
-mod settings_host;
 #[cfg(windows)]
-mod shared_shortcuts;
-#[cfg(windows)]
-mod shared_shortcuts_acl;
+mod shared_shortcuts_link;
 #[cfg(windows)]
 mod shared_shortcuts_file;
 #[cfg(windows)]
-mod shared_shortcuts_link;
+mod shared_shortcuts_acl;
+#[cfg(windows)]
+mod shared_shortcuts;
+#[cfg(windows)]
+mod peer_auth_deployment_acl;
+mod settings_host;
+#[cfg(any(windows, test))]
+mod managed_deployment;
 
 #[cfg(windows)]
 mod license_cache;
@@ -51,10 +51,10 @@ mod machine_settings;
 mod rdp_lock_query;
 
 #[cfg(windows)]
-mod bluetooth_control;
-#[cfg(windows)]
 #[path = "../../runtime-support/bluetooth_control.rs"]
 mod bluetooth_control_core;
+#[cfg(windows)]
+mod bluetooth_control;
 
 // G-1 ownership split: endpoint background loops live with their future
 // owners; this root remains process composition only.
@@ -72,38 +72,29 @@ mod reconciler;
 // only its internal `WindowsPolicyFs`/`windows_acl` submodule is
 // `#[cfg(windows)]`-gated. See `policy_store.rs`'s module doc.
 mod diagnostics;
+mod policy_store;
+mod fleet_machine_policy;
 mod fleet_identity_handoff;
 mod fleet_recovery_candidate;
 mod fleet_recovery_credential;
 mod fleet_recovery_transport;
-mod fleet_recovery_leave;
 mod fleet_credential;
-mod fleet_machine_policy;
-mod policy_store;
-#[cfg(windows)]
+#[cfg(all(windows, feature = "experimental-pq-licence"))]
 #[allow(dead_code)]
 #[path = "../../commander-free/src/fleet_lifecycle_mutex.rs"]
 mod licence_coordination;
-#[cfg(windows)]
+#[cfg(all(windows, feature = "experimental-pq-licence"))]
 fn licence_security_lock() -> Result<licence_coordination::Guard, &'static str> {
     licence_coordination::acquire_named(r"Global\WinCommander.Licence.Security.v1", 30_000)
         .map_err(|_| "license security coordination is unavailable")
 }
-#[cfg(windows)]
-mod fleet_contact_transfer;
-mod fleet_presence;
-mod fleet_runtime_env;
 #[cfg(all(windows, feature = "experimental-pq-licence"))]
 #[allow(dead_code)] // Not connected to enrolment or production licence decisions.
 mod licence_device_credential;
-#[cfg(all(windows, feature = "experimental-pq-licence"))]
-mod licence_activation_intent;
-#[cfg(all(windows, feature = "experimental-pq-licence"))]
-#[allow(dead_code)] // Reservation, transport and settlement are not connected.
-mod licence_trial_intent;
-#[cfg(all(windows, feature = "experimental-pq-licence"))]
-#[allow(dead_code)] // Service-owned activation is still disconnected.
-mod licence_machine_identity;
+mod fleet_runtime_env;
+mod fleet_presence;
+#[cfg(windows)]
+mod fleet_contact_transfer;
 mod shield_journal;
 mod vault_access;
 
@@ -416,8 +407,6 @@ async fn run(mut stop_rx: Option<tokio::sync::watch::Receiver<bool>>) {
     tokio::spawn(reconciler::run());
     tokio::spawn(command_worker::run());
     tokio::spawn(fleet_transport::run());
-    #[cfg(feature = "experimental-pq-licence")]
-    tokio::spawn(licence_activation_intent::recovery_loop());
     tokio::spawn(pipe::fleet_handoff_confirmation::run_automatic_recovery_contact());
     // Pro can extract the engine after this service has already started.
     // Poll only the fixed payload: the helper is private, accepts no renderer
