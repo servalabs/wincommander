@@ -88,19 +88,15 @@ Var WCPairedServiceRunning
   !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "${stage}-query" "$0" "attempt=${attempt} output=$1"
 !macroend
 
-; NSIS does not provide a built-in $PROGRAMDATA/$COMMONAPPDATA variable. Read
-; the Windows-owned ProgramData path instead of accidentally treating it as an
-; empty string and operating at the root of the current drive.
+; Resolve machine data from the Windows known-folder API, not inherited
+; environment variables. The output remains UTF-16 in the NSIS register.
 !macro WC_LOAD_PROGRAMDATA_OR_ABORT stage
-  ClearErrors
-  ReadEnvStr $R5 "ProgramData"
-  ${If} ${Errors}
-    !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "${stage}-programdata" "missing" "ProgramData environment variable was unavailable"
-    Abort "WinCommander could not locate the machine ProgramData directory."
-  ${EndIf}
-  ${If} $R5 == ""
-    !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "${stage}-programdata" "missing" "ProgramData environment variable was empty"
-    Abort "WinCommander could not locate the machine ProgramData directory."
+  StrCpy $R5 ""
+  System::Call 'shell32::SHGetFolderPathW(p 0, i 0x23, p 0, i 0, w .R5) i .r0'
+  ${If} $0 != 0
+  ${OrIf} $R5 == ""
+    !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "${stage}-programdata" "$0" "Windows machine-data known folder could not be resolved"
+    Abort "WinCommander could not locate the Windows machine-data directory. Existing data was retained."
   ${EndIf}
 !macroend
 

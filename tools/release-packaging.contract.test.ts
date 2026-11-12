@@ -234,7 +234,8 @@ describe("Free machine-wide release packaging", () => {
     expect(hooks).toContain("!macro WC_RELEASE_LICENSE_SEAT_OR_ABORT");
     expect(hooks).toContain("--release-license-seat");
     expect(uninstallHook).toContain("!insertmacro WC_RELEASE_LICENSE_SEAT_OR_ABORT");
-    expect(hooks).toContain('ReadEnvStr $R5 "ProgramData"');
+    expect(hooks).toContain("SHGetFolderPathW");
+    expect(hooks).not.toContain('ReadEnvStr $R5 "ProgramData"');
     expect(hooks).not.toContain('RMDir /r "$R5\\WinCommander"');
     expect(hooks.indexOf('${GetOptions} $CMDLINE "/UPDATE" $R7')).toBeLessThan(
       hooks.indexOf('wc_remove_machine_data_next:'),
