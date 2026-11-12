@@ -1778,6 +1778,38 @@ mod tests {
         assert_eq!(std::fs::read(source).unwrap(), b"scrubbed");
     }
 
+    // Diagnostic only: reproduces the unresolved identity gap between a
+    // pathname-based scrub and publication. This must not be read as a safety
+    // guarantee or used to enable the experimental handle-based route.
+    #[test]
+    #[ignore = "diagnostic reproduces an unresolved staging identity race"]
+    fn diagnostic_staged_path_can_be_replaced_after_scrub_before_publish() {
+        let root = tempfile::tempdir().unwrap();
+        let staged = root.path().join("staged");
+        let original = root.path().join("original");
+        let destination = root.path().join("destination");
+        std::fs::write(&staged, b"synthetic scrubbed content").unwrap();
+        let mut skipped = Vec::new();
+
+        let published = commit_staged_batch_with(
+            vec![(staged.clone(), destination.clone())],
+            &mut skipped,
+            |from, to| {
+                // Simulate another process swapping the pathname immediately
+                // after the scrub result and before the real publication call.
+                std::fs::rename(from, &original)?;
+                std::fs::write(from, b"synthetic replacement")?;
+                safe_paste_publish::move_no_replace(from, to)
+            },
+        )
+        .unwrap();
+
+        assert_eq!(published.len(), 1);
+        assert!(skipped.is_empty());
+        assert_eq!(std::fs::read(original).unwrap(), b"synthetic scrubbed content");
+        assert_eq!(std::fs::read(destination).unwrap(), b"synthetic replacement");
+    }
+
     #[test]
     fn publication_failure_rolls_prior_items_back_into_staging() {
         let root = tempfile::tempdir().unwrap();
