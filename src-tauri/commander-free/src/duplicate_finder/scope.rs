@@ -21,6 +21,8 @@ pub struct DuplicateProgress {
     pub errors: Vec<String>,
     pub minimum_size_bytes: u64,
     pub skipped_small_files: usize,
+    pub filter_excluded_files: usize,
+    pub filter_excluded_directories: usize,
 }
 static PROGRESS: OnceLock<Mutex<DuplicateProgress>> = OnceLock::new();
 fn progress() -> &'static Mutex<DuplicateProgress> {
