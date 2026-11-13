@@ -426,6 +426,57 @@ fn is_protected_against(target: &Path, roots: &[PathBuf]) -> bool {
     })
 }
 
+/// Experimental only; not registered as an IPC command. A structured receipt
+/// distinguishes requests accepted by Windows from actual space reclaimed.
+#[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FolderDeleteReceipt {
+    pub status: &'static str,
+    pub processed: usize,
+    pub cache_invalidated: bool,
+    pub message: Option<String>,
+}
+
+#[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
+struct FolderCacheInvalidator;
+
+#[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
+impl FolderCacheInvalidator {
+    fn invalidate(&self) {
+        let mut guard = cache().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = ScanCache::empty();
+    }
+}
+
+#[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
+impl Drop for FolderCacheInvalidator {
+    fn drop(&mut self) { self.invalidate(); }
+}
+
+#[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
+fn folder_delete_receipt(result: Result<usize, crate::disk_tree_delete::DeleteFailure>) -> FolderDeleteReceipt {
+    let (status, processed, message) = match result {
+        Ok(n) => ("delete_requested", n, None),
+        Err(failure) => (if failure.processed == 0 { "failed" } else { "partial" }, failure.processed, Some(failure.error.to_string())),
+    };
+    FolderDeleteReceipt { status, processed, cache_invalidated: true, message }
+}
+
+#[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
+pub(crate) async fn delete_confirmed_folder(path: String, capability_token: Option<String>) -> Result<FolderDeleteReceipt, String> {
+    // Consume before enumeration so a forged request cannot lock/traverse a tree.
+    let root = crate::authz::consume_folder(capability_token.as_deref(), &path)?;
+    tokio::task::spawn_blocking(move || {
+        let invalidator = FolderCacheInvalidator;
+        let tree = crate::disk_tree_delete::prepare_authorized(root)
+            .map_err(|e| format!("Folder could not be safely prepared: {e}"))?;
+        let result = crate::disk_tree_delete::delete_prepared(tree);
+        invalidator.invalidate();
+        Ok(folder_delete_receipt(result))
+    }).await.map_err(|_| "Folder deletion worker failed; rescan to determine what remains".to_string())?
+}
+
 #[tauri::command]
 pub async fn disk_delete_item(
     path: String,
@@ -503,6 +554,19 @@ pub async fn get_disk_file_types(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
+    #[test]
+    fn folder_receipt_distinguishes_partial_mutation_from_failure() {
+        use super::folder_delete_receipt;
+        use crate::disk_tree_delete::DeleteFailure;
+        let partial = folder_delete_receipt(Err(DeleteFailure { processed: 2, error: std::io::Error::other("fixture") }));
+        assert_eq!(partial.status, "partial");
+        assert_eq!(partial.processed, 2);
+        assert!(partial.cache_invalidated);
+        let failed = folder_delete_receipt(Err(DeleteFailure { processed: 0, error: std::io::Error::other("fixture") }));
+        assert_eq!(failed.status, "failed");
+        assert_eq!(folder_delete_receipt(Ok(2)).status, "delete_requested");
+    }
     use super::*;
 
     fn roots() -> Vec<PathBuf> {

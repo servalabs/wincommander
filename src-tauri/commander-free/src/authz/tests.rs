@@ -12,19 +12,19 @@ fn test_plan(self_destruct: crate::settings::SelfDestructSettings) -> LockdownPl
 
 #[test]
 fn consume_rejects_wrong_action() {
-    let tok = mint(DestructiveAction::SelfDestruct, "hash-A").unwrap();
+    let tok = mint(DestructiveAction::SelfDestruct, "hash-A");
     assert!(consume(&tok, DestructiveAction::RemoveUsers, "hash-A").is_err());
 }
 
 #[test]
 fn consume_rejects_wrong_args() {
-    let tok = mint(DestructiveAction::DiskDelete, "path=/a").unwrap();
+    let tok = mint(DestructiveAction::DiskDelete, "path=/a");
     assert!(consume(&tok, DestructiveAction::DiskDelete, "path=/b").is_err());
 }
 
 #[test]
 fn token_is_single_use() {
-    let tok = mint(DestructiveAction::KillSwitch, "on").unwrap();
+    let tok = mint(DestructiveAction::KillSwitch, "on");
     assert!(consume(&tok, DestructiveAction::KillSwitch, "on").is_ok());
     assert!(consume(&tok, DestructiveAction::KillSwitch, "on").is_err());
 }
@@ -33,11 +33,11 @@ fn token_is_single_use() {
 fn bluetooth_confirmation_cannot_be_reversed_replayed_or_replaced_by_internet_confirmation() {
     let block = crate::bluetooth_control::confirmation_args(true);
     let allow = crate::bluetooth_control::confirmation_args(false);
-    let token = mint(DestructiveAction::KillSwitch, &block).unwrap();
+    let token = mint(DestructiveAction::KillSwitch, &block);
     assert!(consume(&token, DestructiveAction::KillSwitch, &allow).is_err());
-    let token = mint(DestructiveAction::KillSwitch, &kill_switch_args(true)).unwrap();
+    let token = mint(DestructiveAction::KillSwitch, &kill_switch_args(true));
     assert!(consume(&token, DestructiveAction::KillSwitch, &block).is_err());
-    let token = mint(DestructiveAction::KillSwitch, &block).unwrap();
+    let token = mint(DestructiveAction::KillSwitch, &block);
     assert!(consume(&token, DestructiveAction::KillSwitch, &block).is_ok());
     assert!(consume(&token, DestructiveAction::KillSwitch, &block).is_err());
 }
@@ -57,7 +57,7 @@ fn missing_or_empty_token_is_refused() {
 fn capability_is_bound_to_command_and_arguments() {
     let plan = test_plan(crate::settings::SelfDestructSettings::default());
     let args = lockdown_args(false, false, &plan);
-    let tok = mint(DestructiveAction::SelfDestruct, &args).unwrap();
+    let tok = mint(DestructiveAction::SelfDestruct, &args);
     assert!(consume_required(
         Some(&tok),
         DestructiveAction::SelfDestruct,
@@ -66,7 +66,7 @@ fn capability_is_bound_to_command_and_arguments() {
     .is_err());
 
     let args = disk_delete_args("C:\\one");
-    let tok = mint(DestructiveAction::DiskDelete, &args).unwrap();
+    let tok = mint(DestructiveAction::DiskDelete, &args);
     assert!(consume_required(
         Some(&tok),
         DestructiveAction::DiskDelete,
@@ -83,7 +83,7 @@ fn lockdown_capability_is_bound_to_the_complete_configured_plan() {
         ..Default::default()
     });
     let args = full_lockdown_args(&confirmed);
-    let token = mint(DestructiveAction::SelfDestruct, &args).unwrap();
+    let token = mint(DestructiveAction::SelfDestruct, &args);
     confirmed.self_destruct.shred_folders = Some(vec!["C:\\substituted".to_string()]);
     assert!(consume_required(
         Some(&token),
@@ -157,10 +157,48 @@ fn path_capability_detects_directory_identity_replacement() {
     assert_ne!(confirmed, replaced);
 }
 
+#[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
+#[test]
+fn folder_capability_holds_confirmed_root_and_expires_without_another_mint() {
+    use super::capability::{consume_folder, mint_folder, STORE, TTL};
+    let base = tempfile::Builder::new().prefix("wincommander-folder-capability-test-").tempdir().unwrap();
+    let target = base.path().join("selected");
+    let renamed = base.path().join("renamed");
+    std::fs::create_dir(&target).unwrap();
+    let root = crate::disk_tree_delete::AuthorizedRoot::open(
+        &target, crate::disk_tree_delete::ProtectedRoots::fixture(base.path()).unwrap()
+    ).unwrap();
+    let path = target.to_string_lossy().into_owned();
+    let token = mint_folder(&path, root).unwrap();
+    assert!(std::fs::rename(&target, &renamed).is_err());
+    { let mut store = STORE.lock().unwrap(); store.get_mut(&token).unwrap().at = Instant::now() - TTL; }
+    let deadline = Instant::now() + std::time::Duration::from_secs(4);
+    while Instant::now() < deadline && STORE.lock().unwrap().contains_key(&token) {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(consume_folder(Some(&token), &path).is_err());
+    std::fs::rename(&target, &renamed).unwrap();
+}
+
+#[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
+#[test]
+fn folder_capability_is_single_use_and_bound_to_raw_request() {
+    use super::capability::{consume_folder, mint_folder};
+    let base = tempfile::Builder::new().prefix("wincommander-folder-capability-test-").tempdir().unwrap();
+    let target = base.path().join("selected");
+    std::fs::create_dir(&target).unwrap();
+    let path = target.to_string_lossy().into_owned();
+    let roots = crate::disk_tree_delete::ProtectedRoots::fixture(base.path()).unwrap();
+    let token = mint_folder(&path, crate::disk_tree_delete::AuthorizedRoot::open(&target, roots).unwrap()).unwrap();
+    assert!(consume_folder(Some(&token), "C:\\different").is_err());
+    assert!(consume_folder(Some(&token), &path).is_err());
+    assert!(consume_folder(None, &path).is_err());
+}
+
 #[test]
 fn required_capability_is_single_use() {
     let args = kill_switch_args(true);
-    let tok = mint(DestructiveAction::KillSwitch, &args).unwrap();
+    let tok = mint(DestructiveAction::KillSwitch, &args);
     assert!(consume_required(Some(&tok), DestructiveAction::KillSwitch, &args).is_ok());
     assert!(consume_required(Some(&tok), DestructiveAction::KillSwitch, &args).is_err());
 }
@@ -174,6 +212,8 @@ fn expired_capability_is_refused_and_removed() {
             action: DestructiveAction::DiskDelete,
             args_hash: hash_args("target"),
             at: Instant::now() - TTL,
+            #[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
+            folder: None,
         },
     );
     assert!(consume(&token, DestructiveAction::DiskDelete, "target").is_err());
@@ -182,7 +222,7 @@ fn expired_capability_is_refused_and_removed() {
 
 #[test]
 fn concurrent_replay_has_exactly_one_winner() {
-    let token = mint(DestructiveAction::DiskDelete, "target").unwrap();
+    let token = mint(DestructiveAction::DiskDelete, "target");
     let barrier = Arc::new(Barrier::new(8));
     let handles: Vec<_> = (0..8)
         .map(|_| {
@@ -303,7 +343,7 @@ fn backend_secure_erase_requires_matching_single_use_capability() {
     let mut missing = HashMap::from([("Path".to_string(), path.to_string())]);
     assert!(authorize_backend_dispatch("Invoke-7Erase", &mut missing).is_err());
 
-    let token = mint(DestructiveAction::DiskDelete, &secure_erase_args(path)).unwrap();
+    let token = mint(DestructiveAction::DiskDelete, &secure_erase_args(path));
     let mut authorized = HashMap::from([
         ("Path".to_string(), path.to_string()),
         ("CapabilityToken".to_string(), token.clone()),
@@ -322,7 +362,7 @@ fn backend_secure_erase_requires_matching_single_use_capability() {
         ("Passes", "99"),
         ("Type", "RegistryProperty"),
     ] {
-        let token = mint(DestructiveAction::DiskDelete, &secure_erase_args(path)).unwrap();
+        let token = mint(DestructiveAction::DiskDelete, &secure_erase_args(path));
         let mut changed = HashMap::from([
             ("Path".to_string(), path.to_string()),
             ("CapabilityToken".to_string(), token),
@@ -340,7 +380,7 @@ fn backend_free_space_capability_is_bound_to_drive_and_media() {
     let token = mint(
         DestructiveAction::CryptoErase,
         &free_space_erase_args("D", "SSD"),
-    ).unwrap();
+    );
     let mut changed_target = HashMap::from([
         ("DriveLetter".to_string(), "E".to_string()),
         ("MediaType".to_string(), "SSD".to_string()),

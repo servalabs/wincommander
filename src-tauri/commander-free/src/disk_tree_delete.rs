@@ -343,7 +343,8 @@ fn protected_scope_intersects(selected: &Path, scopes: &[(PathBuf, bool)]) -> bo
     })
 }
 
-fn open_child(parent: &File, name: &OsStr, is_dir: bool, for_delete: bool) -> io::Result<File> {
+fn open_child(parent: &File, name: &OsStr, is_dir: bool, for_delete: bool, backup_intent: bool) -> io::Result<File> {
+    if backup_intent && for_delete { return Err(io::Error::new(io::ErrorKind::InvalidInput, "backup privilege cannot be used for deletion")); }
     let mut utf16: Vec<u16> = name.encode_wide().collect();
     if utf16.is_empty()
         || utf16.iter().any(|c| matches!(*c, 0 | 47 | 58 | 92))
@@ -386,6 +387,7 @@ fn open_child(parent: &File, name: &OsStr, is_dir: bool, for_delete: bool) -> io
         };
     let options = OPEN_REPARSE_POINT
         | FILE_SYNCHRONOUS_IO_NONALERT
+        | if backup_intent { 0x0000_4000 } else { 0 }
         | if is_dir {
             FILE_DIRECTORY_FILE
         } else {
@@ -525,12 +527,16 @@ struct Pinned {
 /// Hold protected identities without delete sharing until the operation ends,
 /// so a protected root cannot be renamed underneath the preflight checks.
 pub(crate) struct ProtectedRoots {
-    handles: Vec<(PathBuf, File)>,
+    handles: Vec<(PathBuf, File, bool)>,
     identities: Vec<Identity>,
     scopes: Vec<(PathBuf, bool)>,
 }
 
 impl ProtectedRoots {
+    #[cfg(test)]
+    pub(crate) fn fixture(path: &Path) -> io::Result<Self> {
+        Self::pin(&[(path.to_path_buf(), false)])
+    }
     /// Obtain security-sensitive roots from Windows known-folder APIs rather
     /// than process environment variables, which are caller-controlled.
     pub(crate) fn system() -> io::Result<Self> {
@@ -542,6 +548,14 @@ impl ProtectedRoots {
             (known_folder(0xdfdf76a2_c82a_4d63_906a_5644ac457385)?, false), // Public
             (known_folder(0x5e6c858f_0e22_4760_9afe_ea3317b67173)?, false), // current profile
         ];
+        // Every registered profile must resolve successfully: an incomplete
+        // inventory cannot safely distinguish another user's data.
+        #[cfg(feature = "experimental-disk-tree-delete")]
+        {
+            let (current_sid, profiles) = crate::duplicate_finder::profile_policy::profiles_unresolved()
+                .map_err(|message| io::Error::new(io::ErrorKind::PermissionDenied, message))?;
+            roots.extend(other_profile_roots(&current_sid, profiles));
+        }
         let exe = std::env::current_exe()?;
         roots.push((
             exe.parent()
@@ -549,12 +563,12 @@ impl ProtectedRoots {
                 .to_path_buf(),
             true,
         ));
-        Self::pin(&roots)
+        crate::disk_backup_privilege::with_backup_privilege(|| Self::pin_inner(&roots, true))
     }
     /// Resolve each component relative to an already pinned parent handle.
     /// All non-volume ancestors are held for traversal without
     /// FILE_SHARE_DELETE to prevent namespace replacement during the operation.
-    fn lock_directory(&mut self, path: &Path) -> io::Result<usize> {
+    fn lock_directory(&mut self, path: &Path, backup_intent: bool) -> io::Result<usize> {
         let volume = path
             .ancestors()
             .last()
@@ -564,7 +578,7 @@ impl ProtectedRoots {
         let mut index = if let Some(i) = self
             .handles
             .iter()
-            .position(|(p, _)| path_prefix(p, &cursor) && path_prefix(&cursor, p))
+            .position(|(p, _, privileged)| *privileged == backup_intent && path_prefix(p, &cursor) && path_prefix(&cursor, p))
         {
             i
         } else {
@@ -588,7 +602,7 @@ impl ProtectedRoots {
                     "volume root identity is unsafe",
                 ));
             }
-            self.handles.push((cursor.clone(), root));
+            self.handles.push((cursor.clone(), root, backup_intent));
             self.handles.len() - 1
         };
         let root_volume = identity(&self.handles[index].1)?.0.volume;
@@ -606,12 +620,12 @@ impl ProtectedRoots {
             if let Some(existing) = self
                 .handles
                 .iter()
-                .position(|(p, _)| path_prefix(p, &cursor) && path_prefix(&cursor, p))
+                .position(|(p, _, privileged)| *privileged == backup_intent && path_prefix(p, &cursor) && path_prefix(&cursor, p))
             {
                 index = existing;
                 continue;
             }
-            let child = open_child(&self.handles[index].1, name, true, false)?;
+            let child = open_child(&self.handles[index].1, name, true, false, backup_intent)?;
             let (id, attrs) = identity(&child)?;
             let final_name = final_path(&child)?;
             if id.index == 0
@@ -626,7 +640,7 @@ impl ProtectedRoots {
                     "folder ancestor changed or is a link",
                 ));
             }
-            self.handles.push((cursor.clone(), child));
+            self.handles.push((cursor.clone(), child, backup_intent));
             index = self.handles.len() - 1;
         }
         Ok(index)
@@ -635,6 +649,10 @@ impl ProtectedRoots {
     /// `protect_descendants` distinguishes Windows/app system roots from user
     /// roots, where deleting a specifically selected child may be allowed.
     fn pin(paths: &[(PathBuf, bool)]) -> io::Result<Self> {
+        Self::pin_inner(paths, false)
+    }
+
+    fn pin_inner(paths: &[(PathBuf, bool)], backup_intent: bool) -> io::Result<Self> {
         let mut pinned = Self {
             handles: Vec::new(),
             identities: Vec::new(),
@@ -648,7 +666,7 @@ impl ProtectedRoots {
                 *protect |= *protect_descendants;
                 continue;
             }
-            let index = pinned.lock_directory(&resolved)?;
+            let index = pinned.lock_directory(&resolved, backup_intent)?;
             let (id, attrs) = identity(&pinned.handles[index].1)?;
             if id.index == 0 || attrs & ATTRIBUTE_REPARSE_POINT != 0 {
                 return Err(io::Error::new(
@@ -663,11 +681,51 @@ impl ProtectedRoots {
     }
 }
 
+#[cfg(feature = "experimental-disk-tree-delete")]
+fn other_profile_roots(current_sid: &str, profiles: Vec<(String, PathBuf)>) -> Vec<(PathBuf, bool)> {
+    profiles.into_iter().filter_map(|(sid, path)| {
+        (!sid.eq_ignore_ascii_case(current_sid)).then_some((path, true))
+    }).collect()
+}
+
+#[cfg(all(test, feature = "experimental-disk-tree-delete"))]
+#[test]
+fn other_profile_and_descendants_are_protected() {
+    let roots = other_profile_roots("S-1-5-21-1", vec![
+        ("s-1-5-21-1".into(), PathBuf::from(r"C:\Users\FixtureUser")),
+        ("S-1-5-21-2".into(), PathBuf::from(r"D:\Users\Other")),
+    ]);
+    assert_eq!(roots.len(), 1);
+    assert!(protected_scope_intersects(Path::new(r"D:\Users\Other"), &roots));
+    assert!(protected_scope_intersects(Path::new(r"D:\Users\Other\Documents"), &roots));
+    assert!(!protected_scope_intersects(Path::new(r"C:\Users\FixtureUser\Documents"), &roots));
+}
+
 pub(crate) struct PreparedTree {
     entries: Vec<Pinned>,
     protected: ProtectedRoots,
     authorization_path: PathBuf,
     authorization_identity: Identity,
+}
+
+/// Owns the exact target and its protected ancestors throughout confirmation.
+/// Dropping an expired or rejected capability releases all held handles.
+pub(crate) struct AuthorizedRoot {
+    root: File,
+    protected: ProtectedRoots,
+    path: PathBuf,
+    id: Identity,
+}
+
+impl AuthorizedRoot {
+    pub(crate) fn target(&self) -> (&Path, Identity) {
+        (&self.path, self.id)
+    }
+
+    pub(crate) fn open(root_path: &Path, mut protected: ProtectedRoots) -> io::Result<Self> {
+        let (root, path, id) = open_selected(root_path, &mut protected)?;
+        Ok(Self { root, protected, path, id })
+    }
 }
 
 impl PreparedTree {
@@ -699,10 +757,10 @@ fn open_selected(
     let name = resolved
         .file_name()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing folder name"))?;
-    let parent_index = protected.lock_directory(parent)?;
+    let parent_index = protected.lock_directory(parent, false)?;
     // A volume may have multiple DOS names. Compare identities of every
     // selected ancestor as well as lexical paths against protected roots.
-    for (path, handle) in &protected.handles {
+    for (path, handle, _) in &protected.handles {
         if !path_prefix(path, parent) {
             continue;
         }
@@ -719,7 +777,7 @@ fn open_selected(
             ));
         }
     }
-    let root = open_child(&protected.handles[parent_index].1, name, true, true)?;
+    let root = open_child(&protected.handles[parent_index].1, name, true, true, false)?;
     let opened_path = final_path(&root)?;
     if !path_prefix(&resolved, &opened_path) || !path_prefix(&opened_path, &resolved) {
         return Err(io::Error::new(
@@ -741,18 +799,11 @@ fn open_selected(
     Ok((root, opened_path, actual))
 }
 
-/// Capture only an identity-bound, no-follow root for a confirmation token.
-/// All locks are released before the native confirmation dialog is displayed.
-pub(crate) fn authorization_target(root_path: &Path) -> io::Result<(PathBuf, Identity)> {
-    let mut protected = ProtectedRoots::system()?;
-    let (_root, path, id) = open_selected(root_path, &mut protected)?;
-    Ok((path, id))
-}
-
 /// Prepare every handle before deleting anything. Root identity must have been
 /// independently captured at authorization time. Protected root handles must
 /// be acquired before this call and stay pinned throughout deletion.
-pub(crate) fn prepare(
+#[cfg(test)]
+fn prepare(
     root_path: &Path,
     expected: Identity,
     mut protected: ProtectedRoots,
@@ -764,6 +815,21 @@ pub(crate) fn prepare(
             "selected folder identity changed",
         ));
     }
+    prepare_opened(root, opened_path, actual, protected)
+}
+
+/// Call only after consuming the capability which owned this exact root.
+pub(crate) fn prepare_authorized(target: AuthorizedRoot) -> io::Result<PreparedTree> {
+    let AuthorizedRoot { root, protected, path, id } = target;
+    let (current, attrs) = identity(&root)?;
+    if current != id || attrs & ATTRIBUTE_REPARSE_POINT != 0 || attrs & ATTRIBUTE_DIRECTORY == 0 {
+        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "authorized folder identity changed"));
+    }
+    prepare_opened(root, path, id, protected)
+}
+
+fn prepare_opened(root: File, opened_path: PathBuf, actual: Identity, protected: ProtectedRoots) -> io::Result<PreparedTree> {
+    let expected = actual;
     let mut pinned = vec![Pinned {
         file: root,
         is_dir: true,
@@ -778,7 +844,7 @@ pub(crate) fn prepare(
             if pinned.len() >= MAX_ENTRIES {
                 return Err(io::Error::other("folder exceeds the safe deletion limit"));
             }
-            let file = open_child(&pinned[index].file, &child.name, child.is_dir, true)?;
+            let file = open_child(&pinned[index].file, &child.name, child.is_dir, true, false)?;
             let (id, attrs) = identity(&file)?;
             if child.index == 0
                 || id.volume != expected.volume
@@ -897,6 +963,25 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "read-only host discovery requires administrator backup privilege"]
+    fn administrator_can_pin_host_protected_roots() {
+        let roots = ProtectedRoots::system().expect("protected-root discovery must fail closed");
+        assert!(!roots.handles.is_empty());
+    }
+
+    #[test]
+    fn target_traversal_does_not_reuse_backup_origin_handles() {
+        let fixture = Fixture::new();
+        let mut roots = ProtectedRoots::pin_inner(&[(fixture.root.clone(), false)], true).unwrap();
+        let backup = roots.lock_directory(&fixture.root, true).unwrap();
+        let normal = roots.lock_directory(&fixture.root, false).unwrap();
+        assert_ne!(backup, normal);
+        assert!(roots.handles[backup].2);
+        assert!(!roots.handles[normal].2);
+        assert_eq!(identity(&roots.handles[backup].1).unwrap().0, identity(&roots.handles[normal].1).unwrap().0);
+    }
+
+    #[test]
     fn protected_scope_checks_ancestors_descendants_and_case() {
         let roots = vec![
             (PathBuf::from(r"C:\Windows"), true),
@@ -1003,6 +1088,25 @@ mod tests {
             }
             std::fs::remove_dir(&target).unwrap();
         }
+    }
+
+    #[test]
+    fn authorized_root_pins_confirmed_identity_until_preparation() {
+        let f = Fixture::new();
+        let target = f.target();
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(target.join("item"), b"fixture").unwrap();
+        let expected_id = selected_identity(&target);
+        let protected = ProtectedRoots::pin(&[]).unwrap();
+        let authority = AuthorizedRoot::open(&target, protected).unwrap();
+        let (confirmed_path, confirmed_id) = authority.target();
+        assert!(path_prefix(confirmed_path, &target) && path_prefix(&target, confirmed_path));
+        assert_eq!(confirmed_id, expected_id);
+        assert!(std::fs::rename(&target, f.root.join("replacement")).is_err());
+        let prepared = prepare_authorized(authority).unwrap();
+        assert_eq!(prepared.authorization_target().1, confirmed_id);
+        assert_eq!(delete_prepared(prepared).unwrap(), 2);
+        assert!(!target.exists());
     }
 
     #[test]

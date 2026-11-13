@@ -7,6 +7,8 @@
 mod arguments;
 mod capability;
 mod dispatch;
+#[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
+mod folder_confirmation;
 mod request;
 mod trusted;
 
@@ -15,6 +17,8 @@ pub use arguments::{
     lockdown_args, secure_erase_args, LockdownPlanSnapshot,
 };
 pub use capability::{consume, consume_required, DestructiveAction};
+#[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
+pub(crate) use capability::consume_folder;
 pub use dispatch::{
     action_for, authorize_backend_dispatch, backend_dispatch_policy, BackendDispatchPolicy,
 };
