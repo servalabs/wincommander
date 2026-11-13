@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+mod git_metadata;
 mod index;
 mod safety;
 mod scan;

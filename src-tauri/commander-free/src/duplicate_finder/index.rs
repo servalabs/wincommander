@@ -161,7 +161,7 @@ impl ScanIndex {
             )
             .map_err(|error| error.to_string())?;
         let display = |(id, path, modified): (String, String, Option<String>)| {
-            let removable = !super::safety::is_inside_system_root(&PathBuf::from(&path));
+            let removable = !super::safety::is_removal_protected(&PathBuf::from(&path));
             DuplicateFile {
                 name: PathBuf::from(&path)
                     .file_name()
