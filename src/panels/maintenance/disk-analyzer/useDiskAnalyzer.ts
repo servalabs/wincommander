@@ -3,6 +3,7 @@ import useBackend from "@/hooks/useBackend";
 import { recordMaintenanceOperation } from "@/hooks/useMaintenanceHistory";
 import { showError, showSuccess } from "@/utils/toast";
 import { independentDiskSelection, type DiskNode, type DiskScanMeta, type LargeDiskItem, type LargeDiskResult } from "@/lib/diskAnalyzer";
+import { performFolderDeletion } from "./folderDeletion";
 
 interface AnalyzerSession {
     scanning: boolean;
@@ -44,6 +45,15 @@ export function useDiskAnalyzer() {
     const [confirmItems, setConfirmItems] = useState<DiskNode[]>([]);
     const [progress, setProgress] = useState<{ filesScanned: number; foldersScanned: number; bytesScanned: number } | null>(null);
     const [cancelling, setCancelling] = useState(false);
+    const [folderDeleteAvailable, setFolderDeleteAvailable] = useState(false);
+
+    useEffect(() => {
+        let active = true;
+        void backendRef.current.diskFolderDeleteAvailable().then(available => {
+            if (active) setFolderDeleteAvailable(available === true);
+        }).catch(() => { if (active) setFolderDeleteAvailable(false); });
+        return () => { active = false; };
+    }, []);
 
     useEffect(() => {
         setSelected(new Set()); setFocused(null); setConfirmItems([]);
@@ -115,9 +125,12 @@ export function useDiskAnalyzer() {
     }
 
     function toggleSelection(item: DiskNode) {
-        if (item.isDir) return;
+        if (item.isDir && !folderDeleteAvailable) return;
         setSelected(previous => {
-            const next = new Set(previous);
+            // A folder operation invalidates the scan, so it must be reviewed
+            // and confirmed separately from files and other folders.
+            const next = item.isDir ? new Set<string>() : new Set([...previous].filter(path => !session.rows.some(row => row.isDir && row.fullPath === path)));
+            if (item.isDir && previous.has(item.fullPath)) return next;
             if (next.has(item.fullPath)) next.delete(item.fullPath); else next.add(item.fullPath);
             return next;
         });
@@ -125,11 +138,39 @@ export function useDiskAnalyzer() {
 
     function selectedItems(): DiskNode[] {
         const candidates = new Map([...session.rows, ...session.largeItems].map(item => [item.fullPath, item]));
-        return independentDiskSelection([...selected].flatMap(path => candidates.has(path) && !candidates.get(path)!.isDir ? [candidates.get(path)!] : []));
+        return independentDiskSelection([...selected].flatMap(path => candidates.has(path) ? [candidates.get(path)!] : []));
     }
 
     async function deleteConfirmed() {
         if (session.deleting || session.scanning || session.stale || !confirmItems.length) return;
+        const folders = confirmItems.filter(item => item.isDir);
+        if (folders.length) {
+            if (!folderDeleteAvailable || folders.length !== 1 || confirmItems.length !== 1 || !session.meta || folders[0].entryId === 0) {
+                showError("Choose one scanned folder to review separately.");
+                return;
+            }
+            const folder = folders[0];
+            const scanId = session.meta.scanId;
+            let deletionRequested = false;
+            update({ deleting: true });
+            try {
+                const attempt = await performFolderDeletion(backendRef.current, scanId, folder.entryId);
+                deletionRequested = attempt.attempted;
+                if (attempt.kind === "cancelled") return;
+                if (attempt.kind === "error") throw attempt.error;
+                const { receipt } = attempt;
+                if (receipt.status === "delete_requested") showSuccess("Folder deletion requested. Rescan to verify what remains.");
+                else showError(`${receipt.status === "partial" ? "Folder deletion was partial. Some items may already have been removed." : "Folder deletion failed."} ${receipt.message ?? "Rescan to check what remains."}`);
+                recordMaintenanceOperation({ tool: "disk-analysis", title: "Folder deletion requested", outcome: receipt.status === "delete_requested" ? "completed" : receipt.status === "partial" ? "partial" : "failed", affectedItems: receipt.processed, detail: "Rescan to verify what remains; physical space recovered was not measured." });
+            } catch (error) {
+                showError(deletionRequested ? `Folder deletion could not be completed. Some items may already have been removed; rescan to check. ${String(error)}` : `Folder deletion could not be confirmed: ${String(error)}`);
+            } finally {
+                setConfirmItems([]); setSelected(new Set()); setFocused(null);
+                if (deletionRequested) update({ stale: true, rows: [], largeItems: [] });
+                update({ deleting: false });
+            }
+            return;
+        }
         navigationRequest++; largeRequest++;
         update({ deleting: true, loadingPath: false, largeLoading: false });
         const failed: string[] = [];
@@ -161,7 +202,7 @@ export function useDiskAnalyzer() {
         try { await backendRef.current.openDiskItem(session.meta.scanId, item.entryId); } catch (error) { showError(String(error)); }
     }
 
-    return { ...state, selected, focused, confirmItems, progress, cancelling,
+    return { ...state, selected, focused, confirmItems, progress, cancelling, folderDeleteAvailable,
         setScanPath: (scanPath: string) => update({ scanPath }), startScan, navigate, changeMinSize, toggleSelection,
         setSelected, setFocused, setConfirmItems, selectedItems, deleteConfirmed, cancelScan, openInExplorer,
         getChildren: (path: string) => backendRef.current.getDiskChildren(path) };

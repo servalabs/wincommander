@@ -28,6 +28,7 @@ path = "src/main.rs"
 test = false
 
 [features]
+experimental-disk-tree-delete = []
 # Portable single-exe edition. Gates the trial out (the most-copyable build has
 # nothing to farm) and packaging differences. Persistent state is already
 # machine-wide (%ProgramData%) regardless of this flag.

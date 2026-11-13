@@ -10,12 +10,13 @@ interface Props {
     focused: DiskNode | null;
     large?: boolean;
     disabled: boolean;
+    folderDeleteAvailable: boolean;
     onFocus: (node: DiskNode) => void;
     onSelect: (node: DiskNode) => void;
     onNavigate: (path: string) => void;
 }
 
-export default function DiskItemList({ items, total, selected, focused, large, disabled, onFocus, onSelect, onNavigate }: Props) {
+export default function DiskItemList({ items, total, selected, focused, large, disabled, folderDeleteAvailable, onFocus, onSelect, onNavigate }: Props) {
     const [visibleCount, setVisibleCount] = useState(150);
     useEffect(() => setVisibleCount(150), [items]);
     const focusedIndex = focused ? items.findIndex(item => item.fullPath === focused.fullPath || item.isDir && diskPathContains(item.fullPath, focused.fullPath)) : -1;
@@ -26,7 +27,7 @@ export default function DiskItemList({ items, total, selected, focused, large, d
             const largeItem = item as LargeDiskItem;
             const isFocused = focusedIndex === index;
             return <div key={item.fullPath} className={`da-item${isFocused ? " active" : ""}${selected.has(item.fullPath) ? " selected" : ""}`}>
-                <span title={item.isDir ? "Explore this folder to select individual files. Directory deletion is unavailable." : undefined}><CheckboxControl checked={selected.has(item.fullPath)} disabled={disabled || item.isDir} ariaLabel={`Select ${item.name}${item.isDir ? ". Folder deletion unavailable" : ""}`} onChange={() => onSelect(item)} /></span>
+                <span title={item.isDir && !folderDeleteAvailable ? "Folder deletion is unavailable in this build." : undefined}><CheckboxControl checked={selected.has(item.fullPath)} disabled={disabled || (item.isDir && !folderDeleteAvailable)} ariaLabel={`Select ${item.name}${item.isDir && !folderDeleteAvailable ? ". Folder deletion unavailable" : ""}`} onChange={() => onSelect(item)} /></span>
                 <button type="button" className="da-item-main" disabled={disabled} onClick={() => onFocus(item)}
                     onDoubleClick={() => item.isDir && onNavigate(item.fullPath)} title={toExplorerDisplayPath(item.fullPath) ?? "Location unavailable"} aria-pressed={isFocused}>
                     <Icon icon={item.isDir ? "folder-close" : "document"} size={24} style={{ color: diskNodeColor(item, index) }} />

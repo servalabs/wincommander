@@ -113,7 +113,7 @@ pub(super) fn validated_file(file: &CachedFile) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-pub(super) fn ensure_mutation_allowed() -> Result<(), String> {
+pub(crate) fn ensure_mutation_allowed() -> Result<(), String> {
     if crate::settings::is_decoy_mode() {
         return Err("Refused: duplicate removal is unavailable in Decoy mode.".into());
     }
@@ -132,7 +132,7 @@ pub(super) fn is_inside_system_root(path: &Path) -> bool {
         .any(|root| path == root || path.starts_with(root))
 }
 
-pub(super) struct RemovalPolicy {
+pub(crate) struct RemovalPolicy {
     system_roots: Vec<PathBuf>,
     #[cfg(windows)]
     profiles: super::profile_policy::Snapshot,
@@ -165,7 +165,7 @@ impl RemovalPolicy {
             ("unavailable", None)
         }
     }
-    pub(super) fn load() -> Self {
+    pub(crate) fn load() -> Self {
         Self {
             system_roots: protected_system_roots(),
             #[cfg(windows)]
@@ -174,7 +174,7 @@ impl RemovalPolicy {
     }
 
     /// Paths remain reviewable even when removal is prohibited.
-    pub(super) fn protected_reason(&self, path: &Path) -> Option<&'static str> {
+    pub(crate) fn protected_reason(&self, path: &Path) -> Option<&'static str> {
         // Git object stores include LFS content-addressed blobs whose bytes can
         // match ordinary files. Removing them can break repositories, even if
         // a scan found another copy of the same content.

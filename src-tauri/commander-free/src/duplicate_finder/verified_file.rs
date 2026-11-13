@@ -147,8 +147,8 @@ fn verify_allowed_owner(owner: Result<OwnerClass, String>, allow_shared_admin_ow
     }
 }
 
-#[cfg(all(windows, test))]
-pub(super) fn verify_current_user_owns(handle: &File) -> Result<(), String> {
+#[cfg(windows)]
+pub(crate) fn verify_current_user_owns(handle: &File) -> Result<(), String> {
     verify_allowed_owner(classify_owner(handle), false)
 }
 

@@ -254,7 +254,7 @@ fn protected_builtin_profile(sid: &str, value: &str, windows: &Path) -> bool {
         })
 }
 
-fn profiles() -> Result<(String, Vec<(String, PathBuf)>), &'static str> {
+fn collect_profiles(resolve: impl Fn(&str) -> Result<PathBuf, &'static str>) -> Result<(String, Vec<(String, PathBuf)>), &'static str> {
     let sid = current_sid()?;
     let key = RegKey::predef(HKEY_LOCAL_MACHINE)
         .open_subkey("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList")
@@ -274,7 +274,7 @@ fn profiles() -> Result<(String, Vec<(String, PathBuf)>), &'static str> {
         {
             continue;
         }
-        paths.push((name, expand_path(&path)?));
+        paths.push((name, resolve(&path)?));
     }
     if !paths
         .iter()
@@ -283,6 +283,19 @@ fn profiles() -> Result<(String, Vec<(String, PathBuf)>), &'static str> {
         return Err(UNAVAILABLE);
     }
     Ok((sid, paths))
+}
+
+pub(crate) fn profiles() -> Result<(String, Vec<(String, PathBuf)>), &'static str> {
+    collect_profiles(expand_path)
+}
+
+#[cfg(feature = "experimental-disk-tree-delete")]
+pub(crate) fn profiles_unresolved() -> Result<(String, Vec<(String, PathBuf)>), &'static str> {
+    let mut buffer = vec![0u16; 32768];
+    let length = unsafe { GetWindowsDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) } as usize;
+    if length == 0 || length >= buffer.len() { return Err(UNAVAILABLE); }
+    let windows_dir = String::from_utf16(&buffer[..length]).map_err(|_| UNAVAILABLE)?;
+    collect_profiles(|value| resolve_profile_string(value, Path::new(&windows_dir)))
 }
 
 fn contains(path: &Path, root: &Path) -> bool {

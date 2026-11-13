@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 mod index;
 #[cfg(windows)]
-mod profile_policy;
-mod safety;
+pub(crate) mod profile_policy;
+pub(crate) mod safety;
 mod scan;
 mod scope;
-mod verified_file;
+pub(crate) mod verified_file;
 
 use serde::Serialize;
 use std::collections::HashSet;
