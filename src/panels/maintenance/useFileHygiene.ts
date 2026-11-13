@@ -200,6 +200,18 @@ export function useFileHygiene() {
       setRetainedFiles((current) => ({ ...current, [groupId]: fileId }));
       setSelected((current) => { const next = new Set(current); next.delete(fileId); return next; });
     },
+    selectGroupCopies: (groupId: string) => {
+      if (busy || !duplicateScan) return;
+      const group = duplicateScan.groups.find((item) => item.id === groupId);
+      if (!group) return;
+      setSelected((current) => {
+        const next = new Set(current);
+        for (const file of group.files) {
+          if (canRemoveDuplicateFile([group], file.id, keepPolicy, retainedFiles)) next.add(file.id);
+        }
+        return next;
+      });
+    },
     changeKeepPolicy: (next: DuplicateKeepPolicy) => { if (!busy) { setKeepPolicy(next); setSelected(new Set()); } },
     changeMinimumSize: (next: number) => { if (!busy && DUPLICATE_SIZE_CHOICES.includes(next as typeof DUPLICATE_SIZE_CHOICES[number])) { setMinimumSizeBytes(next); setDuplicateScan(undefined); setSelected(new Set()); } },
     smartSelect: () => { if (!busy) setSelected(tool === "duplicates" ? selectDuplicateCopies(duplicateScan?.groups ?? [], keepPolicy, retainedFiles) : new Set(emptyScan?.folders.map((folder) => folder.id) ?? [])); },
