@@ -13,17 +13,16 @@ const IP_TTL_MS = 300_000; // 5 min
 let cachedIp: string | null = null;
 let cachedIpAt = 0;
 
-/** Friendly DNS label, mirroring the mapping used in PublicIPCard. */
-function dnsLabel(s: DNSStatus | null): string {
+/** Label only identified providers; an unknown resolver stays generic. */
+export function dnsLabel(s: DNSStatus | null): string {
   if (!s) return "checking…";
+  if (s.provider === "Swiss_Firewall" || [s.provider, s.dohTemplate, s.resolverOrg].some(value => value?.toLowerCase().includes("nextdns"))) return "Enterprise DNS";
   if (s.provider === "AdGuard_Ads_Trackers") return "Ads + Trackers";
   if (s.provider === "Cloudflare_Malware_Adult") return "Malware + Adult";
-  if (s.provider === "Swiss_Firewall") return "ServaLabs Netwall";
   if (s.provider === "ControlD") return "Simple Firewall";
   const ip = s.resolverIp ?? s.servers?.[0] ?? null;
-  const org = s.resolverOrg ?? null;
   if (!ip) return "—";
-  return org ? `${org}` : ip;
+  return "Configured";
 }
 
 /**
@@ -73,7 +72,7 @@ export default function RadarControlStrip() {
         <span className="rsr-value">{ip ?? "checking…"}</span>
       </div>
 
-      <div className="radar-strip-readout" title={networkDnsStatus?.resolverIp ?? networkDnsStatus?.servers?.join(", ") ?? undefined}>
+      <div className="radar-strip-readout" title={[networkDnsStatus?.resolverOrg, networkDnsStatus?.resolverIp ?? networkDnsStatus?.servers?.join(", ")].filter(Boolean).join(" · ") || undefined}>
         <Server size={12} className="rsr-icon" />
         <span className="rsr-label">DNS</span>
         <span className="rsr-value">{dnsLabel(networkDnsStatus)}</span>

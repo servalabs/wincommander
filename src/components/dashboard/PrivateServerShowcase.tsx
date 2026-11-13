@@ -47,12 +47,14 @@ export default function PrivateServerShowcase() {
         <div className="server-model-toggle" aria-label="Server model">
           <button
             className={model === "pro" ? "active" : ""}
+            aria-pressed={model === "pro"}
             onClick={() => setModel("pro")}
           >
             Pro
           </button>
           <button
             className={model === "max" ? "active pro" : ""}
+            aria-pressed={model === "max"}
             onClick={() => setModel("max")}
           >
             Max
