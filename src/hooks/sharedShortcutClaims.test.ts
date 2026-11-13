@@ -1,5 +1,21 @@
 import { expect, test } from "bun:test";
-import { shortcutWarningsAfterReconciliation, syncSharedShortcutClaim } from "./sharedShortcutClaims";
+import { shortcutWarningsAfterReconciliation, summarizeStartupShortcutWarnings, syncSharedShortcutClaim } from "./sharedShortcutClaims";
+
+test("deduplicates only the complete known rejection and preserves combined warnings", async () => {
+  const denied = "Shared shortcut changes could not be confirmed: service rejected request: forbidden (session-helper peer binary path is not on the allow-list)";
+  const combined = `${denied} Another independent failure.`;
+  const warnings = summarizeStartupShortcutWarnings([`${denied} [operation 11]`, `${denied} [operation 12]`, combined, "Other warning", null]);
+  expect(warnings).toHaveLength(3);
+  expect(warnings[0]).toContain("not approved by the Windows service");
+  expect(warnings[1]).toBe(combined);
+  expect(warnings[2]).toBe("Other warning");
+  const result = await syncSharedShortcutClaim("hide", true, async () => ({ status: "partial", warnings: [denied, "Other warning"] }));
+  expect(summarizeStartupShortcutWarnings([result.warning])[0]).toContain("Other warning");
+  expect(result.managed).toEqual({ desktop: false, start: false });
+  const rejected = await syncSharedShortcutClaim("hide", true, async () => { throw new Error("service rejected request: forbidden (session-helper peer binary path is not on the allow-list)"); });
+  expect(summarizeStartupShortcutWarnings([rejected.warning])[0]).toContain("not approved by the Windows service");
+  expect(rejected.managed).toEqual({ desktop: false, start: false });
+});
 
 test("reports denied and incomplete shared shortcut changes", async () => {
   expect((await syncSharedShortcutClaim("hide", true, async () => { throw new Error("forbidden"); })).warning).toContain("forbidden");

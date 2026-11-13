@@ -33,7 +33,7 @@ import EvidenceStatusBridge from "./components/EvidenceStatusBridge";
 import CalculatorGate from "./components/startup/CalculatorGate";
 import useBackend from "./hooks/useBackend";
 import { shouldReconcileCalculatorShortcuts, syncCalculatorShortcuts } from "./panels/privacy/calculatorShortcuts";
-import { shortcutWarningsAfterReconciliation, syncSharedShortcutClaim } from "./hooks/sharedShortcutClaims";
+import { shortcutWarningsAfterReconciliation, summarizeStartupShortcutWarnings, syncSharedShortcutClaim } from "./hooks/sharedShortcutClaims";
 import { getCalculatorGateGeneration } from "./hooks/startupWindow";
 import { FlowSettingsRecovery } from "./components/startup/FlowSettingsRecovery";
 import { AuthModeProvider, useAuthMode, type AuthMode } from "./context/AuthModeContext";
@@ -1572,7 +1572,7 @@ function StartupAuthGate({ children }: { children: React.ReactNode }) {
       const accountWarning = reconcileCalculator
         ? await syncCalculatorShortcuts(setWinCommanderCalculatorShortcuts, true, hideClaim.managed)
         : null;
-      const warnings = [calculatorClaim.warning, hideClaim.warning, ...shortcutWarningsAfterReconciliation(accountWarning ? [accountWarning] : [], hideClaim.warning)].filter(Boolean);
+      const warnings = summarizeStartupShortcutWarnings([calculatorClaim.warning, hideClaim.warning, ...shortcutWarningsAfterReconciliation(accountWarning ? [accountWarning] : [], hideClaim.warning)]);
       if (warnings.length) showWarning(`Shortcuts need attention: ${warnings.join(" ")}`);
     })();
   }, [appSettings, mode, setWinCommanderCalculatorShortcuts, showCalc, startupDataState]);
