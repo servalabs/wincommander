@@ -1,4 +1,4 @@
-//! Thread-local backup privilege for no-follow protected-root discovery only.
+//! Thread-local read-only privileges for no-follow protected-root discovery only.
 use std::{ffi::c_void, io, ptr};
 
 type Handle = *mut c_void;
@@ -40,8 +40,8 @@ impl Drop for ThreadImpersonation {
 
 /// Validate the duplicate itself before impersonating it. A token inherited
 /// from an elevated process can carry several enabled privileges; discovery
-/// must not inherit those capabilities into its backup-only impersonation.
-fn verify_only_backup_enabled(token: Handle, backup: Luid) -> io::Result<()> {
+/// must not inherit those capabilities into its discovery impersonation.
+fn verify_only_discovery_privileges_enabled(token: Handle, backup: Luid, traverse: Luid) -> io::Result<()> {
     const TOKEN_PRIVILEGES_CLASS: u32 = 3;
     const SE_PRIVILEGE_ENABLED: u32 = 2;
     #[repr(C)]
@@ -59,16 +59,20 @@ fn verify_only_backup_enabled(token: Handle, backup: Luid) -> io::Result<()> {
     let size = std::mem::size_of::<LuidAndAttributes>();
     if count > (bytes.len() - 4) / size { return Err(io::Error::other("invalid token privileges")); }
     let mut enabled_backup = false;
+    let mut enabled_traverse = false;
     for index in 0..count {
         let entry = unsafe { std::ptr::read_unaligned(bytes.as_ptr().add(4 + index * size).cast::<LuidAndAttributes>()) };
         if entry.attributes & SE_PRIVILEGE_ENABLED != 0 {
-            if entry.luid.low != backup.low || entry.luid.high != backup.high || enabled_backup {
+            if entry.luid.low == backup.low && entry.luid.high == backup.high && !enabled_backup {
+                enabled_backup = true;
+            } else if entry.luid.low == traverse.low && entry.luid.high == traverse.high && !enabled_traverse {
+                enabled_traverse = true;
+            } else {
                 return Err(io::Error::new(io::ErrorKind::PermissionDenied, "unexpected enabled token privilege"));
             }
-            enabled_backup = true;
         }
     }
-    if !enabled_backup { return Err(io::Error::new(io::ErrorKind::PermissionDenied, "backup privilege unavailable")); }
+    if !enabled_backup || !enabled_traverse { return Err(io::Error::new(io::ErrorKind::PermissionDenied, "discovery privileges unavailable")); }
     Ok(())
 }
 
@@ -92,15 +96,19 @@ pub(crate) fn with_backup_privilege<T>(f: impl FnOnce() -> io::Result<T>) -> io:
     if unsafe { DuplicateTokenEx(process.0, TOKEN_QUERY | TOKEN_ADJUST_PRIVILEGES | TOKEN_IMPERSONATE, ptr::null_mut(), 2, 2, &mut duplicate) } == 0 { return Err(io::Error::last_os_error()); }
     let duplicate = OwnedHandle(duplicate);
     if unsafe { AdjustTokenPrivileges(duplicate.0, 1, ptr::null(), 0, ptr::null_mut(), ptr::null_mut()) } == 0 { return Err(io::Error::last_os_error()); }
-    let name: Vec<u16> = "SeBackupPrivilege\0".encode_utf16().collect();
-    let mut luid = Luid { low: 0, high: 0 };
-    if unsafe { LookupPrivilegeValueW(ptr::null(), name.as_ptr(), &mut luid) } == 0 { return Err(io::Error::last_os_error()); }
-    let state = TokenPrivileges { count: 1, luid, attributes: 2 };
-    unsafe { SetLastError(0); }
-    if unsafe { AdjustTokenPrivileges(duplicate.0, 0, &state, 0, ptr::null_mut(), ptr::null_mut()) } == 0 { return Err(io::Error::last_os_error()); }
-    let error = unsafe { GetLastError() };
-    if error != 0 { return Err(io::Error::from_raw_os_error(error as i32)); }
-    verify_only_backup_enabled(duplicate.0, luid)?;
+    let mut enabled = Vec::new();
+    for privilege in ["SeBackupPrivilege\0", "SeChangeNotifyPrivilege\0"] {
+        let name: Vec<u16> = privilege.encode_utf16().collect();
+        let mut luid = Luid { low: 0, high: 0 };
+        if unsafe { LookupPrivilegeValueW(ptr::null(), name.as_ptr(), &mut luid) } == 0 { return Err(io::Error::last_os_error()); }
+        let state = TokenPrivileges { count: 1, luid, attributes: 2 };
+        unsafe { SetLastError(0); }
+        if unsafe { AdjustTokenPrivileges(duplicate.0, 0, &state, 0, ptr::null_mut(), ptr::null_mut()) } == 0 { return Err(io::Error::last_os_error()); }
+        let error = unsafe { GetLastError() };
+        if error != 0 { return Err(io::Error::from_raw_os_error(error as i32)); }
+        enabled.push(luid);
+    }
+    verify_only_discovery_privileges_enabled(duplicate.0, enabled[0], enabled[1])?;
     if unsafe { SetThreadToken(ptr::null(), duplicate.0) } == 0 { return Err(io::Error::last_os_error()); }
     let guard = ThreadImpersonation;
     let result = f();

@@ -211,13 +211,17 @@ fn open_root(path: &Path) -> io::Result<File> {
 }
 
 fn final_path(file: &File) -> io::Result<PathBuf> {
+    final_path_with_flags(file, 0)
+}
+
+fn final_path_with_flags(file: &File, flags: u32) -> io::Result<PathBuf> {
     let mut buffer = vec![0u16; 32768];
     let len = unsafe {
         GetFinalPathNameByHandleW(
             file.as_raw_handle(),
             buffer.as_mut_ptr(),
             buffer.len() as u32,
-            0,
+            flags,
         )
     } as usize;
     if len == 0 {
@@ -565,6 +569,7 @@ impl ProtectedRoots {
             true,
         ));
         crate::disk_backup_privilege::with_backup_privilege(|| Self::pin_inner(&roots, true))
+            .map_err(|error| contextual_error("protected-root discovery", error))
     }
     /// Resolve each component relative to an already pinned parent handle.
     /// All non-volume ancestors are held for traversal without
@@ -574,7 +579,7 @@ impl ProtectedRoots {
             .ancestors()
             .last()
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing volume root"))?;
-        require_fixed_ntfs(volume)?;
+        require_fixed_ntfs(volume).map_err(|error| contextual_error("volume eligibility check", error))?;
         let mut cursor = volume.to_path_buf();
         let mut index = if let Some(i) = self
             .handles
@@ -589,9 +594,15 @@ impl ProtectedRoots {
                 .access_mode(READ_ATTRIBUTES | TRAVERSE | SYNCHRONIZE)
                 .share_mode(SHARE_READ_WRITE)
                 .custom_flags(BACKUP_SEMANTICS | OPEN_REPARSE_POINT)
-                .open(volume)?;
-            let (id, attrs) = identity(&root)?;
-            let final_name = final_path(&root)?;
+                .open(volume).map_err(|error| contextual_error("open volume root", error))?;
+            let (id, attrs) = identity(&root).map_err(|error| contextual_error("volume identity", error))?;
+            // Normalizing a volume root can require permissions that the
+            // restricted backup token deliberately does not carry. A root has
+            // no intermediate components to resolve, so its opened name is
+            // sufficient here, alongside the volume identity and reparse
+            // checks below. Descendant names still require normalization.
+            let final_name = final_path_with_flags(&root, 0x8 /* FILE_NAME_OPENED */)
+                .map_err(|error| contextual_error("volume final path", error))?;
             if id.index == 0
                 || attrs & ATTRIBUTE_REPARSE_POINT != 0
                 || attrs & ATTRIBUTE_DIRECTORY == 0
@@ -610,7 +621,7 @@ impl ProtectedRoots {
         let relative = path
             .strip_prefix(volume)
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid volume path"))?;
-        for part in relative.components() {
+        for (depth, part) in relative.components().enumerate() {
             let std::path::Component::Normal(name) = part else {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
@@ -626,9 +637,12 @@ impl ProtectedRoots {
                 index = existing;
                 continue;
             }
-            let child = open_child(&self.handles[index].1, name, true, false, backup_intent)?;
-            let (id, attrs) = identity(&child)?;
-            let final_name = final_path(&child)?;
+            let child = open_child(&self.handles[index].1, name, true, false, backup_intent)
+                .map_err(|error| contextual_error(&format!("cannot open component {}", depth + 1), error))?;
+            let (id, attrs) = identity(&child)
+                .map_err(|error| contextual_error(&format!("component {} identity", depth + 1), error))?;
+            let final_name = final_path(&child)
+                .map_err(|error| contextual_error(&format!("component {} final path", depth + 1), error))?;
             if id.index == 0
                 || id.volume != root_volume
                 || attrs & ATTRIBUTE_REPARSE_POINT != 0
@@ -659,7 +673,7 @@ impl ProtectedRoots {
             identities: Vec::new(),
             scopes: Vec::new(),
         };
-        for (path, protect_descendants) in paths {
+        for (root_index, (path, protect_descendants)) in paths.iter().enumerate() {
             let resolved = lexical_windows_path(path)?;
             if let Some((_, protect)) = pinned.scopes.iter_mut().find(|(existing, _)| {
                 path_prefix(existing, &resolved) && path_prefix(&resolved, existing)
@@ -667,7 +681,9 @@ impl ProtectedRoots {
                 *protect |= *protect_descendants;
                 continue;
             }
-            let index = pinned.lock_directory(&resolved, backup_intent)?;
+            let index = pinned.lock_directory(&resolved, backup_intent).map_err(|error| {
+                contextual_error(&format!("cannot verify protected root {}", root_index + 1), error)
+            })?;
             let (id, attrs) = identity(&pinned.handles[index].1)?;
             if id.index == 0 || attrs & ATTRIBUTE_REPARSE_POINT != 0 {
                 return Err(io::Error::new(
@@ -680,6 +696,10 @@ impl ProtectedRoots {
         }
         Ok(pinned)
     }
+}
+
+fn contextual_error(context: &str, error: io::Error) -> io::Error {
+    io::Error::new(error.kind(), format!("{context}: {error}"))
 }
 
 #[cfg(feature = "experimental-disk-tree-delete")]
