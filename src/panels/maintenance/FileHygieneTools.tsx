@@ -64,19 +64,19 @@ export function FileHygieneTools() {
   const scannedCount = tools.tool === "duplicates" ? tools.duplicateScan?.scannedFiles ?? 0 : tools.emptyScan?.scannedFolders ?? 0;
   const truncated = tools.tool === "duplicates" ? tools.duplicateScan?.truncated : tools.emptyScan?.truncated;
   const cancelled = tools.tool === "duplicates" ? tools.duplicateScan?.cancelled : tools.emptyScan?.cancelled;
-  const selectedBytes = useMemo(() => {
-    if (tools.tool !== "duplicates" || !tools.duplicateScan) return 0;
-    return getDuplicateSelectedBytes(tools.duplicateScan.groups, tools.selected);
-  }, [tools.tool, tools.duplicateScan, tools.selected]);
-  // Aggregate removable bytes across every group, not just the selected
-  // ones — this is the "total scan findings" figure surfaced immediately
-  // after a scan completes, before the user selects anything.
-  const totalReclaimableBytes = useMemo(() => {
+  const eligibleSelected = new Set((tools.duplicateScan?.groups ?? []).flatMap((group) => {
+    const retained = tools.retainedFileId(group);
+    return group.files.filter((file) => file.removable === true && file.id !== retained && tools.selected.has(file.id)).map((file) => file.id);
+  }));
+  const selectedBytes = tools.tool === "duplicates" && tools.duplicateScan
+    ? getDuplicateSelectedBytes(tools.duplicateScan.groups, eligibleSelected) : 0;
+  // This total includes protected copies and is not a deletion estimate.
+  const totalPotentialBytes = useMemo(() => {
     if (tools.tool !== "duplicates" || !tools.duplicateScan) return 0;
     return tools.duplicateScan.totalDuplicateBytes;
   }, [tools.tool, tools.duplicateScan]);
   const selectedReview = tools.tool === "duplicates"
-    ? tools.duplicateScan?.groups.flatMap((group) => group.files.filter((file) => singleRemovalId ? file.id === singleRemovalId : tools.selected.has(file.id)).map((file) => ({ id: file.id, path: file.path, detail: formatBytes(file.size) }))) ?? []
+    ? tools.duplicateScan?.groups.flatMap((group) => group.files.filter((file) => singleRemovalId ? file.id === singleRemovalId && file.removable === true && tools.retainedFileId(group) !== file.id : eligibleSelected.has(file.id)).map((file) => ({ id: file.id, path: file.path, detail: formatBytes(file.size) }))) ?? []
     : tools.emptyScan?.folders.filter((folder) => tools.selected.has(folder.id)).map((folder) => ({ id: folder.id, path: folder.path, detail: "Empty folder" })) ?? [];
   const resetDuplicateResultScroll = useCallback(() => {
     const results = document.querySelector<HTMLDivElement>(".maintenance-file-hygiene-results--duplicates > .maintenance-file-hygiene-content");
@@ -103,7 +103,7 @@ export function FileHygieneTools() {
               {!!tools.roots.length && <Badge tone="accent">{tools.roots.length} folder{tools.roots.length === 1 ? "" : "s"}</Badge>}
               {tools.roots.length > 0 && <Button size="sm" variant="outline" onClick={() => setRootsOpen(true)}><Icon icon="folder-open" /> View selected</Button>}
               <Button size="sm" variant="outline" onClick={() => void tools.chooseRoots()} disabled={tools.busy}><Icon icon="folder-open" /> Choose folders</Button>
-              {tools.tool === "duplicates" && <Button size="sm" variant="outline" disabled={tools.busy} onClick={() => void tools.scan("local")}><Icon icon="hard-drive" /> Scan my files</Button>}
+              {tools.tool === "duplicates" && <Button size="sm" variant="outline" disabled={tools.busy} onClick={() => void tools.scan("local")}><Icon icon="hard-drive" /> Scan local drives</Button>}
               {tools.busy && <Button size="icon" variant="outline" onClick={() => void tools.cancel()} title={`Cancel ${tools.tool} scan`} aria-label={`Cancel ${tools.tool} scan`}><Icon icon="stop" /></Button>}
             </div>
           </div>
@@ -120,12 +120,12 @@ export function FileHygieneTools() {
           </Tabs>
           {tools.busy && <p className="text-xs text-[var(--text-dim)]" role="status">Other tabs are available when the current operation finishes.</p>}
           {tools.tool === "empty" && <div className="duplicate-scan-options" aria-label="Choose drives to scan"><strong>Drives</strong>{drives.map(root => { return <label key={root}><input type="checkbox" checked={tools.roots.includes(root)} disabled={tools.busy} onChange={() => tools.toggleDrive(root)} /> {root.slice(0, 2)}</label>; })}{driveError && <span role="status">{driveError}</span>}</div>}
-          {tools.tool === "duplicates" && <div className="duplicate-scan-options"><label htmlFor="duplicate-minimum-size">Minimum size</label><select id="duplicate-minimum-size" aria-label="Minimum duplicate file size" value={tools.minimumSizeBytes} disabled={tools.busy} onChange={(event) => tools.changeMinimumSize(Number(event.target.value))}><option value={200 * 1024}>200 KB (recommended)</option><option value={1024 * 1024}>1 MB</option><option value={10 * 1024 * 1024}>10 MB</option><option value={100 * 1024 * 1024}>100 MB</option><option value={0}>Any size (slower)</option></select><span>Only files owned by this user are compared; protected files are hidden. Changing the minimum requires a new scan.</span></div>}
+          {tools.tool === "duplicates" && <div className="duplicate-scan-options"><label htmlFor="duplicate-minimum-size">Minimum size</label><select id="duplicate-minimum-size" aria-label="Minimum duplicate file size" value={tools.minimumSizeBytes} disabled={tools.busy} onChange={(event) => tools.changeMinimumSize(Number(event.target.value))}><option value={200 * 1024}>200 KB (recommended)</option><option value={1024 * 1024}>1 MB</option><option value={10 * 1024 * 1024}>10 MB</option><option value={100 * 1024 * 1024}>100 MB</option><option value={0}>Any size (slower)</option></select><span>Protected copies are review-only. Changing the minimum requires a new scan.</span></div>}
           {hasScan && (
             <div className="flex flex-wrap items-center gap-2 pt-1">
               {tools.tool === "duplicates" ? (
                 <>
-                  <Badge tone="accent">{formatBytes(totalReclaimableBytes)} potential duplicate data including protected copies</Badge>
+                  <Badge tone="accent">{formatBytes(totalPotentialBytes)} potential duplicate data including protected copies</Badge>
                   <Badge tone="neutral">{count} verified group{count === 1 ? "" : "s"} including protected copies</Badge>
                 </>
               ) : (
@@ -178,7 +178,7 @@ export function FileHygieneTools() {
             <>
               <DuplicateGroups tools={tools} onFilterChange={setGroupsFiltered} onRemoveFile={(id) => { setSingleRemovalId(id); setConfirmOpen(true); }} />
               <nav aria-label="Duplicate result pages" className="flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--text-dim)]"><span>Groups {count ? tools.duplicateScan.groupOffset + 1 : 0}–{tools.duplicateScan.groupOffset + tools.duplicateScan.groups.length} of {count.toLocaleString()}</span><div className="flex gap-2"><Button size="sm" variant="outline" disabled={tools.busy || tools.duplicateScan.groupOffset === 0} onClick={() => loadDuplicateGroupPage(Math.max(0, tools.duplicateScan!.groupOffset - 100))}>Previous groups</Button><Button size="sm" variant="outline" disabled={tools.busy || !tools.duplicateScan.hasMoreGroups} onClick={() => loadDuplicateGroupPage(tools.duplicateScan!.groupOffset + 100)}>Next groups</Button></div></nav>
-              <SelectionActionBar disabled={tools.busy} count={tools.selected.size} bytesLabel={selectedBytes > 0 ? `${formatBytes(selectedBytes)} logical bytes selected` : undefined} onRemove={() => { setSingleRemovalId(undefined); setConfirmOpen(true); }} />
+              <SelectionActionBar disabled={tools.busy} count={eligibleSelected.size} bytesLabel={selectedBytes > 0 ? `${formatBytes(selectedBytes)} eligible bytes selected` : undefined} onRemove={() => { setSingleRemovalId(undefined); setConfirmOpen(true); }} />
             </>
           )}
 

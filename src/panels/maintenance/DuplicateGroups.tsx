@@ -21,6 +21,18 @@ const TYPES: { id: string; label: string; icon: IconName; extensions: string[] }
 ];
 const fileType = (name: string) => TYPES.find((type) => type.extensions.includes(name.split(".").pop()?.toLowerCase() ?? ""));
 
+function reviewReason(reason?: string | null): string {
+  switch (reason) {
+    case "other_profile": return "Another user's files are protected";
+    case "protected_location": return "Windows or application location is protected";
+    case "protected_type": return "Application or executable files are protected";
+    case "application_data": return "Application data is protected";
+    case "profiles_unavailable": return "Windows profiles could not be verified";
+    case "owner_unavailable": return "File ownership could not be verified";
+    default: return "Removal eligibility has not been verified";
+  }
+}
+
 function formatModified(modified: string | null) {
   if (!modified || !/^\d+$/.test(modified)) return "Modified date unavailable";
   try {
@@ -33,8 +45,7 @@ function formatModified(modified: string | null) {
 export function DuplicateGroups({ tools, onFilterChange, onRemoveFile }: { tools: Tools; onFilterChange: (active: boolean) => void; onRemoveFile: (fileId: string) => void }) {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("all");
-  // The scanner enforces ownership. Show all eligible scanned locations,
-  // including a folder the current user explicitly selected outside a profile.
+  // Show all scanned locations, including copies protected from removal.
   const [profile, setProfile] = useState("all");
   const [visibleCount, setVisibleCount] = useState(50);
   const [expandedGroupIds, setExpandedGroupIds] = useState<Set<string> | null>(null);
@@ -42,7 +53,7 @@ export function DuplicateGroups({ tools, onFilterChange, onRemoveFile }: { tools
   const groups = tools.duplicateScan?.groups;
   const profiles = useMemo(() => {
     const choices = new Map<string, string>();
-    for (const group of groups ?? []) for (const file of group.files) if (file.removable === true) choices.set(duplicateProfileKey(file), duplicateProfileLabel(file));
+    for (const group of groups ?? []) for (const file of group.files) choices.set(duplicateProfileKey(file), duplicateProfileLabel(file));
     return [...choices.entries()].sort((a, b) => a[1].localeCompare(b[1]));
   }, [groups]);
   useEffect(() => {
@@ -53,12 +64,11 @@ export function DuplicateGroups({ tools, onFilterChange, onRemoveFile }: { tools
     return () => onFilterChange(false);
   }, [category, onFilterChange, profile, query]);
   const filtered = useMemo(() => (groups ?? []).filter((group) => {
-    const visible = group.files.filter(file => file.removable === true);
-    if (!visible.length) return (group.hasMoreFiles || group.memberOffset > 0) && category === "all" && !query.trim();
-    return visible.length > 0 &&
-    (category === "all" || visible.some((file) => (fileType(file.name)?.id ?? "other") === category)) &&
-    (profile === "all" || visible.some((file) => (profile === "current" ? file.profileScope === "current" : duplicateProfileKey(file) === profile))) &&
-    visible.some((file) => `${file.name} ${toExplorerDisplayPath(file.path) ?? ""}`.toLowerCase().includes(query.trim().toLowerCase()));
+    const files = group.files;
+    if (!files.length) return (group.hasMoreFiles || group.memberOffset > 0) && category === "all" && !query.trim();
+    return (category === "all" || files.some((file) => (fileType(file.name)?.id ?? "other") === category)) &&
+    (profile === "all" || files.some((file) => (profile === "current" ? file.profileScope === "current" : duplicateProfileKey(file) === profile))) &&
+    files.some((file) => `${file.name} ${toExplorerDisplayPath(file.path) ?? ""}`.toLowerCase().includes(query.trim().toLowerCase()));
   }), [category, groups, profile, query]);
   const groupKey = (group: DuplicateGroup) => `${group.id}:${group.memberOffset}`;
   const isExpanded = (group: DuplicateGroup) => isDuplicateGroupExpanded(expandedGroupIds, groupKey(group));
@@ -91,7 +101,7 @@ export function DuplicateGroups({ tools, onFilterChange, onRemoveFile }: { tools
       {[{ id: "all", label: "All files" }, ...TYPES, { id: "other", label: "Other" }].map((type) =>
         <button key={type.id} type="button" className="duplicate-category" aria-pressed={category === type.id} onClick={() => { setCategory(type.id); setVisibleCount(50); }}>{type.label}</button>)}
     </div>
-    <p className="text-xs text-[var(--text-dim)]">Filters apply to loaded groups only. Protected copies are hidden but included in group totals.</p>
+    <p className="text-xs text-[var(--text-dim)]">Filters apply to loaded groups only. Protected copies are shown for review and cannot be selected for removal.</p>
     {filtered.slice(0, visibleCount).map((group, index) => <DuplicateGroupRows key={groupKey(group)} group={group} tools={tools} onRemoveFile={onRemoveFile} open={isExpanded(group)} onOpenChange={(open) => setGroupExpanded(group, open)} groupRef={index === 0 ? firstMatchRef : undefined} />)}
     {!filtered.length && <p className="duplicate-empty">{groups?.length ? "No groups match this filter. Your selection is unchanged." : tools.duplicateScan?.cancelled ? "No verified groups are available from this partial scan. Scan again to compare the remaining files." : "No identical file groups were found in the returned scan scope."}</p>}
     {filtered.length > visibleCount && <Button size="sm" variant="outline" onClick={() => setVisibleCount((count) => count + 50)}>Show more groups ({filtered.length - visibleCount} remaining)</Button>}
@@ -102,26 +112,26 @@ function DuplicateGroupRows({ group, tools, onRemoveFile, open, onOpenChange, gr
   const [visibleCount, setVisibleCount] = useState(50);
   const selectedCount = group.files.filter((file) => tools.selected.has(file.id)).length;
   const retainedId = tools.retainedFileId(group);
-  const visibleFiles = group.files.filter(file => file.removable === true);
+  const visibleFiles = group.files;
   return <details ref={groupRef} className="duplicate-group" open={open} onToggle={(event) => onOpenChange(event.currentTarget.open)}>
     <summary>
       <Icon icon={fileType(visibleFiles[0]?.name ?? "")?.icon ?? "document"} size={20} />
-      <span className="duplicate-group-heading"><strong>{visibleFiles[0]?.name ?? "Protected copies hidden"}</strong><small>{group.fileCount} verified copies including protected · {formatBytes(group.size)} each · {formatBytes(group.reclaimableBytes)} potential duplicate data</small></span>
+      <span className="duplicate-group-heading"><strong>{visibleFiles[0]?.name ?? "Duplicate copies"}</strong><small>{group.fileCount} verified copies including protected · {formatBytes(group.size)} each · {formatBytes(group.reclaimableBytes)} potential duplicate data</small></span>
       {selectedCount > 0 && <Badge tone="accent">{selectedCount} selected</Badge>}
-      <Button type="button" size="sm" variant="outline" disabled={tools.busy || !visibleFiles.some(file => file.id !== retainedId)} onClick={(event) => { event.preventDefault(); event.stopPropagation(); tools.selectGroupCopies(group.id); }}>Select copies</Button>
+      <Button type="button" size="sm" variant="outline" disabled={tools.busy || !visibleFiles.some(file => file.removable === true && file.id !== retainedId)} onClick={(event) => { event.preventDefault(); event.stopPropagation(); tools.selectGroupCopies(group.id); }}>Select copies</Button>
       <Icon icon="chevron-down" size={14} />
     </summary>
     <div className="duplicate-members">
-      {retainedId && !visibleFiles.some(file => file.id === retainedId) && <p className="text-xs text-[var(--text-dim)]">The kept copy is protected and hidden. Its contents are checked again before removal.</p>}
-      {!visibleFiles.length && <p className="text-xs text-[var(--text-dim)]">No removable copies on this page. Check other pages for this group.</p>}
+      {!visibleFiles.length && <p className="text-xs text-[var(--text-dim)]">No copies on this page. Check other pages for this group.</p>}
       {visibleFiles.slice(0, visibleCount).map((file) => {
         const retained = retainedId === file.id;
+        const protectedCopy = file.removable !== true;
         const displayPath = toExplorerDisplayPath(file.path) ?? "Location unavailable";
         return <div key={file.id} className="duplicate-member" data-retained={retained || undefined}>
-          <CheckboxControl checked={tools.selected.has(file.id)} disabled={tools.busy || retained} ariaLabel={`${tools.selected.has(file.id) ? "Deselect" : "Select"} ${file.name} at ${displayPath}`} onChange={() => tools.select(file.id)} />
+          <CheckboxControl checked={!protectedCopy && tools.selected.has(file.id)} disabled={tools.busy || retained || protectedCopy} ariaLabel={`${tools.selected.has(file.id) ? "Deselect" : "Select"} ${file.name} at ${displayPath}`} onChange={() => tools.select(file.id)} />
           <span className="duplicate-member-location"><strong>{file.name}</strong><small title={displayPath}>{displayPath} · {formatModified(file.modified)} · {duplicateProfileLabel(file)}</small></span>
           <Button size="sm" variant="ghost" disabled={tools.busy} aria-label={`Open ${file.name} in Explorer`} onClick={() => void tools.openDuplicate(file.id)}><Icon icon="folder-open" size={14} /></Button>
-          {retained ? <Badge tone="success">Kept copy</Badge> : <><Button size="sm" variant="ghost" disabled={tools.busy} aria-label={`Keep ${file.name} at ${displayPath}`} onClick={() => tools.keepFile(group.id, file.id)}>Keep</Button><Button size="sm" variant="outline" disabled={tools.busy} aria-label={`Remove ${file.name} at ${displayPath}`} title="Remove file" onClick={() => onRemoveFile(file.id)}><Icon icon="trash" size={14} /></Button></>}
+          {protectedCopy ? <span title={reviewReason(file.removalBlockReason)}><Badge tone="neutral">{retained ? "Kept · review only" : "Review only"}</Badge></span> : retained ? <Badge tone="success">Kept copy</Badge> : <><Button size="sm" variant="ghost" disabled={tools.busy} aria-label={`Keep ${file.name} at ${displayPath}`} onClick={() => tools.keepFile(group.id, file.id)}>Keep</Button><Button size="sm" variant="outline" disabled={tools.busy} aria-label={`Remove ${file.name} at ${displayPath}`} title="Remove file" onClick={() => onRemoveFile(file.id)}><Icon icon="trash" size={14} /></Button></>}
         </div>;
       })}
       {visibleFiles.length > visibleCount && <Button size="sm" variant="ghost" onClick={() => setVisibleCount((count) => count + 50)}>Inspect more copies ({visibleFiles.length - visibleCount} remaining)</Button>}

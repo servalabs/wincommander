@@ -188,11 +188,8 @@ pub async fn duplicate_finder_scan(
 pub async fn duplicate_finder_scan_local(
     minimum_size_bytes: Option<u64>,
 ) -> Result<DuplicateScan, String> {
-    #[cfg(windows)]
-    let roots = vec![profile_policy::Snapshot::load().current_root().map_err(str::to_owned)?];
-    #[cfg(not(windows))]
-    let roots = vec![std::env::var_os("HOME").map(PathBuf::from).ok_or("Current user profile unavailable")?];
-    start_scan(roots, Vec::new(), validate_minimum_size(minimum_size_bytes)?).await
+    let (roots, excluded) = scope::local_fixed_roots()?;
+    start_scan(roots, excluded, validate_minimum_size(minimum_size_bytes)?).await
 }
 #[tauri::command]
 pub fn duplicate_finder_progress() -> scope::DuplicateProgress {

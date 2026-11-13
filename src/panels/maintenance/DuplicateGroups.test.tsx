@@ -3,14 +3,16 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { DuplicateGroups } from "./DuplicateGroups";
 
-test("protected copies stay hidden while an eligible copy can be reviewed for removal", () => {
-  const protectedFile = { id: "keeper", name: "protected-app.exe", path: "C:\\other\\protected-app.exe", size: 10, modified: null, removable: false, profileScope: "other" };
+test("protected copies are visible for review and cannot be removed", () => {
+  const protectedFile = { id: "keeper", name: "protected-app.exe", path: "C:\\other\\protected-app.exe", size: 10, modified: null, removable: false, profileScope: "other", removalBlockReason: "other_profile" };
   const eligible = { id: "copy", name: "photo.jpg", path: "C:\\Users\\me\\photo.jpg", size: 10, modified: null, removable: true, profileScope: "current" };
   const group = { id: "g", files: [protectedFile, eligible], fileCount: 2, size: 10, reclaimableBytes: 10, memberOffset: 0, hasMoreFiles: false };
   const tools = { duplicateScan: { groups: [group] }, selected: new Set(), busy: false, retainedFileId: () => "keeper", select() {}, openDuplicate() {}, keepFile() {}, loadMembers() {} };
   const html = renderToStaticMarkup(createElement(DuplicateGroups, { tools: tools as never, onFilterChange() {}, onRemoveFile() {} }));
-  expect(html).not.toContain("protected-app.exe");
-  expect(html).toContain("The kept copy is protected and hidden");
+  expect(html).toContain("protected-app.exe");
+  expect(html).toContain("Kept · review only");
+  expect(html).toContain("Another user&#x27;s files are protected");
+  expect(html).not.toContain("Remove protected-app.exe");
   expect(html).toContain("Remove photo.jpg");
   expect(html).toContain("including protected");
   expect(html).toContain('aria-label="Filter duplicate file type"');
@@ -24,8 +26,21 @@ test("older results without a positive removal classification are not exposed as
   const group = { id: "g", files: [file], fileCount: 2, size: 10, reclaimableBytes: 10, memberOffset: 0, hasMoreFiles: false };
   const tools = { duplicateScan: { groups: [group] }, selected: new Set(), busy: false, retainedFileId: () => "unknown", select() {}, openDuplicate() {}, keepFile() {}, loadMembers() {} };
   const html = renderToStaticMarkup(createElement(DuplicateGroups, { tools: tools as never, onFilterChange() {}, onRemoveFile() {} }));
-  expect(html).not.toContain("unverified.dat");
+  expect(html).toContain("unverified.dat");
+  expect(html).toContain("review only");
   expect(html).not.toContain("Remove unverified.dat");
+});
+
+test("a protected copy that is not the keeper stays review-only", () => {
+  const protectedFile = { id: "other", name: "other-user.txt", path: "C:\\Users\\Other\\other-user.txt", size: 10, modified: null, removable: false, profileScope: "other", removalBlockReason: "other_profile" };
+  const keeper = { id: "keeper", name: "my-copy.txt", path: "C:\\Users\\Me\\my-copy.txt", size: 10, modified: null, removable: true, profileScope: "current" };
+  const group = { id: "g", files: [keeper, protectedFile], fileCount: 2, size: 10, reclaimableBytes: 10, memberOffset: 0, hasMoreFiles: false };
+  const tools = { duplicateScan: { groups: [group] }, selected: new Set(), busy: false, retainedFileId: () => "keeper", select() {}, openDuplicate() {}, keepFile() {}, loadMembers() {} };
+  const html = renderToStaticMarkup(createElement(DuplicateGroups, { tools: tools as never, onFilterChange() {}, onRemoveFile() {} }));
+  expect(html).toContain("other-user.txt");
+  expect(html).toContain("Review only");
+  expect(html).not.toContain("Remove other-user.txt");
+  expect(html).not.toContain("Keep other-user.txt");
 });
 
 test("eligible files in an explicitly scanned location outside a profile are visible by default", () => {
@@ -42,6 +57,7 @@ test("a page of protected copies still offers access to later copies", () => {
   const group = { id: "g", files: [file], fileCount: 201, size: 10, reclaimableBytes: 2000, memberOffset: 0, hasMoreFiles: true };
   const tools = { duplicateScan: { groups: [group] }, selected: new Set(), busy: false, retainedFileId: () => "keeper", select() {}, openDuplicate() {}, keepFile() {}, loadMembers() {} };
   const html = renderToStaticMarkup(createElement(DuplicateGroups, { tools: tools as never, onFilterChange() {}, onRemoveFile() {} }));
-  expect(html).not.toContain("protected.exe");
+  expect(html).toContain("protected.exe");
+  expect(html).not.toContain("Remove protected.exe");
   expect(html).toContain("Next copies");
 });
