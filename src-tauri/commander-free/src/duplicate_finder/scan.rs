@@ -128,10 +128,10 @@ pub(super) fn scan_roots(
     if !cancelled.load(Ordering::Acquire) {
         hash_candidates(&index, cancelled)?;
     }
-    index.connection.execute_batch("INSERT INTO groups(id,size,hash,count)
-        SELECT lower(hex(randomblob(16))),size,hash,count(*) FROM files WHERE length(hash)=32 GROUP BY size,hash HAVING count(*)>1;
-        CREATE INDEX group_hashes ON groups(size,hash);
-        UPDATE files SET group_id=(SELECT id FROM groups WHERE groups.size=files.size AND groups.hash=files.hash) WHERE length(hash)=32;
+    index.connection.execute_batch("INSERT INTO groups(id,size,hash,name_key,count)
+        SELECT lower(hex(randomblob(16))),size,hash,name_key,count(*) FROM files WHERE length(hash)=32 AND name_key IS NOT NULL GROUP BY size,hash,name_key HAVING count(*)>1;
+        CREATE INDEX group_hashes ON groups(size,hash,name_key);
+        UPDATE files SET group_id=(SELECT id FROM groups WHERE groups.size=files.size AND groups.hash=files.hash AND groups.name_key=files.name_key) WHERE length(hash)=32;
         CREATE INDEX group_members ON files(group_id,id);")
         .map_err(|error| error.to_string())?;
     scope::finish(cancelled.load(Ordering::Acquire));
@@ -493,11 +493,12 @@ fn flush_file_batch(
     let mut inserted = 0usize;
     {
         let mut insert_file = transaction
-            .prepare("INSERT OR IGNORE INTO files(id,path,root,size) VALUES(lower(hex(randomblob(16))),?1,?2,?3)")
+            .prepare("INSERT OR IGNORE INTO files(id,path,root,size,name_key) VALUES(lower(hex(randomblob(16))),?1,?2,?3,?4)")
             .map_err(|error| error.to_string())?;
         for (path, root, size) in files.drain(..) {
+            let name_key = Path::new(&path).file_name().and_then(|name| name.to_str()).map(str::to_lowercase);
             inserted += insert_file
-                .execute(params![path, root, size])
+                .execute(params![path, root, size, name_key])
                 .map_err(|error| error.to_string())?;
         }
     }

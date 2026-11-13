@@ -8,6 +8,15 @@ pub(super) fn remove_files(
     keepers: Vec<CachedFile>,
     cancelled: &AtomicBool,
 ) -> super::DuplicateRemoveResult {
+    remove_files_with_shared_admin(files, keepers, cancelled, false)
+}
+
+pub(super) fn remove_files_with_shared_admin(
+    files: Vec<CachedFile>,
+    keepers: Vec<CachedFile>,
+    cancelled: &AtomicBool,
+    allow_shared_admin_owned: bool,
+) -> super::DuplicateRemoveResult {
     let mut result = super::DuplicateRemoveResult {
         files_removed: 0,
         bytes_recovered: 0,
@@ -34,7 +43,7 @@ pub(super) fn remove_files(
                 .push("refused removal: no unchanged verified copy could be retained".into());
             continue;
         };
-        match super::verified_file::open_verified(&file, true, cancelled) {
+        match super::verified_file::open_verified_with_shared_admin(&file, true, cancelled, allow_shared_admin_owned) {
             Ok(handle) => match super::verified_file::delete_verified(handle, &file) {
                 Ok(()) => {
                     result.files_removed += 1;
@@ -138,6 +147,7 @@ pub(super) fn removal_block_code(reason: &str) -> &'static str {
         "another user profile is protected" => "other_profile",
         "user profile locations could not be verified" => "profiles_unavailable",
         "file owner cannot be verified as the current user" => "owner_unavailable",
+        "file is owned by another account or shared group" => "owner_other",
         _ => "unknown",
     }
 }

@@ -56,9 +56,9 @@ impl ScanIndex {
             CREATE TABLE directories(path TEXT PRIMARY KEY, root TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0);
             CREATE INDEX pending_directories ON directories(done);
             CREATE TABLE files(id TEXT PRIMARY KEY, path TEXT UNIQUE NOT NULL, root TEXT NOT NULL, size INTEGER NOT NULL,
-                identity TEXT, volume INTEGER, file_index TEXT, modified TEXT, sample_hash BLOB, hash BLOB, group_id TEXT);
+                name_key TEXT, identity TEXT, volume INTEGER, file_index TEXT, modified TEXT, sample_hash BLOB, hash BLOB, group_id TEXT);
             CREATE INDEX file_sizes ON files(size);
-            CREATE TABLE groups(id TEXT PRIMARY KEY, size INTEGER NOT NULL, hash BLOB NOT NULL, count INTEGER NOT NULL);")
+            CREATE TABLE groups(id TEXT PRIMARY KEY, size INTEGER NOT NULL, hash BLOB NOT NULL, name_key TEXT NOT NULL, count INTEGER NOT NULL);")
             .map_err(|error| error.to_string())?;
         let status = scope::snapshot();
         Ok(Self {
@@ -171,10 +171,11 @@ impl ScanIndex {
             )
             .map_err(|error| error.to_string())?;
         let display = |(id, path, modified): (String, String, Option<String>)| {
-            let reason = policy.protected_reason(&PathBuf::from(&path)).or_else(|| {
-                (!super::verified_file::current_user_owns_path(&PathBuf::from(&path)))
-                    .then_some("file owner cannot be verified as the current user")
-            });
+            let protected = policy.protected_reason(&PathBuf::from(&path));
+            let (owner_reason, requires_shared_admin_confirmation) = if protected.is_none() {
+                super::verified_file::ownership_review(&PathBuf::from(&path))
+            } else { (None, false) };
+            let reason = protected.or(owner_reason);
             let (profile_scope, profile_root) = policy.profile(&PathBuf::from(&path));
             DuplicateFile {
                 name: PathBuf::from(&path)
@@ -187,6 +188,7 @@ impl ScanIndex {
                 size,
                 modified,
                 removable: reason.is_none(),
+                requires_shared_admin_confirmation,
                 removal_block_reason: reason.map(super::safety::removal_block_code),
                 profile_scope,
                 profile_root,

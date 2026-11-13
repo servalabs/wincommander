@@ -2,6 +2,11 @@ import type { DuplicateGroup } from "../hooks/useBackend";
 
 export type DuplicateKeepPolicy = "first" | "shortest-path" | "newest-modified" | "oldest-modified";
 
+/** Applies only to the specific copies currently being confirmed for deletion. */
+export function requiresSharedAdminConfirmation(groups: DuplicateGroup[], ids: Set<string>): boolean {
+  return groups.some(group => group.files.some(file => ids.has(file.id) && file.requiresSharedAdminConfirmation === true));
+}
+
 // Git keeps content-addressed objects under .git. Even if an older scan
 // marked such a file removable, it must not be selected for deletion.
 export function isGitManagedDuplicate(path: string): boolean {

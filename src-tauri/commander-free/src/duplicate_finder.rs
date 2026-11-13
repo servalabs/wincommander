@@ -60,6 +60,9 @@ pub struct DuplicateFile {
     /// Protected system/application locations can be inspected but never
     /// selected for duplicate removal.
     pub removable: bool,
+    /// This copy is owned by the shared Administrators group, rather than the
+    /// signed-in user. Deletion requires an explicit additional confirmation.
+    pub requires_shared_admin_confirmation: bool,
     /// Stable, non-sensitive reason for a review-only copy, when available.
     pub removal_block_reason: Option<&'static str>,
     pub profile_scope: &'static str,
@@ -287,6 +290,7 @@ fn explorer_select_argument(path: &std::path::Path) -> Result<std::ffi::OsString
 pub async fn duplicate_finder_remove(
     file_ids: Vec<String>,
     keeper_ids: Option<Vec<String>>,
+    allow_shared_admin_owned: Option<bool>,
 ) -> Result<DuplicateRemoveResult, String> {
     safety::ensure_mutation_allowed()?;
     if file_ids.is_empty()
@@ -315,7 +319,7 @@ pub async fn duplicate_finder_remove(
     };
     tokio::task::spawn_blocking(move || {
         let _running = running;
-        safety::remove_files(candidates, keepers, &CANCELLED)
+        safety::remove_files_with_shared_admin(candidates, keepers, &CANCELLED, allow_shared_admin_owned.unwrap_or(false))
     })
     .await
     .map_err(|error| format!("duplicate removal task failed: {error}"))

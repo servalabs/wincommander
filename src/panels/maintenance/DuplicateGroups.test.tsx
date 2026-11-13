@@ -58,6 +58,7 @@ test("a protected copy that is not the keeper stays review-only", () => {
   expect(html).toContain("Review only");
   expect(html).not.toContain("Remove other-user.txt");
   expect(html).not.toContain("Keep other-user.txt");
+  expect(html).toContain("Another user&#x27;s files are protected");
 });
 
 test("eligible files in an explicitly scanned location outside a profile are visible by default", () => {
@@ -67,6 +68,25 @@ test("eligible files in an explicitly scanned location outside a profile are vis
   const html = renderToStaticMarkup(createElement(DuplicateGroups, { tools: tools as never, onFilterChange() {}, onRemoveFile() {} }));
   expect(html).toContain("report.txt");
   expect(html).toContain("All scanned locations");
+});
+
+test("shared administrator copies show a confirmation warning and remain actionable", () => {
+  const file = { id: "copy", name: "report.txt", path: "D:\\Work\\report.txt", size: 10, modified: null, removable: true, requiresSharedAdminConfirmation: true };
+  const group = { id: "g", files: [file], fileCount: 2, size: 10, reclaimableBytes: 10, memberOffset: 0, hasMoreFiles: false };
+  const tools = { duplicateScan: { groups: [group] }, selected: new Set(), busy: false, retainedFileId: () => "other", select() {}, openDuplicate() {}, keepFile() {}, loadMembers() {} };
+  const html = renderToStaticMarkup(createElement(DuplicateGroups, { tools: tools as never, onFilterChange() {}, onRemoveFile() {} }));
+  expect(html).toContain("Shared Administrators ownership");
+  expect(html).toContain("Remove report.txt");
+  expect(html).toContain("Open containing folder");
+});
+
+test("unknown owner reason is visible without a hover", () => {
+  const file = { id: "x", name: "x.txt", path: "D:\\Work\\x.txt", size: 10, modified: null, removable: false, removalBlockReason: "owner_unavailable" };
+  const group = { id: "g", files: [file], fileCount: 2, size: 10, reclaimableBytes: 10, memberOffset: 0, hasMoreFiles: false };
+  const tools = { duplicateScan: { groups: [group] }, selected: new Set(), busy: false, retainedFileId: () => "other", select() {}, openDuplicate() {}, keepFile() {}, loadMembers() {} };
+  const html = renderToStaticMarkup(createElement(DuplicateGroups, { tools: tools as never, onFilterChange() {}, onRemoveFile() {} }));
+  expect(html).toContain('class="duplicate-member-reason">Windows could not verify the owner');
+  expect(html).toContain("Open containing folder");
 });
 
 test("a page of protected copies still offers access to later copies", () => {

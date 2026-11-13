@@ -102,6 +102,8 @@ export interface DuplicateFile {
   removable?: boolean;
   /** A bounded reason code; absent on older backends. */
   removalBlockReason?: string | null;
+  /** Removal requires confirmation because this file is owned by the Administrators group. */
+  requiresSharedAdminConfirmation?: boolean;
   profileScope?: "current" | "other" | "outside" | "unavailable";
   profileRoot?: string | null;
 }
@@ -2522,8 +2524,8 @@ export function useBackend(retainCleanupScanErrors = false) {
       invoke<DuplicateGroup>("duplicate_finder_group_page", { scanId, groupId, offset }),
     duplicateFinderOpen: (scanId: string, fileId: string) =>
       invoke<void>("duplicate_finder_open", { scanId, fileId }),
-    duplicateFinderRemove: (fileIds: string[], keeperIds?: string[]) =>
-      invoke<DuplicateRemoveResult>("duplicate_finder_remove", { fileIds, keeperIds }),
+    duplicateFinderRemove: (fileIds: string[], keeperIds?: string[], allowSharedAdminOwned = false) =>
+      invoke<DuplicateRemoveResult>("duplicate_finder_remove", { fileIds, keeperIds, allowSharedAdminOwned }),
     duplicateFinderCancel: () => invoke<void>("duplicate_finder_cancel"),
     emptyFolderCleanerScan: (roots: string[]) =>
       invoke<EmptyFolderScan>("empty_folder_cleaner_scan", { roots }),

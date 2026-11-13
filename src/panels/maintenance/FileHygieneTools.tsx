@@ -12,7 +12,7 @@ import { Icon, type IconName } from "../../components/ui/icon";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import SharedEmptyState from "../../components/shared/EmptyState";
 import { useBackend, type DuplicateRemoveResult, type EmptyFolderRemoveResult } from "../../hooks/useBackend";
-import { getDuplicateSelectedBytes } from "../../lib/maintenanceSelection";
+import { getDuplicateSelectedBytes, requiresSharedAdminConfirmation } from "../../lib/maintenanceSelection";
 import { formatBytes } from "./routineCleanerHelpers";
 import { useFileHygiene } from "./useFileHygiene";
 import { DuplicateGroups } from "./DuplicateGroups";
@@ -78,6 +78,7 @@ export function FileHygieneTools() {
   const selectedReview = tools.tool === "duplicates"
     ? tools.duplicateScan?.groups.flatMap((group) => group.files.filter((file) => singleRemovalId ? file.id === singleRemovalId && file.removable === true && tools.retainedFileId(group) !== file.id : eligibleSelected.has(file.id)).map((file) => ({ id: file.id, path: file.path, detail: formatBytes(file.size) }))) ?? []
     : tools.emptyScan?.folders.filter((folder) => tools.selected.has(folder.id)).map((folder) => ({ id: folder.id, path: folder.path, detail: "Empty folder" })) ?? [];
+  const hasSharedAdminCopies = tools.tool === "duplicates" && requiresSharedAdminConfirmation(tools.duplicateScan?.groups ?? [], new Set(selectedReview.map(item => item.id)));
   const resetDuplicateResultScroll = useCallback(() => {
     const results = document.querySelector<HTMLDivElement>(".maintenance-file-hygiene-results--duplicates > .maintenance-file-hygiene-content");
     results?.scrollTo({ top: 0, left: 0, behavior: "auto" });
@@ -196,9 +197,9 @@ export function FileHygieneTools() {
 
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <AlertDialogContent>
-          <AlertDialogHeader><AlertDialogTitle>Permanently remove {selectedReview.length} selected items?</AlertDialogTitle><AlertDialogDescription>{tools.tool === "duplicates" ? `${singleRemovalId ? "The selected file" : `${formatBytes(selectedBytes)} of duplicate data`} will be removed. At least one unchanged, content-verified copy must remain per group. ` : "Only folders still empty are removed. "}The backend revalidates every selection. This cannot be undone.</AlertDialogDescription></AlertDialogHeader>
+          <AlertDialogHeader><AlertDialogTitle>Permanently remove {selectedReview.length} selected items?</AlertDialogTitle><AlertDialogDescription>{tools.tool === "duplicates" ? `${singleRemovalId ? "The selected file" : `${formatBytes(selectedBytes)} of duplicate data`} will be removed. At least one unchanged, content-verified copy must remain per group. ` : "Only folders still empty are removed. "}{hasSharedAdminCopies ? "Some selected files are owned by the shared Windows Administrators group and may be used by other accounts. Confirm only if you want to remove these shared files. " : ""}The backend revalidates every selection. This cannot be undone.</AlertDialogDescription></AlertDialogHeader>
           <CleanupReviewItems items={selectedReview} />
-          <AlertDialogFooter><AlertDialogCancel>Back</AlertDialogCancel><AlertDialogAction disabled={!selectedReview.length} onClick={() => { setConfirmOpen(false); void tools.remove(singleRemovalId); }}>Remove selected</AlertDialogAction></AlertDialogFooter>
+          <AlertDialogFooter><AlertDialogCancel>Back</AlertDialogCancel><AlertDialogAction disabled={!selectedReview.length} onClick={() => { setConfirmOpen(false); void tools.remove(singleRemovalId, hasSharedAdminCopies); }}>Remove selected</AlertDialogAction></AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
 

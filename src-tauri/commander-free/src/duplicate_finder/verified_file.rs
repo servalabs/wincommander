@@ -7,6 +7,15 @@ pub(super) fn open_verified(
     deleting: bool,
     cancelled: &AtomicBool,
 ) -> Result<File, String> {
+    open_verified_with_shared_admin(file, deleting, cancelled, false)
+}
+
+pub(super) fn open_verified_with_shared_admin(
+    file: &CachedFile,
+    deleting: bool,
+    cancelled: &AtomicBool,
+    allow_shared_admin_owned: bool,
+) -> Result<File, String> {
     super::safety::validated_file(file)?;
     let mut options = OpenOptions::new();
     options.read(true);
@@ -23,7 +32,7 @@ pub(super) fn open_verified(
             .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     }
     #[cfg(not(windows))]
-    let _ = deleting;
+    let _ = (deleting, allow_shared_admin_owned);
     let mut handle = options
         .open(&file.path)
         .map_err(|error| error.to_string())?;
@@ -39,7 +48,7 @@ pub(super) fn open_verified(
     {
         verify_handle(&handle, file)?;
         if deleting {
-            verify_current_user_owns(&handle)?;
+            verify_allowed_owner(classify_owner(&handle), allow_shared_admin_owned)?;
         }
     }
     let hash = super::scan::hash_reader(&mut handle, cancelled)?;
@@ -50,14 +59,25 @@ pub(super) fn open_verified(
 }
 
 #[cfg(windows)]
-pub(super) fn verify_current_user_owns(handle: &File) -> Result<(), String> {
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum OwnerClass { CurrentUser, SharedAdministrators, Other }
+
+#[cfg(windows)]
+fn owner_class_from_identity(is_current: bool, is_admin_owner: bool, is_admin_member: bool) -> OwnerClass {
+    if is_current { OwnerClass::CurrentUser }
+    else if is_admin_owner && is_admin_member { OwnerClass::SharedAdministrators }
+    else { OwnerClass::Other }
+}
+
+#[cfg(windows)]
+fn classify_owner(handle: &File) -> Result<OwnerClass, String> {
     use std::{os::windows::io::AsRawHandle, ptr};
     use windows_sys::Win32::{
         Foundation::{CloseHandle, LocalFree},
         Security::{
             Authorization::{GetSecurityInfo, SE_FILE_OBJECT},
-            EqualSid, GetTokenInformation, TokenUser, OWNER_SECURITY_INFORMATION, TOKEN_QUERY,
-            TOKEN_USER,
+            CheckTokenMembership, CreateWellKnownSid, EqualSid, GetTokenInformation, TokenUser,
+            WinBuiltinAdministratorsSid, OWNER_SECURITY_INFORMATION, TOKEN_QUERY, TOKEN_USER,
         },
         System::Threading::{GetCurrentProcess, OpenProcessToken},
     };
@@ -103,27 +123,69 @@ pub(super) fn verify_current_user_owns(handle: &File) -> Result<(), String> {
     }
     let same = !owner.is_null()
         && unsafe { EqualSid(owner, (*user.as_ptr().cast::<TOKEN_USER>()).User.Sid) } != 0;
+    let mut admin_sid = [0usize; 9];
+    let mut admin_len = 68u32;
+    let sid_ok = unsafe { CreateWellKnownSid(WinBuiltinAdministratorsSid, ptr::null_mut(), admin_sid.as_mut_ptr().cast(), &mut admin_len) } != 0;
+    let is_admin_owner = sid_ok && !owner.is_null() && unsafe { EqualSid(owner, admin_sid.as_mut_ptr().cast()) } != 0;
+    let mut member = 0;
+    let member_ok = is_admin_owner && unsafe { CheckTokenMembership(ptr::null_mut(), admin_sid.as_mut_ptr().cast(), &mut member) } != 0 && member != 0;
     if !descriptor.is_null() {
         unsafe {
             LocalFree(descriptor);
         }
     }
-    if !same {
-        return Err("refused removal: file is not owned by the current user".into());
+    Ok(owner_class_from_identity(same, is_admin_owner, member_ok))
+}
+
+#[cfg(windows)]
+fn verify_allowed_owner(owner: Result<OwnerClass, String>, allow_shared_admin_owned: bool) -> Result<(), String> {
+    match owner? {
+        OwnerClass::CurrentUser => Ok(()),
+        OwnerClass::SharedAdministrators if allow_shared_admin_owned => Ok(()),
+        OwnerClass::SharedAdministrators => Err("refused removal: shared Administrators ownership requires confirmation".into()),
+        OwnerClass::Other => Err("refused removal: file is not owned by the current user".into()),
     }
-    Ok(())
+}
+
+#[cfg(all(windows, test))]
+pub(super) fn verify_current_user_owns(handle: &File) -> Result<(), String> {
+    verify_allowed_owner(classify_owner(handle), false)
 }
 
 /// Display checks are advisory; removal repeats this check on its held handle.
 #[cfg(windows)]
-pub(super) fn current_user_owns_path(path: &std::path::Path) -> bool {
-    File::open(path).and_then(|handle| {
-        verify_current_user_owns(&handle).map_err(std::io::Error::other)
-    }).is_ok()
+pub(super) fn ownership_review(path: &std::path::Path) -> (Option<&'static str>, bool) {
+    let Ok(handle) = File::open(path) else {
+        return (Some("file owner cannot be verified as the current user"), false);
+    };
+    match classify_owner(&handle) {
+        Ok(OwnerClass::CurrentUser) => (None, false),
+        Ok(OwnerClass::SharedAdministrators) => (None, true),
+        Ok(OwnerClass::Other) => (Some("file is owned by another account or shared group"), false),
+        Err(_) => (Some("file owner cannot be verified as the current user"), false),
+    }
+}
+
+#[cfg(all(test, windows))]
+mod ownership_review_tests {
+    use super::{owner_class_from_identity, verify_allowed_owner, OwnerClass};
+
+    #[test]
+    fn shared_admin_requires_confirmation_and_other_owner_remains_blocked() {
+        assert_eq!(owner_class_from_identity(false, true, true), OwnerClass::SharedAdministrators);
+        assert_eq!(owner_class_from_identity(false, true, false), OwnerClass::Other);
+        assert_eq!(owner_class_from_identity(false, false, true), OwnerClass::Other);
+        assert_eq!(owner_class_from_identity(false, false, false), OwnerClass::Other);
+        assert!(verify_allowed_owner(Ok(OwnerClass::CurrentUser), false).is_ok());
+        assert!(verify_allowed_owner(Ok(OwnerClass::SharedAdministrators), false).is_err());
+        assert!(verify_allowed_owner(Ok(OwnerClass::SharedAdministrators), true).is_ok());
+        assert!(verify_allowed_owner(Ok(OwnerClass::Other), true).is_err());
+        assert!(verify_allowed_owner(Err("unknown".into()), true).is_err());
+    }
 }
 
 #[cfg(not(windows))]
-pub(super) fn current_user_owns_path(_path: &std::path::Path) -> bool { true }
+pub(super) fn ownership_review(_path: &std::path::Path) -> (Option<&'static str>, bool) { (None, false) }
 
 #[cfg(windows)]
 pub(super) fn handle_identity(handle: &File) -> Result<Option<(u32, u64)>, String> {

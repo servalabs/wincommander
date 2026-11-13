@@ -1,5 +1,12 @@
 import { expect, test } from "bun:test";
-import { canRemoveDuplicateFile, getDuplicateSelectedBytes, getRetainedFileId, selectDuplicateCopies } from "./maintenanceSelection";
+import { canRemoveDuplicateFile, getDuplicateSelectedBytes, getRetainedFileId, requiresSharedAdminConfirmation, selectDuplicateCopies } from "./maintenanceSelection";
+
+test("shared admin confirmation applies only to selected copies", () => {
+  const groups = [{ id: "g", files: [{ id: "shared", requiresSharedAdminConfirmation: true }, { id: "ordinary" }] }] as never;
+  expect(requiresSharedAdminConfirmation(groups, new Set(["ordinary"]))).toBe(false);
+  expect(requiresSharedAdminConfirmation(groups, new Set(["shared"]))).toBe(true);
+  expect(requiresSharedAdminConfirmation(groups, new Set())).toBe(false);
+});
 import type { DuplicateGroup } from "../hooks/useBackend";
 
 const group: DuplicateGroup = { id: "group", size: 100, reclaimableBytes: 200, fileCount: 3, memberOffset: 0, hasMoreFiles: false, files: [

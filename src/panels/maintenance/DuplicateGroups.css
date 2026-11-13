@@ -23,6 +23,7 @@
 .duplicate-member-location { min-width: 0; flex: 1; }
 .duplicate-member-location strong { display: block; font-weight: 400; font-size: 12px; overflow-wrap: anywhere; }
 .duplicate-member-location small { display: block; margin-top: 4px; font-family: var(--font-mono); font-size: 10px; color: var(--text-mute); overflow-wrap: anywhere; }
+.duplicate-member-location .duplicate-member-reason { font-family: inherit; font-size: 11px; color: var(--text-dim); }
 .duplicate-member-size { font-size: 11px; white-space: nowrap; color: var(--text-dim); }
 .duplicate-member[data-retained] { background: var(--accent-soft); }
 .duplicate-empty { padding: 24px; text-align: center; font-size: 12px; color: var(--text-dim); }

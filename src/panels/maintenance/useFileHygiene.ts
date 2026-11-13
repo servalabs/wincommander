@@ -121,7 +121,7 @@ export function useFileHygiene() {
     finally { setBusy(false); }
   }, [backend, busy, duplicateScan, setBusy, setDuplicateScan, setError, setSelected, setRetainedFiles]);
 
-  const remove = useCallback(async (singleId?: string) => {
+  const remove = useCallback(async (singleId?: string, allowSharedAdminOwned = false) => {
     if (busy || (!singleId && !selected.size)) return;
     const ids = singleId ? [singleId] : [...selected];
     const groups = duplicateScan?.groups ?? [];
@@ -141,7 +141,7 @@ export function useFileHygiene() {
     let hasReturnedResult = false;
     try {
       const next = tool === "duplicates"
-        ? await backend.duplicateFinderRemove(ids, keeperIds as string[])
+        ? await backend.duplicateFinderRemove(ids, keeperIds as string[], allowSharedAdminOwned)
         : await backend.emptyFolderCleanerRemove(ids);
       setResult(next);
       hasReturnedResult = true;

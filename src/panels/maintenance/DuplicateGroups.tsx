@@ -30,7 +30,8 @@ function reviewReason(reason?: string | null): string {
     case "application_data": return "Application data is protected";
     case "source_control": return "Git-managed data is protected";
     case "profiles_unavailable": return "Windows profiles could not be verified";
-    case "owner_unavailable": return "File ownership could not be verified";
+    case "owner_other": return "Owned by another Windows account or shared group";
+    case "owner_unavailable": return "Windows could not verify the owner";
     default: return "Removal eligibility has not been verified";
   }
 }
@@ -133,12 +134,13 @@ function DuplicateGroupRows({ group, tools, onRemoveFile, open, onOpenChange, gr
         const retained = retainedId === file.id;
         const gitManaged = isGitManagedDuplicate(file.path);
         const protectedCopy = gitManaged || file.removable !== true;
+        const reason = gitManaged ? "Git-managed data is protected" : reviewReason(file.removalBlockReason);
         const displayPath = toExplorerDisplayPath(file.path) ?? "Location unavailable";
         return <div key={file.id} className="duplicate-member" data-retained={retained || undefined}>
           <CheckboxControl checked={!protectedCopy && tools.selected.has(file.id)} disabled={tools.busy || retained || protectedCopy} ariaLabel={`${tools.selected.has(file.id) ? "Deselect" : "Select"} ${file.name} at ${displayPath}`} onChange={() => tools.select(file.id)} />
-          <span className="duplicate-member-location"><strong>{file.name}</strong><small title={displayPath}>{displayPath} · {formatModified(file.modified)} · {duplicateProfileLabel(file)}</small></span>
-          <Button size="sm" variant="ghost" disabled={tools.busy} aria-label={`Open ${file.name} in Explorer`} onClick={() => void tools.openDuplicate(file.id)}><Icon icon="folder-open" size={14} /></Button>
-          {protectedCopy ? <span title={gitManaged ? "Git-managed data is protected" : reviewReason(file.removalBlockReason)}><Badge tone="neutral">{retained ? "Kept · review only" : "Review only"}</Badge></span> : retained ? <Badge tone="success">Kept copy</Badge> : <><Button size="sm" variant="ghost" disabled={tools.busy} aria-label={`Keep ${file.name} at ${displayPath}`} onClick={() => tools.keepFile(group.id, file.id)}>Keep</Button><Button size="sm" variant="outline" disabled={tools.busy} aria-label={`Remove ${file.name} at ${displayPath}`} title="Remove file" onClick={() => onRemoveFile(file.id)}><Icon icon="trash" size={14} /></Button></>}
+          <span className="duplicate-member-location"><strong>{file.name}</strong><small title={displayPath}>{displayPath} · {formatModified(file.modified)} · {duplicateProfileLabel(file)}</small>{protectedCopy ? <small className="duplicate-member-reason">{reason}</small> : file.requiresSharedAdminConfirmation && <small className="duplicate-member-reason">Shared Administrators ownership · removal requires confirmation</small>}</span>
+          <Button size="sm" variant="ghost" disabled={tools.busy} aria-label={`Open ${file.name} in Explorer`} title="Open containing folder" onClick={() => void tools.openDuplicate(file.id)}><Icon icon="folder-open" size={14} /></Button>
+          {protectedCopy ? <Badge tone="neutral">{retained ? "Kept · review only" : "Review only"}</Badge> : retained ? <Badge tone="success">Kept copy</Badge> : <><Button size="sm" variant="ghost" disabled={tools.busy} aria-label={`Keep ${file.name} at ${displayPath}`} onClick={() => tools.keepFile(group.id, file.id)}>Keep</Button><Button size="sm" variant="outline" disabled={tools.busy} aria-label={`Remove ${file.name} at ${displayPath}`} title="Remove file" onClick={() => onRemoveFile(file.id)}><Icon icon="trash" size={14} /></Button></>}
         </div>;
       })}
       {visibleFiles.length > visibleCount && <Button size="sm" variant="ghost" onClick={() => setVisibleCount((count) => count + 50)}>Inspect more copies ({visibleFiles.length - visibleCount} remaining)</Button>}

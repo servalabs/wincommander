@@ -2,6 +2,12 @@ use super::*;
 
 static SERIAL: Mutex<()> = Mutex::new(());
 
+fn copy_path(root: &std::path::Path, directory: &str, name: &str) -> PathBuf {
+    let folder = root.join(directory);
+    std::fs::create_dir_all(&folder).unwrap();
+    folder.join(name)
+}
+
 #[test]
 fn dot_directories_are_skipped_unless_explicitly_selected_as_roots() {
     let _serial = SERIAL.lock().unwrap();
@@ -122,8 +128,8 @@ fn broad_scan_minimum_excludes_small_files_without_counting_them_as_errors() {
     std::fs::write(root.path().join("small-a"), b"same").unwrap();
     std::fs::write(root.path().join("small-b"), b"same").unwrap();
     let large = vec![7u8; DEFAULT_MINIMUM_SIZE_BYTES as usize];
-    std::fs::write(root.path().join("large-a"), &large).unwrap();
-    std::fs::write(root.path().join("large-b"), &large).unwrap();
+    std::fs::write(copy_path(root.path(), "a", "large"), &large).unwrap();
+    std::fs::write(copy_path(root.path(), "b", "large"), &large).unwrap();
     let roots = [std::fs::canonicalize(root.path()).unwrap()];
     scope::begin(&roots, Vec::new(), DEFAULT_MINIMUM_SIZE_BYTES);
     let index =
@@ -139,9 +145,9 @@ fn broad_scan_minimum_excludes_small_files_without_counting_them_as_errors() {
 #[test]
 fn hashes_after_size_candidates_and_keeps_one() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("a"), b"same").unwrap();
-    std::fs::write(dir.path().join("b"), b"same").unwrap();
-    std::fs::write(dir.path().join("c"), b"nope").unwrap();
+    std::fs::write(copy_path(dir.path(), "a", "item"), b"same").unwrap();
+    std::fs::write(copy_path(dir.path(), "b", "item"), b"same").unwrap();
+    std::fs::write(copy_path(dir.path(), "c", "item"), b"nope").unwrap();
     let (scan, files, groups) = scan_fixture(
         &[std::fs::canonicalize(dir.path()).unwrap()],
         &AtomicBool::new(false),
@@ -154,10 +160,23 @@ fn hashes_after_size_candidates_and_keeps_one() {
 }
 
 #[test]
+fn groups_require_matching_filename_and_full_content() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(copy_path(dir.path(), "a", "Report.TXT"), b"same").unwrap();
+    std::fs::write(copy_path(dir.path(), "b", "report.txt"), b"same").unwrap();
+    std::fs::write(copy_path(dir.path(), "c", "renamed.txt"), b"same").unwrap();
+    std::fs::write(copy_path(dir.path(), "d", "report.txt"), b"nope").unwrap();
+    let (scan, _, _) = scan_fixture(&[std::fs::canonicalize(dir.path()).unwrap()], &AtomicBool::new(false));
+    assert_eq!(scan.groups.len(), 1);
+    assert_eq!(scan.groups[0].file_count, 2);
+    assert!(scan.groups[0].files.iter().all(|file| file.name.eq_ignore_ascii_case("report.txt")));
+}
+
+#[test]
 fn duplicate_rows_expose_the_verified_modified_time_for_retention_review() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("a"), b"same").unwrap();
-    std::fs::write(dir.path().join("b"), b"same").unwrap();
+    std::fs::write(copy_path(dir.path(), "a", "item"), b"same").unwrap();
+    std::fs::write(copy_path(dir.path(), "b", "item"), b"same").unwrap();
 
     let (scan, _, _) = scan_fixture(
         &[std::fs::canonicalize(dir.path()).unwrap()],
@@ -175,9 +194,9 @@ fn only_full_hashes_same_size_files_with_matching_content_samples() {
     let dir = tempfile::tempdir().unwrap();
     let duplicate = vec![7u8; 256 * 1024];
     let distinct = vec![9u8; 256 * 1024];
-    std::fs::write(dir.path().join("a"), &duplicate).unwrap();
-    std::fs::write(dir.path().join("b"), &duplicate).unwrap();
-    std::fs::write(dir.path().join("c"), &distinct).unwrap();
+    std::fs::write(copy_path(dir.path(), "a", "item"), &duplicate).unwrap();
+    std::fs::write(copy_path(dir.path(), "b", "item"), &duplicate).unwrap();
+    std::fs::write(copy_path(dir.path(), "c", "item"), &distinct).unwrap();
     let (scan, _, _) = scan_fixture(
         &[std::fs::canonicalize(dir.path()).unwrap()],
         &AtomicBool::new(false),
@@ -192,8 +211,8 @@ fn full_hash_rejects_files_that_match_only_at_the_sampled_edges() {
     let first = vec![7u8; 512 * 1024];
     let mut second = first.clone();
     second[128 * 1024] = 9;
-    std::fs::write(dir.path().join("a"), first).unwrap();
-    std::fs::write(dir.path().join("b"), second).unwrap();
+    std::fs::write(copy_path(dir.path(), "a", "item"), first).unwrap();
+    std::fs::write(copy_path(dir.path(), "b", "item"), second).unwrap();
     let (scan, _, _) = scan_fixture(
         &[std::fs::canonicalize(dir.path()).unwrap()],
         &AtomicBool::new(false),
@@ -207,12 +226,12 @@ fn parallel_candidate_batches_keep_full_hash_confirmation() {
     let dir = tempfile::tempdir().unwrap();
     let duplicate = vec![7u8; 256 * 1024];
     for index in 0..4 {
-        std::fs::write(dir.path().join(format!("copy-{index}")), &duplicate).unwrap();
+        std::fs::write(copy_path(dir.path(), &format!("copy-{index}"), "item"), &duplicate).unwrap();
     }
     for index in 0..4 {
         let mut sampled_match = duplicate.clone();
         sampled_match[64 * 1024 + index] = index as u8;
-        std::fs::write(dir.path().join(format!("different-{index}")), sampled_match).unwrap();
+        std::fs::write(copy_path(dir.path(), &format!("different-{index}"), "item"), sampled_match).unwrap();
     }
 
     let (scan, _, _) = scan_fixture(
@@ -244,16 +263,16 @@ fn overlapping_roots_do_not_turn_one_file_into_duplicates() {
 #[test]
 fn refuses_changed_content_even_when_size_and_timestamp_match() {
     let dir = tempfile::tempdir().unwrap();
-    let changed = dir.path().join("a");
+    let changed = copy_path(dir.path(), "a", "item");
     std::fs::write(&changed, b"same").unwrap();
-    std::fs::write(dir.path().join("b"), b"same").unwrap();
+    std::fs::write(copy_path(dir.path(), "b", "item"), b"same").unwrap();
     let (_, files, _) = scan_fixture(
         &[std::fs::canonicalize(dir.path()).unwrap()],
         &AtomicBool::new(false),
     );
     let candidate = files
         .values()
-        .find(|file| file.path.ends_with("a"))
+        .find(|file| file.path == std::fs::canonicalize(&changed).unwrap())
         .unwrap();
     std::fs::write(&changed, b"nope").unwrap();
     let times = std::fs::FileTimes::new().set_modified(candidate.modified.unwrap());
@@ -270,8 +289,8 @@ fn refuses_changed_content_even_when_size_and_timestamp_match() {
 #[test]
 fn review_validation_allows_an_unchanged_cached_file_without_granting_removal() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("a"), b"same").unwrap();
-    std::fs::write(dir.path().join("b"), b"same").unwrap();
+    std::fs::write(copy_path(dir.path(), "a", "item"), b"same").unwrap();
+    std::fs::write(copy_path(dir.path(), "b", "item"), b"same").unwrap();
     let (_, files, _) = scan_fixture(
         &[std::fs::canonicalize(dir.path()).unwrap()],
         &AtomicBool::new(false),
@@ -305,20 +324,22 @@ fn explorer_selection_uses_a_normal_windows_path_after_canonicalization() {
 #[test]
 fn refuses_removal_when_retained_copy_disappears() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("a"), b"same").unwrap();
-    std::fs::write(dir.path().join("b"), b"same").unwrap();
+    let a = copy_path(dir.path(), "a", "item");
+    let b = copy_path(dir.path(), "b", "item");
+    std::fs::write(&a, b"same").unwrap();
+    std::fs::write(&b, b"same").unwrap();
     let (_, files, _) = scan_fixture(
         &[std::fs::canonicalize(dir.path()).unwrap()],
         &AtomicBool::new(false),
     );
     let candidate = files
         .values()
-        .find(|file| file.path.ends_with("a"))
+        .find(|file| file.path == std::fs::canonicalize(&a).unwrap())
         .unwrap()
         .clone();
     let keeper = files
         .values()
-        .find(|file| file.path.ends_with("b"))
+        .find(|file| file.path == std::fs::canonicalize(&b).unwrap())
         .unwrap()
         .clone();
     std::fs::remove_file(&keeper.path).unwrap();
@@ -336,8 +357,10 @@ fn refuses_removal_when_retained_copy_disappears() {
 #[test]
 fn hard_links_are_not_reported_as_reclaimable_copies() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("a"), b"same").unwrap();
-    std::fs::hard_link(dir.path().join("a"), dir.path().join("b")).unwrap();
+    let a = copy_path(dir.path(), "a", "item");
+    let b = copy_path(dir.path(), "b", "item");
+    std::fs::write(&a, b"same").unwrap();
+    std::fs::hard_link(a, b).unwrap();
     let (scan, _, _) = scan_fixture(
         &[std::fs::canonicalize(dir.path()).unwrap()],
         &AtomicBool::new(false),
@@ -381,8 +404,10 @@ fn verified_removal_deletes_selected_copy_and_retains_identical_copy() {
         .unwrap();
     #[cfg(not(windows))]
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("a"), b"same").unwrap();
-    std::fs::write(dir.path().join("b"), b"same").unwrap();
+    let a = copy_path(dir.path(), "a", "item");
+    let b = copy_path(dir.path(), "b", "item");
+    std::fs::write(&a, b"same").unwrap();
+    std::fs::write(&b, b"same").unwrap();
     #[cfg(windows)]
     {
         let account = format!(
@@ -390,9 +415,9 @@ fn verified_removal_deletes_selected_copy_and_retains_identical_copy() {
             std::env::var("USERDOMAIN").unwrap(),
             std::env::var("USERNAME").unwrap()
         );
-        for name in ["a", "b"] {
+        for path in [&a, &b] {
             let status = std::process::Command::new("icacls.exe")
-                .arg(dir.path().join(name))
+                .arg(path)
                 .arg("/setowner")
                 .arg(&account)
                 .status()
@@ -409,12 +434,12 @@ fn verified_removal_deletes_selected_copy_and_retains_identical_copy() {
     );
     let candidate = files
         .values()
-        .find(|file| file.path.ends_with("a"))
+        .find(|file| file.path == std::fs::canonicalize(&a).unwrap())
         .unwrap()
         .clone();
     let keeper = files
         .values()
-        .find(|file| file.path.ends_with("b"))
+        .find(|file| file.path == std::fs::canonicalize(&b).unwrap())
         .unwrap()
         .clone();
     let result = safety::remove_files(
@@ -433,7 +458,7 @@ fn verified_removal_deletes_selected_copy_and_retains_identical_copy() {
 fn member_paging_preserves_true_group_total_and_same_keeper() {
     let dir = tempfile::tempdir().unwrap();
     for number in 0..205 {
-        std::fs::write(dir.path().join(format!("copy-{number}")), b"same").unwrap();
+        std::fs::write(copy_path(dir.path(), &format!("copy-{number}"), "item"), b"same").unwrap();
     }
     let (scan, _, _) = scan_fixture(
         &[std::fs::canonicalize(dir.path()).unwrap()],
@@ -464,7 +489,7 @@ fn cancelled_inventory_never_claims_complete() {
 fn selection_uses_whole_group_and_rejects_stale_ids() {
     let dir = tempfile::tempdir().unwrap();
     for number in 0..205 {
-        std::fs::write(dir.path().join(format!("copy-{number}")), b"same").unwrap();
+        std::fs::write(copy_path(dir.path(), &format!("copy-{number}"), "item"), b"same").unwrap();
     }
     let roots = [std::fs::canonicalize(dir.path()).unwrap()];
     let index = fixture_index(&roots, &AtomicBool::new(false));
@@ -494,7 +519,7 @@ fn selection_uses_whole_group_and_rejects_stale_ids() {
 #[test]
 fn explicit_keeper_must_match_group_and_remain_unchanged() {
     let dir = tempfile::tempdir().unwrap();
-    for name in ["a", "b", "c"] { std::fs::write(dir.path().join(name), b"same").unwrap(); }
+    for name in ["a", "b", "c"] { std::fs::write(copy_path(dir.path(), name, "item"), b"same").unwrap(); }
     let index = fixture_index(&[std::fs::canonicalize(dir.path()).unwrap()], &AtomicBool::new(false));
     let group = index.page(0).unwrap().groups.remove(0);
     let selected = HashSet::from([group.files[0].id.clone()]);
@@ -513,8 +538,8 @@ fn explicit_keeper_must_match_group_and_remain_unchanged() {
 #[test]
 fn explicit_keepers_must_cover_each_selected_group_once() {
     let dir = tempfile::tempdir().unwrap();
-    for name in ["a1", "a2", "a3"] { std::fs::write(dir.path().join(name), b"same").unwrap(); }
-    for name in ["b1", "b2"] { std::fs::write(dir.path().join(name), b"diff").unwrap(); }
+    for name in ["a1", "a2", "a3"] { std::fs::write(copy_path(dir.path(), name, "item-a"), b"same").unwrap(); }
+    for name in ["b1", "b2"] { std::fs::write(copy_path(dir.path(), name, "item-b"), b"diff").unwrap(); }
     let index = fixture_index(&[std::fs::canonicalize(dir.path()).unwrap()], &AtomicBool::new(false));
     let groups = index.page(0).unwrap().groups;
     assert_eq!(groups.len(), 2);
@@ -571,7 +596,7 @@ fn git_object_copy_is_verified_for_review_but_cannot_be_deleted() {
     let dir = tempfile::tempdir().unwrap();
     let object_dir = dir.path().join(".GiT").join("lfs").join("objects");
     std::fs::create_dir_all(&object_dir).unwrap();
-    std::fs::write(object_dir.join("aabbcc"), b"matching video bytes").unwrap();
+    std::fs::write(object_dir.join("video.mp4"), b"matching video bytes").unwrap();
     std::fs::write(dir.path().join("video.mp4"), b"matching video bytes").unwrap();
     // A hidden Git root is discoverable only when the caller explicitly adds it.
     // It must remain protected even when deliberately included alongside a
@@ -584,11 +609,11 @@ fn git_object_copy_is_verified_for_review_but_cannot_be_deleted() {
         &AtomicBool::new(false),
     );
     assert_eq!(page.groups.len(), 1, "identical contents form a verified group");
-    let object = page.groups[0].files.iter().find(|file| file.name == "aabbcc").unwrap();
+    let object = page.groups[0].files.iter().find(|file| file.path.to_lowercase().contains(".git")).unwrap();
     assert!(!object.removable);
     assert_eq!(object.removal_block_reason, Some("source_control"));
-    let candidate = files.values().find(|file| file.path.ends_with("aabbcc")).unwrap().clone();
-    let keeper = files.values().find(|file| file.path.ends_with("video.mp4")).unwrap().clone();
+    let candidate = files.values().find(|file| file.path.to_string_lossy().to_lowercase().contains(".git")).unwrap().clone();
+    let keeper = files.values().find(|file| !file.path.to_string_lossy().to_lowercase().contains(".git")).unwrap().clone();
     let result = safety::remove_files(vec![candidate.clone()], vec![keeper], &AtomicBool::new(false));
     assert_eq!(result.files_removed, 0);
     assert!(candidate.path.exists());
@@ -614,8 +639,8 @@ fn blocked_copies_expose_only_stable_non_sensitive_reason_codes() {
 #[test]
 fn backend_refuses_executable_removal_even_if_selection_is_forged() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("one.exe"), b"same").unwrap();
-    std::fs::write(dir.path().join("two.exe"), b"same").unwrap();
+    std::fs::write(copy_path(dir.path(), "a", "same.exe"), b"same").unwrap();
+    std::fs::write(copy_path(dir.path(), "b", "same.exe"), b"same").unwrap();
     let (page, files, _) = scan_fixture(
         &[std::fs::canonicalize(dir.path()).unwrap()],
         &AtomicBool::new(false),
