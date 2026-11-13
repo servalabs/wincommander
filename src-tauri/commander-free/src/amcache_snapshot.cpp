@@ -88,8 +88,9 @@ extern "C" __declspec(dllexport) HRESULT wc_amcache_snapshot_close(void* handle)
     return close_snapshot(static_cast<AmcacheSnapshot*>(handle));
 }
 
-extern "C" __declspec(dllexport) HRESULT wc_amcache_snapshot_open(void** handle, wchar_t* output, DWORD capacity) {
-    if (!handle || !output || capacity == 0) return E_INVALIDARG;
+extern "C" __declspec(dllexport) HRESULT wc_amcache_snapshot_open(void** handle, wchar_t* output, DWORD capacity, DWORD* stage) {
+    if (!handle || !output || capacity == 0 || !stage) return E_INVALIDARG;
+    *stage = 1; // initialize and resolve Windows volume
     *handle = nullptr;
     auto* s = new (std::nothrow) AmcacheSnapshot();
     if (!s) return E_OUTOFMEMORY;
@@ -121,28 +122,30 @@ extern "C" __declspec(dllexport) HRESULT wc_amcache_snapshot_open(void** handle,
     if (win.size() < root.size() || _wcsnicmp(win.c_str(), root.c_str(), root.size()) != 0) {
         close_snapshot(s); return E_FAIL;
     }
+    *stage = 2; // initialize VSS
     hr = CreateVssBackupComponents(&s->backup);
     if (SUCCEEDED(hr)) hr = s->backup->InitializeForBackup();
     if (SUCCEEDED(hr)) hr = s->backup->SetContext(VSS_CTX_BACKUP);
     if (SUCCEEDED(hr)) hr = s->backup->SetBackupState(FALSE, FALSE, VSS_BT_COPY, FALSE);
     IVssAsync* operation = nullptr;
-    if (SUCCEEDED(hr)) { hr = s->backup->GatherWriterMetadata(&operation); if (SUCCEEDED(hr)) hr = wait_for(operation); }
+    if (SUCCEEDED(hr)) { *stage = 3; hr = s->backup->GatherWriterMetadata(&operation); if (SUCCEEDED(hr)) hr = wait_for(operation); }
     VSS_ID set_id = GUID_NULL;
+    if (SUCCEEDED(hr)) *stage = 4; // create snapshot set
     if (SUCCEEDED(hr)) hr = s->backup->StartSnapshotSet(&set_id);
     if (SUCCEEDED(hr)) hr = s->backup->AddToSnapshotSet(volume_name, GUID_NULL, &s->id);
     if (SUCCEEDED(hr)) {
-        operation = nullptr; hr = s->backup->PrepareForBackup(&operation);
+        *stage = 5; operation = nullptr; hr = s->backup->PrepareForBackup(&operation);
         if (SUCCEEDED(hr)) { s->prepared = true; hr = wait_for(operation); }
     }
     if (SUCCEEDED(hr)) {
-        operation = nullptr; hr = s->backup->DoSnapshotSet(&operation);
+        *stage = 6; operation = nullptr; hr = s->backup->DoSnapshotSet(&operation);
         if (SUCCEEDED(hr)) hr = wait_for(operation);
         if (SUCCEEDED(hr)) s->created = true;
     }
-    if (SUCCEEDED(hr)) hr = verify_registry_writer(s->backup);
+    if (SUCCEEDED(hr)) { *stage = 7; hr = verify_registry_writer(s->backup); }
     VSS_SNAPSHOT_PROP properties = {};
     if (SUCCEEDED(hr)) {
-        hr = s->backup->GetSnapshotProperties(s->id, &properties);
+        *stage = 8; hr = s->backup->GetSnapshotProperties(s->id, &properties);
         if (SUCCEEDED(hr)) {
             if (!properties.m_pwszSnapshotDeviceObject || !*properties.m_pwszSnapshotDeviceObject) hr = E_FAIL;
             else {
@@ -154,7 +157,11 @@ extern "C" __declspec(dllexport) HRESULT wc_amcache_snapshot_open(void** handle,
             VssFreeSnapshotProperties(&properties);
         }
     }
-    if (FAILED(hr)) { close_snapshot(s); return hr; }
+    if (FAILED(hr)) {
+        HRESULT cleanup = close_snapshot(s);
+        if (FAILED(cleanup)) { *stage = 9; return cleanup; }
+        return hr;
+    }
     *handle = s;
     return S_OK;
 }

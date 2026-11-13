@@ -2978,7 +2978,15 @@ function Get-WCAmcacheSnapshotFailureMessage {
     # Only translate fixed failure categories. Never echo the collector's
     # output: registry data and paths must not leak through error messages.
     if ($Diagnostic -match 'At least 1 GiB of free space') { return 'App Launch Cache needs at least 1 GiB of free space on the Windows drive to take a temporary snapshot.' }
+    if ($Diagnostic -match '(?i)temporary snapshot could not be confirmed removed \(Windows error (0x[0-9a-f]{8})\)') { return "Windows could not confirm removal of the temporary App Launch Cache snapshot (Windows error $($Matches[1])). No records were reported." }
+    if ($Diagnostic -match '(?i)stage 9, Windows error (0x[0-9a-f]{8})') { return "Windows could not confirm removal of the temporary App Launch Cache snapshot (Windows error $($Matches[1])). No records were reported." }
     if ($Diagnostic -match '(?i)0x80070005|access is denied') { return 'App Launch Cache needs administrator access to read a temporary Windows snapshot.' }
+    # Windows error codes and our fixed numeric stages are safe to report;
+    # never include collector output, paths, or registry values in messages.
+    if ($Diagnostic -match '(?i)stage ([1-8]), Windows error (0x[0-9a-f]{8})') {
+        $names = @('', 'Windows volume setup', 'snapshot service setup', 'writer discovery', 'snapshot set creation', 'backup preparation', 'snapshot creation', 'registry writer verification', 'snapshot lookup')
+        return "App Launch Cache could not complete $($names[[int]$Matches[1]]) (Windows error $($Matches[2])). No records were reported."
+    }
     if ($Diagnostic -match '(?i)0x8007041D|0x8004230[0-9A-F]|0x80070002') { return 'Windows could not create a temporary snapshot. Check that Volume Shadow Copy is available and scan again.' }
     if ($Diagnostic -match '(?i)registry.*(log|snapshot|hive)|transaction log|Amcache.*(inventory|entry|categor)') { return 'The App Launch Cache snapshot could not be verified. No records were reported.' }
     return 'App Launch Cache could not read and verify a temporary snapshot. No records were reported.'
@@ -2999,7 +3007,7 @@ function Invoke-WCAmcacheNativeCollector {
         $start.StandardOutputEncoding = [System.Text.Encoding]::UTF8
         $start.StandardErrorEncoding = [System.Text.Encoding]::UTF8
         $process.StartInfo = $start
-        if (-not $process.Start()) { return $null }
+        if (-not $process.Start()) { $script:WCAmcacheSnapshotFailure = 'App Launch Cache could not start its snapshot reader.'; return $null }
         $stdout = $process.StandardOutput.ReadToEndAsync()
         $stderr = $process.StandardError.ReadToEndAsync()
         if (-not $process.WaitForExit(180000)) {
@@ -3010,11 +3018,11 @@ function Invoke-WCAmcacheNativeCollector {
         $output = $stdout.GetAwaiter().GetResult()
         $diagnostic = $stderr.GetAwaiter().GetResult()
         if ($process.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($output)) {
-            $script:WCAmcacheSnapshotFailure = Get-WCAmcacheSnapshotFailureMessage -Diagnostic $diagnostic
+            $script:WCAmcacheSnapshotFailure = if ([string]::IsNullOrWhiteSpace($diagnostic)) { "App Launch Cache snapshot reader exited without a diagnostic (exit code $($process.ExitCode)). No records were reported." } else { Get-WCAmcacheSnapshotFailureMessage -Diagnostic $diagnostic }
             return $null
         }
         return $output
-    } catch { return $null }
+    } catch { $script:WCAmcacheSnapshotFailure = 'App Launch Cache could not start or communicate with its snapshot reader.'; return $null }
     finally {
         if ($process) {
             try { if (-not $process.HasExited) { $process.Kill(); [void]$process.WaitForExit(5000) } } catch { }
