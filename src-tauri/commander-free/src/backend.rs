@@ -5749,7 +5749,7 @@ pub(crate) async fn run_fleet_forensic_projection(
 
     let child_pid = child.id();
     let wait = tokio::task::spawn_blocking(move || child.wait_with_output());
-    let timeout_seconds = if cfg!(feature = "amcache-snapshot-experimental") && category == "amcache" { 240 } else { 60 };
+    let timeout_seconds = if cfg!(feature = "amcache-snapshot-experimental") && category == "amcache" { 300 } else { 60 };
     let output = match tokio::time::timeout(std::time::Duration::from_secs(timeout_seconds), wait).await {
         Ok(Ok(Ok(output))) => output,
         Ok(_) => return Err("WinCommander could not read the local cleanup records".to_string()),

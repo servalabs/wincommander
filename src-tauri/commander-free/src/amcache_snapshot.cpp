@@ -16,12 +16,12 @@ struct AmcacheSnapshot {
     bool prepared = false;
 };
 
-static HRESULT wait_for(IVssAsync* operation) {
+static HRESULT wait_for(IVssAsync* operation, DWORD timeout_ms = 20000) {
     if (!operation) return E_UNEXPECTED;
-    // Several VSS phases run sequentially. Keep each bounded well below the
-    // 180-second collector deadline so a slow phase can be cancelled and the
-    // snapshot can be released by close_snapshot before the wrapper times out.
-    HRESULT hr = operation->Wait(20000);
+    // The snapshot phase can legitimately take longer than writer setup.
+    // Every wait remains bounded so cancellation and cleanup get time before
+    // the collector deadline; this does not override a writer's own timeout.
+    HRESULT hr = operation->Wait(timeout_ms);
     HRESULT result = E_FAIL;
     INT reserved = 0;
     if (SUCCEEDED(hr)) hr = operation->QueryStatus(&result, &reserved);
@@ -139,7 +139,7 @@ extern "C" __declspec(dllexport) HRESULT wc_amcache_snapshot_open(void** handle,
     }
     if (SUCCEEDED(hr)) {
         *stage = 6; operation = nullptr; hr = s->backup->DoSnapshotSet(&operation);
-        if (SUCCEEDED(hr)) hr = wait_for(operation);
+        if (SUCCEEDED(hr)) hr = wait_for(operation, 90000);
         if (SUCCEEDED(hr)) s->created = true;
     }
     if (SUCCEEDED(hr)) { *stage = 7; hr = verify_registry_writer(s->backup); }

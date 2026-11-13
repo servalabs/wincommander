@@ -3010,7 +3010,9 @@ function Invoke-WCAmcacheNativeCollector {
         if (-not $process.Start()) { $script:WCAmcacheSnapshotFailure = 'App Launch Cache could not start its snapshot reader.'; return $null }
         $stdout = $process.StandardOutput.ReadToEndAsync()
         $stderr = $process.StandardError.ReadToEndAsync()
-        if (-not $process.WaitForExit(180000)) {
+        # Allow the bounded VSS phases, hive parsing, and snapshot cleanup to
+        # finish before stopping the collector.
+        if (-not $process.WaitForExit(240000)) {
             try { $process.Kill(); [void]$process.WaitForExit(5000) } catch { }
             $script:WCAmcacheSnapshotFailure = 'The App Launch Cache snapshot timed out. No records were reported.'
             return $null
