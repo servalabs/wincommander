@@ -62,6 +62,126 @@ fn current_sid() -> Result<String, &'static str> {
     unsafe {
         LocalFree(value.cast());
     }
+    let sid = result?;
+    let interactive_sid = session_user_sid()?;
+    ensure_session_identity(&sid, &interactive_sid)?;
+    Ok(sid)
+}
+
+fn ensure_session_identity(process_sid: &str, session_sid: &str) -> Result<(), &'static str> {
+    if process_sid.is_empty() || session_sid.is_empty() {
+        return Err(UNAVAILABLE);
+    }
+    if !process_sid.eq_ignore_ascii_case(session_sid) {
+        return Err("the app runs as a different Windows user than the signed-in session");
+    }
+    Ok(())
+}
+
+// Resolve the account for this process's Windows logon session through WTS,
+// rather than trusting environment variables inherited through elevation.
+// An unavailable or ambiguous account fails closed.
+fn session_user_sid() -> Result<String, &'static str> {
+    use windows_sys::Win32::{
+        Security::{LookupAccountNameW, SID_NAME_USE},
+        System::{
+            RemoteDesktop::{
+                ProcessIdToSessionId, WTSDomainName, WTSFreeMemory, WTSQuerySessionInformationW,
+                WTSUserName, WTS_CURRENT_SERVER_HANDLE,
+            },
+            Threading::GetCurrentProcessId,
+        },
+    };
+    fn query(session: u32, class: i32) -> Result<String, &'static str> {
+        let mut value = ptr::null_mut();
+        let mut bytes = 0;
+        let ok = unsafe {
+            WTSQuerySessionInformationW(
+                WTS_CURRENT_SERVER_HANDLE,
+                session,
+                class,
+                &mut value,
+                &mut bytes,
+            )
+        };
+        if ok == 0 || value.is_null() || bytes < 2 || bytes % 2 != 0 || bytes > 65536 {
+            if !value.is_null() {
+                unsafe { WTSFreeMemory(value.cast()) };
+            }
+            return Err(UNAVAILABLE);
+        }
+        let units = unsafe { std::slice::from_raw_parts(value, (bytes / 2) as usize) };
+        let result = units
+            .iter()
+            .position(|unit| *unit == 0)
+            .and_then(|end| String::from_utf16(&units[..end]).ok())
+            .ok_or(UNAVAILABLE);
+        unsafe { WTSFreeMemory(value.cast()) };
+        result
+    }
+    let mut session = 0;
+    if unsafe { ProcessIdToSessionId(GetCurrentProcessId(), &mut session) } == 0 {
+        return Err(UNAVAILABLE);
+    }
+    let username = query(session, WTSUserName)?;
+    let domain = query(session, WTSDomainName)?;
+    if username.is_empty() || domain.is_empty() || username.contains('\\') || domain.contains('\\')
+    {
+        return Err(UNAVAILABLE);
+    }
+    let account: Vec<u16> = format!("{domain}\\{username}")
+        .encode_utf16()
+        .chain(Some(0))
+        .collect();
+    let mut sid_len = 0;
+    let mut domain_len = 0;
+    let mut kind: SID_NAME_USE = 0;
+    unsafe {
+        LookupAccountNameW(
+            ptr::null(),
+            account.as_ptr(),
+            ptr::null_mut(),
+            &mut sid_len,
+            ptr::null_mut(),
+            &mut domain_len,
+            &mut kind,
+        );
+    }
+    if sid_len == 0 || sid_len > 65536 || domain_len > 32768 {
+        return Err(UNAVAILABLE);
+    }
+    let mut sid = vec![0usize; (sid_len as usize).div_ceil(std::mem::size_of::<usize>())];
+    let mut resolved_domain = vec![0u16; domain_len as usize];
+    if unsafe {
+        LookupAccountNameW(
+            ptr::null(),
+            account.as_ptr(),
+            sid.as_mut_ptr().cast(),
+            &mut sid_len,
+            resolved_domain.as_mut_ptr(),
+            &mut domain_len,
+            &mut kind,
+        )
+    } == 0
+    {
+        return Err(UNAVAILABLE);
+    }
+    let mut text = ptr::null_mut();
+    if unsafe { ConvertSidToStringSidW(sid.as_mut_ptr().cast(), &mut text) } == 0 || text.is_null()
+    {
+        return Err(UNAVAILABLE);
+    }
+    let mut len = 0;
+    unsafe {
+        while *text.add(len) != 0 {
+            len += 1;
+        }
+    }
+    let result = String::from_utf16(unsafe { std::slice::from_raw_parts(text, len) })
+        .map_err(|_| UNAVAILABLE);
+    unsafe {
+        LocalFree(text.cast());
+    }
     result
 }
 
@@ -101,10 +221,14 @@ fn expand_path(value: &str) -> Result<PathBuf, &'static str> {
             // Resolve the parent and reject reparse-point roots; never guess
             // about a missing, redirected, or uninspectable profile.
             let meta = fs::symlink_metadata(&path).map_err(|_| UNAVAILABLE)?;
-            if !meta.is_dir() || super::safety::is_link_or_reparse(&meta) { return Err(UNAVAILABLE); }
+            if !meta.is_dir() || super::safety::is_link_or_reparse(&meta) {
+                return Err(UNAVAILABLE);
+            }
             let parent = path.parent().ok_or(UNAVAILABLE)?;
             let name = path.file_name().ok_or(UNAVAILABLE)?;
-            Ok(fs::canonicalize(parent).map_err(|_| UNAVAILABLE)?.join(name))
+            Ok(fs::canonicalize(parent)
+                .map_err(|_| UNAVAILABLE)?
+                .join(name))
         }
         Err(_) => Err(UNAVAILABLE),
     }
@@ -120,10 +244,14 @@ fn protected_builtin_profile(sid: &str, value: &str, windows: &Path) -> bool {
         "S-1-5-20" => r"ServiceProfiles\NetworkService",
         _ => return false,
     };
-    resolve_profile_string(value, windows).ok().is_some_and(|path| {
-        path.to_string_lossy().replace('/', "\\").trim_end_matches('\\')
-            .eq_ignore_ascii_case(&windows.join(suffix).to_string_lossy())
-    })
+    resolve_profile_string(value, windows)
+        .ok()
+        .is_some_and(|path| {
+            path.to_string_lossy()
+                .replace('/', "\\")
+                .trim_end_matches('\\')
+                .eq_ignore_ascii_case(&windows.join(suffix).to_string_lossy())
+        })
 }
 
 fn profiles() -> Result<(String, Vec<(String, PathBuf)>), &'static str> {
@@ -141,7 +269,11 @@ fn profiles() -> Result<(String, Vec<(String, PathBuf)>), &'static str> {
         let path: String = subkey
             .get_value("ProfileImagePath")
             .map_err(|_| UNAVAILABLE)?;
-        if !name.eq_ignore_ascii_case(&sid) && protected_builtin_profile(&name, &path, &windows_directory()?) { continue; }
+        if !name.eq_ignore_ascii_case(&sid)
+            && protected_builtin_profile(&name, &path, &windows_directory()?)
+        {
+            continue;
+        }
         paths.push((name, expand_path(&path)?));
     }
     if !paths
@@ -228,8 +360,11 @@ impl Snapshot {
 
     pub(super) fn current_root(&self) -> Result<PathBuf, &'static str> {
         let (sid, paths) = self.0.as_ref().map_err(|error| *error)?;
-        paths.iter().find(|(candidate, _)| candidate.eq_ignore_ascii_case(sid))
-            .map(|(_, root)| root.clone()).ok_or(UNAVAILABLE)
+        paths
+            .iter()
+            .find(|(candidate, _)| candidate.eq_ignore_ascii_case(sid))
+            .map(|(_, root)| root.clone())
+            .ok_or(UNAVAILABLE)
     }
 
     pub(super) fn describe(&self, path: &Path) -> (&'static str, Option<&Path>) {
@@ -244,22 +379,49 @@ impl Snapshot {
 mod tests {
     use super::*;
     #[test]
+    fn alternate_elevation_account_is_rejected() {
+        assert!(ensure_session_identity("S-1-5-21-10", "s-1-5-21-10").is_ok());
+        assert!(ensure_session_identity("S-1-5-21-10", "S-1-5-21-20").is_err());
+        assert!(ensure_session_identity("S-1-5-21-10", "").is_err());
+    }
+    #[test]
     fn current_scan_root_comes_from_matching_profile_sid() {
-        let snapshot = Snapshot(Ok(("S-1-mine".into(), vec![
-            ("S-1-other".into(), PathBuf::from(r"D:\Other")),
-            ("s-1-MINE".into(), PathBuf::from(r"D:\Mine")),
-        ])));
+        let snapshot = Snapshot(Ok((
+            "S-1-mine".into(),
+            vec![
+                ("S-1-other".into(), PathBuf::from(r"D:\Other")),
+                ("s-1-MINE".into(), PathBuf::from(r"D:\Mine")),
+            ],
+        )));
         assert_eq!(snapshot.current_root().unwrap(), PathBuf::from(r"D:\Mine"));
-        assert!(Snapshot(Ok(("missing".into(), Vec::new()))).current_root().is_err());
+        assert!(Snapshot(Ok(("missing".into(), Vec::new())))
+            .current_root()
+            .is_err());
         assert!(Snapshot(Err(UNAVAILABLE)).current_root().is_err());
     }
     #[test]
     fn only_standard_service_profiles_under_windows_are_covered_by_system_protection() {
         let windows = Path::new(r"C:\Windows");
-        assert!(protected_builtin_profile("S-1-5-18", r"%SystemRoot%\System32\config\systemprofile", windows));
-        assert!(protected_builtin_profile("S-1-5-19", r"C:\Windows\ServiceProfiles\LocalService", windows));
-        assert!(!protected_builtin_profile("S-1-5-18", r"D:\RedirectedService", windows));
-        assert!(!protected_builtin_profile("S-1-5-21-123", r"C:\Windows\System32\config\systemprofile", windows));
+        assert!(protected_builtin_profile(
+            "S-1-5-18",
+            r"%SystemRoot%\System32\config\systemprofile",
+            windows
+        ));
+        assert!(protected_builtin_profile(
+            "S-1-5-19",
+            r"C:\Windows\ServiceProfiles\LocalService",
+            windows
+        ));
+        assert!(!protected_builtin_profile(
+            "S-1-5-18",
+            r"D:\RedirectedService",
+            windows
+        ));
+        assert!(!protected_builtin_profile(
+            "S-1-5-21-123",
+            r"C:\Windows\System32\config\systemprofile",
+            windows
+        ));
     }
     #[test]
     fn redirected_other_profile_on_another_drive_is_protected() {

@@ -136,6 +136,11 @@ async fn start_scan(
     excluded: Vec<String>,
     minimum_size_bytes: u64,
 ) -> Result<DuplicateScan, String> {
+    // Apply the interactive-user check to explicitly chosen folders too, not
+    // just to the default profile scan. Do not expose another account's files
+    // when elevation used different credentials.
+    #[cfg(windows)]
+    profile_policy::Snapshot::load().current_root().map_err(str::to_owned)?;
     let running = RunningGuard::acquire()?;
     scope::begin(&roots, excluded, minimum_size_bytes);
     *cache()
