@@ -81,7 +81,8 @@ test("storage dashboards do not auto-scan the manual analysis tools", async () =
 test("duplicate discovery starts once per app session and keeps a completed report on return", async () => {
   const source = await read("useFileHygiene.ts");
 
-  expect(source).toContain('if (tool === "duplicates" && !busy && !duplicateScan) void scan("local")');
+  expect(source).toContain('if (tool === "duplicates" && !busy && !duplicateScan && !autoScanStarted) void scan("local")');
+  expect(source).toContain('"file-hygiene.auto-scan-started"');
   expect(source).toContain("keep the completed report in");
 });
 

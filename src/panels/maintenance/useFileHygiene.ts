@@ -11,6 +11,7 @@ import {
 import { recordMaintenanceOperation } from "../../hooks/useMaintenanceHistory";
 import { canRemoveDuplicateFile, getRetainedFileId, selectDuplicateCopies, type DuplicateKeepPolicy } from "../../lib/maintenanceSelection";
 import { useMaintenanceSessionState } from "./maintenanceSessionState";
+import { executeRemoval } from "./removalExecution";
 
 type FileTool = "duplicates" | "empty";
 const DUPLICATE_SIZE_CHOICES = [0, 200 * 1024, 1024 * 1024, 10 * 1024 * 1024, 100 * 1024 * 1024] as const;
@@ -31,6 +32,7 @@ export function useFileHygiene() {
   const [scopeMode, setScopeMode] = useMaintenanceSessionState<"local" | "folders">("file-hygiene.scope", "local");
   const [progress, setProgress] = useMaintenanceSessionState<DuplicateProgress | undefined>("file-hygiene.progress", undefined);
   const [minimumSizeBytes, setMinimumSizeBytes] = useMaintenanceSessionState<number>("file-hygiene.minimum-size-bytes", 200 * 1024);
+  const [autoScanStarted, setAutoScanStarted] = useMaintenanceSessionState("file-hygiene.auto-scan-started", false);
   const enteredTool = useRef<FileTool | undefined>(undefined);
 
   const chooseRoots = useCallback(async () => {
@@ -56,6 +58,7 @@ export function useFileHygiene() {
   const scan = useCallback(async (requestedMode?: "local" | "folders") => {
     const mode = requestedMode ?? scopeMode;
     if (busy || ((tool === "empty" || mode === "folders") && !roots.length)) return;
+    if (tool === "duplicates") setAutoScanStarted(true);
     setBusy(true);
     setError(undefined);
     setResult(undefined);
@@ -73,7 +76,7 @@ export function useFileHygiene() {
     } finally {
       setBusy(false);
     }
-  }, [backend, busy, minimumSizeBytes, roots, scopeMode, setBusy, setDuplicateScan, setEmptyScan, setError, setResult, setSelected, setRetainedFiles, setProgress, setScopeMode, tool]);
+  }, [backend, busy, minimumSizeBytes, roots, scopeMode, setAutoScanStarted, setBusy, setDuplicateScan, setEmptyScan, setError, setResult, setSelected, setRetainedFiles, setProgress, setScopeMode, tool]);
 
   useEffect(() => {
     if (enteredTool.current === tool) return;
@@ -83,8 +86,8 @@ export function useFileHygiene() {
     // the first visit after app launch, then keep the completed report in
     // place until the person explicitly asks to scan again. Re-entering the
     // tab must never discard a report or restart an expensive drive walk.
-    if (tool === "duplicates" && !busy && !duplicateScan) void scan("local");
-  }, [busy, duplicateScan, scan, tool]);
+    if (tool === "duplicates" && !busy && !duplicateScan && !autoScanStarted) void scan("local");
+  }, [autoScanStarted, busy, duplicateScan, scan, tool]);
 
   useEffect(() => {
     if (!busy || tool !== "duplicates" || duplicateScan) return;
@@ -136,26 +139,24 @@ export function useFileHygiene() {
     setResult(undefined);
     let hasReturnedResult = false;
     try {
-      const next = tool === "duplicates"
-        ? await backend.duplicateFinderRemove(ids, keeperIds as string[])
-        : await backend.emptyFolderCleanerRemove(ids);
+      const next = await executeRemoval<DuplicateRemoveResult | EmptyFolderRemoveResult>(
+        () => tool === "duplicates"
+          ? backend.duplicateFinderRemove(ids, keeperIds as string[])
+          : backend.emptyFolderCleanerRemove(ids),
+        () => { if (tool === "duplicates") setDuplicateScan(undefined); else setEmptyScan(undefined); },
+      );
       setResult(next);
       hasReturnedResult = true;
       recordMaintenanceOperation({ tool: tool === "duplicates" ? "duplicates" : "empty-folders", title: tool === "duplicates" ? "Duplicate file removal" : "Empty folder removal", outcome: next.cancelled ? "cancelled" : next.errors.length ? "partial" : "completed", affectedItems: "filesRemoved" in next ? next.filesRemoved : next.foldersRemoved, bytesRecovered: "bytesRecovered" in next ? next.bytesRecovered : undefined, detail: "bytesRecovered" in next ? "Logical file bytes removed; free space not measured." : undefined });
-      // Removal results don't identify successful IDs; only a new scan can reconcile failures.
-      setDuplicateScan(undefined);
-      setEmptyScan(undefined);
       setSelected(new Set());
-      if (tool === "duplicates") setDuplicateScan(await (scopeMode === "local" ? backend.duplicateFinderScanLocal(minimumSizeBytes) : backend.duplicateFinderScan(roots, minimumSizeBytes)));
-      else setEmptyScan(await backend.emptyFolderCleanerScan(roots));
     } catch (cause) {
       if (!hasReturnedResult) recordMaintenanceOperation({ tool: tool === "duplicates" ? "duplicates" : "empty-folders", title: tool === "duplicates" ? "Duplicate file removal" : "Empty folder removal", outcome: "failed" });
       setSelected(new Set());
-      setError(hasReturnedResult ? `Removal finished, but refreshing the scan failed: ${String(cause)}` : String(cause));
+      setError(hasReturnedResult ? `Removal finished, but recording the result failed. Scan again for updated results: ${String(cause)}` : `Removal could not be confirmed. Scan again for updated results: ${String(cause)}`);
     } finally {
       setBusy(false);
     }
-  }, [backend, busy, duplicateScan, keepPolicy, retainedFiles, minimumSizeBytes, roots, scopeMode, selected, setBusy, setDuplicateScan, setEmptyScan, setError, setResult, setSelected, tool]);
+  }, [backend, busy, duplicateScan, keepPolicy, retainedFiles, selected, setBusy, setDuplicateScan, setEmptyScan, setError, setResult, setSelected, tool]);
 
   const cancel = useCallback(async () => {
     try {

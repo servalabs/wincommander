@@ -21,8 +21,8 @@ import { DuplicateScanStatus } from "./DuplicateScanStatus";
 
 function describeRemoveResult(result: DuplicateRemoveResult | EmptyFolderRemoveResult) {
   const summary = "bytesRecovered" in result
-    ? `Removed ${result.filesRemoved} files (${formatBytes(result.bytesRecovered)} logical data).`
-    : `Removed ${result.foldersRemoved} empty folders.`;
+    ? `Removed ${result.filesRemoved} files (${formatBytes(result.bytesRecovered)} logical data). Scan again for updated results.`
+    : `Removed ${result.foldersRemoved} empty folders. Scan again for updated results.`;
   if (result.cancelled) return { tone: "warning" as const, title: "Removal cancelled", message: `${summary} Cancelled before finishing.` };
   if (result.errors.length) return { tone: "warning" as const, title: "Completed with issues", message: `${summary} ${result.errors.length} item${result.errors.length === 1 ? "" : "s"} could not be removed.` };
   return { tone: "success" as const, title: "Removal complete", message: summary };
