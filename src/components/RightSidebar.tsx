@@ -26,7 +26,7 @@ import { vaultMountResultConfirmed } from "@/panels/fleet/vaultOperationConfirma
 import { runOperation } from "../context/OperationContext";
 import { displayEraseDetail } from "../lib/cryptoEraseReceipt";
 import { DESTRUCT_STEPS, isStepEnabled } from "../types/lockdownSteps";
-import { sidebarHiddenActions, DEFAULT_BORROWED_EXTRAS } from "../lib/visibilityDefaults";
+import { DEFAULT_ALWAYS_HIDDEN_SIDEBAR_ACTIONS, DEFAULT_BORROWED_EXTRAS } from "../lib/visibilityDefaults";
 import { requestDestructiveCapability } from "../hooks/destructiveAuthz";
 import { invalidateDiskCleanupScheduleStatus } from "../panels/maintenance/diskCleanupScheduleState";
 import { useActiveTourStepId, useLockdownChoicePendingEnabled } from "../lib/tourActive";
@@ -160,7 +160,7 @@ export default function RightSidebar() {
     // An action is also hidden when Borrowed Mode is active and its key is in
     // borrowedHidden (key format: "action:<key>").
     const hiddenActions = new Set([
-        ...sidebarHiddenActions(appSettings?.app?.hiddenSidebarActions, appSettings?.app?.showAdvisorAction),
+        ...(appSettings?.app?.hiddenSidebarActions ?? DEFAULT_ALWAYS_HIDDEN_SIDEBAR_ACTIONS),
         ...(borrowedActive
             ? borrowedHidden
                 .filter(k => k.startsWith("action:"))
@@ -848,7 +848,7 @@ export default function RightSidebar() {
     ]);
 
     const lockdownTimerSeconds = Math.min(
-        86400,
+        30,
         Math.max(3, appSettings?.app?.lockdownTimerSec ?? 4),
     );
 

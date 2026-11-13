@@ -62,7 +62,6 @@ type VaultVolume = NonNullable<EncryptionStatus["volumes"]>[number];
 function VaultPanel() {
   const { encryptionStatus, refreshVault, loading, vaultStatusError, vaultManualRefreshing } = useAppState();
   const { state: processElevation } = useProcessElevation();
-  const [showAssignedVaults, setShowAssignedVaults] = useState(true);
 
   const volumes = encryptionStatus?.volumes || [];
 
@@ -88,9 +87,9 @@ function VaultPanel() {
           </div>
           <BackupRecoverySection />
           <StegoBackupSection />
-          {processElevation !== "administrator" && <section aria-label="My vaults" hidden={!showAssignedVaults}>
+          {processElevation !== "administrator" && <section aria-label="My vaults">
             <SectionCard title="My vaults" icon="lock">
-              <div className="fleet-panel"><VaultAccessTab isAdmin={false} directory={DEFAULT_ACCESS_DIRECTORY} onVisibilityChange={setShowAssignedVaults} /></div>
+              <div className="fleet-panel"><VaultAccessTab isAdmin={false} directory={DEFAULT_ACCESS_DIRECTORY} /></div>
             </SectionCard>
           </section>}
           {processElevation === "administrator" && <section aria-label="Vault permissions">
@@ -575,7 +574,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
           ) : (
             <div className="empty-state">
               <Icon icon="clean" className="empty-icon" size={32} />
-              <p>{statusError ? "The last confirmed check found no mounted volumes for this account. Current status is unavailable." : "No WinCommander volumes mounted for this account"}</p>
+              <p>{statusError ? "The last confirmed check found no mounted volumes for this account. FixtureUser status is unavailable." : "No WinCommander volumes mounted for this account"}</p>
             </div>
           )}
         </div>

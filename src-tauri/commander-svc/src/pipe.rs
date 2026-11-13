@@ -35,12 +35,11 @@ use anyhow::{Context, Result};
 use tokio::net::windows::named_pipe::{PipeMode, ServerOptions};
 
 use wincmd_shared::fleet::{Action, ClipboardEventReport};
+use wincmd_shared::vault_access::VaultMountReason;
 use wincmd_shared::svc::{
     classify_verb, is_known_verb, ApplyMachineSettingRequest, CapabilityClass,
-    APPLY_MACHINE_SETTING_VERB, ACTIVATE_HYBRID_LICENSE_VERB, ENROL_HYBRID_LICENSE_VERB, RENEW_HYBRID_LICENSE_VERB, RELEASE_HYBRID_LICENSE_VERB,
-    STORE_LICENSE_CACHE_VERB, SVC_PIPE_NAME, SVC_PROTOCOL_VERSION, VERIFY_LICENSE_CACHE_VERB,
+    APPLY_MACHINE_SETTING_VERB, STORE_LICENSE_CACHE_VERB, VERIFY_LICENSE_CACHE_VERB, RENEW_HYBRID_LICENSE_VERB, ENROL_HYBRID_LICENSE_VERB, SVC_PIPE_NAME, SVC_PROTOCOL_VERSION,
 };
-use wincmd_shared::vault_access::VaultMountReason;
 use wincmd_shared::{Envelope, ErrorReply, Hello, Request, Response};
 
 use crate::peer_auth::{SessionHelperGate, TrustOrigin};
@@ -61,8 +60,6 @@ pub(crate) use service_peer_identity::{capture_authenticated_pipe_peer, Authenti
 
 #[path = "service_peer_privileges.rs"]
 mod service_peer_privileges;
-#[path = "fleet_handoff_confirmation.rs"]
-pub(crate) mod fleet_handoff_confirmation;
 use service_peer_privileges::{caller_has_vault_policy_capability_token, token_is_privileged};
 
 #[path = "service_peer_query.rs"]
@@ -78,9 +75,11 @@ use windows_sys::Win32::{
     Foundation::{LocalFree, HANDLE},
     Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW,
     Security::PSECURITY_DESCRIPTOR,
-    System::RemoteDesktop::{
-        WTSActive, WTSConnectState, WTSFreeMemory, WTSQuerySessionInformationW,
-        WTS_CONNECTSTATE_CLASS, WTS_CURRENT_SERVER_HANDLE,
+    System::{
+        RemoteDesktop::{
+            WTSActive, WTSConnectState, WTSFreeMemory, WTSQuerySessionInformationW,
+            WTS_CONNECTSTATE_CLASS, WTS_CURRENT_SERVER_HANDLE,
+        },
     },
 };
 
@@ -367,24 +366,19 @@ pub(crate) async fn handle_connection(
             crate::pipe_transport::write_frame(&mut conn, &reply).await?;
             continue;
         }
-        let authorization = if matches!(
-            req.feature_id.as_str(),
-            "svc.managed_deployment.apply" | "svc.managed_deployment.status"
-        ) {
+        let authorization = if matches!(req.feature_id.as_str(),
+            "svc.managed_deployment.apply" | "svc.managed_deployment.status") {
             let gate = Arc::clone(&session_helper_gate);
             let verb = req.feature_id.clone();
             let permitted_session = peer.as_deref().is_some_and(|peer| {
                 crate::peer_auth::deployment_session_is_permitted(
-                    peer.session_id(),
-                    wts_connect_state(peer.session_id()),
+                    peer.session_id(), wts_connect_state(peer.session_id()),
                     peer.caller_sid() == "S-1-5-18",
                 )
             });
             match tokio::task::spawn_blocking(move || {
                 gate.authorize_deployment_relay(client_pid, &verb, permitted_session)
-            })
-            .await
-            {
+            }).await {
                 Ok(result) => result.map(Some).map_err(|error| error.to_string()),
                 Err(_) => Err("managed deployment peer authorization unavailable".into()),
             }
@@ -397,18 +391,9 @@ pub(crate) async fn handle_connection(
                 Err("shared shortcut claims require an elevated WinCommander session".into())
             } else {
                 let gate = Arc::clone(&session_helper_gate);
-                let session = peer
-                    .as_deref()
-                    .map(AuthenticatedPipePeer::session_id)
-                    .unwrap_or(0);
-                let active = peer
-                    .as_deref()
-                    .is_some_and(peer_has_active_interactive_session);
-                let result = match tokio::task::spawn_blocking(move || {
-                    gate.authorize_shared_shortcut_relay(client_pid, session, active)
-                })
-                .await
-                {
+                let session = peer.as_deref().map(AuthenticatedPipePeer::session_id).unwrap_or(0);
+                let active = peer.as_deref().is_some_and(peer_has_active_interactive_session);
+                let result = match tokio::task::spawn_blocking(move || gate.authorize_shared_shortcut_relay(client_pid, session, active)).await {
                     Ok(result) => result.map(Some).map_err(|error| error.to_string()),
                     Err(_) => Err("shared shortcut peer authorization unavailable".into()),
                 };
@@ -416,80 +401,42 @@ pub(crate) async fn handle_connection(
                 crate::diagnostics::record_shared_shortcut_stage("auth_end", shortcut_started);
                 result
             }
-        } else if matches!(
-            req.feature_id.as_str(),
-            ACTIVATE_HYBRID_LICENSE_VERB | ENROL_HYBRID_LICENSE_VERB | RENEW_HYBRID_LICENSE_VERB | RELEASE_HYBRID_LICENSE_VERB
-        ) {
-            if req.feature_id == RELEASE_HYBRID_LICENSE_VERB && !caller_privileged {
-                Err("licence release requires an elevated WinCommander session".into())
-            } else {
-                let gate = Arc::clone(&session_helper_gate);
-                let verb = req.feature_id.clone();
-                let session = peer
-                    .as_deref()
-                    .map(AuthenticatedPipePeer::session_id)
-                    .unwrap_or(0);
-                let active = peer
-                    .as_deref()
-                    .is_some_and(peer_has_active_interactive_session);
-                match tokio::task::spawn_blocking(move || {
-                    gate.authorize_licence_relay(client_pid, &verb, session, active)
-                })
-                .await
-                {
-                    Ok(result) => result.map(Some).map_err(|error| error.to_string()),
-                    Err(_) => Err("licence peer authorization unavailable".into()),
-                }
+        } else if matches!(req.feature_id.as_str(), ENROL_HYBRID_LICENSE_VERB | RENEW_HYBRID_LICENSE_VERB) {
+            let gate = Arc::clone(&session_helper_gate);
+            let verb = req.feature_id.clone();
+            let session = peer.as_deref().map(AuthenticatedPipePeer::session_id).unwrap_or(0);
+            let active = peer.as_deref().is_some_and(peer_has_active_interactive_session);
+            match tokio::task::spawn_blocking(move || gate.authorize_licence_relay(client_pid, &verb, session, active)).await {
+                Ok(result) => result.map(Some).map_err(|error| error.to_string()),
+                Err(_) => Err("licence peer authorization unavailable".into()),
             }
-        } else if matches!(req.feature_id.as_str(), "svc.fleet.recovery.stop_poll" | "svc.fleet.recovery.stop_complete" | "svc.fleet.recovery.legacy_work_start" | "svc.fleet.recovery.legacy_work_complete" | "svc.fleet.recovery.upgrade_challenge" | "svc.fleet.recovery.upgrade_confirm" | "svc.fleet.recovery.execution_status" | "svc.fleet.recovery.execute_list" | "svc.fleet.recovery.execute_grant" | "svc.fleet.recovery.execute_start" | "svc.fleet.recovery.leave_request" | "svc.fleet.recovery.leave_status" | "svc.fleet.recovery.execute_result") {
-            let gate=Arc::clone(&session_helper_gate);
-            let verb=req.feature_id.clone();
-            let session=peer.as_deref().map(AuthenticatedPipePeer::session_id).unwrap_or(0);
-            let active=peer.as_deref().is_some_and(peer_has_active_interactive_session);
-            match tokio::task::spawn_blocking(move || gate.authorize_recovery_execution_relay(client_pid,&verb,session,active)).await {
-                Ok(result)=>result.map(Some).map_err(|error|error.to_string()),
-                Err(_)=>Err("Fleet execution peer authorization unavailable".into()),
-            }
-        } else if matches!(req.feature_id.as_str(), "svc.fleet.install_policy" | "svc.fleet.get_policy" | "svc.fleet.read_hybrid_trust") {
+        } else if matches!(req.feature_id.as_str(), "svc.fleet.install_policy" | "svc.fleet.get_policy") {
             #[cfg(debug_assertions)]
             let policy_trace_started = if req.feature_id == "svc.fleet.get_policy" {
                 let started = std::time::Instant::now();
                 crate::diagnostics::record_shield_policy_stage("auth_start", started);
                 Some(started)
-            } else {
-                None
-            };
+            } else { None };
             let gate = Arc::clone(&session_helper_gate);
             let verb = req.feature_id.clone();
-            let session = peer
-                .as_deref()
-                .map(AuthenticatedPipePeer::session_id)
-                .unwrap_or(0);
-            let active = peer
-                .as_deref()
-                .is_some_and(peer_has_active_interactive_session);
-            let result = match tokio::task::spawn_blocking(move || {
-                gate.authorize_fleet_policy_relay(client_pid, &verb, session, active)
-            })
-            .await
-            {
+            let session = peer.as_deref().map(AuthenticatedPipePeer::session_id).unwrap_or(0);
+            let active = peer.as_deref().is_some_and(peer_has_active_interactive_session);
+            let result = match tokio::task::spawn_blocking(move || gate.authorize_fleet_policy_relay(client_pid, &verb, session, active)).await {
                 Ok(result) => result.map(Some).map_err(|error| error.to_string()),
                 Err(_) => Err("Fleet policy peer authorization unavailable".into()),
             };
             #[cfg(debug_assertions)]
-            if let Some(started) = policy_trace_started {
-                crate::diagnostics::record_shield_policy_stage("auth_end", started);
-            }
+            if let Some(started) = policy_trace_started { crate::diagnostics::record_shield_policy_stage("auth_end", started); }
             result
         } else {
             authorize_with_interactive_session(
-                &req.feature_id,
-                caller_privileged
-                    || (vault_policy_manager && is_vault_management_verb(&req.feature_id)),
-                caller_has_interactive_session,
-                client_pid,
-                &session_helper_gate,
-            )
+            &req.feature_id,
+            caller_privileged
+                || (vault_policy_manager && is_vault_management_verb(&req.feature_id)),
+            caller_has_interactive_session,
+            client_pid,
+            &session_helper_gate,
+        )
             .await
         };
         match authorization {
@@ -503,8 +450,7 @@ pub(crate) async fn handle_connection(
                 crate::pipe_transport::write_frame(&mut conn, &reply).await?;
             }
             Ok(trust_origin) => {
-                let sensitive_reply=matches!(req.feature_id.as_str(),"svc.fleet.recovery.execute_grant"|"svc.fleet.recovery.stop_poll"|"svc.fleet.recovery.legacy_work_start"|"svc.fleet.recovery.upgrade_challenge");
-                let mut reply = dispatch_verb(
+                let reply = dispatch_verb(
                     req,
                     trust_origin,
                     &policy_store,
@@ -515,9 +461,7 @@ pub(crate) async fn handle_connection(
                     caller_privileged,
                 )
                 .await;
-                let result=crate::pipe_transport::write_frame(&mut conn, &reply).await;
-                if sensitive_reply { if let Envelope::Response(response)=&mut reply { wincmd_shared::zeroize_json(&mut response.result); } }
-                result?;
+                crate::pipe_transport::write_frame(&mut conn, &reply).await?;
             }
         }
     }
@@ -677,14 +621,11 @@ async fn dispatch_verb(
         "svc.health" => Ok(settings_host::health()),
         "svc.ping" => Ok(serde_json::json!({ "pong": true })),
         "svc.managed_deployment.bind" => crate::managed_deployment::bind(args)
-            .await
-            .map_err(|kind| VerbError::new(kind, kind)),
+            .await.map_err(|kind| VerbError::new(kind, kind)),
         "svc.managed_deployment.apply" => crate::managed_deployment::apply(args, request_id)
-            .await
-            .map_err(|kind| VerbError::new(kind, kind)),
+            .await.map_err(|kind| VerbError::new(kind, kind)),
         "svc.managed_deployment.status" => crate::managed_deployment::status(args)
-            .await
-            .map_err(|kind| VerbError::new(kind, kind)),
+            .await.map_err(|kind| VerbError::new(kind, kind)),
         "svc.bluetooth.policy.status" | "svc.bluetooth.policy.set_blocked" => {
             crate::bluetooth_control::handle(&feature_id, args, caller_privileged)
                 .await
@@ -697,24 +638,14 @@ async fn dispatch_verb(
                 .map_err(|kind| VerbError::new(kind, kind))
         }
         "svc.shared_shortcuts.set_claim" => {
-            if !shared_shortcut_dispatch_allowed(
-                caller_privileged,
-                trust_origin.is_some(),
-                peer.is_some_and(peer_has_active_interactive_session),
-            ) {
-                Err(VerbError::new(
-                    "forbidden",
-                    "protected WinCommander session required",
-                ))
+            if !shared_shortcut_dispatch_allowed(caller_privileged, trust_origin.is_some(),
+                peer.is_some_and(peer_has_active_interactive_session)) {
+                Err(VerbError::new("forbidden", "protected WinCommander session required"))
             } else if let Some(peer) = peer {
                 crate::shared_shortcuts::handle(args, peer.caller_sid().to_owned())
-                    .await
-                    .map_err(|kind| VerbError::new(kind, kind))
+                    .await.map_err(|kind| VerbError::new(kind, kind))
             } else {
-                Err(VerbError::new(
-                    "forbidden",
-                    "active authenticated session required",
-                ))
+                Err(VerbError::new("forbidden", "active authenticated session required"))
             }
         }
 
@@ -730,55 +661,20 @@ async fn dispatch_verb(
 
         RENEW_HYBRID_LICENSE_VERB => handle_hybrid_license_renewal(args, trust_origin).await,
         ENROL_HYBRID_LICENSE_VERB => handle_hybrid_license_enrolment(args, trust_origin).await,
-        ACTIVATE_HYBRID_LICENSE_VERB => handle_hybrid_license_activation(args, trust_origin).await,
-        RELEASE_HYBRID_LICENSE_VERB => handle_hybrid_license_release(args, trust_origin, caller_privileged).await,
 
-        "svc.clipboard.get_policy" => fleet_machine_policy_store().and_then(|store| {
-            store
-                .read_current(|bound, policy| policy_store.bound_clipboard_response(bound, policy))
-                .map_err(|kind| VerbError::new("clipboard_policy_unavailable", kind))
-        }),
+        "svc.clipboard.get_policy" => fleet_machine_policy_store().and_then(|store|store.read_current(|bound,policy| {
+            policy_store.bound_clipboard_response(bound,policy)
+        }).map_err(|kind|VerbError::new("clipboard_policy_unavailable",kind))),
 
         "svc.policy.install_epoch" => handle_install_epoch(policy_store, args),
 
-        "svc.fleet.begin_enrollment"
-        | "svc.fleet.provision_trust"
-        | "svc.fleet.replace_trust"
-        | "svc.fleet.bind_origins"
-        | "svc.fleet.get_trust"
-        | "svc.fleet.provision_hybrid_trust"
-        | "svc.fleet.get_hybrid_trust"
-        | "svc.fleet.read_hybrid_trust"
-        | "svc.fleet.begin_hybrid_enrollment"
-        | "svc.fleet.cancel_hybrid_enrollment"
-        | "svc.fleet.install_policy"
-        | "svc.fleet.get_policy" => handle_fleet_machine_policy(&feature_id, args, peer),
 
-        "svc.fleet.operator_key.pin" => handle_operator_key_pin(args, peer),
-        "svc.fleet.recovery.stage" => handle_recovery_stage(args, peer).await,
-        "svc.fleet.recovery.handoff" => handle_recovery_handoff(args, peer).await,
-        "svc.fleet.recovery.finish" => handle_recovery_finish(args, peer).await,
-        "svc.fleet.recovery.contact" => handle_recovery_contact(args,trust_origin.is_some()).await,
-        "svc.fleet.recovery.leave_request" => {
-            if !RECOVERY_EXECUTION_READY || trust_origin.is_none() { Err(VerbError::new("recovery_unavailable","Fleet leave request is unavailable")) }
-            else if let Some(device)=args.as_object().filter(|o|o.len()==1).and_then(|o|o.get("device_id")).and_then(|v|v.as_str()).filter(|v|!v.is_empty() && v.len()<=128) {
-                match fleet_machine_policy_store() { Ok(store)=>crate::fleet_recovery_leave::request(store,&crate::fleet_credential::MachineDpapi,device).await.map_err(|_|VerbError::new("recovery_unavailable","Fleet leave request is unavailable")), Err(error)=>Err(error) }
-            } else { Err(VerbError::new("recovery_unavailable","Fleet leave request is unavailable")) }
-        },
-        "svc.fleet.recovery.leave_status" => {
-            if !RECOVERY_EXECUTION_READY || trust_origin.is_none() || args!=serde_json::json!({}) { Err(VerbError::new("recovery_unavailable","Fleet leave status is unavailable")) }
-            else { handle_recovered_leave_status().await }
-        },
-        "svc.fleet.recovery.stop_poll" | "svc.fleet.recovery.stop_complete" | "svc.fleet.recovery.legacy_work_start" | "svc.fleet.recovery.legacy_work_complete" | "svc.fleet.recovery.upgrade_challenge" | "svc.fleet.recovery.upgrade_confirm" => handle_recovery_stop(&feature_id,args,trust_origin.is_some(),peer),
-        "svc.fleet.recovery.resolve_unknown" => handle_recovery_unknown(args,peer),
-        "svc.fleet.recovery.execution_status" | "svc.fleet.recovery.execute_list" | "svc.fleet.recovery.execute_grant" | "svc.fleet.recovery.execute_start" | "svc.fleet.recovery.execute_result" =>
-            handle_recovery_execution(&feature_id,args,trust_origin.is_some(),peer),
-        "svc.fleet.recovery.resume" => handle_recovery_resume(args, peer).await,
+        "svc.fleet.begin_enrollment" | "svc.fleet.provision_trust" | "svc.fleet.replace_trust" | "svc.fleet.bind_origins" | "svc.fleet.get_trust" | "svc.fleet.install_policy" | "svc.fleet.get_policy" =>
+            handle_fleet_machine_policy(&feature_id, args, peer),
 
-        "svc.fleet.contact_observation" => fleet_machine_policy_store().and_then(|store| {
+        "svc.fleet.contact_observation" => fleet_machine_policy_store().and_then(|store|
             crate::fleet_contact_transfer::handle(store, args)
-                .map_err(|kind| VerbError::new("fleet_contact_unavailable", kind))
-        }),
+                .map_err(|kind| VerbError::new("fleet_contact_unavailable", kind))),
 
         "svc.clipboard.report_event" => match trust_origin {
             Some(origin) => handle_report_event(clipboard_state, args, origin),
@@ -800,8 +696,7 @@ async fn dispatch_verb(
                 vault_access,
                 peer.map(AuthenticatedPipePeer::caller_sid).unwrap_or(""),
                 caller_privileged,
-            ))
-            .map_err(|_| vault_policy_state_unavailable())
+            )).map_err(|_| vault_policy_state_unavailable())
         }),
         "svc.vault.list_principals" => handle_vault_list_principals(vault_access, args, peer),
         "svc.vault.get_status" => vault_mount.with_exclusive_operation(|| {
@@ -809,8 +704,7 @@ async fn dispatch_verb(
             serde_json::to_value(vault_access.caller_status(
                 peer.map(AuthenticatedPipePeer::caller_sid).unwrap_or(""),
                 caller_privileged,
-            ))
-            .map_err(|_| vault_policy_state_unavailable())
+            )).map_err(|_| vault_policy_state_unavailable())
         }),
         // The historical whole-policy wire cannot safely be caller-scoped:
         // an owner would have to receive other owners' records or omission
@@ -868,14 +762,9 @@ async fn dispatch_verb(
             args,
             peer,
         ),
-        "svc.vault.dismount_personal" => handle_personal_vault_dismount(
-            request_id,
-            &diagnostic_operation_id,
-            vault_access,
-            vault_mount,
-            args,
-            peer,
-        ),
+        "svc.vault.dismount_personal" => {
+            handle_personal_vault_dismount(request_id, &diagnostic_operation_id, vault_access, vault_mount, args, peer)
+        }
         "svc.vault.manage_personal_syncthing" => handle_personal_vault_syncthing_manage(
             request_id,
             vault_access,
@@ -900,7 +789,6 @@ async fn dispatch_verb(
                 handle_vault_list_authorized(vault_access, vault_mount, peer)
             }
         }
-        "svc.search.fence_capabilities" => Ok(crate::pro_broker::search_fence_capabilities()),
         "svc.vault.capabilities" => {
             Ok(serde_json::json!({ "can_manage_policy": caller_privileged }))
         }
@@ -949,14 +837,10 @@ fn valid_diagnostic_operation_id(value: &str) -> bool {
 
 #[cfg(feature = "experimental-pq-licence")]
 fn hybrid_renewal_error(error: &str) -> VerbError {
-    VerbError::new(
-        "license_renewal_rejected",
+    VerbError::new("license_renewal_rejected",
         if error == crate::licence_device_credential::RETRY_LATER {
             crate::licence_device_credential::RETRY_LATER
-        } else {
-            "license renewal is unavailable"
-        },
-    )
+        } else { "license renewal is unavailable" })
 }
 
 async fn handle_hybrid_license_renewal(
@@ -964,92 +848,17 @@ async fn handle_hybrid_license_renewal(
     trust_origin: Option<TrustOrigin>,
 ) -> Result<serde_json::Value, VerbError> {
     if trust_origin.is_none() {
-        return Err(VerbError::new(
-            "forbidden",
-            "protected WinCommander session required",
-        ));
-    }
-    if !args.as_object().is_some_and(|object| object.is_empty()) {
-        return Err(VerbError::new(
-            "license_renewal_rejected",
-            "license renewal accepts no parameters",
-        ));
-    }
-    #[cfg(feature = "experimental-pq-licence")]
-    {
-        crate::licence_device_credential::renew_from_machine_cache()
-            .await
-            .map(|_| serde_json::json!({ "renewed": true }))
-            .map_err(hybrid_renewal_error)
-    }
-    #[cfg(not(feature = "experimental-pq-licence"))]
-    {
-        Err(VerbError::new(
-            "license_renewal_rejected",
-            "license renewal is unavailable",
-        ))
-    }
-}
-
-async fn handle_hybrid_license_release(
-    args: serde_json::Value, trust_origin: Option<TrustOrigin>, caller_privileged: bool,
-) -> Result<serde_json::Value, VerbError> {
-    handle_hybrid_license_release_with(args, trust_origin, caller_privileged, || async {
-        #[cfg(feature = "experimental-pq-licence")]
-        { crate::licence_activation_intent::release_serialized().await }
-        #[cfg(not(feature = "experimental-pq-licence"))]
-        { Err("license release is unavailable") }
-    }).await
-}
-
-async fn handle_hybrid_license_release_with<F, Fut>(
-    args: serde_json::Value, trust_origin: Option<TrustOrigin>, caller_privileged: bool, release: F,
-) -> Result<serde_json::Value, VerbError>
-where F: FnOnce() -> Fut, Fut: std::future::Future<Output = Result<(), &'static str>> {
-    if !caller_privileged || trust_origin != Some(TrustOrigin::SessionHelperPinned) {
-        return Err(VerbError::new("forbidden", "elevated protected WinCommander session required"));
-    }
-    if !args.as_object().is_some_and(|object| object.is_empty()) {
-        return Err(VerbError::new("license_release_rejected", "license release accepts no parameters"));
-    }
-    release().await.map(|_| serde_json::json!({"released": true})).map_err(|_| VerbError::new(
-        "license_release_rejected", "License release could not be confirmed. Check the service and connection, then retry."))
-}
-
-async fn handle_hybrid_license_activation(
-    args: serde_json::Value, trust_origin: Option<TrustOrigin>,
-) -> Result<serde_json::Value, VerbError> {
-    handle_hybrid_license_activation_with(args, trust_origin, |key| async move {
-        #[cfg(feature = "experimental-pq-licence")]
-        { crate::licence_activation_intent::activate_from_key(&key).await }
-        #[cfg(not(feature = "experimental-pq-licence"))]
-        { let _ = key; Err("license activation is unavailable") }
-    }).await
-}
-
-async fn handle_hybrid_license_activation_with<F, Fut>(
-    mut args: serde_json::Value, trust_origin: Option<TrustOrigin>, activate: F,
-) -> Result<serde_json::Value, VerbError>
-where F: FnOnce(zeroize::Zeroizing<String>) -> Fut,
-      Fut: std::future::Future<Output = Result<(), &'static str>> {
-    let key = if trust_origin == Some(TrustOrigin::SessionHelperPinned) {
-        args.as_object_mut().filter(|map| map.len() == 1).and_then(|map| map.remove("licenseKey"))
-    } else { None };
-    wincmd_shared::zeroize_json(&mut args);
-    if trust_origin != Some(TrustOrigin::SessionHelperPinned) {
         return Err(VerbError::new("forbidden", "protected WinCommander session required"));
     }
-    let mut key = key.ok_or_else(|| VerbError::new("license_activation_rejected", "license activation is unavailable"))?;
-    let result = match &mut key {
-        serde_json::Value::String(value) if !value.is_empty() && value.len() <= 256 && value.trim() == value => {
-            let key = zeroize::Zeroizing::new(std::mem::take(value));
-            activate(key).await.map(|_| serde_json::json!({"activated": true})).map_err(|_| VerbError::new(
-                "license_activation_rejected", "Secure activation could not be confirmed. Keep WinCommander installed and retry."))
-        }
-        _ => Err(VerbError::new("license_activation_rejected", "license activation is unavailable")),
-    };
-    wincmd_shared::zeroize_json(&mut key);
-    result
+    if !args.as_object().is_some_and(|object| object.is_empty()) {
+        return Err(VerbError::new("license_renewal_rejected", "license renewal accepts no parameters"));
+    }
+    #[cfg(feature = "experimental-pq-licence")]
+    { crate::licence_device_credential::renew_from_machine_cache().await
+        .map(|_| serde_json::json!({ "renewed": true }))
+        .map_err(hybrid_renewal_error) }
+    #[cfg(not(feature = "experimental-pq-licence"))]
+    { Err(VerbError::new("license_renewal_rejected", "license renewal is unavailable")) }
 }
 
 async fn handle_hybrid_license_enrolment(
@@ -1057,53 +866,25 @@ async fn handle_hybrid_license_enrolment(
     trust_origin: Option<TrustOrigin>,
 ) -> Result<serde_json::Value, VerbError> {
     let key = if trust_origin.is_some() {
-        args.as_object_mut()
-            .filter(|map| map.len() == 1)
+        args.as_object_mut().filter(|map| map.len() == 1)
             .and_then(|map| map.remove("licenseKey"))
-    } else {
-        None
-    };
+    } else { None };
     wincmd_shared::zeroize_json(&mut args);
     if trust_origin.is_none() {
-        return Err(VerbError::new(
-            "forbidden",
-            "protected WinCommander session required",
-        ));
+        return Err(VerbError::new("forbidden", "protected WinCommander session required"));
     }
-    let mut key = key.ok_or_else(|| {
-        VerbError::new(
-            "license_enrolment_rejected",
-            "license registration is unavailable",
-        )
-    })?;
+    let mut key = key.ok_or_else(|| VerbError::new("license_enrolment_rejected", "license registration is unavailable"))?;
     let result = match &mut key {
         serde_json::Value::String(value) if !value.trim().is_empty() && value.len() <= 512 => {
             let key = zeroize::Zeroizing::new(std::mem::take(value));
             #[cfg(feature = "experimental-pq-licence")]
-            {
-                crate::licence_device_credential::enrol_from_machine_cache(&key)
-                    .await
-                    .map(|_| serde_json::json!({"enrolled": true}))
-                    .map_err(|_| {
-                        VerbError::new(
-                            "license_enrolment_rejected",
-                            "license registration is unavailable",
-                        )
-                    })
-            }
+            { crate::licence_device_credential::enrol_from_machine_cache(&key).await
+                .map(|_| serde_json::json!({"enrolled": true}))
+                .map_err(|_| VerbError::new("license_enrolment_rejected", "license registration is unavailable")) }
             #[cfg(not(feature = "experimental-pq-licence"))]
-            {
-                let _ = key;
-                Err(VerbError::new(
-                    "license_enrolment_rejected",
-                    "license registration is unavailable",
-                ))
-            }
+            { let _ = key; Err(VerbError::new("license_enrolment_rejected", "license registration is unavailable")) }
         }
-        _ => Err(VerbError::new(
-            "license_enrolment_rejected",
-            "license registration is unavailable",
-        )),
+        _ => Err(VerbError::new("license_enrolment_rejected", "license registration is unavailable")),
     };
     wincmd_shared::zeroize_json(&mut key);
     result
@@ -1418,14 +1199,12 @@ fn handle_vault_apply_owner_fragment(
         let caller_sid = peer
             .map(AuthenticatedPipePeer::caller_sid)
             .filter(|sid| !sid.is_empty())
-            .ok_or_else(|| {
-                VerbError::new("vault_not_authorized", "vault owner session unavailable")
-            })?;
+            .ok_or_else(|| VerbError::new("vault_not_authorized", "vault owner session unavailable"))?;
         vault_mount.with_exclusive_operation(|| {
             stage.set("policy_state");
             require_vault_policy_read_available(vault_access, caller_privileged)?;
             stage.set("policy_merge");
-            let policy = merge_owner_fragment(
+        let policy = merge_owner_fragment(
                 vault_access,
                 fragment.clone(),
                 caller_sid,
@@ -1453,53 +1232,30 @@ fn handle_vault_apply_owner_fragment(
             stage.set("permission_preflight");
             vault_access
                 .preflight_apply(policy.clone())
-                .map_err(|error| {
-                    VerbError::new("vault_apply_failed", vault_error_message(error))
-                })?;
+                .map_err(|error| VerbError::new("vault_apply_failed", vault_error_message(error)))?;
             stage.set("permissions");
             handle_vault_apply(vault_access, policy)?;
             stage.set("readback");
-            serde_json::to_value(vault_access.caller_status(caller_sid, caller_privileged)).map_err(
-                |_| VerbError::new("vault_apply_failed", "Vault status could not be encoded"),
-            )
+            serde_json::to_value(vault_access.caller_status(caller_sid, caller_privileged))
+                .map_err(|_| VerbError::new("vault_apply_failed", "Vault status could not be encoded"))
         })
     })();
     if let Err(failure) = &result {
         let detail = failure.message.to_ascii_lowercase();
-        if matches!(
-            failure.kind,
-            "vault_owner_required"
-                | "vault_fleet_group_required"
-                | "vault_not_authorized"
-                | "forbidden"
-                | "vault_owner_transfer_requires_admin"
-        ) {
+        if matches!(failure.kind, "vault_owner_required" | "vault_fleet_group_required" | "vault_not_authorized" | "forbidden" | "vault_owner_transfer_requires_admin") {
             stage.set("authorization");
-        } else if failure.kind == "vault_policy_commit_unconfirmed" {
-            stage.set("policy_commit_unconfirmed");
-        } else if failure.kind == "vault_policy_rollback_unverified" {
-            stage.set("permission_rollback");
-        } else if detail.starts_with("vault principal resolution") {
-            stage.set("principal_lookup");
-        } else if detail == "vault policy could not be persisted" {
-            stage.set("persistence");
-        } else if detail.contains("changed elsewhere") {
-            stage.set("policy_version");
-        } else if detail.starts_with("vault container identity") {
-            stage.set("container_identity");
-        } else if detail == "vault access plan could not be applied" {
-            stage.set("permission_apply");
-        } else if detail == "vault access plan read-back failed" {
-            stage.set("permission_readback");
-        }
+        } else if failure.kind == "vault_policy_commit_unconfirmed" { stage.set("policy_commit_unconfirmed"); }
+        else if failure.kind == "vault_policy_rollback_unverified" { stage.set("permission_rollback"); }
+        else if detail.starts_with("vault principal resolution") { stage.set("principal_lookup"); }
+        else if detail == "vault policy could not be persisted" { stage.set("persistence"); }
+        else if detail.contains("changed elsewhere") { stage.set("policy_version"); }
+        else if detail.starts_with("vault container identity") { stage.set("container_identity"); }
+        else if detail == "vault access plan could not be applied" { stage.set("permission_apply"); }
+        else if detail == "vault access plan read-back failed" { stage.set("permission_readback"); }
     }
-    crate::diagnostics::record_vault_policy_save(
-        diagnostic_operation_id,
-        stage.get(),
-        result.is_ok(),
-        started,
-    );
+    crate::diagnostics::record_vault_policy_save(diagnostic_operation_id, stage.get(), result.is_ok(), started);
     result
+
 }
 
 fn validate_vault_changed_targets_unmounted(
@@ -1653,13 +1409,8 @@ fn vault_policy_state_unavailable() -> VerbError {
         "Saved Vault settings could not be verified. Your draft must be kept. Refresh to check again; if verification still fails, an administrator must review the existing policy permissions.")
 }
 
-fn require_vault_policy_read_available(
-    store: &VaultAccessStore,
-    privileged: bool,
-) -> Result<(), VerbError> {
-    store
-        .ensure_policy_read_available(privileged)
-        .map_err(|_| vault_policy_state_unavailable())
+fn require_vault_policy_read_available(store: &VaultAccessStore, privileged: bool) -> Result<(), VerbError> {
+    store.ensure_policy_read_available(privileged).map_err(|_| vault_policy_state_unavailable())
 }
 
 fn vault_policy_projection(
@@ -1690,9 +1441,9 @@ fn vault_policy_capabilities(
         return (false, false);
     }
     let can_edit = match group_access {
-        Ok(Some(true)) => owns_entry || caller_privileged,
-        Ok(None) => owns_entry,
-        _ => false,
+            Ok(Some(true)) => owns_entry || caller_privileged,
+            Ok(None) => owns_entry,
+            _ => false,
     };
     (can_edit, caller_privileged || can_edit)
 }
@@ -1843,13 +1594,13 @@ fn merge_owner_fragment_policy_with_scope(
                 .iter()
                 .find(|entry| entry.id == owned.entry.id)
         }) {
-            Some(existing) if existing.primary_owner_sid.as_deref() != Some(caller_sid) => {
+                Some(existing) if existing.primary_owner_sid.as_deref() != Some(caller_sid) => {
                 let group_administrator =
                     caller_privileged && group_scope.get(&existing.id) == Some(&true);
-                if !group_administrator && owned.entry != *existing {
-                    return Err(denied());
+                    if !group_administrator && owned.entry != *existing {
+                        return Err(denied());
+                    }
                 }
-            }
             Some(existing) => {
                 validate_primary_owner_transfer(existing, &owned.entry, caller_privileged)?
             }
@@ -1860,9 +1611,9 @@ fn merge_owner_fragment_policy_with_scope(
                 previous.is_none(),
             ) =>
             {
-                return Err(denied());
-            }
-            _ => {}
+                    return Err(denied());
+                }
+                _ => {}
         }
         if incoming.insert(owned.entry.id.clone(), owned).is_some() {
             return Err(VerbError::new(
@@ -1969,7 +1720,7 @@ fn validate_vault_owner_mutation(
             !vault_policy_capabilities(
                 old.primary_owner_sid.as_deref() == Some(caller_sid),
                 caller_privileged,
-                Ok(group_scope.get(&old.id).copied()),
+            Ok(group_scope.get(&old.id).copied()),
             )
             .0
         })
@@ -3490,10 +3241,7 @@ fn handle_personal_vault_list(
             VerbError::new("vault_mount_state_unknown", "cleanup status unavailable")
         })?
     {
-        return Err(VerbError::new(
-            "vault_untracked_mounts",
-            "untracked driver mounts remain",
-        ));
+        return Err(VerbError::new("vault_untracked_mounts", "untracked driver mounts remain"));
     }
     let mounts = vault_mount
         .personal_mounts_for_caller(
@@ -3513,7 +3261,7 @@ fn handle_personal_vault_list(
         vault_inventory_contract::parse_query(args).expect("validated inventory request"),
         &mounts,
     )
-    .map_err(|_| VerbError::new("vault_internal_error", "personal mount list unavailable"))
+        .map_err(|_| VerbError::new("vault_internal_error", "personal mount list unavailable"))
 }
 
 fn handle_personal_vault_dismount(
@@ -3560,12 +3308,7 @@ fn handle_personal_vault_dismount(
         peer.caller_sid(),
         token_is_privileged(peer.token()).unwrap_or(false),
     );
-    crate::diagnostics::record_vault_terminal(
-        diagnostic_operation_id,
-        "dismount",
-        &result,
-        started,
-    );
+    crate::diagnostics::record_vault_terminal(diagnostic_operation_id, "dismount", &result, started);
     serde_json::to_value(result)
         .map_err(|_| VerbError::new("vault_internal_error", "personal dismount unavailable"))
 }
@@ -3844,479 +3587,80 @@ fn vault_group_update_error(error: crate::vault_access::VaultError) -> VerbError
     VerbError::new(kind, vault_error_message(error))
 }
 
-// Enabled only after the complete recovery path and native consent are validated.
-// Signed Windows v2 recovery admission is not yet integrated; keep every recovery verb unavailable.
-const RECOVERY_V2_ADMISSION_READY: bool = false;
-const OPERATOR_PIN_READY: bool = RECOVERY_V2_ADMISSION_READY && cfg!(feature="fleet-recovery-lab");
-const RECOVERY_RESUME_READY: bool = RECOVERY_V2_ADMISSION_READY && cfg!(feature="fleet-recovery-lab");
-const RECOVERY_STAGE_READY: bool = RECOVERY_V2_ADMISSION_READY && cfg!(feature="fleet-recovery-lab");
-const RECOVERY_HANDOFF_READY: bool = RECOVERY_V2_ADMISSION_READY && cfg!(feature="fleet-recovery-lab");
-const RECOVERY_FINISH_READY: bool = RECOVERY_V2_ADMISSION_READY && cfg!(feature="fleet-recovery-lab");
-const RECOVERY_CONTACT_READY: bool = RECOVERY_V2_ADMISSION_READY && cfg!(feature="fleet-recovery-lab");
-const RECOVERY_EXECUTION_READY: bool = RECOVERY_V2_ADMISSION_READY && cfg!(feature="fleet-recovery-lab");
-const RECOVERY_STOP_READY: bool = RECOVERY_V2_ADMISSION_READY && cfg!(feature="fleet-recovery-lab");
-const RECOVERY_UPGRADE_READY: bool = RECOVERY_V2_ADMISSION_READY && cfg!(feature="fleet-recovery-lab");
-fn handle_recovery_stop(verb:&str,args:serde_json::Value,exact_pro:bool,peer:Option<&AuthenticatedPipePeer>)->Result<serde_json::Value,VerbError> {
-    if !RECOVERY_STOP_READY { return Err(VerbError::new("recovery_unavailable","Fleet recovery is unavailable")); }
-    if !exact_pro { return Err(VerbError::new("forbidden","authenticated Pro helper required")); }
-    let peer=peer.ok_or_else(||VerbError::new("forbidden","authenticated Pro helper required"))?;
-    let store=fleet_machine_policy_store()?;
-    let base=std::env::var_os("ProgramData").ok_or_else(||VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
-    let dir=std::path::PathBuf::from(base).join("WinCommander").join("fleet-machine");
-    let fs=crate::fleet_machine_policy::WindowsFleetPolicyFs;
-    match verb {
-        "svc.fleet.recovery.upgrade_challenge" => {
-            if !RECOVERY_UPGRADE_READY { return Err(VerbError::new("recovery_unavailable","Fleet recovery is unavailable")); }
-            #[derive(serde::Deserialize)] #[serde(deny_unknown_fields)] struct Request { device_id:String,recovery_id:String }
-            let request:Request=serde_json::from_value(args).map_err(|_|VerbError::new("bad_request","invalid upgrade request"))?;
-            let challenge=fleet_handoff_confirmation::issue_upgrade_challenge(store,&fs,&dir,peer,&request.device_id,&request.recovery_id)
-                .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
-            Ok(serde_json::json!({"challenge":challenge,"protocol_version":1}))
-        },
-        "svc.fleet.recovery.upgrade_confirm" => {
-            if !RECOVERY_UPGRADE_READY { return Err(VerbError::new("recovery_unavailable","Fleet recovery is unavailable")); }
-            #[derive(serde::Deserialize)] #[serde(deny_unknown_fields)] struct Request { device_id:String,recovery_id:String,challenge:String,protocol_version:u32 }
-            impl Drop for Request { fn drop(&mut self) { use zeroize::Zeroize;self.challenge.zeroize(); } }
-            let request:Request=serde_json::from_value(args).map_err(|_|VerbError::new("bad_request","invalid upgrade confirmation"))?;
-            fleet_handoff_confirmation::confirm_upgrade_challenge(store,&fs,&dir,peer,&request.device_id,&request.recovery_id,&request.challenge,request.protocol_version)
-                .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
-            Ok(serde_json::json!({"verified":true}))
-        },
-        "svc.fleet.recovery.legacy_work_start" => {
-            #[derive(serde::Deserialize)] #[serde(deny_unknown_fields)] struct Request { device_id:String,kind:String,work_id:String }
-            let request:Request=serde_json::from_value(args).map_err(|_|VerbError::new("bad_request","invalid work request"))?;
-            let token=fleet_handoff_confirmation::legacy_work_start_for_pro(store,&fs,&dir,peer,&request.device_id,&request.kind,&request.work_id)
-                .map_err(|_|VerbError::new("recovery_unavailable","Fleet work admission is unavailable"))?;
-            Ok(serde_json::json!({"token":token}))
-        },
-        "svc.fleet.recovery.legacy_work_complete" => {
-            #[derive(serde::Deserialize)] #[serde(deny_unknown_fields)] struct Request { device_id:String,kind:String,work_id:String,token:String }
-            impl Drop for Request { fn drop(&mut self) { use zeroize::Zeroize;self.token.zeroize(); } }
-            let request:Request=serde_json::from_value(args).map_err(|_|VerbError::new("bad_request","invalid work receipt"))?;
-            fleet_handoff_confirmation::legacy_work_complete_for_pro(store,&fs,&dir,peer,&request.device_id,&request.kind,&request.work_id,&request.token)
-                .map_err(|_|VerbError::new("recovery_unavailable","Fleet work completion is unavailable"))?;
-            Ok(serde_json::json!({"recorded":true}))
-        },
-        "svc.fleet.recovery.stop_poll" => {
-            #[derive(serde::Deserialize)] #[serde(deny_unknown_fields)] struct Request { device_id:String }
-            let request:Request=serde_json::from_value(args).map_err(|_|VerbError::new("bad_request","invalid stop request"))?;
-            fleet_handoff_confirmation::stop_poll_for_pro(store,&fs,&dir,peer,&request.device_id)
-                .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))
-        },
-        "svc.fleet.recovery.stop_complete" => {
-            #[derive(serde::Deserialize)] #[serde(deny_unknown_fields)] struct Request { device_id:String,recovery_id:String,token:String,state:String }
-            impl Drop for Request { fn drop(&mut self) { use zeroize::Zeroize;self.token.zeroize(); } }
-            let request:Request=serde_json::from_value(args).map_err(|_|VerbError::new("bad_request","invalid stop receipt"))?;
-            fleet_handoff_confirmation::stop_complete_for_pro(store,&fs,&dir,peer,&request.device_id,&request.recovery_id,&request.token,&request.state)
-                .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
-            Ok(serde_json::json!({"recorded":true}))
-        },
-        _=>Err(VerbError::new("bad_request","invalid stop request")),
-    }
-}
-const RECOVERY_UNKNOWN_READY: bool = false;
-fn handle_recovery_unknown(args:serde_json::Value,peer:Option<&AuthenticatedPipePeer>)->Result<serde_json::Value,VerbError> {
-    if !RECOVERY_UNKNOWN_READY { return Err(VerbError::new("recovery_unavailable","Fleet recovery is unavailable")); }
-    #[derive(serde::Deserialize)] #[serde(deny_unknown_fields)] struct Request { command_id:String }
-    let request:Request=serde_json::from_value(args).map_err(|_|VerbError::new("bad_request","invalid command request"))?;
-    let peer=peer.filter(|peer|fleet_handoff_confirmation::session_matches(peer))
-        .ok_or_else(||VerbError::new("forbidden","active local administrator required"))?;
-    let store=fleet_machine_policy_store()?;
-    let base=std::env::var_os("ProgramData").ok_or_else(||VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
-    let dir=std::path::PathBuf::from(base).join("WinCommander").join("fleet-machine");
-    let fs=crate::fleet_machine_policy::WindowsFleetPolicyFs; let protector=crate::fleet_credential::MachineDpapi;
-    let candidate=crate::fleet_recovery_candidate::CandidateStore::open(&fs,dir.clone(),&protector)
-        .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
-    tokio::task::block_in_place(||fleet_handoff_confirmation::review_unknown_for_admin(store,&fs,&dir,&protector,&candidate,peer,&request.command_id))
-        .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
-    Ok(serde_json::json!({"state":"execution_unknown"}))
-}
-fn handle_recovery_execution(verb:&str,args:serde_json::Value,exact_pro:bool,peer:Option<&AuthenticatedPipePeer>) -> Result<serde_json::Value,VerbError> {
-    if !RECOVERY_EXECUTION_READY { return Err(VerbError::new("recovery_unavailable","Fleet recovery is unavailable")); }
-    if !exact_pro { return Err(VerbError::new("forbidden","authenticated Pro helper required")); }
-    let peer=peer.ok_or_else(||VerbError::new("forbidden","authenticated Pro helper required"))?;
-    let store=fleet_machine_policy_store()?;
-    let base=std::env::var_os("ProgramData").ok_or_else(||VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
-    let dir=std::path::PathBuf::from(base).join("WinCommander").join("fleet-machine");
-    let fs=crate::fleet_machine_policy::WindowsFleetPolicyFs;
-    let protector=crate::fleet_credential::MachineDpapi;
-    let candidate=crate::fleet_recovery_candidate::CandidateStore::open(&fs,dir.clone(),&protector)
-        .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
-    match verb {
-        "svc.fleet.recovery.execution_status" => {
-            if args!=serde_json::json!({}) { return Err(VerbError::new("bad_request","invalid recovery request")); }
-            let (device_id,mode)=store.recovery_execution_mode().map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
-            Ok(serde_json::json!({"device_id":device_id,"mode":mode}))
-        },
-        "svc.fleet.recovery.execute_list" => {
-            if args!=serde_json::json!({}) { return Err(VerbError::new("bad_request","invalid command request")); }
-            fleet_handoff_confirmation::ready_for_pro(store,&fs,&dir,&protector,&candidate,peer)
-                .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))
-        },
-        "svc.fleet.recovery.execute_grant" => {
-            #[derive(serde::Deserialize)] #[serde(deny_unknown_fields)] struct Request { command_id:String }
-            let request:Request=serde_json::from_value(args).map_err(|_|VerbError::new("bad_request","invalid command request"))?;
-            fleet_handoff_confirmation::grant_for_pro(store,&fs,&dir,&protector,&candidate,peer,&request.command_id)
-                .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))
-        },
-        "svc.fleet.recovery.execute_start" => {
-            #[derive(serde::Deserialize)] #[serde(deny_unknown_fields)] struct Request { command_id:String,grant:String }
-            impl Drop for Request { fn drop(&mut self) { use zeroize::Zeroize; self.grant.zeroize(); } }
-            let request:Request=serde_json::from_value(args).map_err(|_|VerbError::new("bad_request","invalid command request"))?;
-            fleet_handoff_confirmation::start_for_pro(store,&fs,&dir,&protector,&candidate,peer,&request.command_id,&request.grant)
-                .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
-            Ok(serde_json::json!({"started":true}))
-        },
-        "svc.fleet.recovery.execute_result" => {
-            #[derive(serde::Deserialize)] #[serde(deny_unknown_fields)]
-            struct Request { command_id:String,grant:String,outcome:fleet_proto::ActionOutcome,ack:fleet_proto::CheckinAck }
-            impl Drop for Request { fn drop(&mut self) { use zeroize::Zeroize; self.grant.zeroize(); } }
-            let request:Request=serde_json::from_value(args).map_err(|_|VerbError::new("bad_request","invalid command result"))?;
-            fleet_handoff_confirmation::result_from_pro(store,&fs,&dir,&protector,&candidate,peer,&request.command_id,&request.grant,request.outcome.clone(),request.ack.clone())
-                .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
-            Ok(serde_json::json!({"recorded":true}))
-        },
-        _=>Err(VerbError::new("bad_request","invalid recovery request")),
-    }
-}
-async fn handle_recovered_leave_status()->Result<serde_json::Value,VerbError> {
-    let unavailable=||VerbError::new("recovery_unavailable","Fleet leave status is unavailable");
-    let store=fleet_machine_policy_store()?;
-    let base=std::env::var_os("ProgramData").ok_or_else(unavailable)?;
-    let dir=std::path::PathBuf::from(base).join("WinCommander").join("fleet-machine");
-    let fs=crate::fleet_machine_policy::WindowsFleetPolicyFs;let protector=crate::fleet_credential::MachineDpapi;
-    let candidate=crate::fleet_recovery_candidate::CandidateStore::open(&fs,dir.clone(),&protector).map_err(|_|unavailable())?;
-    fleet_handoff_confirmation::recovered_leave_status(store,&fs,&dir,&protector,&candidate).await.map_err(|_|unavailable())
-}
-async fn handle_recovery_contact(args:serde_json::Value, trusted_helper:bool)->Result<serde_json::Value,VerbError> {
-    if !RECOVERY_CONTACT_READY { return Err(VerbError::new("recovery_unavailable","Fleet recovery is unavailable")); }
-    if !trusted_helper { return Err(VerbError::new("forbidden","authenticated Fleet helper required")); }
-    #[derive(serde::Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct Request { #[serde(default)] decoy:bool, #[serde(default)] policy_only:bool }
-    let request:Request=serde_json::from_value(args).map_err(|_|VerbError::new("bad_request","invalid recovery request"))?;
-    static LIMIT:std::sync::OnceLock<tokio::sync::Semaphore>=std::sync::OnceLock::new();
-    let _permit=LIMIT.get_or_init(||tokio::sync::Semaphore::new(1)).try_acquire()
-        .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
-    let store=fleet_machine_policy_store()?;
-    let pending=fleet_handoff_confirmation::recovery_contact(store,request.decoy,request.policy_only).await
-        .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
-    Ok(if request.decoy || request.policy_only { serde_json::json!({"sent":true}) } else { serde_json::json!({"pending_approval":pending}) })
-}
-async fn handle_recovery_finish(args:serde_json::Value, peer:Option<&AuthenticatedPipePeer>) -> Result<serde_json::Value,VerbError> {
-    use base64::{engine::general_purpose::STANDARD,Engine};
-    let unavailable=||VerbError::new("recovery_unavailable","Fleet recovery is unavailable");
-    if !RECOVERY_FINISH_READY { return Err(unavailable()); }
-    #[derive(serde::Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct Request { retirement_receipt:serde_json::Value, handoff:crate::fleet_identity_handoff::Handoff }
-    let request:Request=serde_json::from_value(args).map_err(|_|unavailable())?;
-    let peer=peer.filter(|peer|fleet_handoff_confirmation::session_matches(peer))
-        .ok_or_else(||VerbError::new("forbidden","active local administrator required"))?;
-    let receipt=serde_json::to_vec(&request.retirement_receipt).map_err(|_|unavailable())?;
-    if receipt.len()>8192 { return Err(unavailable()); }
-    let retirement=request.retirement_receipt.get("retirement_id").and_then(serde_json::Value::as_str).ok_or_else(unavailable)?.to_owned();
-    let store=fleet_machine_policy_store()?;
-    let base=std::env::var_os("ProgramData").ok_or_else(unavailable)?;
-    let dir=std::path::PathBuf::from(base).join("WinCommander").join("fleet-machine");
-    let fs=crate::fleet_machine_policy::WindowsFleetPolicyFs;
-    let protector=crate::fleet_credential::MachineDpapi;
-    let candidate=crate::fleet_recovery_candidate::CandidateStore::open(&fs,dir.clone(),&protector).map_err(|_|unavailable())?;
-    let wall=||std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok().and_then(|v|i64::try_from(v.as_secs()).ok()).ok_or("clock unavailable");
-    let (trust,verified,key)=store.with_handoff_trust(|trust| {
-        let encoded=candidate.stage(trust,&receipt,wall()?)?;
-        let key:[u8;32]=STANDARD.decode(encoded).map_err(|_|"invalid candidate")?.try_into().map_err(|_|"invalid candidate")?;
-        let verified=request.handoff.verify(trust,&retirement,request.handoff.new_generation(),&key,wall()?)?;
-        Ok((trust.clone(),verified,key))
-    }).map_err(|_|unavailable())?;
-    let (approval,witness)=tokio::task::block_in_place(||fleet_handoff_confirmation::authorize_recovery(store,&request.handoff,&verified,&key,peer))
-        .map_err(|_|unavailable())?;
-    fleet_handoff_confirmation::request_cooperative_stop(store,&fs,&dir,&request.handoff,&verified,&key,&approval).map_err(|_|unavailable())?;
-    if RECOVERY_UPGRADE_READY {
-        if fleet_handoff_confirmation::upgrade_restart_required(store,&fs,&dir,&request.handoff,&verified,&key,&approval,&witness).map_err(|_|unavailable())? {
-            return Ok(serde_json::json!({"status":"restart_required"}));
-        }
-        tokio::task::block_in_place(||tokio::runtime::Handle::current().block_on(
-            fleet_handoff_confirmation::probe_upgrade_after_restart(store,&fs,&dir,&request.handoff,&verified,&key,&approval,&witness)))
-            .map_err(|_|unavailable())?;
-    }
-    fleet_handoff_confirmation::await_cooperative_stop(store,&fs,&dir,&verified,&approval,&witness).await.map_err(|error| {
-        if error=="stop outcome unknown" {
-            VerbError::new("recovery_stop_unknown","WinCommander could not confirm that the previous Fleet agent stopped. Reconnection has not completed; previous work may still be running.")
-        } else { unavailable() }
-    })?;
-    let archive=tokio::task::block_in_place(||tokio::runtime::Handle::current().block_on(
-        fleet_handoff_confirmation::archive_review_with_broker(store,&fs,&dir,&protector,&trust,&request.handoff,&verified,&key,approval,&witness)))
-        .map_err(|_|unavailable())?;
-    let status=crate::fleet_recovery_transport::prepare_and_resume(store,&candidate,&receipt,&request.handoff,&retirement,
-        verified.new_generation(),&archive,&protector,||witness.still_authorized()).await.map_err(|_|unavailable())?;
-    Ok(serde_json::json!({"status":status}))
-}
-async fn handle_recovery_handoff(args:serde_json::Value, peer:Option<&AuthenticatedPipePeer>) -> Result<serde_json::Value,VerbError> {
-    if !RECOVERY_HANDOFF_READY { return Err(VerbError::new("recovery_unavailable","Fleet recovery is unavailable")); }
-    #[derive(serde::Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct Request { retirement_receipt:serde_json::Value }
-    let request:Request=serde_json::from_value(args).map_err(|_|VerbError::new("bad_request","invalid recovery request"))?;
-    let receipt=serde_json::to_vec(&request.retirement_receipt).map_err(|_|VerbError::new("bad_request","invalid retirement receipt"))?;
-    if receipt.len()>8192 { return Err(VerbError::new("bad_request","invalid retirement receipt")); }
-    let witness=peer.and_then(fleet_handoff_confirmation::SessionWitness::capture)
-        .ok_or_else(||VerbError::new("forbidden","active local administrator required"))?;
-    let store=fleet_machine_policy_store()?;
-    let base=std::env::var_os("ProgramData").ok_or_else(||VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
-    let fs=crate::fleet_machine_policy::WindowsFleetPolicyFs;
-    let protector=crate::fleet_credential::MachineDpapi;
-    let candidate=crate::fleet_recovery_candidate::CandidateStore::open(&fs,
-        std::path::PathBuf::from(base).join("WinCommander").join("fleet-machine"),&protector)
-        .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
-    let handoff=crate::fleet_recovery_transport::request_handoff(store,&candidate,&receipt,||witness.still_authorized()).await
-        .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
-    serde_json::to_value(handoff).map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))
-}
-async fn handle_recovery_stage(args:serde_json::Value, peer:Option<&AuthenticatedPipePeer>) -> Result<serde_json::Value,VerbError> {
-    if !RECOVERY_STAGE_READY { return Err(VerbError::new("recovery_unavailable","Fleet recovery is unavailable")); }
-    #[derive(serde::Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct Request { retirement_receipt:serde_json::Value }
-    let request:Request=serde_json::from_value(args).map_err(|_|VerbError::new("bad_request","invalid recovery request"))?;
-    let witness=peer.and_then(fleet_handoff_confirmation::SessionWitness::capture)
-        .ok_or_else(||VerbError::new("forbidden","active local administrator required"))?;
-    let receipt=serde_json::to_vec(&request.retirement_receipt).map_err(|_|VerbError::new("bad_request","invalid retirement receipt"))?;
-    if receipt.len()>8192 { return Err(VerbError::new("bad_request","invalid retirement receipt")); }
-    let store=fleet_machine_policy_store()?;
-    let base=std::env::var_os("ProgramData").ok_or_else(||VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
-    let fs=crate::fleet_machine_policy::WindowsFleetPolicyFs;
-    let protector=crate::fleet_credential::MachineDpapi;
-    let candidate=crate::fleet_recovery_candidate::CandidateStore::open(&fs,
-        std::path::PathBuf::from(base).join("WinCommander").join("fleet-machine"),&protector)
-        .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
-    let (public_key,conflict)=crate::fleet_recovery_transport::submit_candidate(store,&candidate,&receipt,||witness.still_authorized()).await
-        .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
-    Ok(serde_json::json!({"candidate_public_key":public_key,"submission_conflict":conflict}))
-}
-async fn handle_recovery_resume(args:serde_json::Value, peer:Option<&AuthenticatedPipePeer>) -> Result<serde_json::Value,VerbError> {
-    if !RECOVERY_RESUME_READY { return Err(VerbError::new("recovery_unavailable","Fleet recovery is unavailable")); }
-    #[derive(serde::Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct Request {}
-    let _:Request=serde_json::from_value(args).map_err(|_|VerbError::new("bad_request","invalid recovery request"))?;
-    let witness=peer.and_then(fleet_handoff_confirmation::SessionWitness::capture)
-        .ok_or_else(||VerbError::new("forbidden","active local administrator required"))?;
-    let store=fleet_machine_policy_store()?;
-    let base=std::env::var_os("ProgramData").ok_or_else(||VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
-    let fs=crate::fleet_machine_policy::WindowsFleetPolicyFs;
-    let protector=crate::fleet_credential::MachineDpapi;
-    let candidate=crate::fleet_recovery_candidate::CandidateStore::open(&fs,
-        std::path::PathBuf::from(base).join("WinCommander").join("fleet-machine"),&protector)
-        .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
-    let status=crate::fleet_recovery_transport::resume_prepared(store,&candidate,||witness.still_authorized()).await
-        .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
-    Ok(serde_json::json!({"status":status}))
-}
-fn handle_operator_key_pin(args:serde_json::Value, peer:Option<&AuthenticatedPipePeer>) -> Result<serde_json::Value,VerbError> {
-    if !OPERATOR_PIN_READY { return Err(VerbError::new("recovery_unavailable","Fleet recovery is unavailable")); }
-    #[derive(serde::Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct Request { operator_key:String }
-    let request:Request=serde_json::from_value(args).map_err(|_| VerbError::new("bad_request","invalid operator key"))?;
-    let peer=peer.ok_or_else(||VerbError::new("forbidden","authenticated administrator required"))?;
-    let store=fleet_machine_policy_store()?;
-    let trust=store.trust_snapshot().map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?
-        .map(|value|value.0).ok_or_else(||VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
-    let approval=tokio::task::block_in_place(|| fleet_handoff_confirmation::confirm_operator(peer,&trust,&request.operator_key))
-        .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
-    store.commit_operator_key(request.operator_key,approval,peer)
-        .map_err(|_|VerbError::new("recovery_unavailable","Fleet recovery is unavailable"))?;
-    Ok(serde_json::json!({"pinned":true}))
-}
-
-fn fleet_machine_policy_store(
-) -> Result<&'static crate::fleet_machine_policy::FleetMachinePolicy, VerbError> {
-    crate::fleet_machine_policy::system_store()
-        .map_err(|kind| VerbError::new("fleet_policy_unavailable", kind))
+fn fleet_machine_policy_store()->Result<&'static crate::fleet_machine_policy::FleetMachinePolicy,VerbError> {
+    crate::fleet_machine_policy::system_store().map_err(|kind| VerbError::new("fleet_policy_unavailable", kind))
 }
 
 fn handle_fleet_machine_policy(verb: &str, args: serde_json::Value, peer: Option<&AuthenticatedPipePeer>) -> Result<serde_json::Value, VerbError> {
-    use crate::fleet_machine_policy::{FleetHybridTrust, FleetTrust, TransportProfile};
+    use crate::fleet_machine_policy::{FleetTrust, TransportProfile};
     let store=fleet_machine_policy_store()?;
     match verb {
         "svc.fleet.begin_enrollment" => {
             #[derive(serde::Deserialize)]
             #[serde(deny_unknown_fields)]
-            struct Request {
-                device_id: String,
-                signer_key: String,
-                #[serde(default)]
-                origins: Vec<String>,
-                #[serde(default)]
-                transport_profile: Option<TransportProfile>,
-            }
-            let request: Request = serde_json::from_value(args)
-                .map_err(|_| VerbError::new("bad_request", "invalid enrollment binding"))?;
-            let challenge = store
-                .begin_enrollment(
-                    request.device_id,
-                    request.signer_key,
-                    request.origins,
-                    request.transport_profile,
-                )
+            struct Request { device_id: String, signer_key: String, #[serde(default)] origins: Vec<String>, #[serde(default)] transport_profile: Option<TransportProfile> }
+            let request: Request = serde_json::from_value(args).map_err(|_| VerbError::new("bad_request", "invalid enrollment binding"))?;
+            let challenge = store.begin_enrollment(request.device_id, request.signer_key, request.origins, request.transport_profile)
                 .map_err(|kind| VerbError::new("fleet_policy_rejected", kind))?;
             Ok(serde_json::json!({"challenge": challenge}))
-        }
+        },
         "svc.fleet.get_trust" => {
-            if args != serde_json::json!({}) {
-                return Err(VerbError::new("bad_request", "unexpected arguments"));
-            }
-            let binding = store
-                .trust_with_origins()
-                .map_err(|kind| VerbError::new("fleet_policy_unavailable", kind))?;
+            if args != serde_json::json!({}) { return Err(VerbError::new("bad_request", "unexpected arguments")); }
+            let binding = store.trust_with_origins().map_err(|kind| VerbError::new("fleet_policy_unavailable", kind))?;
             match binding {
-                Some((trust, audit, origins, transport_profile, service_enabled)) => Ok(
-                    serde_json::json!({"trust": trust, "audit": audit, "origins": origins, "transport_profile": transport_profile, "service_enabled": service_enabled}),
-                ),
-                None => Ok(
-                    serde_json::json!({"trust": null, "audit": [], "origins": [], "transport_profile": null, "service_enabled": false}),
-                ),
+                Some((trust, audit, origins, transport_profile, service_enabled)) => Ok(serde_json::json!({"trust": trust, "audit": audit, "origins": origins, "transport_profile": transport_profile, "service_enabled": service_enabled})),
+                None => Ok(serde_json::json!({"trust": null, "audit": [], "origins": [], "transport_profile": null, "service_enabled": false})),
             }
-        }
-        "svc.fleet.get_hybrid_trust" => {
-            if args != serde_json::json!({}) { return Err(VerbError::new("bad_request", "unexpected arguments")); }
-            let snapshot = store.hybrid_trust_snapshot().map_err(|kind| VerbError::new("fleet_policy_unavailable", kind))?;
-            match snapshot {
-                Some((binding, hybrid)) => Ok(serde_json::json!({"trust": binding, "hybrid_trust": hybrid})),
-                None => Ok(serde_json::json!({"trust": null, "hybrid_trust": null})),
-            }
-        },
-        "svc.fleet.read_hybrid_trust" => {
-            if args != serde_json::json!({}) { return Err(VerbError::new("bad_request", "unexpected arguments")); }
-            let peer = peer.ok_or_else(|| VerbError::new("forbidden", "authenticated caller required"))?;
-            let snapshot = store.hybrid_trust_for_helper(peer.caller_sid(), peer.session_id())
-                .map_err(|kind| VerbError::new("fleet_policy_unavailable", kind))?;
-            match snapshot {
-                Some((binding, hybrid, authorization)) => Ok(serde_json::json!({"trust": binding, "hybrid_trust": hybrid, "authorization": authorization})),
-                None => Ok(serde_json::json!({"trust": null, "hybrid_trust": null, "authorization": null})),
-            }
-        },
-        "svc.fleet.begin_hybrid_enrollment" => {
-            #[derive(serde::Deserialize)]
-            #[serde(deny_unknown_fields)]
-            struct Request { trust: FleetTrust, origin: String }
-            let request: Request = serde_json::from_value(args).map_err(|_| VerbError::new("bad_request", "invalid enrollment authorization"))?;
-            let peer = peer.ok_or_else(|| VerbError::new("forbidden", "authenticated caller required"))?;
-            let offer = store.begin_hybrid_enrollment(&request.trust, &request.origin, peer.caller_sid(), peer.session_id())
-                .map_err(|kind| VerbError::new("fleet_policy_rejected", kind))?;
-            serde_json::to_value(offer).map_err(|_| VerbError::new("fleet_policy_unavailable", "authorization encoding failed"))
-        },
-        "svc.fleet.cancel_hybrid_enrollment" => {
-            #[derive(serde::Deserialize)]
-            #[serde(deny_unknown_fields)]
-            struct Request { authorization_id: String }
-            let request: Request = serde_json::from_value(args).map_err(|_| VerbError::new("bad_request", "invalid enrollment authorization"))?;
-            let peer = peer.ok_or_else(|| VerbError::new("forbidden", "authenticated caller required"))?;
-            let cancelled = store.cancel_hybrid_enrollment(&request.authorization_id, peer.caller_sid(), peer.session_id())
-                .map_err(|kind| VerbError::new("fleet_policy_unavailable", kind))?;
-            Ok(serde_json::json!({"cancelled": cancelled}))
-        },
-        "svc.fleet.provision_hybrid_trust" => {
-            #[derive(serde::Deserialize)]
-            #[serde(deny_unknown_fields)]
-            struct Request { trust: FleetTrust, hybrid_trust: FleetHybridTrust }
-            let request: Request = serde_json::from_value(args).map_err(|_| VerbError::new("bad_request", "invalid hybrid trust"))?;
-            let actor = peer.ok_or_else(|| VerbError::new("forbidden", "authenticated caller required"))?.caller_sid();
-            store.provision_hybrid_trust(request.trust, request.hybrid_trust, actor).map_err(|kind| VerbError::new("fleet_policy_rejected", kind))?;
-            Ok(serde_json::json!({"provisioned": true}))
         },
         "svc.fleet.provision_trust" => {
             #[derive(serde::Deserialize)]
             #[serde(deny_unknown_fields)]
-            struct Request {
-                trust: FleetTrust,
-                signature: String,
-            }
-            let request: Request = serde_json::from_value(args)
-                .map_err(|_| VerbError::new("bad_request", "invalid trust binding"))?;
-            let actor = peer
-                .ok_or_else(|| VerbError::new("forbidden", "authenticated caller required"))?
-                .caller_sid();
-            store
-                .provision(request.trust, &request.signature, actor)
-                .map_err(|kind| VerbError::new("fleet_policy_rejected", kind))?;
+            struct Request { trust: FleetTrust, signature: String }
+            let request: Request = serde_json::from_value(args).map_err(|_| VerbError::new("bad_request", "invalid trust binding"))?;
+            let actor = peer.ok_or_else(|| VerbError::new("forbidden", "authenticated caller required"))?.caller_sid();
+            store.provision(request.trust, &request.signature, actor).map_err(|kind| VerbError::new("fleet_policy_rejected", kind))?;
             Ok(serde_json::json!({"provisioned": true}))
-        }
+        },
         "svc.fleet.replace_trust" => {
             #[derive(serde::Deserialize)]
             #[serde(deny_unknown_fields)]
-            struct Request {
-                previous: FleetTrust,
-                replacement: FleetTrust,
-                signature: String,
-            }
-            let request: Request = serde_json::from_value(args)
-                .map_err(|_| VerbError::new("bad_request", "invalid trust replacement"))?;
-            let actor = peer
-                .ok_or_else(|| VerbError::new("forbidden", "authenticated caller required"))?
-                .caller_sid();
-            store
-                .replace_trust(
-                    request.previous,
-                    request.replacement,
-                    &request.signature,
-                    actor,
-                )
-                .map_err(|kind| VerbError::new("fleet_policy_rejected", kind))?;
+            struct Request { previous: FleetTrust, replacement: FleetTrust, signature: String }
+            let request: Request = serde_json::from_value(args).map_err(|_| VerbError::new("bad_request", "invalid trust replacement"))?;
+            let actor = peer.ok_or_else(|| VerbError::new("forbidden", "authenticated caller required"))?.caller_sid();
+            store.replace_trust(request.previous, request.replacement, &request.signature, actor).map_err(|kind| VerbError::new("fleet_policy_rejected", kind))?;
             Ok(serde_json::json!({"replaced": true}))
-        }
+        },
         "svc.fleet.bind_origins" => {
             #[derive(serde::Deserialize)]
             #[serde(deny_unknown_fields)]
-            struct Request {
-                trust: FleetTrust,
-                signature: String,
-            }
-            let request: Request = serde_json::from_value(args)
-                .map_err(|_| VerbError::new("bad_request", "invalid trust binding"))?;
-            let actor = peer
-                .ok_or_else(|| VerbError::new("forbidden", "authenticated caller required"))?
-                .caller_sid();
-            store
-                .bind_origins(request.trust, &request.signature, actor)
-                .map_err(|kind| VerbError::new("fleet_policy_rejected", kind))?;
+            struct Request { trust: FleetTrust, signature: String }
+            let request: Request = serde_json::from_value(args).map_err(|_| VerbError::new("bad_request", "invalid trust binding"))?;
+            let actor = peer.ok_or_else(|| VerbError::new("forbidden", "authenticated caller required"))?.caller_sid();
+            store.bind_origins(request.trust, &request.signature, actor).map_err(|kind| VerbError::new("fleet_policy_rejected", kind))?;
             Ok(serde_json::json!({"bound": true}))
-        }
+        },
         "svc.fleet.install_policy" => {
             #[derive(serde::Deserialize)]
             #[serde(deny_unknown_fields)]
-            struct Request {
-                policy: fleet_proto::PolicyEnvelope,
-            }
-            let request: Request = serde_json::from_value(args)
-                .map_err(|_| VerbError::new("bad_request", "invalid signed policy"))?;
-            store
-                .install(request.policy)
-                .map_err(|kind| VerbError::new("fleet_policy_rejected", kind))?;
+            struct Request { policy: fleet_proto::PolicyEnvelope }
+            let request: Request = serde_json::from_value(args).map_err(|_| VerbError::new("bad_request", "invalid signed policy"))?;
+            store.install(request.policy).map_err(|kind| VerbError::new("fleet_policy_rejected", kind))?;
             Ok(serde_json::json!({"installed": true}))
-        }
+        },
         "svc.fleet.get_policy" => {
-            if args != serde_json::json!({}) {
-                return Err(VerbError::new("bad_request", "unexpected arguments"));
-            }
+            if args != serde_json::json!({}) { return Err(VerbError::new("bad_request", "unexpected arguments")); }
             #[cfg(debug_assertions)]
             let trace_started = {
                 let started = std::time::Instant::now();
                 crate::diagnostics::record_shield_policy_stage("store_start", started);
                 started
             };
-            let (trust_bound, policy) = store
-                .trust_and_policy()
-                .map_err(|kind| VerbError::new("fleet_policy_unavailable", kind))?;
+            let (trust_bound, policy) = store.trust_and_policy().map_err(|kind| VerbError::new("fleet_policy_unavailable", kind))?;
             #[cfg(debug_assertions)]
             crate::diagnostics::record_shield_policy_stage("store_end", trace_started);
             Ok(serde_json::json!({"trust_bound": trust_bound, "policy": policy}))
-        }
-        _ => Err(VerbError::new(
-            "bad_request",
-            "unknown Fleet policy operation",
-        )),
+        },
+        _ => Err(VerbError::new("bad_request", "unknown Fleet policy operation")),
     }
 }
 
@@ -4552,7 +3896,7 @@ impl ClipboardEventQueue {
         guard.push_back(event);
     }
 
-    /// Current queue depth — backs the `queued_events` health field.
+    /// FixtureUser queue depth — backs the `queued_events` health field.
     pub fn len(&self) -> usize {
         self.lock().len()
     }
@@ -4986,51 +4330,6 @@ mod test_support {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn recovery_verbs_remain_disabled_until_signed_v2_admission_is_ready() {
-        let enabled = false;
-        assert_eq!(super::OPERATOR_PIN_READY,enabled);assert_eq!(super::RECOVERY_RESUME_READY,enabled);
-        assert_eq!(super::RECOVERY_STAGE_READY,enabled);assert_eq!(super::RECOVERY_HANDOFF_READY,enabled);
-        assert_eq!(super::RECOVERY_FINISH_READY,enabled);assert_eq!(super::RECOVERY_CONTACT_READY,enabled);
-        assert_eq!(super::RECOVERY_EXECUTION_READY,enabled);assert_eq!(super::RECOVERY_STOP_READY,enabled);
-        assert_eq!(super::RECOVERY_UPGRADE_READY,enabled);
-        assert!(!super::RECOVERY_UNKNOWN_READY);
-    }
-    #[cfg(not(feature="fleet-recovery-lab"))]
-    #[test]
-    fn operator_pin_ipc_stays_unavailable_until_recovery_is_ready() {
-        assert!(!super::OPERATOR_PIN_READY);
-        assert!(super::handle_operator_key_pin(serde_json::json!({"operator_key":"invalid"}),None).is_err());
-    }
-    #[tokio::test]
-    async fn recovery_resume_ipc_stays_unavailable_until_recovery_is_ready() {
-        assert!(!super::RECOVERY_RESUME_READY);
-        assert!(super::handle_recovery_resume(serde_json::json!({}), None).await.is_err());
-    }
-    #[tokio::test]
-    async fn recovery_stage_ipc_stays_unavailable_until_recovery_is_ready() {
-        assert!(!super::RECOVERY_STAGE_READY);
-        assert!(super::handle_recovery_stage(serde_json::json!({}), None).await.is_err());
-    }
-    #[cfg(not(feature="fleet-recovery-lab"))]
-    #[tokio::test]
-    async fn recovery_handoff_ipc_stays_unavailable_until_recovery_is_ready() {
-        assert!(!super::RECOVERY_HANDOFF_READY);
-        assert!(super::handle_recovery_handoff(serde_json::json!({}), None).await.is_err());
-    }
-    #[cfg(not(feature="fleet-recovery-lab"))]
-    #[tokio::test]
-    async fn recovery_finish_ipc_stays_unavailable_until_recovery_is_ready() {
-        assert!(!super::RECOVERY_FINISH_READY);
-        assert!(super::handle_recovery_finish(serde_json::json!({}), None).await.is_err());
-    }
-    #[cfg(not(feature="fleet-recovery-lab"))]
-    #[tokio::test]
-    async fn recovery_contact_ipc_stays_unavailable_until_recovery_is_ready() {
-        assert!(!super::RECOVERY_CONTACT_READY);
-        assert!(super::handle_recovery_contact(serde_json::json!({}),false).await.is_err());
-    }
-
     use super::test_support::*;
     use super::*;
     use wincmd_shared::svc::SVC_PROTOCOL_VERSION;
@@ -5039,12 +4338,9 @@ mod tests {
     fn policy_save_ambiguous_write_and_unverified_restore_have_distinct_bounded_stages() {
         let commit = vault_policy_apply_error(crate::vault_access::VaultError::CommitUnconfirmed);
         assert_eq!(commit.kind, "vault_policy_commit_unconfirmed");
-        assert!(commit
-            .message
-            .contains("write outcome could not be confirmed"));
+        assert!(commit.message.contains("write outcome could not be confirmed"));
         assert!(!commit.message.contains("unchanged"));
-        let rollback =
-            vault_policy_apply_error(crate::vault_access::VaultError::RollbackUnverified);
+        let rollback = vault_policy_apply_error(crate::vault_access::VaultError::RollbackUnverified);
         assert_eq!(rollback.kind, "vault_policy_rollback_unverified");
         assert!(rollback.message.contains("access remains blocked"));
         assert!(!rollback.message.contains("unchanged"));
@@ -5055,10 +4351,7 @@ mod tests {
         let message = vault_error_message(crate::vault_access::VaultError::PrincipalResolution(
             "sensitive-account-name".to_owned(),
         ));
-        assert_eq!(
-            message,
-            "vault principal resolution failed — refresh Windows users and groups before saving"
-        );
+        assert_eq!(message, "vault principal resolution failed — refresh Windows users and groups before saving");
         assert!(!message.contains("sensitive-account-name"));
     }
 
@@ -5269,7 +4562,7 @@ mod tests {
                         canonical_container_path: None,
                         container_path_state:
                             wincmd_shared::vault_access::VaultContainerPathState::Available,
-                    });
+                });
                 if transfer && caller == "S-1-5-21-owner" {
                     continue;
                 }
@@ -5353,7 +4646,7 @@ mod tests {
                 canonical_container_path: None,
                 container_path_state:
                     wincmd_shared::vault_access::VaultContainerPathState::Available,
-            });
+        });
         let merged = merge_owner_fragment_policy_with_scope(
             Some(previous.clone()),
             fragment,
@@ -5735,7 +5028,7 @@ mod tests {
                     wincmd_shared::vault_access::VaultContainerPathState::Available,
                 can_edit_policy: true,
                 can_remove_policy: true,
-            });
+        });
         let merged = merge_owner_fragment_policy(
             Some(policy),
             fragment,
@@ -5838,7 +5131,7 @@ mod tests {
     fn known_principal_response_preserves_trusted_caller_label_and_admin_flag() {
         let response = build_known_principals_response(
             "S-1-5-21-caller",
-            "WORKSTATION\\Example".into(),
+            "WORKSTATION\\AuditUser".into(),
             vec![wincmd_shared::vault_access::VaultKnownPrincipal {
                 sid: "S-1-5-21-directory-user".into(),
                 display_name: "Fleet User".into(),
@@ -5846,7 +5139,7 @@ mod tests {
             }],
             vec![wincmd_shared::vault_access::VaultKnownPrincipal {
                 sid: "S-1-5-21-caller".into(),
-                display_name: "WORKSTATION\\Example".into(),
+                display_name: "WORKSTATION\\AuditUser".into(),
                 is_local_administrator: true,
             }],
         );
@@ -5855,7 +5148,7 @@ mod tests {
         assert_eq!(response.principals.len(), 2);
         assert!(response.principals.iter().any(|principal| {
             principal.sid == "S-1-5-21-caller"
-                && principal.display_name == "WORKSTATION\\Example"
+                && principal.display_name == "WORKSTATION\\AuditUser"
                 && principal.is_local_administrator
         }));
     }
@@ -6120,13 +5413,13 @@ mod tests {
     fn personal_file_create_target_keeps_the_existing_absolute_path_contract() {
         let args = serde_json::json!({
             "TargetKind": "file",
-            "Path": r"C:\Users\Example\vault.hc",
+            "Path": r"C:\Users\AuditUser\vault.hc",
         });
         let target = parse_personal_vault_create_target(&args).expect("file target is valid");
         assert!(matches!(
             target,
             PersonalVaultCreateTarget::File { ref path }
-                if path == r"C:\Users\Example\vault.hc"
+                if path == r"C:\Users\AuditUser\vault.hc"
         ));
     }
 
@@ -6258,11 +5551,11 @@ mod tests {
 
     #[tokio::test]
     async fn fleet_trust_mutations_require_admin_and_policy_requires_pinned_peer() {
-        for verb in ["svc.fleet.begin_enrollment", "svc.fleet.provision_trust", "svc.fleet.replace_trust", "svc.fleet.bind_origins", "svc.fleet.get_trust", "svc.fleet.provision_hybrid_trust", "svc.fleet.get_hybrid_trust", "svc.fleet.begin_hybrid_enrollment", "svc.fleet.cancel_hybrid_enrollment"] {
+        for verb in ["svc.fleet.begin_enrollment", "svc.fleet.provision_trust", "svc.fleet.replace_trust", "svc.fleet.bind_origins", "svc.fleet.get_trust"] {
             assert!(authorize(verb, false, 1234, &passing_gate()).await.is_err());
             assert_eq!(authorize(verb, true, 1234, &passing_gate()).await, Ok(None));
         }
-        for verb in ["svc.fleet.install_policy", "svc.fleet.get_policy", "svc.fleet.read_hybrid_trust"] {
+        for verb in ["svc.fleet.install_policy", "svc.fleet.get_policy"] {
             assert!(authorize(verb, true, 1234, &gate_denying_with(PeerAuthError::PathNotAllowed)).await.is_err());
             assert_eq!(authorize(verb, false, 1234, &passing_gate()).await, Ok(Some(TrustOrigin::SessionHelperPinned)));
         }
@@ -6304,99 +5597,34 @@ mod tests {
 
     #[tokio::test]
     async fn hybrid_enrolment_requires_pinned_peer_and_only_a_bounded_key() {
-        let denied =
-            handle_hybrid_license_enrolment(serde_json::json!({"licenseKey":"test"}), None)
-                .await
-                .unwrap_err();
+        let denied = handle_hybrid_license_enrolment(serde_json::json!({"licenseKey":"test"}), None).await.unwrap_err();
         assert_eq!(denied.kind, "forbidden");
-        for args in [
-            serde_json::json!({}),
-            serde_json::json!({"licenseKey":" "}),
+        for args in [serde_json::json!({}), serde_json::json!({"licenseKey":" "}),
             serde_json::json!({"licenseKey":"x", "issuer":"attacker"}),
-            serde_json::json!({"licenseKey":"x".repeat(513)}),
-        ] {
-            let err = handle_hybrid_license_enrolment(args, Some(TrustOrigin::SessionHelperPinned))
-                .await
-                .unwrap_err();
+            serde_json::json!({"licenseKey":"x".repeat(513)})] {
+            let err = handle_hybrid_license_enrolment(args, Some(TrustOrigin::SessionHelperPinned)).await.unwrap_err();
             assert_eq!(err.kind, "license_enrolment_rejected");
         }
         let gate = gate_denying_with(PeerAuthError::PathNotAllowed);
-        assert!(authorize(ENROL_HYBRID_LICENSE_VERB, true, 1234, &gate)
-            .await
-            .is_err());
+        assert!(authorize(ENROL_HYBRID_LICENSE_VERB, true, 1234, &gate).await.is_err());
     }
 
     #[tokio::test]
     async fn hybrid_renewal_requires_pinned_peer_and_no_caller_parameters() {
-        let no_peer = handle_hybrid_license_renewal(serde_json::json!({}), None)
-            .await
-            .unwrap_err();
+        let no_peer = handle_hybrid_license_renewal(serde_json::json!({}), None).await.unwrap_err();
         assert_eq!(no_peer.kind, "forbidden");
-        let injected = handle_hybrid_license_renewal(
-            serde_json::json!({"issuer": "attacker"}),
-            Some(TrustOrigin::SessionHelperPinned),
-        )
-        .await
-        .unwrap_err();
+        let injected = handle_hybrid_license_renewal(serde_json::json!({"issuer": "attacker"}),
+            Some(TrustOrigin::SessionHelperPinned)).await.unwrap_err();
         assert_eq!(injected.kind, "license_renewal_rejected");
         let gate = gate_denying_with(PeerAuthError::PathNotAllowed);
-        assert!(authorize(RENEW_HYBRID_LICENSE_VERB, true, 1234, &gate)
-            .await
-            .is_err());
-    }
-
-    #[tokio::test]
-    async fn hybrid_activation_requires_exact_pinned_peer_and_key() {
-        let pinned = Some(TrustOrigin::SessionHelperPinned);
-        for (args, peer, kind) in [
-            (serde_json::json!({"licenseKey":"key"}), None, "forbidden"),
-            (serde_json::json!({}), pinned, "license_activation_rejected"),
-            (serde_json::json!({"licenseKey":"key", "deviceHash":"other"}), pinned, "license_activation_rejected"),
-            (serde_json::json!({"licenseKey":" key "}), pinned, "license_activation_rejected"),
-        ] {
-            let result = handle_hybrid_license_activation_with(args, peer,
-                |_| async { panic!("invalid activation reached service") }).await.unwrap_err();
-            assert_eq!(result.kind, kind);
-        }
-        let result = handle_hybrid_license_activation_with(serde_json::json!({"licenseKey":"key"}), pinned,
-            |key| async move { assert_eq!(&*key, "key"); Ok(()) }).await.unwrap();
-        assert_eq!(result, serde_json::json!({"activated": true}));
-        let error = handle_hybrid_license_activation_with(serde_json::json!({"licenseKey":"key"}), pinned,
-            |_| async { Err("sensitive detail") }).await.unwrap_err();
-        assert!(!error.message.contains("sensitive"));
-    }
-
-    #[tokio::test]
-    async fn hybrid_release_requires_elevated_pinned_peer_and_no_parameters() {
-        let pinned = Some(TrustOrigin::SessionHelperPinned);
-        for (args, peer, admin, kind) in [
-            (serde_json::json!({}), None, true, "forbidden"),
-            (serde_json::json!({}), pinned, false, "forbidden"),
-            (serde_json::json!({"deviceHash":"other"}), pinned, true, "license_release_rejected"),
-            (serde_json::json!(null), pinned, true, "license_release_rejected"),
-        ] {
-            let result = handle_hybrid_license_release_with(args, peer, admin,
-                || async { panic!("unauthorized release reached service") }).await.unwrap_err();
-            assert_eq!(result.kind, kind);
-        }
-        let ok = handle_hybrid_license_release_with(serde_json::json!({}), pinned, true,
-            || async { Ok(()) }).await.unwrap();
-        assert_eq!(ok, serde_json::json!({"released":true}));
-        let error = handle_hybrid_license_release_with(serde_json::json!({}), pinned, true,
-            || async { Err("private credential detail") }).await.unwrap_err();
-        assert_eq!(error.kind, "license_release_rejected");
-        assert!(!error.message.contains("private credential"));
-        assert!(authorize(RELEASE_HYBRID_LICENSE_VERB, false, 1234, &passing_gate()).await.is_err());
+        assert!(authorize(RENEW_HYBRID_LICENSE_VERB, true, 1234, &gate).await.is_err());
     }
 
     #[cfg(feature = "experimental-pq-licence")]
     #[test]
     fn hybrid_renewal_exposes_only_the_safe_retry_message() {
         let limited = hybrid_renewal_error(crate::licence_device_credential::RETRY_LATER);
-        assert_eq!(
-            limited.message,
-            crate::licence_device_credential::RETRY_LATER
-        );
+        assert_eq!(limited.message, crate::licence_device_credential::RETRY_LATER);
         let private = hybrid_renewal_error("sensitive server detail");
         assert_eq!(private.message, "license renewal is unavailable");
     }
@@ -6570,7 +5798,7 @@ mod tests {
     #[test]
     fn get_policy_response_shape_matches_client_contract_when_nothing_installed() {
         let store = test_policy_store();
-        let value = store.bound_clipboard_response(false, None).unwrap();
+        let value = store.bound_clipboard_response(false,None).unwrap();
         assert_eq!(value["policy_version"], serde_json::json!(0));
         assert_eq!(value["rules"], serde_json::json!([]));
         // The client's `ClipboardPolicyResponse` has no `installed` field
@@ -6587,10 +5815,7 @@ mod tests {
     fn get_policy_response_shape_matches_client_contract_when_installed() {
         let store = test_policy_store();
         handle_install_epoch(&store, pipe_wire_args(1, PIPE_SIG_V1_B64)).expect("v1 installs");
-        assert!(
-            store.bound_clipboard_response(false, None).is_err(),
-            "retained policy needs current machine authorization"
-        );
+        assert!(store.bound_clipboard_response(false,None).is_err(),"retained policy needs current machine authorization");
     }
 
     // ── report_event / set_enabled ───────────────────────────────────────
@@ -6881,8 +6106,7 @@ mod integration {
             wincmd_shared::svc::VERIFY_LICENSE_CACHE_VERB,
             false,
             false,
-        )
-        .await;
+        ).await;
         match reply {
             Envelope::Error(ErrorReply { kind, .. }) => assert_eq!(kind, "forbidden"),
             other => panic!("expected licence history permission denial, got {other:?}"),
@@ -6891,13 +6115,7 @@ mod integration {
 
     #[tokio::test]
     async fn bluetooth_change_from_a_normal_user_is_denied_at_the_pipe() {
-        let reply = run_one_request(
-            "bluetooth-denied",
-            "svc.bluetooth.policy.set_blocked",
-            false,
-            false,
-        )
-        .await;
+        let reply = run_one_request("bluetooth-denied", "svc.bluetooth.policy.set_blocked", false, false).await;
         match reply {
             Envelope::Error(ErrorReply { kind, .. }) => assert_eq!(kind, "forbidden"),
             other => panic!("expected Bluetooth permission denial, got {other:?}"),

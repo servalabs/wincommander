@@ -97,7 +97,7 @@ export default function PrivacyTogglesCard({
               : "Internet is live — click to cut all traffic"}
           >
             {internetCut ? <GlobeLock size={13} /> : <Globe size={13} />}
-            NET {internetCut ? "OFF" : "ON"}
+            INT {internetCut ? "OFF" : "ON"}
           </button>
         )}
         <BluetoothControl />

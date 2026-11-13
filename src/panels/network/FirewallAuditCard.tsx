@@ -43,47 +43,7 @@ export function FirewallAuditCard({ firewall }: { firewall: ReturnType<typeof us
               a decision.
             </CardDescription>
           </div>
-          <div className="flex min-w-0 flex-wrap items-center gap-2">
-            {audit && !firewall.auditing && rules.length > 0 && (
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={firewall.busy || selectedCount === 0}
-                      onClick={() => request("enable")}
-                    >
-                      <Icon
-                        icon={firewall.applying === "enable" ? "refresh" : "tick"}
-                        className={firewall.applying === "enable" ? "animate-spin" : undefined}
-                      />
-                      Enable ({selectedCount})
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={firewall.busy || selectedCount === 0}
-                      onClick={() => request("disable")}
-                    >
-                      <Icon
-                        icon={firewall.applying === "disable" ? "refresh" : "disable"}
-                        className={firewall.applying === "disable" ? "animate-spin" : undefined}
-                      />
-                      Disable ({selectedCount})
-                    </Button>
-                    <Button
-                      variant="danger"
-                      size="sm"
-                      disabled={firewall.busy || selectedCount === 0}
-                      onClick={() => request("remove")}
-                    >
-                      <Icon
-                        icon={firewall.applying === "remove" ? "refresh" : "trash"}
-                        className={firewall.applying === "remove" ? "animate-spin" : undefined}
-                      />
-                      Remove ({selectedCount})
-                    </Button>
-                  </div>
-            )}
+          <div className="flex shrink-0 items-center gap-2">
             {audit && !firewall.busy ? (
               <Button
                 variant="ghost"
@@ -171,6 +131,7 @@ export function FirewallAuditCard({ firewall }: { firewall: ReturnType<typeof us
               <div className="min-w-0 flex-1"><MaintenanceNotice tone={summary.intent} headline={summary.headline}>
                 {summary.detail}
               </MaintenanceNotice></div>
+              <Badge tone="neutral">{rules.length} rules to review</Badge>
               {selectedCount > 0 ? <Badge tone="accent">{selectedCount} selected</Badge> : null}
               {audit.cancelled ? <Badge tone="warning">partial</Badge> : null}
             </div>
@@ -185,7 +146,51 @@ export function FirewallAuditCard({ firewall }: { firewall: ReturnType<typeof us
                   onSetSelection={firewall.setSelection}
                 />
 
-
+                <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border)] pt-3">
+                  <p className="text-[11px] leading-relaxed text-[var(--text-mute)]">
+                    {selectedCount === 0
+                      ? "Select the rules you don't recognise. Disabling is reversible; removing is not."
+                      : "A full firewall backup is exported before any change."}
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={firewall.busy || selectedCount === 0}
+                      onClick={() => request("enable")}
+                    >
+                      <Icon
+                        icon={firewall.applying === "enable" ? "refresh" : "tick"}
+                        className={firewall.applying === "enable" ? "animate-spin" : undefined}
+                      />
+                      Enable ({selectedCount})
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={firewall.busy || selectedCount === 0}
+                      onClick={() => request("disable")}
+                    >
+                      <Icon
+                        icon={firewall.applying === "disable" ? "refresh" : "disable"}
+                        className={firewall.applying === "disable" ? "animate-spin" : undefined}
+                      />
+                      Disable ({selectedCount})
+                    </Button>
+                    <Button
+                      variant="danger"
+                      size="sm"
+                      disabled={firewall.busy || selectedCount === 0}
+                      onClick={() => request("remove")}
+                    >
+                      <Icon
+                        icon={firewall.applying === "remove" ? "refresh" : "trash"}
+                        className={firewall.applying === "remove" ? "animate-spin" : undefined}
+                      />
+                      Remove ({selectedCount})
+                    </Button>
+                  </div>
+                </div>
               </>
             ) : null}
           </>

@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { Button, Switch, Tag } from '@/components/ui/bp';
+import { Button, InputGroup, Switch, Tag } from '@/components/ui/bp';
 import SectionCard from '../../components/shared/SectionCard';
 import { useAppConfirm } from '../../components/shared/AppConfirmDialog';
 import { useAppState } from '../../context/AppContext';
 import { isPrivilegedWriteBlocked, MACHINE_SCOPE_ELEVATION_MESSAGE } from '../../lib/machineScopeElevation';
+import { isFleetReportControlLocked } from '../../lib/fleetReportingPolicyLock';
 import { applyWifiApproval, canTrustAssociation, isWifiGuardRecoveryBlocked, setWifiGuardRecoveryBlocked, wifiBaselineIdentity, wifiReasonLabel, wifiSecurityLabel, wifiStatusLabel, withWifiGuardOperation, type WifiGuardAssociation, type WifiGuardHit, type WifiGuardStatus } from '../../lib/wifiGuard';
 import type { AppSettings, WifiGuardBaselineEntry } from '../../types/settings';
 import { InfoPopover } from './InfoTip';
-import WifiIntervalInput from './WifiIntervalInput';
 
 export default function WifiGuardSection({ embedded = false }: { expanded?: boolean; onExpandedChange?: (next: boolean) => void; embedded?: boolean } = {}) {
   const { appSettings, patchAppSettings, refreshSettings, systemInfo } = useAppState();
@@ -19,11 +19,14 @@ export default function WifiGuardSection({ embedded = false }: { expanded?: bool
   const needsElevation = isPrivilegedWriteBlocked(true, systemInfo?.isAdmin);
   const enabled = settings?.enabled ?? false;
   const baseline = settings?.baseline ?? [];
+  const required = appSettings?.ideal?.security?.requireAllDeviceAlertsInFleet === true;
+  const reportingLocked = isFleetReportControlLocked({ lockedPaths: appSettings?.policy?.lockedPaths, reportPath: 'network.wifiGuard.reportToFleet', requireAllDeviceAlertsInFleet: required });
   const [status, setStatus] = useState<WifiGuardStatus | null>(null);
   const [recent, setRecent] = useState<WifiGuardHit[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [readError, setReadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [showKnown, setShowKnown] = useState(false);
   const refreshPending = useRef(false);
   const mounted = useRef(true);
 
@@ -111,18 +114,10 @@ export default function WifiGuardSection({ embedded = false }: { expanded?: bool
   });
 
   const clearKnown = async () => {
-    if (!await requestConfirm({ title: 'Forget Wi-Fi approvals?', description: 'Saved networks remain connected, but access points will need approval again.', confirmLabel: 'Forget approvals' })) return;
+    if (!await requestConfirm({ title: 'Forget Wi-Fi approvals?', description: 'Saved networks remain connected, but every access point will need approval again. This does not change Windows Wi-Fi profiles.', confirmLabel: 'Forget approvals' })) return;
     await mutate(async () => {
-      setWifiGuardRecoveryBlocked(true);
-      try {
-        await patchAppSettings({ ideal: { network: { wifiGuard: { baseline: [], learningUntil: null } } } });
-        await invoke('clear_wifi_guard_known');
-        await recoverSavedTrust();
-      } catch (failure) {
-        try { await recoverSavedTrust(); }
-        catch { try { await invoke('stop_wifi_guard'); } catch { /* Recovery stays blocked. */ } }
-        throw failure;
-      }
+      await patchAppSettings({ ideal: { network: { wifiGuard: { baseline: [], learningUntil: null } } } });
+      await invoke('clear_wifi_guard_known');
     });
   };
 
@@ -137,7 +132,7 @@ export default function WifiGuardSection({ embedded = false }: { expanded?: bool
         <p>Checks the Wi-Fi connection while WinCommander is running. SSID is the network name; BSSID identifies the access point. Alerts flag a change to review and do not prove that a hotspot is malicious.</p>
         {status?.observedAt && <p>Last checked: {new Date(status.observedAt).toLocaleString()}. Turning this PC’s MAC randomization on does not change the router’s BSSID.</p>}
       </InfoPopover>
-      <Button minimal small icon="refresh" aria-label="Refresh Wi-Fi Guard" title="Refresh Wi-Fi Guard" onClick={() => void refresh()} />
+      <Button minimal small icon="refresh" onClick={() => void refresh()}>Refresh</Button>
     </div>
     {enabled && !status?.running && <p role="status" style={{ margin: 0 }}>Guard requested; waiting for its observer to start.</p>}
     {!enabled && status?.running && <p role="alert" style={{ margin: 0 }}>Stop requested; Windows has not yet confirmed that the observer stopped. Automatic retry is active.</p>}
@@ -147,7 +142,7 @@ export default function WifiGuardSection({ embedded = false }: { expanded?: bool
     {readError && <p role="alert" style={{ margin: 0, color: 'var(--color-danger)' }}>{readError}</p>}
     {isWifiGuardRecoveryBlocked() && <div role="alert">Saved Wi-Fi trust could not be confirmed. Automatic re-arming is paused. <Button small disabled={busy || needsElevation} onClick={() => void mutate(async () => { await recoverSavedTrust(); })}>Retry saved trust recovery</Button></div>}
 
-    {(status?.interfaces ?? []).filter(row => row.state !== 'disconnected').map((row) => <div key={row.interfaceId} style={{ padding: 10, border: '1px solid var(--color-border)', borderRadius: 4 }}>
+    {(status?.interfaces ?? []).map((row) => <div key={row.interfaceId} style={{ padding: 10, border: '1px solid var(--color-border)', borderRadius: 4 }}>
       <strong>{row.name}</strong>
       {row.state === 'connected' ? <>
         <div style={{ whiteSpace: 'pre-wrap' }}>Network name (SSID): {row.ssid}</div>
@@ -159,19 +154,35 @@ export default function WifiGuardSection({ embedded = false }: { expanded?: bool
     </div>)}
 
     <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-      <WifiIntervalInput label="Check every (seconds)" min={5} max={300} value={settings?.pollIntervalSecs ?? 10} disabled={busy || needsElevation}
-        onCommit={(value) => { void mutate(async () => { await patchAppSettings({ ideal: { network: { wifiGuard: { pollIntervalSecs: value } } } }); }); }} />
-      <WifiIntervalInput label="Repeat alert (seconds)" min={30} max={3600} value={settings?.alertDebounceSecs ?? 300} disabled={busy || needsElevation}
-        onCommit={(value) => { void mutate(async () => { await patchAppSettings({ ideal: { network: { wifiGuard: { alertDebounceSecs: value } } } }); }); }} />
+      <label style={{ maxWidth: 155, fontSize: 12 }}>Check every (seconds)<InputGroup type="number" min={5} max={300} value={String(settings?.pollIntervalSecs ?? 10)} disabled={busy || needsElevation} onChange={(event) => {
+        const value = Number(event.target.value);
+        if (Number.isInteger(value) && value >= 5 && value <= 300) void mutate(async () => { await patchAppSettings({ ideal: { network: { wifiGuard: { pollIntervalSecs: value } } } }); });
+      }} /></label>
+      <label style={{ maxWidth: 155, fontSize: 12 }}>Repeat alert (seconds)<InputGroup type="number" min={30} max={3600} value={String(settings?.alertDebounceSecs ?? 300)} disabled={busy || needsElevation} onChange={(event) => {
+        const value = Number(event.target.value);
+        if (Number.isInteger(value) && value >= 30 && value <= 3600) void mutate(async () => { await patchAppSettings({ ideal: { network: { wifiGuard: { alertDebounceSecs: value } } } }); });
+      }} /></label>
     </div>
-    {baseline.length > 0 && <details>
-      <summary>Approved Wi-Fi ({baseline.length})</summary>
-      {baseline.map((entry, index) => <div key={`${entry.ssidHex ?? entry.ssid}-${index}`} style={{ padding: 8, borderBottom: '1px solid var(--color-border)' }}>
-        <strong style={{ whiteSpace: 'pre-wrap' }}>{entry.ssid}</strong> · {entry.provenance === 'approved' ? 'Approved' : 'Needs review'}
+    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+      <Switch checked={required || settings?.reportToFleet === true} disabled={reportingLocked || busy || needsElevation} label={reportingLocked ? 'Fleet reporting required by device policy' : 'Report coarse Wi-Fi alerts to Fleet'} onChange={(event) => {
+      const reportToFleet = (event.target as HTMLInputElement).checked;
+      void mutate(async () => { await patchAppSettings({ ideal: { network: { wifiGuard: { reportToFleet } } } }); });
+      }} />
+      <InfoPopover iconOnly title="Wi-Fi reporting and notifications">
+        <p>Network names and access-point identities stay in local settings; Fleet receives only an alert category. Popup delivery follows your notification settings.</p>
+      </InfoPopover>
+    </div>
+
+    <div>
+      <Button minimal small onClick={() => setShowKnown(!showKnown)}>{showKnown ? 'Hide' : 'Show'} saved Wi-Fi identities ({baseline.length})</Button>
+      {baseline.length > 0 && <Button minimal small intent="danger" disabled={busy || needsElevation} onClick={() => void clearKnown()}>Forget approvals</Button>}
+      {showKnown && baseline.map((entry, index) => <div key={`${entry.ssidHex ?? entry.ssid}-${index}`} style={{ padding: 8, borderBottom: '1px solid var(--color-border)' }}>
+        <strong style={{ whiteSpace: 'pre-wrap' }}>{entry.ssid}</strong> · {entry.provenance === 'approved' ? 'Approved' : 'Learned previously — needs review'}
         <div>{entry.bssids.join(', ') || 'No access point recorded'}</div>
       </div>)}
-      <Button minimal small intent="danger" disabled={busy || needsElevation} onClick={() => void clearKnown()}>Forget approvals</Button>
-    </details>}
+      {showKnown && <small>Mesh routers may have several access points. Approve each one you recognize; new ones are never silently trusted.</small>}
+    </div>
+
     <div><div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
       <strong>Recent Wi-Fi alerts ({recent.length})</strong>
       <InfoPopover iconOnly title="About Wi-Fi alert history">

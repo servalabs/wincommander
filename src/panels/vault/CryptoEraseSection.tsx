@@ -65,13 +65,7 @@ function HowItWorks() {
         </div>
       }
     >
-      <Button
-        minimal
-        small
-        icon="help"
-        aria-label="How crypto-erase works"
-        title="How crypto-erase works"
-      />
+      <Button minimal small icon="info-sign" text="How it works" />
     </Popover>
   );
 }
@@ -131,9 +125,7 @@ export default function CryptoEraseSection({ veracryptVolumes }: { veracryptVolu
       headerRight={
         <div className="crypto-erase-header-actions">
           <HowItWorks />
-          {displayTargets.length > 0 && (
-            <Button minimal small icon="folder-open" text="Erase container file…" onClick={eraseByPath} />
-          )}
+          <Button minimal small icon="folder-open" text="Erase container file…" onClick={eraseByPath} />
           <Button
             minimal
             small
@@ -152,8 +144,9 @@ export default function CryptoEraseSection({ veracryptVolumes }: { veracryptVolu
         </p>
 
         {loadError && (
-          <Callout intent="warning" title="BitLocker volume list unavailable">
-            {displayEraseDetail(loadError)} The list may be incomplete. You can still select an encrypted container file to erase it.
+          <Callout intent="warning" title="Couldn't read the BitLocker volume list">
+            {displayEraseDetail(loadError)} Encrypted volumes are still listed below, and you can always erase a container
+            by picking its file.
           </Callout>
         )}
 

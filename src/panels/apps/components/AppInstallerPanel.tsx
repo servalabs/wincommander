@@ -1,5 +1,5 @@
 import { Card, Button, Checkbox, InputGroup, Icon, Spinner } from "@/components/ui/bp";
-import { useMemo, useState, useEffect, useCallback, useRef, useSyncExternalStore, type ReactNode } from "react";
+import { useMemo, useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import { motion } from "framer-motion";
 import useBackend from "../../../hooks/useBackend";
 import { useAppState } from "../../../context/AppContext";
@@ -19,7 +19,6 @@ import { staggerDelay } from "../../../components/shared/AnimatedList";
 import { DURATION_S, EASE } from "../../../components/shared/motion";
 import SuccessFill from "../../../components/shared/SuccessFill";
 import { collectUnifiedPackageUpdates } from "../packageUpdateDisplay";
-import { getPackageUpdateInventorySnapshot, subscribeToPackageUpdateInventory } from "../../../lib/packageUpdateInventoryStore";
 import './AppInstallerPanel.css';
 
 
@@ -114,15 +113,12 @@ function mapCategoryToTab(category: string): string {
 
 function AppInstallerPanel({
   updatesTools,
-  refreshControls,
   onStatusChange,
 }: {
   updatesTools?: ReactNode;
-  refreshControls?: ReactNode;
   onStatusChange?: (status: AppInstallerStatus) => void;
 }) {
   const { appInventory, runAppInventoryScan, waitForAppInventoryScan, patchAppSettings, forceRefreshDeps, systemInfo } = useAppState();
-  const packageSnapshot = useSyncExternalStore(subscribeToPackageUpdateInventory, getPackageUpdateInventorySnapshot, getPackageUpdateInventorySnapshot);
   const needsElevation = isPrivilegedWriteBlocked(true, systemInfo?.isAdmin);
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
@@ -408,21 +404,20 @@ function AppInstallerPanel({
   // Count every pending update, not just manifest apps — non-manifest ("other")
   // packages returned by the inventory scan are also visible in the list below.
   const outdatedInstalledCount = useMemo(() => collectUnifiedPackageUpdates([], appInventory).length, [appInventory]);
-  const displayedUpdateCount = useMemo(() => collectUnifiedPackageUpdates(packageSnapshot.inventory?.managers ?? [], packageSnapshot.catalogInventoryFresh ? appInventory : null).length, [packageSnapshot, appInventory]);
   const vulnerabilityBadge = useMemo(() => {
-    if (!packageSnapshot.inventory || !packageSnapshot.catalogInventoryFresh || packageSnapshot.error || packageSnapshot.inventory.cancelled || packageSnapshot.inventory.managers?.some(manager => manager.available && manager.error)) {
+    if (!appInventory || (installedManifestCount === 0 && outdatedInstalledCount === 0)) {
       return {
         tone: "is-neutral",
-        text: "UPDATE CHECK INCOMPLETE",
-        detail: "Refresh inventory to assess updates",
+        text: "NO INSTALLED APPS SCANNED",
+        detail: "Scan inventory to assess updates",
       };
     }
 
     // outdatedInstalledCount also counts pending updates for non-manifest
     // ("other") packages, which aren't part of installedManifestCount, so the
     // raw ratio can exceed 100% — clamp it to a sane percentage.
-    const vulnerabilityScore = Math.min(100, Math.round((displayedUpdateCount / Math.max(1, installedManifestCount)) * 100));
-    if (displayedUpdateCount === 0) {
+    const vulnerabilityScore = Math.min(100, Math.round((outdatedInstalledCount / installedManifestCount) * 100));
+    if (outdatedInstalledCount === 0) {
       return {
         tone: "is-safe",
         text: "ALL APPS UP TO DATE",
@@ -432,10 +427,10 @@ function AppInstallerPanel({
 
     return {
       tone: vulnerabilityScore > 30 ? "is-risk" : "is-warning",
-      text: `${displayedUpdateCount} UPDATE${displayedUpdateCount === 1 ? "" : "S"} AVAILABLE`,
-      detail: "Includes updates from the package managers shown in Updates",
+      text: `${outdatedInstalledCount} APP INVENTORY UPDATE${outdatedInstalledCount === 1 ? "" : "S"}`,
+      detail: "Additional package managers are shown in Updates",
     };
-  }, [installedManifestCount, displayedUpdateCount, packageSnapshot]);
+  }, [appInventory, installedManifestCount, outdatedInstalledCount]);
 
   useEffect(() => {
     onStatusChange?.({
@@ -1121,7 +1116,6 @@ function AppInstallerPanel({
 
               <div className="installer-action-buttons">
               <div className="installer-action-buttons-utility">
-              {refreshControls}
               <Button
                 icon="plus"
                 text="SELECT ALL"
@@ -1155,9 +1149,7 @@ function AppInstallerPanel({
               {outdatedInstalledCount > 0 ? (
                 <Button
                   icon="automatic-updates"
-                  text={<span className="installer-batch-action-label">UPDATE<br />WINGET APPS</span>}
-                  title="Update Winget app inventory. Other package managers are updated in the Updates list."
-                  aria-label="Update all Winget app inventory updates"
+                  text={<span className="installer-batch-action-label">UPDATE<br />ALL</span>}
                   minimal
                   className="app-update-all-btn font-mono text-[11px]!"
                   onClick={handleUpdateAll}
@@ -1167,8 +1159,7 @@ function AppInstallerPanel({
               ) : (
                 <Button
                   icon="tick-circle"
-                  text={<span className="installer-batch-action-label">NO WINGET<br />APP UPDATES</span>}
-                  aria-label="No Winget app inventory updates"
+                  text={<span className="installer-batch-action-label">UP TO<br />DATE</span>}
                   minimal
                   disabled
                   className="app-update-all-btn font-mono text-[11px]!"

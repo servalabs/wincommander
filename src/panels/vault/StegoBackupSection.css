@@ -174,7 +174,3 @@
   color: var(--text-dim); background: var(--surface-3);
   border-radius: var(--r-sm, 4px);
 }
-
-.stego-pick-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-.stego-pick-group { min-width: 0; }
-@media (max-width: 900px) { .stego-pick-grid { grid-template-columns: 1fr; } }

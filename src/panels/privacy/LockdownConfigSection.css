@@ -24,18 +24,6 @@
     min-width: 0;
 }
 
-.sd-workspace { min-width: 0; }
-.sd-workspace-tabs { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
-.sd-workspace-panel { display: flex; flex-direction: column; gap: 10px; min-width: 0; margin-top: 0; }
-.sd-workspace-panel[hidden] { display: none; }
-.sd-workspace-intro { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; color: var(--color-text-muted); font-size: 11px; }
-.sd-workspace-intro strong { color: var(--color-text-primary); font-size: 13px; }
-.sd-workspace-warning { margin: 0; padding: 8px 10px; border-left: 3px solid var(--color-danger); background: var(--color-danger-dim); color: var(--color-text-primary); font-size: 11px; line-height: 1.45; }
-.sd-columns-card .sd-row { grid-template-columns: 28px minmax(0, 1fr) auto; }
-.sd-step-info { max-width: 300px; margin: 0; padding: 10px; color: var(--color-text-primary); font-size: 12px; line-height: 1.45; }
-.sd-step-info-button { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--color-text-secondary); cursor: pointer; }
-.sd-step-info-button:hover, .sd-step-info-button:focus-visible { color: var(--color-text-primary); background: var(--surface-3); }
-
 .lockdown-triggers-card {
     grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
 }
@@ -208,9 +196,6 @@
     grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
     column-gap: 8px;
 }
-.sd-workspace .sd-columns-card { grid-template-columns: minmax(0, 1fr); }
-.sd-workspace .sd-columns-card > .sd-group + .sd-group { border-left: 0; border-top: 1px solid var(--color-border); }
-.sd-workspace .sd-columns-card .sd-rows-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 235px), 1fr)); }
 @media (max-width: 1100px) {
     .sd-columns-card > .sd-group:nth-child(2n+1) {
         border-left: none;
@@ -733,8 +718,3 @@ html.light .sd-shred-folder-row {
         margin-left: 0;
     }
 }
-
-/* Stack target panels so a short folder list does not reserve empty space beside users. */
-.sd-targets-row { grid-template-columns: minmax(0, 1fr); }
-
-.lockdown-checkin-details p { margin: 0; font-size: 12px; line-height: 1.4; color: var(--color-text-secondary); }

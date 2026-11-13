@@ -134,7 +134,6 @@ pub(super) fn removal_block_code(reason: &str) -> &'static str {
         "Windows or application location is protected" => "protected_location",
         "application, executable or codec file is protected" => "protected_type",
         "application data is protected" => "application_data",
-        "Git metadata is protected" => "git_metadata",
         "another user profile is protected" => "other_profile",
         "user profile locations could not be verified" => "profiles_unavailable",
         _ => "unknown",
@@ -142,18 +141,6 @@ pub(super) fn removal_block_code(reason: &str) -> &'static str {
 }
 
 impl RemovalPolicy {
-    pub(super) fn profile(&self, path: &Path) -> (&'static str, Option<String>) {
-        #[cfg(windows)]
-        {
-            let (scope, root) = self.profiles.describe(path);
-            (scope, root.and_then(super::scope::display_path))
-        }
-        #[cfg(not(windows))]
-        {
-            let _ = path;
-            ("unavailable", None)
-        }
-    }
     pub(super) fn load() -> Self {
         Self {
             system_roots: protected_system_roots(),
@@ -164,11 +151,6 @@ impl RemovalPolicy {
 
     /// Paths remain reviewable even when removal is prohibited.
     pub(super) fn protected_reason(&self, path: &Path) -> Option<&'static str> {
-        // Protect literal .git directory components, including case variants.
-        // This does not identify bare repositories or external Git directories.
-        if super::git_metadata::contains_git_metadata_component(path) {
-            return Some("Git metadata is protected");
-        }
         if self
             .system_roots
             .iter()

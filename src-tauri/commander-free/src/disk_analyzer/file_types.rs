@@ -9,7 +9,6 @@ pub struct DiskFileType {
     pub category: String,
     pub file_count: u64,
     pub logical_size: u64,
-    pub sample_path: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -60,7 +59,6 @@ fn summarize(children: &HashMap<String, Vec<DiskNode>>, path: &str) -> Vec<DiskF
             category: (*name).into(),
             file_count: 0,
             logical_size: 0,
-            sample_path: None,
         })
         .collect();
     let mut pending = vec![path];
@@ -71,9 +69,6 @@ fn summarize(children: &HashMap<String, Vec<DiskNode>>, path: &str) -> Vec<DiskF
                     pending.push(&item.full_path);
                 } else {
                     let total = &mut totals[category(&item.name)];
-                    if total.sample_path.is_none() {
-                        total.sample_path = Some(item.full_path.clone());
-                    }
                     total.file_count += 1;
                     total.logical_size = total.logical_size.saturating_add(item.size);
                 }
@@ -87,7 +82,7 @@ fn summarize_extensions(
     children: &HashMap<String, Vec<DiskNode>>,
     path: &str,
 ) -> Vec<DiskFileType> {
-    let mut totals: HashMap<String, (u64, u64, Option<String>)> = HashMap::new();
+    let mut totals: HashMap<String, (u64, u64)> = HashMap::new();
     let mut pending = vec![path];
     while let Some(directory) = pending.pop() {
         if let Some(items) = children.get(directory) {
@@ -103,9 +98,6 @@ fn summarize_extensions(
                     .map(|value| format!(".{}", value.to_lowercase()))
                     .unwrap_or_else(|| "No extension".to_string());
                 let entry = totals.entry(extension).or_default();
-                if entry.2.is_none() {
-                    entry.2 = Some(item.full_path.clone());
-                }
                 entry.0 += 1;
                 entry.1 = entry.1.saturating_add(item.size);
             }
@@ -113,14 +105,11 @@ fn summarize_extensions(
     }
     let mut rows: Vec<_> = totals
         .into_iter()
-        .map(
-            |(category, (file_count, logical_size, sample_path))| DiskFileType {
-                category,
-                file_count,
-                logical_size,
-                sample_path,
-            },
-        )
+        .map(|(category, (file_count, logical_size))| DiskFileType {
+            category,
+            file_count,
+            logical_size,
+        })
         .collect();
     rows.sort_by(|a, b| {
         b.logical_size
@@ -194,8 +183,6 @@ mod tests {
         assert_eq!(root.iter().map(|row| row.file_count).sum::<u64>(), 4);
         assert_eq!(root.iter().map(|row| row.logical_size).sum::<u64>(), 60);
         assert_eq!((root[0].file_count, root[0].logical_size), (1, 10));
-        assert_eq!(root[0].sample_path.as_deref(), Some("root/photo.JPG"));
-        assert_eq!(root[1].sample_path, None);
         assert_eq!((root[6].file_count, root[6].logical_size), (1, 0));
         let nested = summarize(&data, "root/nested");
         assert_eq!(nested.iter().map(|row| row.file_count).sum::<u64>(), 2);
@@ -218,7 +205,6 @@ mod tests {
             ),
         ]);
         let rows = summarize_extensions(&data, "root");
-        assert_eq!(rows[0].sample_path.as_deref(), Some("root/a.JPG"));
         assert_eq!(
             (
                 rows[0].category.as_str(),

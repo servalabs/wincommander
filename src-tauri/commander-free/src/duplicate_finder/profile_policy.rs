@@ -152,33 +152,6 @@ fn classify(
     Ok(())
 }
 
-fn describe_profile<'a>(
-    path: &Path,
-    current_sid: &str,
-    profiles: &'a [(String, PathBuf)],
-) -> (&'static str, Option<&'a Path>) {
-    if profiles.is_empty()
-        || !profiles
-            .iter()
-            .any(|(sid, _)| sid.eq_ignore_ascii_case(current_sid))
-    {
-        return ("unavailable", None);
-    }
-    if let Some((_, root)) = profiles
-        .iter()
-        .find(|(sid, root)| !sid.eq_ignore_ascii_case(current_sid) && contains(path, root))
-    {
-        return ("other", Some(root.as_path()));
-    }
-    if let Some((_, root)) = profiles
-        .iter()
-        .find(|(sid, root)| sid.eq_ignore_ascii_case(current_sid) && contains(path, root))
-    {
-        return ("current", Some(root.as_path()));
-    }
-    ("outside", None)
-}
-
 pub(super) struct Snapshot(Result<(String, Vec<(String, PathBuf)>), &'static str>);
 
 impl Snapshot {
@@ -189,13 +162,6 @@ impl Snapshot {
     pub(super) fn check(&self, path: &Path) -> Result<(), &'static str> {
         let (sid, paths) = self.0.as_ref().map_err(|error| *error)?;
         classify(path, sid, paths)
-    }
-
-    pub(super) fn describe(&self, path: &Path) -> (&'static str, Option<&Path>) {
-        match &self.0 {
-            Ok((sid, paths)) => describe_profile(path, sid, paths),
-            Err(_) => ("unavailable", None),
-        }
     }
 }
 
@@ -231,29 +197,6 @@ mod tests {
                 &profiles
             ),
             Ok(())
-        );
-    }
-    #[test]
-    fn profile_classification_uses_registered_roots_not_folder_names() {
-        let paths = vec![
-            ("mine".into(), PathBuf::from(r"C:\Custom\Me")),
-            ("other".into(), PathBuf::from(r"D:\Redirected\Alice")),
-        ];
-        assert_eq!(
-            describe_profile(Path::new(r"D:\Redirected\Alice\report.pdf"), "mine", &paths),
-            ("other", Some(Path::new(r"D:\Redirected\Alice")))
-        );
-        assert_eq!(
-            describe_profile(Path::new(r"C:\Custom\Me\a.pdf"), "mine", &paths).0,
-            "current"
-        );
-        assert_eq!(
-            describe_profile(Path::new(r"D:\Users\NotAProfile\a.pdf"), "mine", &paths).0,
-            "outside"
-        );
-        assert_eq!(
-            describe_profile(Path::new(r"C:\Custom\Me\a.pdf"), "missing", &paths).0,
-            "unavailable"
         );
     }
     #[test]

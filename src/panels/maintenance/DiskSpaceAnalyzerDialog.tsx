@@ -57,12 +57,6 @@ export default function DiskSpaceAnalyzerDialog({ isOpen, onClose, initialMode =
     }
     const content = <div className="da-workspace">
         <DiskAnalyzerHeader analyzer={analyzer} mode={mode}><DiskAnalyzerTabs mode={mode} disabled={analyzer.deleting} onChange={setMode} /></DiskAnalyzerHeader>
-        <footer className="da-selection-bar"><div className="da-selection-summary"><Layers3 size={17} /><span><strong>{selectedItems.length} selected</strong><small>{formatDiskBytes(selectedBytes)} · Space recovered may differ</small></span></div>
-            {analyzer.meta && !analyzer.stale && !analyzer.scanning && mode !== "types" && <DiskItemDetails item={analyzer.focused} disabled={busy} onOpen={item => void analyzer.openInExplorer(item)} onNavigate={path => void analyzer.navigate(path)} onDelete={item => analyzer.setConfirmItems([item])} />}
-        <div className="da-selection-actions">
-            {analyzer.selected.size > 0 && <Button minimal disabled={busy} onClick={() => analyzer.setSelected(new Set())}>Clear</Button>}
-            <Button intent="danger" icon="trash" title="Review deletion" aria-label={`Review deletion of ${selectedItems.length} selected file${selectedItems.length === 1 ? "" : "s"}`} disabled={busy || !selectedItems.length || analyzer.stale} onClick={() => analyzer.setConfirmItems(selectedItems)} />
-        </div></footer>
         <div id="disk-analyzer-view" role="tabpanel" aria-labelledby={`disk-tab-${mode}`} className="da-analyzer-content">
         {analyzer.scanning ? <div className="da-workspace-empty" role="status"><Spinner size={38} /><h3>Analyzing your storage</h3>
             <p>{analyzer.progress ? `${analyzer.progress.filesScanned.toLocaleString()} files · ${analyzer.progress.foldersScanned.toLocaleString()} folders · ${formatDiskBytes(analyzer.progress.bytesScanned)} found` : "Reading files and folders. Scan time depends on the selected location."}</p>
@@ -74,7 +68,7 @@ export default function DiskSpaceAnalyzerDialog({ isOpen, onClose, initialMode =
                         <div className="da-filter-buttons" aria-label="Large file type">{LARGE_FILTERS.map(item => <button type="button" key={item.id} disabled={busy} aria-pressed={filter === item.id} className={filter === item.id ? "active" : ""} onClick={() => setFilter(item.id)}>{item.label}</button>)}</div>
                         <div className="da-large-inputs"><label><span className="sr-only">Search file name or path</span><input type="search" value={search} onChange={event => setSearch(event.target.value)} placeholder="Search name or path…" /></label>
                             <label>Sort<select value={sort} disabled={busy} onChange={event => setSort(event.target.value as DiskSort)}><option value="size">Largest first</option><option value="name">Name</option><option value="modified">Recently modified</option></select></label></div>
-                        <p role="status">{analyzer.largeResult ? <>{analyzer.largeResult.matchedCount.toLocaleString()} files ≥ {formatDiskBytes(analyzer.largeResult.minimumSize)} · {formatDiskBytes(analyzer.largeResult.matchedSize)} in the scanned location.
+                        <p role="status">{analyzer.largeResult ? <>{analyzer.largeResult.matchedCount.toLocaleString()} files ≥ {formatDiskBytes(analyzer.largeResult.minimumSize)} · {formatDiskBytes(analyzer.largeResult.matchedSize)} logical size in the scanned location.
                             {analyzer.largeResult.limited ? ` Showing the largest ${analyzer.largeResult.resultLimit.toLocaleString()} matches; search, type filters and sorting apply to these loaded results only. Increase the minimum size or scan a smaller folder to inspect more matches.` : " All threshold matches from the scan are loaded."}
                             {analyzer.meta.complete === false ? " Scan is partial; unscanned files are not included." : ""}</> : "Loading threshold matches…"}</p>
                     </div>}
@@ -94,11 +88,17 @@ export default function DiskSpaceAnalyzerDialog({ isOpen, onClose, initialMode =
                     </div>
                 </>}
         </div>
+        <footer className="da-selection-bar"><div className="da-selection-summary"><Layers3 size={17} /><span><strong>{selectedItems.length} selected</strong><small>{formatDiskBytes(selectedBytes)} logical size · Space recovered may differ</small></span></div>
+            {analyzer.meta && !analyzer.stale && !analyzer.scanning && mode !== "types" && <DiskItemDetails item={analyzer.focused} disabled={busy} onOpen={item => void analyzer.openInExplorer(item)} onNavigate={path => void analyzer.navigate(path)} onDelete={item => analyzer.setConfirmItems([item])} />}
+        <div className="da-selection-actions">
+            {analyzer.selected.size > 0 && <Button minimal disabled={busy} onClick={() => analyzer.setSelected(new Set())}>Clear</Button>}
+            <Button intent="danger" icon="trash" title="Review deletion" aria-label={`Review deletion of ${selectedItems.length} selected file${selectedItems.length === 1 ? "" : "s"}`} disabled={busy || !selectedItems.length || analyzer.stale} onClick={() => analyzer.setConfirmItems(selectedItems)} />
+        </div></footer>
     </div>;
     return <>
         {inline ? <div className="disk-analyzer-inline">{content}</div> : <Dialog isOpen={isOpen} onClose={onClose} title="Disk Space Analyzer" icon="search-around" className="disk-analyzer-dialog">{content}</Dialog>}
         <Alert isOpen={analyzer.confirmItems.length > 0} cancelButtonText="Cancel" confirmButtonText={`Delete ${analyzer.confirmItems.length} item${analyzer.confirmItems.length === 1 ? "" : "s"}`} intent="danger" icon="trash" loading={analyzer.deleting} onCancel={() => { if (!analyzer.deleting) analyzer.setConfirmItems([]); }} onConfirm={() => void analyzer.deleteConfirmed()}>
-            <p>Permanently delete <strong>{analyzer.confirmItems.length} file{analyzer.confirmItems.length === 1 ? "" : "s"}</strong> ({formatDiskBytes(analyzer.confirmItems.reduce((sum, item) => sum + item.size, 0))})? This cannot be undone.</p>
+            <p>Permanently delete <strong>{analyzer.confirmItems.length} file{analyzer.confirmItems.length === 1 ? "" : "s"}</strong> ({formatDiskBytes(analyzer.confirmItems.reduce((sum, item) => sum + item.size, 0))} logical size)? This cannot be undone.</p>
             <ul className="da-confirm-list">{analyzer.confirmItems.map(item => <li key={item.fullPath}>{toExplorerDisplayPath(item.fullPath) ?? "Location unavailable"}</li>)}</ul>
         </Alert>
     </>;

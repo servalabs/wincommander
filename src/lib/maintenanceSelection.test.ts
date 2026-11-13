@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { canRemoveDuplicateFile, getDuplicateSelectedBytes, getRetainedFileId, selectDuplicateCopies } from "./maintenanceSelection";
+import { getDuplicateSelectedBytes, getRetainedFileId, selectDuplicateCopies } from "./maintenanceSelection";
 import type { DuplicateGroup } from "../hooks/useBackend";
 
 const group: DuplicateGroup = { id: "group", size: 100, reclaimableBytes: 200, fileCount: 3, memberOffset: 0, hasMoreFiles: false, files: [
@@ -44,13 +44,4 @@ test("single member and empty groups never select their last copy", () => {
 test("smart selection never includes protected or unclassified copies", () => {
   const protectedGroup = { ...group, files: [group.files[0], { ...group.files[1], removable: false }, { ...group.files[2], removable: undefined }] };
   expect(selectDuplicateCopies([protectedGroup], "first").size).toBe(0);
-});
-
-test("individual removal rejects a keeper, protected copy, and stale id", () => {
-  const mixed = { ...group, files: [group.files[0], group.files[1], { ...group.files[2], removable: false }] };
-  expect(canRemoveDuplicateFile([mixed], "long", "first")).toBe(false);
-  expect(canRemoveDuplicateFile([mixed], "short", "first")).toBe(true);
-  expect(canRemoveDuplicateFile([mixed], "third", "first")).toBe(false);
-  expect(canRemoveDuplicateFile([mixed], "stale", "first")).toBe(false);
-  expect(canRemoveDuplicateFile([mixed], "short", "first", { group: "short" })).toBe(false);
 });

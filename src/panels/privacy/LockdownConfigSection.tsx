@@ -28,9 +28,8 @@
 // privacy.selfDestruct.steps. Sparse override map: missing keys use
 // defaultEnabled from the mirrored Rust step registry.
 
-import { Button, Checkbox, Icon, Popover, Tooltip } from "@/components/ui/bp";
+import { Button, Checkbox, Icon, Tooltip } from "@/components/ui/bp";
 import type { IconName } from "@/components/ui/bp";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import CreateWipeUsbDialog from "./CreateWipeUsbDialog";
 import VerifyUsbBootDialog from "./VerifyUsbBootDialog";
@@ -90,7 +89,6 @@ export default function LockdownConfigSection(props: Props = {}) {
   const config = props.config !== undefined ? props.config : internalConfig;
   const onPatch = props.onPatch ?? internalOnPatch;
   const searchQuery = props.searchQuery ?? "";
-  const [workspace, setWorkspace] = useState("actions");
 
   const steps = useMemo(() => config?.steps ?? {}, [config?.steps]);
 
@@ -278,18 +276,6 @@ export default function LockdownConfigSection(props: Props = {}) {
           </div>
         </div>
 
-        <p className="sd-workspace-warning" role="note">
-          Configured actions run when Lockdown is triggered. Deletion and key destruction can be irreversible; review the selected actions and targets before arming.
-        </p>
-        <Tabs value={search ? "actions" : workspace} onValueChange={setWorkspace} className="sd-workspace">
-          {!search && <TabsList className="sd-workspace-tabs" aria-label="Lockdown configuration">
-            <TabsTrigger value="actions">Actions · {totals.enabled}/{totals.total}</TabsTrigger>
-            <TabsTrigger value="targets">Folders, users &amp; volumes</TabsTrigger>
-            <TabsTrigger value="completion">After lockdown &amp; USB</TabsTrigger>
-          </TabsList>}
-        <TabsContent forceMount hidden={!!search || workspace !== "targets"} value="targets" className="sd-workspace-panel">
-          <div className="sd-workspace-intro"><strong>Choose targets</strong><span>Targets are used only when their corresponding action is enabled.</span></div>
-
         {/* User-defined folder shred list. The Rust cascade dispatches this
             as the configured_folders step on every lockdown trigger. Each
             folder goes through the secure shredder command (single
@@ -349,14 +335,11 @@ export default function LockdownConfigSection(props: Props = {}) {
           veracryptDevices={cryptoEraseVeracryptDevices}
           onPatch={onPatch}
         />
-        </TabsContent>
 
         {/* Erase-target groups as columns in ONE card:
             Privacy Traces spans 2 cols (with an inner 2-col row grid),
             Deep Trace Cleaner = col 3, Privacy Deep Clean = col 4.
             "On Completion" is rendered as a toggles row BELOW this card. */}
-        <TabsContent forceMount hidden={!search && workspace !== "actions"} value="actions" className="sd-workspace-panel">
-        <div className="sd-workspace-intro"><strong>Choose lockdown actions</strong><span>Review each group and use the information button for details.</span></div>
         <div className="sd-columns-card">
           {ORDERED_GROUPS.map((group) => {
             const items = stepsByGroup(group);
@@ -418,10 +401,7 @@ export default function LockdownConfigSection(props: Props = {}) {
             );
           })}
         </div>
-        </TabsContent>
 
-        <TabsContent forceMount hidden={!!search || workspace !== "completion"} value="completion" className="sd-workspace-panel">
-        <div className="sd-workspace-intro"><strong>After lockdown</strong><span>Choose what happens after the configured actions run.</span></div>
         {!search && (
           <div className="sd-completion-row">
             <span className="sd-completion-label">On Completion</span>
@@ -465,8 +445,6 @@ export default function LockdownConfigSection(props: Props = {}) {
             onArm={(v) => setGlobal("rebootToUsbEnabled", v)}
           />
         )}
-        </TabsContent>
-        </Tabs>
 
       </div>
     </TierGate>
@@ -632,7 +610,7 @@ interface StepRowProps {
 // be a stable reference (writeStep, passed directly — see call site).
 const StepRow = memo(function StepRow({ def, checked, onToggle }: StepRowProps) {
   return (
-    <div
+    <label
       className="sd-row"
       onClick={(e) => {
         const target = e.target as HTMLElement;
@@ -644,24 +622,23 @@ const StepRow = memo(function StepRow({ def, checked, onToggle }: StepRowProps) 
         // from the checkbox's onChange — doubling the settings-write latency
         // for every single click.)
         if (target.closest('button, [role="checkbox"]')) return;
-        // Clicking the row text or padding toggles the step.
+        // Clicking elsewhere in the row (label text, padding): handle it here,
+        // and suppress the native label→control click-forwarding this element
+        // would otherwise also perform (it targets the same checkbox), which
+        // would otherwise fire onToggle a second time for the same click.
         e.preventDefault();
         onToggle(def.id, !checked);
       }}
     >
       <Checkbox
         className="sd-row-checkbox"
-        ariaLabel={def.label}
         checked={checked}
         onChange={(e) => onToggle(def.id, (e.target as HTMLInputElement).checked)}
       />
       <div className="sd-row-content">
         <div className={`sd-row-label ${!checked ? "is-disabled" : ""}`}>{def.label}</div>
       </div>
-      {DESTRUCT_STEP_DESCRIPTIONS[def.id] && <Popover position="bottom" content={<p className="sd-step-info">{DESTRUCT_STEP_DESCRIPTIONS[def.id]}</p>}>
-        <button type="button" className="sd-step-info-button" aria-label={`About ${def.label}`} title={`About ${def.label}`}><Icon icon="info-sign" size={14} /></button>
-      </Popover>}
-    </div>
+    </label>
   );
 });
 

@@ -9,9 +9,8 @@ import {
   type EmptyFolderScan,
 } from "../../hooks/useBackend";
 import { recordMaintenanceOperation } from "../../hooks/useMaintenanceHistory";
-import { canRemoveDuplicateFile, getRetainedFileId, selectDuplicateCopies, type DuplicateKeepPolicy } from "../../lib/maintenanceSelection";
+import { getRetainedFileId, selectDuplicateCopies, type DuplicateKeepPolicy } from "../../lib/maintenanceSelection";
 import { useMaintenanceSessionState } from "./maintenanceSessionState";
-import { executeRemoval } from "./removalExecution";
 
 type FileTool = "duplicates" | "empty";
 const DUPLICATE_SIZE_CHOICES = [0, 200 * 1024, 1024 * 1024, 10 * 1024 * 1024, 100 * 1024 * 1024] as const;
@@ -32,7 +31,6 @@ export function useFileHygiene() {
   const [scopeMode, setScopeMode] = useMaintenanceSessionState<"local" | "folders">("file-hygiene.scope", "local");
   const [progress, setProgress] = useMaintenanceSessionState<DuplicateProgress | undefined>("file-hygiene.progress", undefined);
   const [minimumSizeBytes, setMinimumSizeBytes] = useMaintenanceSessionState<number>("file-hygiene.minimum-size-bytes", 200 * 1024);
-  const [autoScanStarted, setAutoScanStarted] = useMaintenanceSessionState("file-hygiene.auto-scan-started", false);
   const enteredTool = useRef<FileTool | undefined>(undefined);
 
   const chooseRoots = useCallback(async () => {
@@ -58,7 +56,6 @@ export function useFileHygiene() {
   const scan = useCallback(async (requestedMode?: "local" | "folders") => {
     const mode = requestedMode ?? scopeMode;
     if (busy || ((tool === "empty" || mode === "folders") && !roots.length)) return;
-    if (tool === "duplicates") setAutoScanStarted(true);
     setBusy(true);
     setError(undefined);
     setResult(undefined);
@@ -76,7 +73,7 @@ export function useFileHygiene() {
     } finally {
       setBusy(false);
     }
-  }, [backend, busy, minimumSizeBytes, roots, scopeMode, setAutoScanStarted, setBusy, setDuplicateScan, setEmptyScan, setError, setResult, setSelected, setRetainedFiles, setProgress, setScopeMode, tool]);
+  }, [backend, busy, minimumSizeBytes, roots, scopeMode, setBusy, setDuplicateScan, setEmptyScan, setError, setResult, setSelected, setRetainedFiles, setProgress, setScopeMode, tool]);
 
   useEffect(() => {
     if (enteredTool.current === tool) return;
@@ -86,8 +83,8 @@ export function useFileHygiene() {
     // the first visit after app launch, then keep the completed report in
     // place until the person explicitly asks to scan again. Re-entering the
     // tab must never discard a report or restart an expensive drive walk.
-    if (tool === "duplicates" && !busy && !duplicateScan && !autoScanStarted) void scan("local");
-  }, [autoScanStarted, busy, duplicateScan, scan, tool]);
+    if (tool === "duplicates" && !busy && !duplicateScan) void scan("local");
+  }, [busy, duplicateScan, scan, tool]);
 
   useEffect(() => {
     if (!busy || tool !== "duplicates" || duplicateScan) return;
@@ -120,43 +117,34 @@ export function useFileHygiene() {
     finally { setBusy(false); }
   }, [backend, busy, duplicateScan, setBusy, setDuplicateScan, setError, setSelected, setRetainedFiles]);
 
-  const remove = useCallback(async (singleId?: string) => {
-    if (busy || (!singleId && !selected.size)) return;
-    const ids = singleId ? [singleId] : [...selected];
-    const groups = duplicateScan?.groups ?? [];
-    if (tool === "duplicates" && ids.some(id => !canRemoveDuplicateFile(groups, id, keepPolicy, retainedFiles))) {
-      setError("The selection changed or is no longer eligible. Review the copies again.");
-      return;
-    }
-    const selectedIds = new Set(ids);
-    const keeperIds = groups.filter(group => group.files.some(file => selectedIds.has(file.id))).map(group => getRetainedFileId(group, keepPolicy, retainedFiles));
-    if (tool === "duplicates" && keeperIds.some(id => !id)) {
-      setError("A kept copy is unavailable. Scan again.");
-      return;
-    }
+  const remove = useCallback(async () => {
+    if (busy || !selected.size) return;
     setBusy(true);
     setError(undefined);
     setResult(undefined);
     let hasReturnedResult = false;
     try {
-      const next = await executeRemoval<DuplicateRemoveResult | EmptyFolderRemoveResult>(
-        () => tool === "duplicates"
-          ? backend.duplicateFinderRemove(ids, keeperIds as string[])
-          : backend.emptyFolderCleanerRemove(ids),
-        () => { setDuplicateScan(undefined); setEmptyScan(undefined); },
-      );
+      const ids = [...selected];
+      const next = tool === "duplicates"
+        ? await backend.duplicateFinderRemove(ids)
+        : await backend.emptyFolderCleanerRemove(ids);
       setResult(next);
       hasReturnedResult = true;
       recordMaintenanceOperation({ tool: tool === "duplicates" ? "duplicates" : "empty-folders", title: tool === "duplicates" ? "Duplicate file removal" : "Empty folder removal", outcome: next.cancelled ? "cancelled" : next.errors.length ? "partial" : "completed", affectedItems: "filesRemoved" in next ? next.filesRemoved : next.foldersRemoved, bytesRecovered: "bytesRecovered" in next ? next.bytesRecovered : undefined, detail: "bytesRecovered" in next ? "Logical file bytes removed; free space not measured." : undefined });
+      // Removal results don't identify successful IDs; only a new scan can reconcile failures.
+      setDuplicateScan(undefined);
+      setEmptyScan(undefined);
       setSelected(new Set());
+      if (tool === "duplicates") setDuplicateScan(await (scopeMode === "local" ? backend.duplicateFinderScanLocal(minimumSizeBytes) : backend.duplicateFinderScan(roots, minimumSizeBytes)));
+      else setEmptyScan(await backend.emptyFolderCleanerScan(roots));
     } catch (cause) {
-      if (!hasReturnedResult) recordMaintenanceOperation({ tool: tool === "duplicates" ? "duplicates" : "empty-folders", title: tool === "duplicates" ? "Duplicate file removal" : "Empty folder removal", outcome: "unknown", detail: "Removal outcome could not be confirmed; scan again for updated results." });
+      if (!hasReturnedResult) recordMaintenanceOperation({ tool: tool === "duplicates" ? "duplicates" : "empty-folders", title: tool === "duplicates" ? "Duplicate file removal" : "Empty folder removal", outcome: "failed" });
       setSelected(new Set());
-      setError(hasReturnedResult ? `Removal finished, but recording the result failed. Scan again for updated results: ${String(cause)}` : `Removal could not be confirmed. Scan again for updated results: ${String(cause)}`);
+      setError(hasReturnedResult ? `Removal finished, but refreshing the scan failed: ${String(cause)}` : String(cause));
     } finally {
       setBusy(false);
     }
-  }, [backend, busy, duplicateScan, keepPolicy, retainedFiles, selected, setBusy, setDuplicateScan, setEmptyScan, setError, setResult, setSelected, tool]);
+  }, [backend, busy, minimumSizeBytes, roots, scopeMode, selected, setBusy, setDuplicateScan, setEmptyScan, setError, setResult, setSelected, tool]);
 
   const cancel = useCallback(async () => {
     try {
@@ -173,7 +161,7 @@ export function useFileHygiene() {
 
   const select = useCallback((id: string) => {
     if (busy) return;
-    if (tool === "duplicates" && !canRemoveDuplicateFile(duplicateScan?.groups ?? [], id, keepPolicy, retainedFiles)) return;
+    if (tool === "duplicates" && !duplicateScan?.groups.some((group) => group.files.some((file) => file.id === id && file.removable === true) && getRetainedFileId(group, keepPolicy, retainedFiles) !== id)) return;
     setSelected((current) => {
       const next = new Set(current);
       if (next.has(id)) next.delete(id);
@@ -193,25 +181,11 @@ export function useFileHygiene() {
   return {
     roots, tool, duplicateScan, emptyScan, selected, result, busy, error, scopeMode, progress, minimumSizeBytes, loadGroups, loadMembers,
     chooseRoots, removeRoot, scan, remove, cancel, openDuplicate, select, changeTool, keepPolicy,
-    toggleDrive: (root: string) => { if (busy) return; setRoots(current => current.includes(root) ? current.filter(path => path !== root) : [...current, root]); setScopeMode("folders"); setEmptyScan(undefined); setSelected(new Set()); },
     retainedFileId: (group: NonNullable<DuplicateScan>["groups"][number]) => getRetainedFileId(group, keepPolicy, retainedFiles),
     keepFile: (groupId: string, fileId: string) => {
       if (busy) return;
       setRetainedFiles((current) => ({ ...current, [groupId]: fileId }));
       setSelected((current) => { const next = new Set(current); next.delete(fileId); return next; });
-    },
-    selectGroupCopies: (groupId: string, visibleIds: string[]) => {
-      if (busy || !duplicateScan) return;
-      const group = duplicateScan.groups.find((item) => item.id === groupId);
-      if (!group) return;
-      const visible = new Set(visibleIds);
-      setSelected((current) => {
-        const next = new Set(current);
-        for (const file of group.files) {
-          if (visible.has(file.id) && canRemoveDuplicateFile([group], file.id, keepPolicy, retainedFiles)) next.add(file.id);
-        }
-        return next;
-      });
     },
     changeKeepPolicy: (next: DuplicateKeepPolicy) => { if (!busy) { setKeepPolicy(next); setSelected(new Set()); } },
     changeMinimumSize: (next: number) => { if (!busy && DUPLICATE_SIZE_CHOICES.includes(next as typeof DUPLICATE_SIZE_CHOICES[number])) { setMinimumSizeBytes(next); setDuplicateScan(undefined); setSelected(new Set()); } },
