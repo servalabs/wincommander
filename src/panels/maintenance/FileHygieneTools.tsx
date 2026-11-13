@@ -17,7 +17,7 @@ import { formatBytes } from "./routineCleanerHelpers";
 import { useFileHygiene } from "./useFileHygiene";
 import { DuplicateGroups } from "./DuplicateGroups";
 import { CleanupReviewItems } from "./CleanupReviewItems";
-import { DuplicateScanStatus } from "./DuplicateScanStatus";
+import { DuplicateScanStatus, duplicateDiscoveryGuidance } from "./DuplicateScanStatus";
 
 function describeRemoveResult(result: DuplicateRemoveResult | EmptyFolderRemoveResult) {
   const summary = "bytesRecovered" in result
@@ -105,6 +105,7 @@ export function FileHygieneTools() {
               <TabsTrigger value="empty">Empty folders</TabsTrigger>
             </TabsList>
           </Tabs>
+          {tools.tool === "duplicates" && <p className="text-xs text-[var(--text-dim)]">{duplicateDiscoveryGuidance}</p>}
           {hasScan && (
             <div className="flex flex-wrap items-center gap-2 pt-1">
               {tools.tool === "duplicates" ? (

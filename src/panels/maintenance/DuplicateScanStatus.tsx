@@ -11,6 +11,8 @@ function displayScanError(entry: string): string {
   return path ? `${path}: ${entry.slice(delimiter + 2)}` : `Path unavailable: ${entry.slice(delimiter + 2)}`;
 }
 
+export const duplicateDiscoveryGuidance = "Changing this requires a new scan. Local-drive scans skip dot-named folders, .DS_Store files and .bin, .dll and .jar files. Choose folders to scan without these local-drive filters; the minimum size and other safety exclusions still apply.";
+
 export function DuplicateScanStatus({ progress, scan, scanning, local }: { progress?: DuplicateProgress; scan?: DuplicateScan; scanning: boolean; local: boolean }) {
   const state = scanning ? progress : scan;
   const roots = state?.scopeRoots ?? [];
@@ -23,7 +25,6 @@ export function DuplicateScanStatus({ progress, scan, scanning, local }: { progr
   return <div className="rounded-[var(--r)] border border-[var(--border)] bg-[var(--surface-2)] p-3 text-xs">
     <div className="flex flex-wrap items-center gap-2"><strong>{local ? "All eligible local fixed drive letters" : "Selected folders"}</strong><Badge tone={scanning ? "accent" : scan?.cancelled || hasSafeExclusions ? "warning" : "success"}>{scanning ? progress?.phase === "hashing" ? "Comparing file contents" : "Discovering files" : scan ? scan.cancelled ? "Cancelled · partial results" : hasSafeExclusions ? "Scan finished · exclusions shown" : "Scan finished" : "Automatic read-only scan"}</Badge></div>
     {roots.length > 0 && <ul aria-label="Duplicate scan scope" className="mt-2 flex flex-wrap gap-x-4 gap-y-1 font-mono">{roots.map((root, index) => <li key={`${root}-${index}`} className="break-all">{displayScanPath(root)}</li>)}</ul>}
-    {local && <p className="mt-2 text-[var(--text-dim)]">Local-drive scans exclude dot-named folders and .bin, .dll, .jar and .DS_Store files. Choose folders to include these items, subject to the existing safety policy.</p>}
     {!!state?.filterExcludedDirectories && <p className="mt-2 text-[var(--warn)]">{state.filterExcludedDirectories.toLocaleString()} dot-named folder{state.filterExcludedDirectories === 1 ? "" : "s"} excluded (contents not counted)</p>}
     {!!state?.filterExcludedFiles && <p className="mt-2 text-[var(--warn)]">{state.filterExcludedFiles.toLocaleString()} files excluded by local scan filters</p>}
     {scanning && progress && <div role="status" aria-live="polite" className="mt-2 flex flex-col gap-1 text-[var(--text-dim)]">
