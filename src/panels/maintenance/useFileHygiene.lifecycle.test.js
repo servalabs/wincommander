@@ -32,7 +32,8 @@ mock.module("../../hooks/useBackend", () => ({ useBackend: () => ({
   duplicateFinderProgress: async () => ({}),
   emptyFolderCleanerScan: emptyScan, emptyFolderCleanerRemove: emptyRemove,
 }) }));
-mock.module("../../hooks/useMaintenanceHistory", () => ({ recordMaintenanceOperation: () => {} }));
+const history = [];
+mock.module("../../hooks/useMaintenanceHistory", () => ({ recordMaintenanceOperation: (entry) => history.push(entry) }));
 
 const { useFileHygiene } = await import("./useFileHygiene");
 const { primeMaintenanceSessionValue } = await import("./maintenanceSessionState");
@@ -44,8 +45,10 @@ test("removal invalidates results and navigation does not trigger another scan",
   await act(async () => { root.render(React.createElement(Harness)); });
   expect(scan).toHaveBeenCalledTimes(1);
   expect(current.duplicateScan?.scanId).toBe("scan");
+  await act(async () => { primeMaintenanceSessionValue("file-hygiene.empty-scan", { folders: [{ id: "prior" }] }); });
   await act(async () => { await current.remove("remove"); });
   expect(current.duplicateScan).toBeUndefined();
+  expect(current.emptyScan).toBeUndefined();
   expect(scan).toHaveBeenCalledTimes(1);
   await act(async () => { root.unmount(); });
   root = createRoot(document.getElementById("root"));
@@ -57,6 +60,7 @@ test("removal invalidates results and navigation does not trigger another scan",
   await act(async () => { await current.remove("remove"); });
   expect(current.duplicateScan).toBeUndefined();
   expect(current.error).toContain("could not be confirmed");
+  expect(history.at(-1).outcome).toBe("unknown");
   expect(scan).toHaveBeenCalledTimes(2);
   await act(async () => {
     primeMaintenanceSessionValue("file-hygiene.roots", ["fixture"]);
@@ -64,8 +68,10 @@ test("removal invalidates results and navigation does not trigger another scan",
   });
   await act(async () => { await current.scan(); });
   expect(emptyScan).toHaveBeenCalledTimes(1);
+  await act(async () => { primeMaintenanceSessionValue("file-hygiene.duplicate-scan", { scanId: "stale", groups: [] }); });
   await act(async () => { await current.remove("folder"); });
   expect(current.emptyScan).toBeUndefined();
+  expect(current.duplicateScan).toBeUndefined();
   expect(emptyScan).toHaveBeenCalledTimes(1);
   await act(async () => { root.unmount(); });
 });

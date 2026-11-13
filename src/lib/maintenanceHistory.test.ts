@@ -7,6 +7,10 @@ const entry: MaintenanceOperation = {
 };
 
 describe("maintenance operation display history", () => {
+  test("preserves an unconfirmed removal outcome", () => {
+    const uncertain = { ...entry, outcome: "unknown" as const, detail: "Removal outcome could not be confirmed." };
+    expect(parseMaintenanceHistory(JSON.stringify([uncertain]))).toEqual([uncertain]);
+  });
   test("preserves partial results and actual recovered bytes", () => {
     expect(parseMaintenanceHistory(JSON.stringify([entry]))).toEqual([entry]);
   });

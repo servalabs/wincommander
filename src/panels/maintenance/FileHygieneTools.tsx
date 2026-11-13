@@ -90,7 +90,7 @@ export function FileHygieneTools() {
 
   return (
     <div className="maintenance-file-hygiene-tools flex flex-col gap-4">
-      {tools.error && !errorDismissed && <Notice tone="danger" title="Operation failed" message={tools.error} onDismiss={() => setErrorDismissed(true)} />}
+      {tools.error && !errorDismissed && <Notice tone="danger" title={tools.error.startsWith("Removal could not be confirmed.") ? "Removal outcome unknown" : "Operation failed"} message={tools.error} onDismiss={() => setErrorDismissed(true)} />}
       {resultNotice && !resultDismissed && <Notice tone={resultNotice.tone} title={resultNotice.title} message={resultNotice.message} onDismiss={() => setResultDismissed(true)} />}
       <div className={`maintenance-file-hygiene-results${tools.tool === "duplicates" ? " maintenance-file-hygiene-results--duplicates" : ""}`}>
         <div className="maintenance-file-hygiene-header">

@@ -143,14 +143,14 @@ export function useFileHygiene() {
         () => tool === "duplicates"
           ? backend.duplicateFinderRemove(ids, keeperIds as string[])
           : backend.emptyFolderCleanerRemove(ids),
-        () => { if (tool === "duplicates") setDuplicateScan(undefined); else setEmptyScan(undefined); },
+        () => { setDuplicateScan(undefined); setEmptyScan(undefined); },
       );
       setResult(next);
       hasReturnedResult = true;
       recordMaintenanceOperation({ tool: tool === "duplicates" ? "duplicates" : "empty-folders", title: tool === "duplicates" ? "Duplicate file removal" : "Empty folder removal", outcome: next.cancelled ? "cancelled" : next.errors.length ? "partial" : "completed", affectedItems: "filesRemoved" in next ? next.filesRemoved : next.foldersRemoved, bytesRecovered: "bytesRecovered" in next ? next.bytesRecovered : undefined, detail: "bytesRecovered" in next ? "Logical file bytes removed; free space not measured." : undefined });
       setSelected(new Set());
     } catch (cause) {
-      if (!hasReturnedResult) recordMaintenanceOperation({ tool: tool === "duplicates" ? "duplicates" : "empty-folders", title: tool === "duplicates" ? "Duplicate file removal" : "Empty folder removal", outcome: "failed" });
+      if (!hasReturnedResult) recordMaintenanceOperation({ tool: tool === "duplicates" ? "duplicates" : "empty-folders", title: tool === "duplicates" ? "Duplicate file removal" : "Empty folder removal", outcome: "unknown", detail: "Removal outcome could not be confirmed; scan again for updated results." });
       setSelected(new Set());
       setError(hasReturnedResult ? `Removal finished, but recording the result failed. Scan again for updated results: ${String(cause)}` : `Removal could not be confirmed. Scan again for updated results: ${String(cause)}`);
     } finally {

@@ -2,7 +2,7 @@ export const MAINTENANCE_HISTORY_LIMIT = 100;
 export const MAINTENANCE_HISTORY_KEY = "wincommander.maintenance-history.v1";
 
 export const MAINTENANCE_TOOLS = ["cleanup", "duplicates", "empty-folders", "disk-analysis", "startup", "applications", "repair"] as const;
-export const MAINTENANCE_OUTCOMES = ["completed", "partial", "failed", "cancelled"] as const;
+export const MAINTENANCE_OUTCOMES = ["completed", "partial", "failed", "cancelled", "unknown"] as const;
 
 export interface MaintenanceOperationInput {
   tool: typeof MAINTENANCE_TOOLS[number];
