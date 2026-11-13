@@ -627,6 +627,29 @@ fn blocked_copies_expose_only_stable_non_sensitive_reason_codes() {
 }
 
 #[test]
+fn literal_git_metadata_is_reviewable_but_not_removable() {
+    let dir = tempfile::tempdir().unwrap();
+    let object_dir = dir.path().join(".GiT").join("lfs").join("objects");
+    std::fs::create_dir_all(&object_dir).unwrap();
+    std::fs::write(object_dir.join("fixture-object"), b"synthetic duplicate").unwrap();
+    std::fs::write(dir.path().join("copy.bin"), b"synthetic duplicate").unwrap();
+    let (page, files, _) = scan_fixture(
+        &[std::fs::canonicalize(dir.path()).unwrap()],
+        &AtomicBool::new(false),
+    );
+    let group = page.groups.iter().find(|group| group.file_count == 2).unwrap();
+    let row = group.files.iter().find(|file| file.name == "fixture-object").unwrap();
+    assert!(!row.removable);
+    assert_eq!(row.removal_block_reason, Some("git_metadata"));
+    let object = files.values().find(|file| file.path.ends_with("fixture-object")).unwrap().clone();
+    let keeper = files.values().find(|file| file.path.ends_with("copy.bin")).unwrap().clone();
+    let result = safety::remove_files(vec![object.clone()], vec![keeper], &AtomicBool::new(false));
+    assert_eq!(result.files_removed, 0);
+    assert!(result.errors.iter().any(|error| error.contains("Git metadata is protected")));
+    assert!(object.path.exists());
+}
+
+#[test]
 fn backend_refuses_executable_removal_even_if_selection_is_forged() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("one.exe"), b"same").unwrap();
