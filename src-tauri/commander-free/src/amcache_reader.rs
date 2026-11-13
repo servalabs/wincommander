@@ -1,4 +1,6 @@
 //! Read an Amcache hive from a private VSS snapshot. Never writes to the hive.
+mod fields;
+
 use notatin::{cell_value::CellValue, log::LogCode, parser_builder::ParserBuilder};
 use serde_json::{json, Map, Value};
 use std::{fs, io::Read, path::Path};
@@ -269,15 +271,7 @@ pub fn read_amcache_snapshot(path: &Path) -> Result<Value, String> {
                     };
                     values.insert(value.get_pretty_name(), v);
                 }
-                let first = |names: &[&str]| {
-                    names
-                        .iter()
-                        .find_map(|name| values.get(*name).and_then(Value::as_str))
-                        .unwrap_or("")
-                        .to_string()
-                };
-                let name = first(&["Name", "ProductName", "BinFileVersion"]);
-                let path = first(&["LowerCaseLongPath", "LongPathHash"]);
+                let (name, path) = fields::inventory_text_fields(&values);
                 sample.push(
                     json!({"id":child.key_name,"name":name,"path":path,"registryValues":values}),
                 );

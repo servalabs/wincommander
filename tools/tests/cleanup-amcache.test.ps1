@@ -12,6 +12,7 @@ $script:childCount = 3
 $script:denyNativeRoot = $false; $script:emptyLegacy = $false
 $script:missingHive = $false; $script:denyHiveParent = $false
 $script:missingRecord = $false
+$script:recordMode = 'normal'
 function Get-Item {
     [CmdletBinding()] param([string]$LiteralPath, [string]$Path)
     if ($LiteralPath -like '*Amcache.hve') {
@@ -36,6 +37,8 @@ function Get-ChildItem {
 function Get-ItemProperty {
     [CmdletBinding()] param([Parameter(Position=0)][string]$Path)
     if ($script:missingRecord -and $Path -eq 'mock2') { throw [System.Management.Automation.ItemNotFoundException]::new('Record disappeared') }
+    if ($script:recordMode -eq 'hash-only') { return [pscustomobject]@{ Name = ''; ProductName = ''; FileName = ''; BinFileVersion = '1.2.3'; LowerCaseLongPath = ''; LongPath = ''; LongPathHash = 'abc123' } }
+    if ($script:recordMode -eq 'fallback') { return [pscustomobject]@{ Name = ''; ProductName = ''; FileName = 'example.exe'; BinFileVersion = ''; LowerCaseLongPath = ''; LongPath = 'C:\Mock\real.exe'; LongPathHash = '' } }
     [pscustomobject]@{ Name = ''; ProductName = 'Example'; BinFileVersion = ''; LowerCaseLongPath = 'C:\Mock\example.exe'; LongPathHash = ''; Publisher = 'Synthetic publisher' }
 }
 
@@ -46,6 +49,17 @@ if ($result.coverage -ne 'limited' -or $result.coverageNote -notmatch 'offline A
 if (-not $result.hveFileExists -or $result.hveFileSizeMb -ne 0) { throw 'A zero-byte existing hive was reported as absent.' }
 if ($result.entries[0].sample[0].name -ne 'Example' -or $result.entries[0].sample[0].path -ne 'C:\Mock\example.exe') { throw 'Sample names or paths were not preserved.' }
 if ($result.entries[0].sample[0].registryValues.Publisher -ne 'Synthetic publisher') { throw 'An additional captured Amcache field was discarded.' }
+$script:recordMode = 'hash-only'
+$hashOnly = (Get-AmcacheEntries).entries[0].sample[0]
+if ($hashOnly.name -ne '' -or $hashOnly.path -ne '' -or $hashOnly.registryValues.BinFileVersion -ne '1.2.3' -or $hashOnly.registryValues.LongPathHash -ne 'abc123') { throw 'A version or hash was mislabeled as a name or path, or raw values were lost.' }
+$hashFleet = (Get-AmcacheEntries -FleetProjection).entries[0].sample[0]
+if ($hashFleet.name -ne '' -or $hashFleet.path -ne '' -or $hashFleet.ContainsKey('registryValues')) { throw 'Fleet projection mislabeled fields or exposed raw values.' }
+$script:recordMode = 'fallback'
+$fallback = (Get-AmcacheEntries).entries[0].sample[0]
+if ($fallback.name -ne 'example.exe' -or $fallback.path -ne 'C:\Mock\real.exe') { throw 'Real filename or long-path fallback was lost.' }
+$fallbackFleet = (Get-AmcacheEntries -FleetProjection).entries[0].sample[0]
+if ($fallbackFleet.name -ne '' -or $fallbackFleet.path -ne '' -or $fallbackFleet.ContainsKey('registryValues')) { throw 'New local-only fallback values widened Fleet output.' }
+$script:recordMode = 'normal'
 foreach ($count in @(0, 1)) {
     $script:childCount = $count
     $single = Get-AmcacheEntries
