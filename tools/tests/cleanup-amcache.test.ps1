@@ -11,6 +11,7 @@ $script:denyCategory = $false; $script:mountMissing = $false; $script:availableM
 $script:childCount = 3
 $script:denyNativeRoot = $false; $script:emptyLegacy = $false
 $script:missingHive = $false; $script:denyHiveParent = $false
+$script:missingRecord = $false
 function Get-Item {
     [CmdletBinding()] param([string]$LiteralPath, [string]$Path)
     if ($LiteralPath -like '*Amcache.hve') {
@@ -34,12 +35,14 @@ function Get-ChildItem {
 }
 function Get-ItemProperty {
     [CmdletBinding()] param([Parameter(Position=0)][string]$Path)
+    if ($script:missingRecord -and $Path -eq 'mock2') { throw [System.Management.Automation.ItemNotFoundException]::new('Record disappeared') }
     [pscustomobject]@{ Name = ''; ProductName = 'Example'; BinFileVersion = ''; LowerCaseLongPath = 'C:\Mock\example.exe'; LongPathHash = ''; Publisher = 'Synthetic publisher' }
 }
 
 $result = Get-AmcacheEntries
 if ($result.error -or $result.total -ne 15 -or @($result.entries).Count -ne 5) { throw 'The five category counts did not total 15.' }
 if ($result.inventoryRoot -ne 'HKLM:\Amcache\Root') { throw 'The already-mounted native hive root was not used.' }
+if ($result.coverage -ne 'limited' -or $result.coverageNote -notmatch 'offline Amcache file is not read') { throw 'The mounted-only scan must explain its limitations.' }
 if (-not $result.hveFileExists -or $result.hveFileSizeMb -ne 0) { throw 'A zero-byte existing hive was reported as absent.' }
 if ($result.entries[0].sample[0].name -ne 'Example' -or $result.entries[0].sample[0].path -ne 'C:\Mock\example.exe') { throw 'Sample names or paths were not preserved.' }
 if ($result.entries[0].sample[0].registryValues.Publisher -ne 'Synthetic publisher') { throw 'An additional captured Amcache field was discarded.' }
@@ -80,4 +83,7 @@ if (-not $placeholder.partial -or $placeholder.status -ne 'unavailable' -or $pla
 $script:emptyLegacy = $false
 $recognizedFallback = Get-AmcacheEntries
 if ($recognizedFallback.partial -or $recognizedFallback.total -ne 15 -or $recognizedFallback.inventoryRoot -ne 'HKLM:\AppCompatCache\Amcache') { throw 'A fallback with real inventory categories was not accepted.' }
+$script:denyNativeRoot = $false; $script:missingRecord = $true
+$vanished = Get-AmcacheEntries
+if (-not $vanished.error) { throw 'A record disappearing while it was read was silently reported as a complete inventory.' }
 Write-Output 'Passed: totals, samples, zero-byte existence and denied-read behavior.'

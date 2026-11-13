@@ -3114,8 +3114,14 @@ function Get-AmcacheEntries {
             $count = 0
             $sample = @()
             if (-not $mountAvailable) { $entries += @{ category = $cat.name; count = 0; sample = @() }; continue }
+            $categoryPresent = $false
             try {
                 $null = Get-Item -Path $cat.path -ErrorAction Stop
+                $categoryPresent = $true
+            } catch [System.Management.Automation.ItemNotFoundException] {
+                # This registry category is absent on this Windows build.
+            }
+            if ($categoryPresent) {
                 $children = @(Get-ChildItem -Path $cat.path -ErrorAction Stop)
                 $count = ($children | Measure-Object).Count
                 $sample = @($children | ForEach-Object {
@@ -3139,8 +3145,6 @@ function Get-AmcacheEntries {
                     }
                     $entry
                 })
-            } catch [System.Management.Automation.ItemNotFoundException] {
-                # This registry category is absent on this Windows build.
             }
             $entries += @{ category = $cat.name; count = $count; sample = $sample }
         }
@@ -3154,7 +3158,7 @@ function Get-AmcacheEntries {
             elseif ($hveReadError -or $mountErrors.Count) { 'App Launch Cache inventory is unavailable. Windows could not verify access to its file or registry locations. Open WinCommander as administrator and scan again.' }
             else { 'App Launch Cache inventory is unavailable. This scan cannot read the offline Amcache file, so no records were scanned.' }
         } else { $null }
-        @{ entries = $entries; hveFileSizeMb = $hveSize; hveFileExists = $hveExists; inventoryRoot = $inventoryRoot; total = if ($partial) { $null } else { $totalCount }; partial = $partial; status = if ($partial) { 'unavailable' } else { 'complete' }; message = $message }
+        @{ entries = $entries; hveFileSizeMb = $hveSize; hveFileExists = $hveExists; inventoryRoot = $inventoryRoot; total = if ($partial) { $null } else { $totalCount }; partial = $partial; status = if ($partial) { 'unavailable' } else { 'complete' }; message = $message; coverage = 'limited'; coverageNote = 'Reads the available mounted Windows registry inventory only. The offline Amcache file is not read by this scan.' }
     }
     catch { @{ error = $true; message = $_.Exception.Message } }
 }
