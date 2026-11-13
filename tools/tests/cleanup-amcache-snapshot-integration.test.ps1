@@ -8,6 +8,8 @@ if (-not $failureDefinition) { throw 'Snapshot diagnostic mapping is missing.' }
 . ([scriptblock]::Create($failureDefinition.Extent.Text))
 if ((Get-WCAmcacheSnapshotFailureMessage 'At least 1 GiB of free space is required') -notmatch '1 GiB') { throw 'Low disk space was not explained.' }
 if ((Get-WCAmcacheSnapshotFailureMessage 'Unable to create snapshot (Windows error 0x80070005).') -notmatch 'administrator') { throw 'Access denied was not explained.' }
+if ((Get-WCAmcacheSnapshotFailureMessage 'The temporary snapshot could not be confirmed removed (Windows error 0x80070005).') -notmatch 'could not confirm removal') { throw 'Snapshot cleanup failure was masked as access denied.' }
+if ((Get-WCAmcacheSnapshotFailureMessage 'The temporary snapshot could not be confirmed removed: secret-file-name') -match 'secret-file-name') { throw 'Snapshot cleanup failure leaked collector output.' }
 if ((Get-WCAmcacheSnapshotFailureMessage 'secret-file-name untrusted diagnostic') -match 'secret-file-name') { throw 'Raw collector output leaked into diagnostics.' }
 $definition = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-WCAmcacheSnapshotInventory' }, $true)
 if (-not $definition) { throw 'Snapshot integration is missing.' }

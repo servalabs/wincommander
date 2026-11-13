@@ -2980,6 +2980,7 @@ function Get-WCAmcacheSnapshotFailureMessage {
     param([string]$Diagnostic)
     # Only translate fixed failure categories. Never echo the collector's
     # output: registry data and paths must not leak through error messages.
+    if ($Diagnostic -match '(?i)temporary snapshot could not be confirmed removed') { return 'Windows could not confirm removal of the temporary App Launch Cache snapshot. No records were reported.' }
     if ($Diagnostic -match 'At least 1 GiB of free space') { return 'App Launch Cache needs at least 1 GiB of free space on the Windows drive to take a temporary snapshot.' }
     if ($Diagnostic -match '(?i)0x80070005|access is denied') { return 'App Launch Cache needs administrator access to read a temporary Windows snapshot.' }
     if ($Diagnostic -match '(?i)0x8007041D|0x8004230[0-9A-F]|0x80070002') { return 'Windows could not create a temporary snapshot. Check that Volume Shadow Copy is available and scan again.' }
