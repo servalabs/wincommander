@@ -30,6 +30,7 @@ const OBJ_DONT_REPARSE: u32 = 0x1000;
 const FILE_ID_BOTH_DIRECTORY_INFO: i32 = 10;
 const FILE_ID_BOTH_DIRECTORY_RESTART_INFO: i32 = 11;
 const FILE_DISPOSITION_INFO_CLASS: i32 = 4;
+const FILE_DISPOSITION_INFO_EX_CLASS: i32 = 21;
 const ERROR_NO_MORE_FILES: i32 = 18;
 const MAX_ENTRIES: usize = 10_000;
 const MAX_DEPTH: usize = 128;
@@ -946,20 +947,31 @@ pub(crate) fn delete_prepared(mut tree: PreparedTree) -> Result<usize, DeleteFai
     let mut processed = 0usize;
     while let Some(Pinned { file, is_dir }) = tree.entries.pop() {
         let disposition: u8 = 1; // FILE_DISPOSITION_INFO.DeleteFile
+        // Unlink the verified handle on close even when another process has a
+        // delete-sharing handle open. Keep Windows' image-section check.
+        let extended_disposition: u32 = 0x1 | 0x2 | 0x4;
         let mut retries = 0;
         loop {
-            if unsafe {
+            let extended = unsafe {
+                SetFileInformationByHandle(
+                    file.as_raw_handle(), FILE_DISPOSITION_INFO_EX_CLASS,
+                    (&extended_disposition as *const u32).cast(), 4,
+                )
+            };
+            let extended_error = if extended == 0 { Some(io::Error::last_os_error()) } else { None };
+            let legacy = extended_error.as_ref().is_some_and(|error| matches!(error.raw_os_error(), Some(1 | 50 | 87)));
+            if extended != 0 || (legacy && unsafe {
                 SetFileInformationByHandle(
                     file.as_raw_handle(),
                     FILE_DISPOSITION_INFO_CLASS,
                     (&disposition as *const u8).cast(),
                     1,
                 )
-            } != 0
+            } != 0)
             {
                 break;
             }
-            let error = io::Error::last_os_error();
+            let error = if legacy { io::Error::last_os_error() } else { extended_error.unwrap() };
             // A child marked for deletion can remain pending briefly after its
             // handle closes. Never retry indefinitely when a new child exists.
             if !is_dir || error.raw_os_error() != Some(145) || retries >= 20 {
@@ -1179,6 +1191,41 @@ mod tests {
         assert_eq!(error.to_string(), "application, executable or codec file is protected");
         assert!(target.join("safe.txt").exists());
         assert!(target.join("protected.exe").exists());
+    }
+
+    #[test]
+    fn removes_nested_tree_with_file_at_each_level() {
+        let f = Fixture::new();
+        let target = f.target();
+        std::fs::create_dir_all(target.join("nested")).unwrap();
+        std::fs::write(target.join("first.txt"), b"first").unwrap();
+        std::fs::write(target.join("nested").join("second.txt"), b"second").unwrap();
+        // Allow filesystem watchers to observe the folders, as in the app.
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        let expected = selected_identity(&target);
+        let handles = prepare(&target, expected, ProtectedRoots::pin(&[]).unwrap()).unwrap();
+        delete_prepared(handles).unwrap();
+        assert!(!target.exists());
+    }
+
+    #[test]
+    fn deletes_nested_tree_with_a_shared_directory_handle() {
+        let f = Fixture::new();
+        let target = f.target();
+        let nested = target.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("second.txt"), b"second").unwrap();
+        let watcher = OpenOptions::new()
+            .access_mode(READ_ATTRIBUTES | LIST_DIRECTORY | SYNCHRONIZE)
+            .share_mode(SHARE_READ_WRITE | 0x4)
+            .custom_flags(BACKUP_SEMANTICS)
+            .open(&nested).unwrap();
+        let expected = selected_identity(&target);
+        let handles = prepare(&target, expected, ProtectedRoots::pin(&[]).unwrap()).unwrap();
+        let result = delete_prepared(handles);
+        drop(watcher);
+        result.unwrap();
+        assert!(!target.exists());
     }
 
     #[test]
