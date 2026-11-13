@@ -44,7 +44,12 @@ function Get-Item {
 }
 try {
     $local = Get-WCAmcacheSnapshotInventory
-    if (-not $local -or $local.total -ne 1 -or $local.entries[0].sample[0].registryValues.Publisher -ne 'synthetic') { throw 'A valid local snapshot was not retained.' }
+    $record = $local.entries[0].sample[0]
+    if (-not $local -or $local.total -ne 1 -or $record.id -ne 'synthetic' -or $record.name -ne 'app' -or $record.path -ne 'C:\app.exe' -or $record.registryValues.Publisher -ne 'synthetic') { throw 'A valid local snapshot lost its identity or details.' }
+    # Simulate the router's JSON boundary, not just the intermediate hashtable.
+    $wire = ($local | ConvertTo-Json -Depth 10 -Compress) | ConvertFrom-Json
+    $wireRecord = $wire.entries[0].sample[0]
+    if ($wireRecord.id -ne 'synthetic' -or $wireRecord.name -ne 'app' -or $wireRecord.path -ne 'C:\app.exe' -or $wireRecord.registryValues.Publisher -ne 'synthetic') { throw 'Snapshot record details were lost during JSON serialization.' }
     $fleet = Get-WCAmcacheSnapshotInventory -FleetProjection
     if (-not $fleet -or $fleet.entries[0].sample[0].ContainsKey('registryValues')) { throw 'Fleet received local-only registry values.' }
     $scan = Get-AmcacheEntries

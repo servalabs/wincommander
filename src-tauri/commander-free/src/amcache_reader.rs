@@ -13,6 +13,29 @@ const CATEGORIES: [&str; 5] = [
     "InventoryDriverBinary",
 ];
 
+// A registry hash or file version is not an application path or name. Keep
+// these fields empty when Windows did not provide a meaningful value; the
+// original values remain available in registryValues for inspection.
+fn inventory_text_fields(values: &Map<String, Value>) -> (String, String) {
+    let first = |names: &[&str]| {
+        names
+            .iter()
+            .find_map(|name| {
+                values
+                    .iter()
+                    .find(|(key, _)| key.eq_ignore_ascii_case(name))
+                    .and_then(|(_, value)| value.as_str())
+                    .filter(|value| !value.trim().is_empty())
+            })
+            .unwrap_or("")
+            .to_string()
+    };
+    (
+        first(&["Name", "ProductName", "FileName"]),
+        first(&["LowerCaseLongPath", "LongPath"]),
+    )
+}
+
 fn read_bounded(path: &Path) -> Result<Vec<u8>, String> {
     let mut f = fs::File::open(path)
         .map_err(|_| "A snapshot registry file could not be read".to_owned())?;
@@ -269,15 +292,7 @@ pub fn read_amcache_snapshot(path: &Path) -> Result<Value, String> {
                     };
                     values.insert(value.get_pretty_name(), v);
                 }
-                let first = |names: &[&str]| {
-                    names
-                        .iter()
-                        .find_map(|name| values.get(*name).and_then(Value::as_str))
-                        .unwrap_or("")
-                        .to_string()
-                };
-                let name = first(&["Name", "ProductName", "BinFileVersion"]);
-                let path = first(&["LowerCaseLongPath", "LongPathHash"]);
+                let (name, path) = inventory_text_fields(&values);
                 sample.push(
                     json!({"id":child.key_name,"name":name,"path":path,"registryValues":values}),
                 );
@@ -299,6 +314,22 @@ pub fn read_amcache_snapshot(path: &Path) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn inventory_names_and_paths_do_not_confuse_hashes_or_versions_for_names() {
+        let mut values = Map::new();
+        values.insert("LongPathHash".into(), json!("abc123"));
+        values.insert("BinFileVersion".into(), json!("1.2.3"));
+        assert_eq!(
+            inventory_text_fields(&values),
+            (String::new(), String::new())
+        );
+        values.insert("productname".into(), json!("Example app"));
+        values.insert("LowerCaseLongPath".into(), json!(r"c:\apps\example.exe"));
+        assert_eq!(
+            inventory_text_fields(&values),
+            ("Example app".into(), r"c:\apps\example.exe".into())
+        );
+    }
     fn fix_checksum(b: &mut [u8]) {
         let mut n = 0;
         for offset in (0..508).step_by(4) {
@@ -355,8 +386,8 @@ mod tests {
             fs::read(dir.join("system.log1")).unwrap(),
             fs::read(dir.join("system.log2")).unwrap(),
         ];
-        let parser =
-            parse_snapshot(hive.clone(), logs.clone()).expect("unmodified fixture logs must replay");
+        let parser = parse_snapshot(hive.clone(), logs.clone())
+            .expect("unmodified fixture logs must replay");
         let (keys, values) = parser.count_all_keys_and_values(None);
         assert_eq!((keys, values), (45587, 108178));
         let mut corrupted = logs;
