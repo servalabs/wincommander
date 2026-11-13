@@ -3,6 +3,36 @@ use super::*;
 static SERIAL: Mutex<()> = Mutex::new(());
 
 #[test]
+fn dot_directories_are_skipped_unless_explicitly_selected_as_roots() {
+    let _serial = SERIAL.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let hidden = temp.path().join(".managed");
+    std::fs::create_dir(&hidden).unwrap();
+    std::fs::write(temp.path().join("visible"), b"same content").unwrap();
+    std::fs::write(hidden.join("hidden-a"), b"same content").unwrap();
+    std::fs::write(hidden.join("hidden-b"), b"same content").unwrap();
+
+    let root = std::fs::canonicalize(temp.path()).unwrap();
+    scope::begin(std::slice::from_ref(&root), Vec::new(), 0);
+    let index = scan::scan_roots(&[root], 0, &AtomicBool::new(false)).unwrap();
+    let count: i64 = index
+        .connection
+        .query_row("SELECT count(*) FROM files", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(count, 1, "broad discovery must omit implementation directories");
+    drop(index);
+
+    let root = std::fs::canonicalize(hidden).unwrap();
+    scope::begin(std::slice::from_ref(&root), Vec::new(), 0);
+    let index = scan::scan_roots(&[root], 0, &AtomicBool::new(false)).unwrap();
+    let count: i64 = index
+        .connection
+        .query_row("SELECT count(*) FROM files", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(count, 2, "a directly selected directory must remain inspectable");
+}
+
+#[test]
 fn inventory_excludes_its_own_database_inside_the_scanned_folder() {
     let _serial = SERIAL.lock().unwrap();
     let root = tempfile::tempdir().unwrap();
@@ -543,8 +573,14 @@ fn git_object_copy_is_verified_for_review_but_cannot_be_deleted() {
     std::fs::create_dir_all(&object_dir).unwrap();
     std::fs::write(object_dir.join("aabbcc"), b"matching video bytes").unwrap();
     std::fs::write(dir.path().join("video.mp4"), b"matching video bytes").unwrap();
+    // A hidden Git root is discoverable only when the caller explicitly adds it.
+    // It must remain protected even when deliberately included alongside a
+    // visible copy with identical contents.
     let (page, files, _) = scan_fixture(
-        &[std::fs::canonicalize(dir.path()).unwrap()],
+        &[
+            std::fs::canonicalize(dir.path()).unwrap(),
+            std::fs::canonicalize(dir.path().join(".GiT")).unwrap(),
+        ],
         &AtomicBool::new(false),
     );
     assert_eq!(page.groups.len(), 1, "identical contents form a verified group");

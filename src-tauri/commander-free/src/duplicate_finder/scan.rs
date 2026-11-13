@@ -24,8 +24,73 @@ const HASH_PROGRESS_BATCH_BYTES: u64 = 4 * 1024 * 1024;
 const SAMPLE_WINDOW_BYTES: u64 = 16 * 1024;
 const HASH_BUFFER_BYTES: usize = 1024 * 1024;
 
+// Omit common application payloads only for a drive or home-wide search.
+// Explicitly choosing a narrower folder keeps these file types searchable.
+fn is_broad_scan_root(root: &Path) -> bool {
+    let root = root.to_string_lossy().replace('/', "\\").to_lowercase();
+    let root = root.trim_end_matches('\\');
+    let contains = |path: &Path| {
+        let path = path.to_string_lossy().replace('/', "\\").to_lowercase();
+        path == root
+            || path
+                .strip_prefix(root)
+                .is_some_and(|tail| tail.starts_with('\\'))
+    };
+    let home_is_within = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .and_then(|home| fs::canonicalize(home).ok())
+        .is_some_and(|home| contains(&home));
+    #[cfg(windows)]
+    let is_system_volume = std::env::var_os("SystemRoot")
+        .and_then(|path| fs::canonicalize(path).ok())
+        .and_then(|path| path.ancestors().last().map(Path::to_path_buf))
+        .is_some_and(|volume| {
+            volume
+                .to_string_lossy()
+                .replace('/', "\\")
+                .trim_end_matches('\\')
+                .eq_ignore_ascii_case(root)
+        });
+    #[cfg(not(windows))]
+    let is_system_volume = root.is_empty();
+    home_is_within || is_system_volume
+}
+
+fn excluded_discovery_file(path: &Path, broad: bool) -> bool {
+    if path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case(".DS_Store"))
+    {
+        return true;
+    }
+    broad
+        && path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                ["bin", "dll", "jar"]
+                    .iter()
+                    .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+            })
+}
+
 type CandidateRow = (i64, String, u64, Option<u32>, Option<String>);
 type DirectoryListing = Result<Vec<Result<InventoryEntry, (PathBuf, String)>>, String>;
+
+#[cfg(test)]
+mod discovery_scope_tests {
+    use super::*;
+
+    #[test]
+    fn broad_scan_skips_binary_payloads_but_explicit_folder_can_find_them() {
+        assert!(excluded_discovery_file(Path::new("example.DLL"), true));
+        assert!(excluded_discovery_file(Path::new("example.bin"), true));
+        assert!(excluded_discovery_file(Path::new("example.jar"), true));
+        assert!(!excluded_discovery_file(Path::new("example.bin"), false));
+        assert!(!excluded_discovery_file(Path::new("example.mp4"), true));
+        assert!(excluded_discovery_file(Path::new(".DS_Store"), false));
+    }
+}
 
 enum InventoryKind {
     Directory,
@@ -97,6 +162,10 @@ pub(super) fn enumerate(
         .map_err(|error| error.to_string())?;
     let mut pending = VecDeque::new();
     let mut queued = HashSet::new();
+    let broad_roots: HashSet<String> = roots
+        .iter()
+        .filter_map(|(path, root)| is_broad_scan_root(Path::new(path)).then_some(root.clone()))
+        .collect();
     for (path, root) in roots {
         if queued.insert(path.clone()) {
             pending.push_back((PathBuf::from(path), root));
@@ -203,10 +272,25 @@ pub(super) fn enumerate(
                             continue;
                         };
                         if matches!(entry.kind, InventoryKind::Directory) {
+                            // Implementation directories such as .git and .worktrees
+                            // are omitted during traversal. An explicitly selected
+                            // dot-prefixed root is still scanned because roots enter
+                            // the queue directly rather than through this branch.
+                            if entry
+                                .path
+                                .file_name()
+                                .and_then(|name| name.to_str())
+                                .is_some_and(|name| name.starts_with('.'))
+                            {
+                                continue;
+                            }
                             if queued.insert(display_path.to_owned()) {
                                 pending.push_back((entry.path, root.clone()));
                             }
                         } else if matches!(entry.kind, InventoryKind::File) {
+                            if excluded_discovery_file(&entry.path, broad_roots.contains(&root)) {
+                                continue;
+                            }
                             if entry.size < minimum_size_bytes {
                                 skipped_small += 1;
                                 continue;
