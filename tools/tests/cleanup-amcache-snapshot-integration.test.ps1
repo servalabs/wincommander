@@ -3,6 +3,12 @@ $path = Join-Path $PSScriptRoot '..\..\src-tauri\commander-free\scripts\modules\
 $tokens = $null; $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path), [ref]$tokens, [ref]$errors)
 if ($errors.Count) { throw 'Cleanup source did not parse.' }
+$failureDefinition = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-WCAmcacheSnapshotFailureMessage' }, $true)
+if (-not $failureDefinition) { throw 'Snapshot diagnostic mapping is missing.' }
+. ([scriptblock]::Create($failureDefinition.Extent.Text))
+if ((Get-WCAmcacheSnapshotFailureMessage 'At least 1 GiB of free space is required') -notmatch '1 GiB') { throw 'Low disk space was not explained.' }
+if ((Get-WCAmcacheSnapshotFailureMessage 'Unable to create snapshot (Windows error 0x80070005).') -notmatch 'administrator') { throw 'Access denied was not explained.' }
+if ((Get-WCAmcacheSnapshotFailureMessage 'secret-file-name untrusted diagnostic') -match 'secret-file-name') { throw 'Raw collector output leaked into diagnostics.' }
 $definition = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-WCAmcacheSnapshotInventory' }, $true)
 if (-not $definition) { throw 'Snapshot integration is missing.' }
 . ([scriptblock]::Create($definition.Extent.Text))
@@ -24,6 +30,7 @@ $script:result = @{
     )
 }
 function Invoke-WCAmcacheNativeCollector {
+    if ($script:mockSnapshotFailure) { $script:WCAmcacheSnapshotFailure = 'App Launch Cache needs administrator access to read a temporary Windows snapshot.'; return $null }
     $script:result | ConvertTo-Json -Depth 10 -Compress
 }
 function Get-Item {
@@ -38,6 +45,10 @@ try {
     if (-not $fleet -or $fleet.entries[0].sample[0].ContainsKey('registryValues')) { throw 'Fleet received local-only registry values.' }
     $scan = Get-AmcacheEntries
     if ($scan.status -ne 'complete' -or $scan.source -ne 'snapshot' -or $scan.total -ne 1 -or -not $scan.hveFileExists) { throw 'The cleanup scan did not use the verified snapshot.' }
+    $script:mockSnapshotFailure = $true
+    $denied = Get-AmcacheEntries
+    if (-not $denied.partial -or $denied.message -notmatch 'administrator access' -or $null -ne $denied.total) { throw 'The snapshot failure was not reported accurately.' }
+    $script:mockSnapshotFailure = $false
     $originalSamples = $script:result.entries[0].sample
     $script:result.entries[0].sample = @(1..3608 | ForEach-Object { @{ id = "id-$_"; name = "app-$_"; path = ''; registryValues = @{ Publisher = 'synthetic' } } })
     $script:result.entries[0].count = 3608; $script:result.total = 3608

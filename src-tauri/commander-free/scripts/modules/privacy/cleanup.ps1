@@ -2973,6 +2973,17 @@ function Get-VirtualMemoryStatus {
 # GROUP I-A: STATUS VIEWERS (Get-* companions for each clear function)
 # ============================================================================
 
+function Get-WCAmcacheSnapshotFailureMessage {
+    param([string]$Diagnostic)
+    # Only translate fixed failure categories. Never echo the collector's
+    # output: registry data and paths must not leak through error messages.
+    if ($Diagnostic -match 'At least 1 GiB of free space') { return 'App Launch Cache needs at least 1 GiB of free space on the Windows drive to take a temporary snapshot.' }
+    if ($Diagnostic -match '(?i)0x80070005|access is denied') { return 'App Launch Cache needs administrator access to read a temporary Windows snapshot.' }
+    if ($Diagnostic -match '(?i)0x8007041D|0x8004230[0-9A-F]|0x80070002') { return 'Windows could not create a temporary snapshot. Check that Volume Shadow Copy is available and scan again.' }
+    if ($Diagnostic -match '(?i)registry.*(log|snapshot|hive)|transaction log|Amcache.*(inventory|entry|categor)') { return 'The App Launch Cache snapshot could not be verified. No records were reported.' }
+    return 'App Launch Cache could not read and verify a temporary snapshot. No records were reported.'
+}
+
 function Invoke-WCAmcacheNativeCollector {
     # WinCommander is a GUI-subsystem executable. PowerShell's call operator
     # does not wait for it reliably, so explicitly own and drain both pipes.
@@ -2993,11 +3004,15 @@ function Invoke-WCAmcacheNativeCollector {
         $stderr = $process.StandardError.ReadToEndAsync()
         if (-not $process.WaitForExit(180000)) {
             try { $process.Kill(); [void]$process.WaitForExit(5000) } catch { }
+            $script:WCAmcacheSnapshotFailure = 'The App Launch Cache snapshot timed out. No records were reported.'
             return $null
         }
         $output = $stdout.GetAwaiter().GetResult()
-        [void]$stderr.GetAwaiter().GetResult()
-        if ($process.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($output)) { return $null }
+        $diagnostic = $stderr.GetAwaiter().GetResult()
+        if ($process.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($output)) {
+            $script:WCAmcacheSnapshotFailure = Get-WCAmcacheSnapshotFailureMessage -Diagnostic $diagnostic
+            return $null
+        }
         return $output
     } catch { return $null }
     finally {
@@ -3013,6 +3028,7 @@ function Get-WCAmcacheSnapshotInventory {
     # The executable is supplied by the native backend, never by a UI parameter.
     # The helper accepts no file path and creates its own temporary snapshot.
     if ($env:WINCMD_AMCACHE_SNAPSHOT_AVAILABLE -ne '1' -or -not $env:WINCMD_EXE_PATH) { return $null }
+    $script:WCAmcacheSnapshotFailure = $null
     try {
         $output = Invoke-WCAmcacheNativeCollector
         if (-not $output) { return $null }
@@ -3151,7 +3167,8 @@ function Get-AmcacheEntries {
         foreach ($entry in $entries) { $totalCount += [int]$entry['count'] }
         $partial = -not $mountAvailable -and ($hveExists -or $hveReadError -or $mountErrors.Count -gt 0)
         $message = if ($partial) {
-            if ($snapshotAttempted) { 'App Launch Cache inventory is unavailable. The temporary snapshot could not be read or verified. Check administrator access and scan again.' }
+            if ($snapshotAttempted -and $script:WCAmcacheSnapshotFailure) { $script:WCAmcacheSnapshotFailure }
+            elseif ($snapshotAttempted) { 'App Launch Cache inventory is unavailable. The temporary snapshot could not be read or verified. No records were reported.' }
             elseif ($hveReadError -or $mountErrors.Count) { 'App Launch Cache inventory is unavailable. Windows could not verify access to its file or registry locations. Open WinCommander as administrator and scan again.' }
             else { 'App Launch Cache inventory is unavailable. This scan cannot read the offline Amcache file, so no records were scanned.' }
         } else { $null }
