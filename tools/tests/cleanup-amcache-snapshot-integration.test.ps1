@@ -38,6 +38,12 @@ try {
     if (-not $fleet -or $fleet.entries[0].sample[0].ContainsKey('registryValues')) { throw 'Fleet received local-only registry values.' }
     $scan = Get-AmcacheEntries
     if ($scan.status -ne 'complete' -or $scan.source -ne 'snapshot' -or $scan.total -ne 1 -or -not $scan.hveFileExists) { throw 'The cleanup scan did not use the verified snapshot.' }
+    $originalSamples = $script:result.entries[0].sample
+    $script:result.entries[0].sample = @(1..3608 | ForEach-Object { @{ id = "id-$_"; name = "app-$_"; path = ''; registryValues = @{ Publisher = 'synthetic' } } })
+    $script:result.entries[0].count = 3608; $script:result.total = 3608
+    $large = Get-WCAmcacheSnapshotInventory
+    if ($large.total -ne 3608 -or $large.entries[0].sample.Count -ne 3608 -or $large.entries[0].sample[3607].id -ne 'id-3608') { throw 'The large inventory lost records or identifiers.' }
+    $script:result.entries[0].sample = $originalSamples; $script:result.entries[0].count = 1; $script:result.total = 1
     $script:result.total = 2
     if ($null -ne (Get-WCAmcacheSnapshotInventory)) { throw 'An inconsistent count was accepted.' }
     if (-not (Get-AmcacheEntries).partial) { throw 'An invalid snapshot did not fall back to unavailable.' }
