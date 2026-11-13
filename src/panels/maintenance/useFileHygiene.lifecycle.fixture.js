@@ -7,12 +7,13 @@ import { createRoot } from "react-dom/client";
 const dom = new JSDOM("<!doctype html><div id='root'></div>", { url: "https://example.test" });
 globalThis.window = dom.window;
 globalThis.document = dom.window.document;
+globalThis.getComputedStyle = dom.window.getComputedStyle.bind(dom.window);
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
-const scan = mock(async () => ({ scanId: "scan", groups: [{ id: "group", files: [
-  { id: "keep", path: "keep", removable: true },
-  { id: "remove", path: "remove", removable: true },
-  { id: "protected", path: "protected", removable: false },
+const file = (id, profileScope = "current", removable = true) => ({ id, name: `${id}.txt`, path: id, profileScope, removable, modified: null, size: 4 });
+const scan = mock(async () => ({ scanId: "scan", groups: [{ id: "group", fileCount: 58, size: 4, reclaimableBytes: 228, memberOffset: 0, hasMoreFiles: false, files: [
+  file("keep"), file("remove"), file("protected", "current", false), file("outside", "outside"),
+  ...Array.from({ length: 54 }, (_, index) => file(`copy-${index}`)),
 ] }] }));
 let fail = false;
 const remove = mock(async () => {
@@ -21,26 +22,36 @@ const remove = mock(async () => {
 });
 const emptyScan = mock(async () => ({ folders: [{ id: "folder", path: "fixture" }] }));
 const emptyRemove = mock(async () => ({ foldersRemoved: 1, errors: [], cancelled: false }));
-mock.module("../../hooks/useBackend", () => ({ useBackend: () => ({
+const useBackendMock = () => ({
   duplicateFinderScanLocal: scan, duplicateFinderRemove: remove,
   duplicateFinderProgress: async () => ({}),
   emptyFolderCleanerScan: emptyScan, emptyFolderCleanerRemove: emptyRemove,
-}) }));
+});
+mock.module("../../hooks/useBackend", () => ({ useBackend: useBackendMock, default: useBackendMock, executeBackendCommand: async () => ({}) }));
 const history = [];
 mock.module("../../hooks/useMaintenanceHistory", () => ({ recordMaintenanceOperation: (entry) => history.push(entry) }));
 
 const { useFileHygiene } = await import("./useFileHygiene");
+const { DuplicateGroups } = await import("./DuplicateGroups");
 const { primeMaintenanceSessionValue } = await import("./maintenanceSessionState");
 let current;
-function Harness() { current = useFileHygiene(); return null; }
+const noFilter = () => {};
+function Harness() { current = useFileHygiene(); return React.createElement(DuplicateGroups, { tools: current, onFilterChange: noFilter, onRemoveFile: noFilter }); }
 
 await (async () => {
   let root = createRoot(document.getElementById("root"));
   await act(async () => { root.render(React.createElement(Harness)); });
   assert.equal(scan.mock.calls.length, 1);
   assert.equal(current.duplicateScan?.scanId, "scan");
-  await act(async () => { current.selectGroupCopies("group"); });
-  assert.deepEqual([...current.selected], ["remove"]);
+  const button = [...document.querySelectorAll("button")].find((item) => item.textContent === "Select shown copies matching profile");
+  assert.ok(button);
+  await act(async () => { button.click(); });
+  assert.equal(current.selected.has("keep"), false);
+  assert.equal(current.selected.has("protected"), false);
+  assert.equal(current.selected.has("outside"), false);
+  assert.equal(current.selected.has("remove"), true);
+  assert.equal(current.selected.has("copy-46"), true);
+  assert.equal(current.selected.has("copy-47"), false);
   await act(async () => { primeMaintenanceSessionValue("file-hygiene.empty-scan", { folders: [{ id: "prior" }] }); });
   await act(async () => { await current.remove("remove"); });
   assert.equal(current.duplicateScan, undefined);

@@ -15,7 +15,7 @@ test("protected copies stay hidden while an eligible copy can be reviewed for re
   expect(html).toContain("including protected");
   expect(html).toContain('aria-label="Filter duplicate file type"');
   expect(html).toContain('aria-pressed="true"');
-  expect(html).toContain("Select removable copies on this page");
+  expect(html).toContain("Select shown copies matching profile");
   expect(html).toContain('title="Remove file"');
 });
 

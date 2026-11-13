@@ -200,14 +200,15 @@ export function useFileHygiene() {
       setRetainedFiles((current) => ({ ...current, [groupId]: fileId }));
       setSelected((current) => { const next = new Set(current); next.delete(fileId); return next; });
     },
-    selectGroupCopies: (groupId: string) => {
+    selectGroupCopies: (groupId: string, visibleIds: string[]) => {
       if (busy || !duplicateScan) return;
       const group = duplicateScan.groups.find((item) => item.id === groupId);
       if (!group) return;
+      const visible = new Set(visibleIds);
       setSelected((current) => {
         const next = new Set(current);
         for (const file of group.files) {
-          if (canRemoveDuplicateFile([group], file.id, keepPolicy, retainedFiles)) next.add(file.id);
+          if (visible.has(file.id) && canRemoveDuplicateFile([group], file.id, keepPolicy, retainedFiles)) next.add(file.id);
         }
         return next;
       });

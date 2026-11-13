@@ -91,17 +91,18 @@ export function DuplicateGroups({ tools, onFilterChange, onRemoveFile }: { tools
         <button key={type.id} type="button" className="duplicate-category" aria-pressed={category === type.id} onClick={() => { setCategory(type.id); setVisibleCount(50); }}>{type.label}</button>)}
     </div>
     <p className="text-xs text-[var(--text-dim)]">Filters apply to loaded groups only. Copies not eligible for removal are hidden here but included in group totals.</p>
-    {filtered.slice(0, visibleCount).map((group, index) => <DuplicateGroupRows key={groupKey(group)} group={group} tools={tools} onRemoveFile={onRemoveFile} open={isExpanded(group)} onOpenChange={(open) => setGroupExpanded(group, open)} groupRef={index === 0 ? firstMatchRef : undefined} />)}
+    {filtered.slice(0, visibleCount).map((group, index) => <DuplicateGroupRows key={groupKey(group)} group={group} profile={profile} tools={tools} onRemoveFile={onRemoveFile} open={isExpanded(group)} onOpenChange={(open) => setGroupExpanded(group, open)} groupRef={index === 0 ? firstMatchRef : undefined} />)}
     {!filtered.length && <p className="duplicate-empty">{groups?.length ? "No groups match this filter. Your selection is unchanged." : tools.duplicateScan?.cancelled ? "No verified groups are available from this partial scan. Scan again to compare the remaining files." : "No identical file groups were found in the returned scan scope."}</p>}
     {filtered.length > visibleCount && <Button size="sm" variant="outline" onClick={() => setVisibleCount((count) => count + 50)}>Show more groups ({filtered.length - visibleCount} remaining)</Button>}
   </section>;
 }
 
-function DuplicateGroupRows({ group, tools, onRemoveFile, open, onOpenChange, groupRef }: { group: DuplicateGroup; tools: Tools; onRemoveFile: (fileId: string) => void; open: boolean; onOpenChange: (open: boolean) => void; groupRef?: React.RefObject<HTMLDetailsElement | null> }) {
+function DuplicateGroupRows({ group, profile, tools, onRemoveFile, open, onOpenChange, groupRef }: { group: DuplicateGroup; profile: string; tools: Tools; onRemoveFile: (fileId: string) => void; open: boolean; onOpenChange: (open: boolean) => void; groupRef?: React.RefObject<HTMLDetailsElement | null> }) {
   const [visibleCount, setVisibleCount] = useState(50);
   const selectedCount = group.files.filter((file) => tools.selected.has(file.id)).length;
   const retainedId = tools.retainedFileId(group);
   const visibleFiles = group.files.filter(file => file.removable === true);
+  const selectableIds = visibleFiles.slice(0, visibleCount).filter(file => profile === "all" || (profile === "current" ? file.profileScope === "current" : duplicateProfileKey(file) === profile)).map(file => file.id);
   return <details ref={groupRef} className="duplicate-group" open={open} onToggle={(event) => onOpenChange(event.currentTarget.open)}>
     <summary>
       <Icon icon={fileType(visibleFiles[0]?.name ?? "")?.icon ?? "document"} size={20} />
@@ -110,7 +111,7 @@ function DuplicateGroupRows({ group, tools, onRemoveFile, open, onOpenChange, gr
       <Icon icon="chevron-down" size={14} />
     </summary>
     <div className="duplicate-members">
-      <Button type="button" size="sm" variant="outline" disabled={tools.busy || !visibleFiles.some(file => file.id !== retainedId)} onClick={() => tools.selectGroupCopies(group.id)}>Select removable copies on this page</Button>
+      <Button type="button" size="sm" variant="outline" disabled={tools.busy || !selectableIds.some(id => id !== retainedId)} onClick={() => tools.selectGroupCopies(group.id, selectableIds)}>Select shown copies matching profile</Button>
       {retainedId && !visibleFiles.some(file => file.id === retainedId) && <p className="text-xs text-[var(--text-dim)]">The kept copy is protected and hidden. Its contents are checked again before removal.</p>}
       {!visibleFiles.length && <p className="text-xs text-[var(--text-dim)]">No removable copies on this page. Check other pages for this group.</p>}
       {visibleFiles.slice(0, visibleCount).map((file) => {
