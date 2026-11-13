@@ -77,6 +77,8 @@ pub struct ScanMeta {
 // ═══════════════════════════════════════════════════════════════════════
 
 struct ScanCache {
+    #[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
+    folder_identities: HashMap<u64, (u32, u64)>,
     /// folder absolute path → its immediate children, sorted by size desc.
     children: HashMap<String, Vec<DiskNode>>,
     /// flat list of all items (files + folders) ≥ MIN_LARGE_BYTES, sorted
@@ -89,6 +91,8 @@ struct ScanCache {
 impl ScanCache {
     fn empty() -> Self {
         Self {
+            #[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
+            folder_identities: HashMap::new(),
             children: HashMap::new(),
             large_items: Vec::new(),
             meta: None,
@@ -285,6 +289,8 @@ pub async fn run_disk_scan(path: String) -> Result<ScanMeta, String> {
     };
 
     let mut guard = cache().lock().map_err(|e| format!("cache lock: {}", e))?;
+    #[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
+    { guard.folder_identities = acc.folder_identities; }
     guard.children = acc.children_by_dir;
     guard.large_items = acc.large;
     guard.meta = Some(meta.clone());
@@ -426,6 +432,148 @@ fn is_protected_against(target: &Path, roots: &[PathBuf]) -> bool {
     })
 }
 
+/// A structured receipt distinguishes requests accepted by Windows from
+/// actual space reclaimed; only available when the experimental feature is built.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FolderDeleteReceipt {
+    pub status: &'static str,
+    pub processed: usize,
+    pub cache_invalidated: bool,
+    pub message: Option<String>,
+}
+
+#[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
+struct FolderCacheInvalidator;
+
+#[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
+impl FolderCacheInvalidator {
+    fn invalidate(&self) {
+        let mut guard = cache().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = ScanCache::empty();
+    }
+}
+
+#[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
+impl Drop for FolderCacheInvalidator {
+    fn drop(&mut self) { self.invalidate(); }
+}
+
+#[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
+fn folder_delete_receipt(result: Result<usize, crate::disk_tree_delete::DeleteFailure>) -> FolderDeleteReceipt {
+    let (status, processed, message) = match result {
+        Ok(n) => ("delete_requested", n, None),
+        Err(failure) => (if failure.processed == 0 { "failed" } else { "partial" }, failure.processed, Some(failure.error.to_string())),
+    };
+    FolderDeleteReceipt { status, processed, cache_invalidated: true, message }
+}
+
+#[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
+async fn delete_confirmed_folder(binding: String, capability_token: Option<String>) -> Result<FolderDeleteReceipt, String> {
+    // Consume before enumeration so a forged request cannot lock/traverse a tree.
+    let tree = crate::authz::consume_folder(capability_token.as_deref(), &binding)?;
+    tokio::task::spawn_blocking(move || {
+        let invalidator = FolderCacheInvalidator;
+        let result = crate::disk_tree_delete::delete_prepared(tree);
+        invalidator.invalidate();
+        Ok(folder_delete_receipt(result))
+    }).await.map_err(|_| "Folder deletion worker failed; rescan to determine what remains".to_string())?
+}
+
+// The same capability guard applies to the UI and direct IPC requests.
+#[tauri::command]
+pub fn disk_folder_delete_available() -> bool {
+    cfg!(all(windows, feature = "experimental-disk-tree-delete"))
+}
+
+#[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
+fn scanned_folder(scan_id: &str, item_id: u64) -> Result<(PathBuf, (u32, u64)), String> {
+    if item_id == 0 { return Err("The scan root cannot be deleted.".into()); }
+    let (_, path, is_dir) = explorer::scanned_path(scan_id, item_id)?;
+    if !is_dir { return Err("This scan item is not a folder.".into()); }
+    explorer::reject_link_components(&path)?;
+    let guard = cache().lock().map_err(|_| "Scan cache unavailable.")?;
+    if guard.meta.as_ref().map(|meta| meta.scan_id.as_str()) != Some(scan_id) { return Err("This scan is no longer current.".into()); }
+    let identity = *guard.folder_identities.get(&item_id).ok_or("Folder identity was unavailable during the scan. Analyze it again.")?;
+    Ok((path, identity))
+}
+
+#[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
+fn folder_binding(scan_id: &str, item_id: u64) -> String {
+    serde_json::to_string(&(scan_id, item_id)).expect("scan identity serializes")
+}
+
+#[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
+fn verify_scanned_folder_identity(expected: (u32, u64), actual: crate::disk_tree_delete::Identity) -> Result<(), String> {
+    if (actual.volume, actual.index) != expected { return Err("Folder changed since the scan. Analyze it again.".into()); }
+    Ok(())
+}
+
+#[cfg(all(test, windows, feature = "experimental-disk-tree-delete"))]
+#[test]
+fn folder_replaced_after_scan_has_a_different_identity() {
+    let base = tempfile::Builder::new().prefix("wincmd-folder-identity-").tempdir().unwrap();
+    let selected = base.path().join("selected");
+    std::fs::create_dir(&selected).unwrap();
+    let expected = crate::routine_cleaner::file_identity(&selected).unwrap();
+    std::fs::rename(&selected, base.path().join("original")).unwrap();
+    std::fs::create_dir(&selected).unwrap();
+    let (volume, index) = crate::routine_cleaner::file_identity(&selected).unwrap();
+    assert!(verify_scanned_folder_identity(expected, crate::disk_tree_delete::Identity { volume, index }).is_err());
+}
+
+#[cfg(all(test, windows, feature = "experimental-disk-tree-delete"))]
+#[test]
+fn scanned_alias_retargeted_to_another_folder_is_rejected() {
+    let base = tempfile::Builder::new().prefix("wincmd-folder-alias-test-").tempdir().unwrap();
+    let first = base.path().join("first");
+    let second = base.path().join("second");
+    std::fs::create_dir(&first).unwrap();
+    std::fs::create_dir(&second).unwrap();
+    std::fs::write(first.join("keep.txt"), b"first").unwrap();
+    std::fs::write(second.join("keep.txt"), b"second").unwrap();
+    let scanned_identity = crate::routine_cleaner::file_identity(&first).unwrap();
+    let (volume, index) = crate::routine_cleaner::file_identity(&second).unwrap();
+    assert!(verify_scanned_folder_identity(scanned_identity, crate::disk_tree_delete::Identity { volume, index }).is_err());
+    assert_eq!(std::fs::read(first.join("keep.txt")).unwrap(), b"first");
+    assert_eq!(std::fs::read(second.join("keep.txt")).unwrap(), b"second");
+}
+
+#[tauri::command]
+pub async fn disk_confirm_folder_delete(scan_id: String, item_id: u64) -> Result<Option<String>, String> {
+    if !disk_folder_delete_available() { return Err("Folder deletion is unavailable in this build.".into()); }
+    #[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
+    {
+        crate::duplicate_finder::safety::ensure_mutation_allowed()?;
+        let (path, expected) = scanned_folder(&scan_id, item_id)?;
+        let permit = crate::authz::FolderPreparationPermit::acquire()?;
+        let (folder, permit) = tokio::task::spawn_blocking(move || {
+            let protected = crate::disk_tree_delete::ProtectedRoots::system().map_err(|error| format!("Protected folders could not be verified: {error}"))?;
+            let folder = crate::disk_tree_delete::AuthorizedRoot::open(&path, protected).map_err(|error| format!("Folder cannot be safely selected: {error}"))?;
+            let (_, actual) = folder.target();
+            verify_scanned_folder_identity(expected, actual)?;
+            let tree = crate::disk_tree_delete::prepare_authorized(folder).map_err(|error| format!("Folder could not be safely prepared: {error}"))?;
+            Ok::<_, String>((tree, permit))
+        }).await.map_err(|_| "Folder verification worker failed".to_string())??;
+        crate::authz::confirm_folder(folder_binding(&scan_id, item_id), folder, permit).await
+    }
+    #[cfg(not(all(windows, feature = "experimental-disk-tree-delete")))]
+    { let _ = (scan_id, item_id); Err("Folder deletion is unavailable in this build.".into()) }
+}
+
+#[tauri::command]
+pub async fn disk_delete_confirmed_folder(scan_id: String, item_id: u64, capability_token: Option<String>) -> Result<FolderDeleteReceipt, String> {
+    if !disk_folder_delete_available() { return Err("Folder deletion is unavailable in this build.".into()); }
+    #[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
+    {
+        crate::duplicate_finder::safety::ensure_mutation_allowed()?;
+        let _ = scanned_folder(&scan_id, item_id)?;
+        delete_confirmed_folder(folder_binding(&scan_id, item_id), capability_token).await
+    }
+    #[cfg(not(all(windows, feature = "experimental-disk-tree-delete")))]
+    { let _ = (scan_id, item_id, capability_token); Err("Folder deletion is unavailable in this build.".into()) }
+}
+
 #[tauri::command]
 pub async fn disk_delete_item(
     path: String,
@@ -503,6 +651,19 @@ pub async fn get_disk_file_types(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
+    #[test]
+    fn folder_receipt_distinguishes_partial_mutation_from_failure() {
+        use super::folder_delete_receipt;
+        use crate::disk_tree_delete::DeleteFailure;
+        let partial = folder_delete_receipt(Err(DeleteFailure { processed: 2, error: std::io::Error::other("fixture") }));
+        assert_eq!(partial.status, "partial");
+        assert_eq!(partial.processed, 2);
+        assert!(partial.cache_invalidated);
+        let failed = folder_delete_receipt(Err(DeleteFailure { processed: 0, error: std::io::Error::other("fixture") }));
+        assert_eq!(failed.status, "failed");
+        assert_eq!(folder_delete_receipt(Ok(2)).status, "delete_requested");
+    }
     use super::*;
 
     fn roots() -> Vec<PathBuf> {
