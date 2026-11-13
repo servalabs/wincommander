@@ -570,7 +570,14 @@ impl ProtectedRoots {
             true,
         ));
         crate::disk_backup_privilege::with_backup_privilege(|| Self::pin_inner(&roots, true))
-            .map_err(|error| contextual_error("protected-root discovery", error))
+            .map_err(|error| {
+                if error.raw_os_error() == Some(1300) {
+                    io::Error::new(io::ErrorKind::PermissionDenied,
+                        "Protected-folder verification requires administrator permissions. Restart WinCommander as administrator to delete a folder.")
+                } else {
+                    contextual_error("protected-root discovery", error)
+                }
+            })
     }
     /// Resolve each component relative to an already pinned parent handle.
     /// All non-volume ancestors are held for traversal without
