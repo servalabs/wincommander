@@ -18,13 +18,15 @@ export function DuplicateScanStatus({ progress, scan, scanning, local }: { progr
   const minimumSizeBytes = state?.minimumSizeBytes ?? 0;
   const skippedSmallFiles = state?.skippedSmallFiles ?? 0;
   const hasSafeExclusions = Boolean(
-    scan && (scan.skippedEntries || scan.skippedLinks || scan.excludedVolumes.length),
+    scan && (scan.skippedEntries || scan.skippedLinks || scan.excludedVolumes.length || scan.filterExcludedFiles || scan.filterExcludedDirectories),
   );
   return <div className="rounded-[var(--r)] border border-[var(--border)] bg-[var(--surface-2)] p-3 text-xs">
     <div className="flex flex-wrap items-center gap-2"><strong>{local ? "All eligible local fixed drive letters" : "Selected folders"}</strong><Badge tone={scanning ? "accent" : scan?.cancelled || hasSafeExclusions ? "warning" : "success"}>{scanning ? progress?.phase === "hashing" ? "Comparing file contents" : "Discovering files" : scan ? scan.cancelled ? "Cancelled · partial results" : hasSafeExclusions ? "Scan finished · exclusions shown" : "Scan finished" : "Automatic read-only scan"}</Badge></div>
     <div className="mt-2 flex flex-wrap gap-2 text-[var(--text-dim)]">
       <span className="rounded border border-[var(--border)] px-2 py-1">{roots.length} scan location{roots.length === 1 ? "" : "s"}</span>
       {minimumSizeBytes > 0 && <span className="rounded border border-[var(--border)] px-2 py-1">{skippedSmallFiles.toLocaleString()} below {formatBytes(minimumSizeBytes)}</span>}
+      {!!state?.filterExcludedDirectories && <span className="rounded border border-[var(--border)] px-2 py-1 text-[var(--warn)]">{state.filterExcludedDirectories.toLocaleString()} dot-named folder{state.filterExcludedDirectories === 1 ? "" : "s"} excluded (contents not counted)</span>}
+      {!!state?.filterExcludedFiles && <span className="rounded border border-[var(--border)] px-2 py-1 text-[var(--warn)]">{state.filterExcludedFiles.toLocaleString()} files excluded by local scan filters</span>}
       {!!state?.skippedLinks && <span className="rounded border border-[var(--border)] px-2 py-1">{state.skippedLinks.toLocaleString()} links excluded</span>}
       {!!state?.skippedEntries && <span className="rounded border border-[var(--border)] px-2 py-1 text-[var(--warn)]">{state.skippedEntries.toLocaleString()} unavailable</span>}
     </div>

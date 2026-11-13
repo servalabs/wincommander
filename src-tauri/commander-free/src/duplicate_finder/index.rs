@@ -150,6 +150,8 @@ impl ScanIndex {
             complete: state.phase == "ready"
                 && state.skipped_entries == 0
                 && state.skipped_links == 0
+                && state.filter_excluded_files == 0
+                && state.filter_excluded_directories == 0
                 && !state
                     .excluded_volumes
                     .iter()
@@ -157,6 +159,8 @@ impl ScanIndex {
             truncated: false,
             minimum_size_bytes: state.minimum_size_bytes,
             skipped_small_files: state.skipped_small_files,
+            filter_excluded_files: state.filter_excluded_files,
+            filter_excluded_directories: state.filter_excluded_directories,
         })
     }
 

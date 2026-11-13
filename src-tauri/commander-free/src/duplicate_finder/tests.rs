@@ -160,6 +160,67 @@ fn fixture_index(roots: &[PathBuf], cancelled: &AtomicBool) -> index::ScanIndex 
 }
 
 #[test]
+fn local_filter_reports_exclusions_and_explicit_folder_scans_include_them() {
+    let _serial = SERIAL.lock().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let hidden = root.path().join(".hidden");
+    std::fs::create_dir(&hidden).unwrap();
+    for path in [
+        root.path().join("keep-a"),
+        root.path().join("keep-b"),
+        root.path().join("payload.DLL"),
+        root.path().join(".DS_Store"),
+        hidden.join("inside"),
+    ] {
+        std::fs::write(path, b"same").unwrap();
+    }
+    let roots = [std::fs::canonicalize(root.path()).unwrap()];
+    scope::begin(&roots, Vec::new(), 0);
+    let index = scan::scan_roots_mode(
+        &roots,
+        0,
+        &AtomicBool::new(false),
+        scan::DiscoveryMode::LocalDrives,
+    )
+    .unwrap();
+    let progress = scope::snapshot();
+    let page = index.page(0).unwrap();
+    assert_eq!(
+        (
+            progress.filter_excluded_files,
+            progress.filter_excluded_directories
+        ),
+        (2, 1)
+    );
+    assert_eq!(
+        (page.filter_excluded_files, page.filter_excluded_directories),
+        (2, 1)
+    );
+    assert_eq!(page.scanned_files, 2);
+    assert!(!page.complete);
+    drop(index);
+    scope::begin(&roots, Vec::new(), 0);
+    let explicit = scan::scan_roots_mode(
+        &roots,
+        0,
+        &AtomicBool::new(false),
+        scan::DiscoveryMode::ExplicitFolders,
+    )
+    .unwrap()
+    .page(0)
+    .unwrap();
+    assert_eq!(
+        (
+            explicit.filter_excluded_files,
+            explicit.filter_excluded_directories
+        ),
+        (0, 0)
+    );
+    assert_eq!(explicit.scanned_files, 5);
+    assert!(explicit.complete);
+}
+
+#[test]
 fn broad_scan_minimum_excludes_small_files_without_counting_them_as_errors() {
     let _serial = SERIAL.lock().unwrap();
     let root = tempfile::tempdir().unwrap();

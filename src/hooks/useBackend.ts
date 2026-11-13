@@ -135,6 +135,8 @@ export interface DuplicateScan {
   hasMoreGroups: boolean;
   minimumSizeBytes: number;
   skippedSmallFiles: number;
+  filterExcludedFiles?: number;
+  filterExcludedDirectories?: number;
 }
 
 export interface DuplicateProgress {
@@ -153,6 +155,8 @@ export interface DuplicateProgress {
   errors: string[];
   minimumSizeBytes: number;
   skippedSmallFiles: number;
+  filterExcludedFiles?: number;
+  filterExcludedDirectories?: number;
 }
 
 export interface DuplicateRemoveResult {

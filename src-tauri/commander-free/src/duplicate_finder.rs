@@ -98,6 +98,8 @@ pub struct DuplicateScan {
     pub has_more_groups: bool,
     pub minimum_size_bytes: u64,
     pub skipped_small_files: usize,
+    pub filter_excluded_files: usize,
+    pub filter_excluded_directories: usize,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -136,6 +138,7 @@ async fn start_scan(
     roots: Vec<PathBuf>,
     excluded: Vec<String>,
     minimum_size_bytes: u64,
+    mode: scan::DiscoveryMode,
 ) -> Result<DuplicateScan, String> {
     let running = RunningGuard::acquire()?;
     scope::begin(&roots, excluded, minimum_size_bytes);
@@ -144,7 +147,7 @@ async fn start_scan(
         .map_err(|_| "duplicate cache lock poisoned")? = None;
     tokio::task::spawn_blocking(move || {
         let _running = running;
-        let result = scan::scan_roots(&roots, minimum_size_bytes, &CANCELLED);
+        let result = scan::scan_roots_mode(&roots, minimum_size_bytes, &CANCELLED, mode);
         match result {
             Ok(index) => {
                 scope::finish(CANCELLED.load(Ordering::Acquire));
@@ -177,6 +180,7 @@ pub async fn duplicate_finder_scan(
         safety::validate_roots(roots)?,
         Vec::new(),
         validate_minimum_size(minimum_size_bytes)?,
+        scan::DiscoveryMode::ExplicitFolders,
     )
     .await
 }
@@ -185,7 +189,7 @@ pub async fn duplicate_finder_scan_local(
     minimum_size_bytes: Option<u64>,
 ) -> Result<DuplicateScan, String> {
     let (roots, excluded) = scope::local_fixed_roots()?;
-    start_scan(roots, excluded, validate_minimum_size(minimum_size_bytes)?).await
+    start_scan(roots, excluded, validate_minimum_size(minimum_size_bytes)?, scan::DiscoveryMode::LocalDrives).await
 }
 #[tauri::command]
 pub fn duplicate_finder_progress() -> scope::DuplicateProgress {
