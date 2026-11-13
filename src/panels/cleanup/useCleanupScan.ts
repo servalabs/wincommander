@@ -5,6 +5,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { showSuccess, showError } from "../../utils/toast";
 import useBackend from "../../hooks/useBackend";
+import { isConfirmedAmcacheDeferredReceipt } from "./cleanupAmcacheReceipt";
 import { usePatchSettings, useSettingsQuery } from "../../hooks/queries/useSettingsQuery";
 import { STANDARD_CATEGORIES, DEEP_DFIR_CATEGORIES, VIEW_ONLY_CATEGORIES, ACTION_CATEGORIES, SCHEDULABLE_CATEGORIES, type CleanupCategory } from "./cleanupCategories";
 import { getAutoScheduleInterval } from "./autoSchedulePolicy";
@@ -962,15 +963,21 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
                 verifiedReset?: boolean; journals?: Array<{ drive?: string; beforeJournalId?: string; afterJournalId?: string }> } | undefined;
             backendSucceeded = payload?.ok === true && isCleanupCommandSuccessful(res);
             error = res.error || (payload?.error || payload?.ok === false ? payload.message || payload.stdout : undefined);
-            const bootScheduled = cat.id === 'amcache' && backendSucceeded
-                ? Number(payload?.stdout?.match(/\bbootScheduled=(\d+)/i)?.[1] ?? 0)
-                : 0;
+            // A verified pending-delete receipt describes work Windows will
+            // attempt at restart, not a change an immediate scan can verify.
+            // On failure, some earlier requests may still have been queued.
+            if (cat.id === 'amcache') {
+                if (backendSucceeded && isConfirmedAmcacheDeferredReceipt(payload)) {
+                    return recordVerification({ result: 'deferred', before, after: before, removed: 0 });
+                }
+                return recordVerification({ result: 'failed', before, after: before, removed: 0,
+                    error: error || 'Windows did not confirm the pending deletion. Some deletions may already be scheduled; verify pending operations before restarting.' });
+            }
             const fresh = await loadSingleCategory(cat);
             if (!fresh || fresh.error || fresh.count < 0) {
                 return recordVerification({ result: 'failed', before, after: before, removed: 0, error: fresh?.error || 'A complete verification scan was not available.' });
             }
             const after = fresh.count;
-            if (bootScheduled > 0) return recordVerification({ result: 'deferred', before, after, removed: 0 });
             if (cat.id === 'ntfsJournals') {
                 const resetVerified = backendSucceeded && verifyNtfsJournalReset(payload, fresh.raw);
                 return recordVerification({ result: resetVerified ? 'reset' : 'failed', before, after, removed: 0,
@@ -979,6 +986,8 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
             const coverageNote = cleanupCoverageLimitation(cat.id, fresh.raw, payload?.coverageIncomplete === true);
             return recordVerification({ ...reconcileCleanupClear(before, after, backendSucceeded, !!coverageNote), before, after, error, coverageNote });
         } catch (cause) {
+            if (cat.id === 'amcache') return recordVerification({ result: 'failed', before, after: before, removed: 0,
+                error: `The request could not be confirmed. Some deletions may already be scheduled; verify pending operations before restarting. ${String(cause)}` });
             const fresh = await loadSingleCategory(cat);
             if (!fresh || fresh.error || fresh.count < 0) {
                 return recordVerification({ result: 'failed', before, after: before, removed: 0, error: fresh?.error || 'A complete verification scan was not available.' });

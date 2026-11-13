@@ -29,6 +29,7 @@ export const isAutomaticCleanupExcluded = (id: string, exclusions: ReadonlySet<s
   isDefaultExcludedCleanup(id) || isManualOnlyCleanupSchedule(id) || Array.from(exclusions).some(excluded => excluded.toLowerCase() === id.toLowerCase());
 
 const DEFAULT_WARNINGS: Record<string, string> = {
+  amcache: 'Windows will be asked to delete the App Launch Cache hive and its transaction logs during the next restart. The records are not removed now; scan again after restarting to check the result.',
   connectivityHistory: 'This removes Windows network connection history and signatures.',
   srumData: 'This removes Windows resource-usage history; Windows may rebuild the database.',
   recallDb: 'This removes Windows activity timeline databases and their stored history.',

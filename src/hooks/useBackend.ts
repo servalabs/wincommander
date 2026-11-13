@@ -1903,7 +1903,7 @@ export function useBackend(retainCleanupScanErrors = false) {
     getP2PUpdateCacheInfo: () => execute<{ files: Array<{ name: string; sizeKB: number; modified: string }>; total: number; totalSizeMB: number }>("Get-P2PUpdateCacheInfo"),
     getReliabilityHistoryInfo: () => execute<{ files: Array<{ name: string; sizeKB: number; modified: string }>; total: number; totalSizeMB: number }>("Get-ReliabilityHistoryInfo"),
     // GROUP I-A: Advanced DFIR — erases
-    clearAmcache: () => execute<{ status: string; clearedKeys: number; bootPurgeScheduled: boolean }>(clearCommand("Amcache")),
+    clearAmcache: () => execute<{ ok: boolean; stdout: string }>(clearCommand("Amcache")),
     clearRecycleBinMetadata: () => execute<{ ok: boolean; stdout: string }>(clearCommand("RecycleBinMetadata")),
     clearNTUserTraces: () => execute<{ status: string; removedEntries: number }>(clearCommand("NTUserTraces")),
     clearConnectivityHistory: () => execute(clearCommand("ConnectivityHistory")),

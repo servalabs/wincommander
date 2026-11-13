@@ -188,6 +188,50 @@ function Erase-FileSet {
         Erase-OneFile $file.FullName | Out-Null
     }
 }
+function Get-AutoErasePendingOperations {
+    $key = Get-Item -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager' -ErrorAction Stop
+    $value = $key.GetValue('PendingFileRenameOperations', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+    if ($null -eq $value) { return }
+    if ($value -isnot [string[]]) { throw 'Pending operations have an unexpected format.' }
+    return $value
+}
+function Test-AutoErasePendingDelete([string[]]$Ops, [string]$Path) {
+    $target = '\??\' + $Path
+    for ($i = 0; $i + 1 -lt $Ops.Count; $i += 2) {
+        if ($Ops[$i] -ieq $target -and [string]::IsNullOrEmpty($Ops[$i + 1])) { return $true }
+    }
+    return $false
+}
+function Register-AutoErasePendingDelete([string]$Path) {
+    if (-not ('WcAutoErase.Native' -as [type]) -or -not [WcAutoErase.Native]::MoveFileEx($Path, $null, 4)) {
+        throw 'Windows refused the deferred deletion request.'
+    }
+}
+function Invoke-AutoEraseAmcache {
+    try {
+        # Never overwrite the live registry hive or unrelated backups. Windows
+        # owns the hive; queue only its exact names for deletion after restart.
+        $files = @(Get-AutoEraseFiles -Path (Join-Path $env:SystemRoot 'AppCompat\Programs') -Filter 'Amcache.hve*' |
+            Where-Object { $_.Name -match '^Amcache\.hve(?:\.LOG[12])?$' })
+        if (-not @($files | Where-Object { $_.Name -ieq 'Amcache.hve' }).Count) { throw 'Amcache hive could not be inspected.' }
+        $ops = @(Get-AutoErasePendingOperations)
+        if ($ops.Count % 2 -ne 0) { throw 'Pending operations have an unexpected format.' }
+        foreach ($file in $files) {
+            if (-not (Test-AutoErasePendingDelete $ops $file.FullName)) {
+                Register-AutoErasePendingDelete $file.FullName
+                $ops = @(Get-AutoErasePendingOperations)
+                if ($ops.Count % 2 -ne 0) { throw 'Pending operations have an unexpected format.' }
+            }
+            if (-not (Test-AutoErasePendingDelete $ops $file.FullName)) { throw 'Windows did not confirm a scheduled deletion.' }
+            $script:AutoEraseDeferred++
+        }
+    } catch {
+        # Some earlier requests may already be queued; retain their deferred
+        # count and mark this run incomplete instead of claiming success.
+        $script:AutoEraseFailed++
+        $script:AutoEraseCoverageIncomplete = $true
+    }
+}
 function Get-AutoEraseRegistryItem {
     param([string]$Path)
     try { Get-Item -LiteralPath $Path -ErrorAction Stop }
@@ -1839,7 +1883,7 @@ foreach ($shadow in $shadows) {
 }
 '@
     'amcache' = @'
-Erase-FileSet @(Get-AutoEraseFiles -Path (Join-Path $env:SystemRoot 'AppCompat\Programs') -Filter 'Amcache.hve*')
+Invoke-AutoEraseAmcache
 '@
     'searchIndex' = @'
 Invoke-AutoEraseWithServices -Names WSearch -Body {
@@ -3323,6 +3367,15 @@ function Invoke-AutoEraseMigrationCore {
             $identity = Get-AutoEraseTaskIdentity $task -AllowUnknownOwner
             if ($identity.ownerUnknown) { continue }
             if (-not $identity -or ($CategoryId -and $identity.categoryId -ne $CategoryId) -or ($OwnerSid -and $identity.ownerSid -ne $OwnerSid)) { continue }
+            # Do not silently rewrite or disable this sensitive task. Older
+            # payloads may overwrite the hive or similarly named backups; the
+            # user must review that existing task before it next runs.
+            if ($identity.categoryId -eq 'amcache') {
+                if (-not (Test-AutoEraseCurrentPayload -Task $task -Identity $identity)) {
+                    throw 'An existing App Launch Cache schedule uses an older cleanup script and may still run. It was left unchanged. Review or disable it in Task Scheduler before its next run, then remove and recreate it if needed.'
+                }
+                continue
+            }
             $manualOptIn = $task.Description -match '^System Maintenance scheduled cleanup v(?:[6789]|10|11|12|13|14|15|16|17|18|19|20|21|22) \(manual opt-in\)$'
             if ($script:AutoEraseUnsupportedCategories.Contains($identity.categoryId) -or ($identity.categoryId -in $script:AutoEraseProtectedCategories -and -not $manualOptIn)) {
                 Disable-ScheduledTask -TaskPath $task.TaskPath -TaskName $task.TaskName -ErrorAction Stop | Out-Null

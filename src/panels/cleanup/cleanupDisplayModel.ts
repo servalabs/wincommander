@@ -67,7 +67,7 @@ const CLEAR_EXPLANATIONS: Record<string, string> = {
   notepadState: "Removes temporary Notepad state, including unsaved tabs.",
   netDrives: "Removes saved network-drive connections. You may need to reconnect them.",
   eventLogs: "Clears Windows event records, including records used for troubleshooting or security review.",
-  amcache: "Removes app launch records. Windows may create new records as programs run.",
+  amcache: "Schedules deletion of the App Launch Cache files at restart. Scan again after restarting to verify; Windows may create new records as programs run.",
   psHistory: "Removes saved terminal command history.",
   recentFiles: "Removes Windows recent-file shortcuts; it does not target the original files.",
   jumpLists: "Removes app recent and pinned-item lists.",
