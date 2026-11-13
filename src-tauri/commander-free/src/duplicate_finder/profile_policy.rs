@@ -81,15 +81,49 @@ fn resolve_profile_string(value: &str, windows_dir: &Path) -> Result<PathBuf, &'
     Ok(path)
 }
 
-fn expand_path(value: &str) -> Result<PathBuf, &'static str> {
+fn windows_directory() -> Result<PathBuf, &'static str> {
     let mut buffer = vec![0u16; 32768];
     let length = unsafe { GetWindowsDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) } as usize;
     if length == 0 || length >= buffer.len() {
         return Err(UNAVAILABLE);
     }
     let windows_dir = String::from_utf16(&buffer[..length]).map_err(|_| UNAVAILABLE)?;
-    let path = resolve_profile_string(value, Path::new(&windows_dir))?;
-    fs::canonicalize(path).map_err(|_| UNAVAILABLE)
+    Ok(PathBuf::from(windows_dir))
+}
+
+fn expand_path(value: &str) -> Result<PathBuf, &'static str> {
+    let path = resolve_profile_string(value, &windows_directory()?)?;
+    match fs::canonicalize(&path) {
+        Ok(root) => Ok(root),
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            // Other users' profile roots may deny opening the directory while
+            // still permitting their parent and attributes to be inspected.
+            // Resolve the parent and reject reparse-point roots; never guess
+            // about a missing, redirected, or uninspectable profile.
+            let meta = fs::symlink_metadata(&path).map_err(|_| UNAVAILABLE)?;
+            if !meta.is_dir() || super::safety::is_link_or_reparse(&meta) { return Err(UNAVAILABLE); }
+            let parent = path.parent().ok_or(UNAVAILABLE)?;
+            let name = path.file_name().ok_or(UNAVAILABLE)?;
+            Ok(fs::canonicalize(parent).map_err(|_| UNAVAILABLE)?.join(name))
+        }
+        Err(_) => Err(UNAVAILABLE),
+    }
+}
+
+// Built-in service profiles under Windows are already inside the protected
+// system directory; a normal user cannot open systemprofile to canonicalize
+// it. Never skip a redirected or unexpected service profile location.
+fn protected_builtin_profile(sid: &str, value: &str, windows: &Path) -> bool {
+    let suffix = match sid {
+        "S-1-5-18" => r"System32\config\systemprofile",
+        "S-1-5-19" => r"ServiceProfiles\LocalService",
+        "S-1-5-20" => r"ServiceProfiles\NetworkService",
+        _ => return false,
+    };
+    resolve_profile_string(value, windows).ok().is_some_and(|path| {
+        path.to_string_lossy().replace('/', "\\").trim_end_matches('\\')
+            .eq_ignore_ascii_case(&windows.join(suffix).to_string_lossy())
+    })
 }
 
 fn profiles() -> Result<(String, Vec<(String, PathBuf)>), &'static str> {
@@ -107,6 +141,7 @@ fn profiles() -> Result<(String, Vec<(String, PathBuf)>), &'static str> {
         let path: String = subkey
             .get_value("ProfileImagePath")
             .map_err(|_| UNAVAILABLE)?;
+        if !name.eq_ignore_ascii_case(&sid) && protected_builtin_profile(&name, &path, &windows_directory()?) { continue; }
         paths.push((name, expand_path(&path)?));
     }
     if !paths
@@ -191,6 +226,12 @@ impl Snapshot {
         classify(path, sid, paths)
     }
 
+    pub(super) fn current_root(&self) -> Result<PathBuf, &'static str> {
+        let (sid, paths) = self.0.as_ref().map_err(|error| *error)?;
+        paths.iter().find(|(candidate, _)| candidate.eq_ignore_ascii_case(sid))
+            .map(|(_, root)| root.clone()).ok_or(UNAVAILABLE)
+    }
+
     pub(super) fn describe(&self, path: &Path) -> (&'static str, Option<&Path>) {
         match &self.0 {
             Ok((sid, paths)) => describe_profile(path, sid, paths),
@@ -202,6 +243,24 @@ impl Snapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn current_scan_root_comes_from_matching_profile_sid() {
+        let snapshot = Snapshot(Ok(("S-1-mine".into(), vec![
+            ("S-1-other".into(), PathBuf::from(r"D:\Other")),
+            ("s-1-MINE".into(), PathBuf::from(r"D:\Mine")),
+        ])));
+        assert_eq!(snapshot.current_root().unwrap(), PathBuf::from(r"D:\Mine"));
+        assert!(Snapshot(Ok(("missing".into(), Vec::new()))).current_root().is_err());
+        assert!(Snapshot(Err(UNAVAILABLE)).current_root().is_err());
+    }
+    #[test]
+    fn only_standard_service_profiles_under_windows_are_covered_by_system_protection() {
+        let windows = Path::new(r"C:\Windows");
+        assert!(protected_builtin_profile("S-1-5-18", r"%SystemRoot%\System32\config\systemprofile", windows));
+        assert!(protected_builtin_profile("S-1-5-19", r"C:\Windows\ServiceProfiles\LocalService", windows));
+        assert!(!protected_builtin_profile("S-1-5-18", r"D:\RedirectedService", windows));
+        assert!(!protected_builtin_profile("S-1-5-21-123", r"C:\Windows\System32\config\systemprofile", windows));
+    }
     #[test]
     fn redirected_other_profile_on_another_drive_is_protected() {
         let profiles = vec![

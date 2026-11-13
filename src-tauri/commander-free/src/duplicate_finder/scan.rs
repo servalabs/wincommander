@@ -594,6 +594,8 @@ fn sample_candidates(index: &ScanIndex, cancelled: &AtomicBool) -> Result<(), St
                     ])
                     .map_err(|error| error.to_string())?;
             }
+            // Foreign-owned files are intentionally outside the user's scan.
+            Err(error) if error == "refused removal: file is not owned by the current user" => {},
             Err(error) => scope::error(&path, error),
         }
     }
@@ -696,6 +698,10 @@ fn sample_candidate_with_buffer(
         return Err("File changed before content comparison".into());
     }
     let mut file = fs::File::open(path).map_err(|error| error.to_string())?;
+    // Eligibility is checked against the same Windows owner rule used again
+    // at deletion time. Other users' files never enter duplicate groups.
+    #[cfg(windows)]
+    super::verified_file::verify_current_user_owns(&file)?;
     let opened = file.metadata().map_err(|error| error.to_string())?;
     let identity = super::verified_file::handle_identity(&file)?;
     if cfg!(windows) && identity.is_none() {
@@ -862,4 +868,23 @@ fn read_hash_segment(
         });
     }
     Ok(read_total)
+}
+
+#[cfg(all(test, windows))]
+mod ownership_tests {
+    use super::*;
+
+    #[test]
+    fn sampling_rejects_a_foreign_owned_windows_file() {
+        // Read-only check of a normally TrustedInstaller-owned Windows file.
+        let path = PathBuf::from(std::env::var_os("SystemRoot").unwrap())
+            .join("System32").join("notepad.exe");
+        let file = fs::File::open(&path).expect("Windows notepad should be readable");
+        if super::super::verified_file::verify_current_user_owns(&file).is_ok() {
+            return; // This machine owns the file as the current user.
+        }
+        let size = file.metadata().unwrap().len();
+        let result = sample_candidate_with_buffer(&path, size, None, &AtomicBool::new(false), &mut [0u8; 4096]);
+        assert_eq!(result.unwrap_err(), "refused removal: file is not owned by the current user");
+    }
 }

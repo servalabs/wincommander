@@ -50,7 +50,7 @@ pub(super) fn open_verified(
 }
 
 #[cfg(windows)]
-fn verify_current_user_owns(handle: &File) -> Result<(), String> {
+pub(super) fn verify_current_user_owns(handle: &File) -> Result<(), String> {
     use std::{os::windows::io::AsRawHandle, ptr};
     use windows_sys::Win32::{
         Foundation::{CloseHandle, LocalFree},
@@ -113,6 +113,17 @@ fn verify_current_user_owns(handle: &File) -> Result<(), String> {
     }
     Ok(())
 }
+
+/// Display checks are advisory; removal repeats this check on its held handle.
+#[cfg(windows)]
+pub(super) fn current_user_owns_path(path: &std::path::Path) -> bool {
+    File::open(path).and_then(|handle| {
+        verify_current_user_owns(&handle).map_err(std::io::Error::other)
+    }).is_ok()
+}
+
+#[cfg(not(windows))]
+pub(super) fn current_user_owns_path(_path: &std::path::Path) -> bool { true }
 
 #[cfg(windows)]
 pub(super) fn handle_identity(handle: &File) -> Result<Option<(u32, u64)>, String> {

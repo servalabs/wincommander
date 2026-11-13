@@ -21,7 +21,7 @@ export function DuplicateScanStatus({ progress, scan, scanning, local }: { progr
     scan && (scan.skippedEntries || scan.skippedLinks || scan.excludedVolumes.length),
   );
   return <div className="rounded-[var(--r)] border border-[var(--border)] bg-[var(--surface-2)] p-3 text-xs">
-    <div className="flex flex-wrap items-center gap-2"><strong>{local ? "All eligible local fixed drive letters" : "Selected folders"}</strong><Badge tone={scanning ? "accent" : scan?.cancelled || hasSafeExclusions ? "warning" : "success"}>{scanning ? progress?.phase === "hashing" ? "Comparing file contents" : "Discovering files" : scan ? scan.cancelled ? "Cancelled · partial results" : hasSafeExclusions ? "Scan finished · exclusions shown" : "Scan finished" : "Automatic read-only scan"}</Badge></div>
+    <div className="flex flex-wrap items-center gap-2"><strong>{local ? "Current user profile" : "Selected folders"}</strong><Badge tone={scanning ? "accent" : scan?.cancelled || hasSafeExclusions ? "warning" : "success"}>{scanning ? progress?.phase === "hashing" ? "Comparing file contents" : "Discovering files" : scan ? scan.cancelled ? "Cancelled · partial results" : hasSafeExclusions ? "Scan finished · exclusions shown" : "Scan finished" : "Automatic read-only scan"}</Badge></div>
     <div className="mt-2 flex flex-wrap gap-2 text-[var(--text-dim)]">
       <span className="rounded border border-[var(--border)] px-2 py-1">{roots.length} scan location{roots.length === 1 ? "" : "s"}</span>
       {minimumSizeBytes > 0 && <span className="rounded border border-[var(--border)] px-2 py-1">{skippedSmallFiles.toLocaleString()} below {formatBytes(minimumSizeBytes)}</span>}

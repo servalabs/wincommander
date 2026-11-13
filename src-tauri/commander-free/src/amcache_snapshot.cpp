@@ -18,15 +18,18 @@ struct AmcacheSnapshot {
 
 static HRESULT wait_for(IVssAsync* operation) {
     if (!operation) return E_UNEXPECTED;
-    HRESULT hr = operation->Wait(120000);
+    // Several VSS phases run sequentially. Keep each bounded well below the
+    // 180-second collector deadline so a slow phase can be cancelled and the
+    // snapshot can be released by close_snapshot before the wrapper times out.
+    HRESULT hr = operation->Wait(20000);
     HRESULT result = E_FAIL;
     INT reserved = 0;
     if (SUCCEEDED(hr)) hr = operation->QueryStatus(&result, &reserved);
     if (SUCCEEDED(hr)) {
-        if (result == VSS_S_ASYNC_PENDING) { operation->Cancel(); hr = HRESULT_FROM_WIN32(ERROR_TIMEOUT); }
+        if (result == VSS_S_ASYNC_PENDING) { operation->Cancel(); (void)operation->Wait(5000); hr = HRESULT_FROM_WIN32(ERROR_TIMEOUT); }
         else if (result == VSS_S_ASYNC_FINISHED) hr = S_OK;
         else hr = FAILED(result) ? result : E_ABORT;
-    }
+    } else { (void)operation->Cancel(); (void)operation->Wait(5000); }
     operation->Release();
     return hr;
 }

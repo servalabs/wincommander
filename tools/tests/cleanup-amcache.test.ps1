@@ -53,7 +53,7 @@ $fleet = Get-AmcacheEntries -FleetProjection
 if ($fleet.entries[0].sample[0].ContainsKey('registryValues')) { throw 'Local-only Amcache values reached the Fleet projection.' }
 $script:mountMissing = $true
 $unmounted = Get-AmcacheEntries
-if (-not $unmounted.partial -or $unmounted.status -ne 'unavailable' -or $null -ne $unmounted.total -or -not $unmounted.hveFileExists -or $unmounted.message -notmatch 'offline hive is not read') { throw 'An existing but unmounted hive was reported as complete.' }
+if (-not $unmounted.partial -or $unmounted.status -ne 'unavailable' -or $null -ne $unmounted.total -or -not $unmounted.hveFileExists -or $unmounted.message -notmatch 'cannot read the offline Amcache file') { throw 'An existing but unmounted hive was reported as complete.' }
 $script:missingHive = $true; $script:denyHiveParent = $true
 $hiddenHive = Get-AmcacheEntries
 if (-not $hiddenHive.partial -or $null -ne $hiddenHive.hveFileExists) { throw 'An inaccessible hive directory must not be treated as a missing hive.' }

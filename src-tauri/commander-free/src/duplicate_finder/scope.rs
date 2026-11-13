@@ -98,49 +98,6 @@ pub(super) fn fail(error: &str) {
     });
 }
 
-#[cfg(windows)]
-pub(super) fn local_fixed_roots() -> Result<(Vec<PathBuf>, Vec<String>), String> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::{GetDriveTypeW, GetLogicalDrives};
-    let mask = unsafe { GetLogicalDrives() };
-    if mask == 0 {
-        return Err(std::io::Error::last_os_error().to_string());
-    }
-    let mut roots = Vec::new();
-    let mut excluded = Vec::new();
-    for bit in 0u32..26 {
-        if mask & (1 << bit) == 0 {
-            continue;
-        }
-        let root = format!("{}:\\", (b'A' + bit as u8) as char);
-        let wide: Vec<u16> = std::ffi::OsStr::new(&root)
-            .encode_wide()
-            .chain(Some(0))
-            .collect();
-        let kind = unsafe { GetDriveTypeW(wide.as_ptr()) };
-        if kind == 3 {
-            match std::fs::canonicalize(&root) {
-                Ok(path) => roots.push(path),
-                Err(error) => excluded.push(format!("{root} Fixed drive unavailable: {error}")),
-            }
-        } else {
-            let label = match kind {
-                2 => "Removable — choose a folder to opt in",
-                4 => "Network — choose a folder to opt in",
-                5 => "Optical — choose a folder to opt in",
-                _ => "Unavailable or unsupported drive",
-            };
-            excluded.push(format!("{root} {label}"));
-        }
-    }
-    if roots.is_empty() {
-        return Err(
-            "No eligible accessible local fixed drives were found. Choose a folder instead.".into(),
-        );
-    }
-    Ok((roots, excluded))
-}
-
 #[cfg(test)]
 mod tests {
     use super::display_path;
@@ -158,8 +115,4 @@ mod tests {
         );
         assert_eq!(display_path(Path::new(r"\\?\Volume{test}")), None);
     }
-}
-#[cfg(not(windows))]
-pub(super) fn local_fixed_roots() -> Result<(Vec<PathBuf>, Vec<String>), String> {
-    Err("Automatic fixed-drive discovery is available on Windows. Choose folders instead.".into())
 }

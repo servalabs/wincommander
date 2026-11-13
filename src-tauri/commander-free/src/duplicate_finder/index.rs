@@ -171,7 +171,10 @@ impl ScanIndex {
             )
             .map_err(|error| error.to_string())?;
         let display = |(id, path, modified): (String, String, Option<String>)| {
-            let reason = policy.protected_reason(&PathBuf::from(&path));
+            let reason = policy.protected_reason(&PathBuf::from(&path)).or_else(|| {
+                (!super::verified_file::current_user_owns_path(&PathBuf::from(&path)))
+                    .then_some("file owner cannot be verified as the current user")
+            });
             let (profile_scope, profile_root) = policy.profile(&PathBuf::from(&path));
             DuplicateFile {
                 name: PathBuf::from(&path)

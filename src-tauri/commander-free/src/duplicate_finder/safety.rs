@@ -136,6 +136,7 @@ pub(super) fn removal_block_code(reason: &str) -> &'static str {
         "application data is protected" => "application_data",
         "another user profile is protected" => "other_profile",
         "user profile locations could not be verified" => "profiles_unavailable",
+        "file owner cannot be verified as the current user" => "owner_unavailable",
         _ => "unknown",
     }
 }

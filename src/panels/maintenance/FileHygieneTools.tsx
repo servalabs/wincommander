@@ -21,10 +21,10 @@ import { DuplicateScanStatus } from "./DuplicateScanStatus";
 
 function describeRemoveResult(result: DuplicateRemoveResult | EmptyFolderRemoveResult) {
   const summary = "bytesRecovered" in result
-    ? `Removed ${result.filesRemoved} files (${formatBytes(result.bytesRecovered)} logical data).`
-    : `Removed ${result.foldersRemoved} empty folders.`;
+    ? `Removed ${result.filesRemoved} files (${formatBytes(result.bytesRecovered)} logical data).${result.filesRemoved ? " Scan again when you want updated results." : ""}`
+    : `Removed ${result.foldersRemoved} empty folders.${result.foldersRemoved ? " Scan again when you want updated results." : ""}`;
   if (result.cancelled) return { tone: "warning" as const, title: "Removal cancelled", message: `${summary} Cancelled before finishing.` };
-  if (result.errors.length) return { tone: "warning" as const, title: "Completed with issues", message: `${summary} ${result.errors.length} item${result.errors.length === 1 ? "" : "s"} could not be removed.` };
+  if (result.errors.length) return { tone: "warning" as const, title: "Completed with issues", message: `${summary} ${result.errors.length} item${result.errors.length === 1 ? "" : "s"} could not be removed. ${result.errors.slice(0, 3).join(" ")}` };
   return { tone: "success" as const, title: "Removal complete", message: summary };
 }
 
@@ -103,7 +103,7 @@ export function FileHygieneTools() {
               {!!tools.roots.length && <Badge tone="accent">{tools.roots.length} folder{tools.roots.length === 1 ? "" : "s"}</Badge>}
               {tools.roots.length > 0 && <Button size="sm" variant="outline" onClick={() => setRootsOpen(true)}><Icon icon="folder-open" /> View selected</Button>}
               <Button size="sm" variant="outline" onClick={() => void tools.chooseRoots()} disabled={tools.busy}><Icon icon="folder-open" /> Choose folders</Button>
-              {tools.tool === "duplicates" && <Button size="sm" variant="outline" disabled={tools.busy} onClick={() => void tools.scan("local")}><Icon icon="hard-drive" /> Scan local drives</Button>}
+              {tools.tool === "duplicates" && <Button size="sm" variant="outline" disabled={tools.busy} onClick={() => void tools.scan("local")}><Icon icon="hard-drive" /> Scan my files</Button>}
               {tools.busy && <Button size="icon" variant="outline" onClick={() => void tools.cancel()} title={`Cancel ${tools.tool} scan`} aria-label={`Cancel ${tools.tool} scan`}><Icon icon="stop" /></Button>}
             </div>
           </div>
@@ -114,12 +114,13 @@ export function FileHygieneTools() {
           </p>
           <Tabs value={tools.tool} onValueChange={(value) => tools.changeTool(value as "duplicates" | "empty")}>
             <TabsList>
-              <TabsTrigger value="duplicates">Duplicate files</TabsTrigger>
-              <TabsTrigger value="empty">Empty folders</TabsTrigger>
+              <TabsTrigger value="duplicates" disabled={tools.busy && tools.tool !== "duplicates"} title={tools.busy && tools.tool !== "duplicates" ? "Available after the current operation finishes" : undefined}>Duplicate files</TabsTrigger>
+              <TabsTrigger value="empty" disabled={tools.busy && tools.tool !== "empty"} title={tools.busy && tools.tool !== "empty" ? "Available after the current operation finishes" : undefined}>Empty folders</TabsTrigger>
             </TabsList>
           </Tabs>
+          {tools.busy && <p className="text-xs text-[var(--text-dim)]" role="status">Other tabs are available when the current operation finishes.</p>}
           {tools.tool === "empty" && <div className="duplicate-scan-options" aria-label="Choose drives to scan"><strong>Drives</strong>{drives.map(root => { return <label key={root}><input type="checkbox" checked={tools.roots.includes(root)} disabled={tools.busy} onChange={() => tools.toggleDrive(root)} /> {root.slice(0, 2)}</label>; })}{driveError && <span role="status">{driveError}</span>}</div>}
-          {tools.tool === "duplicates" && <div className="duplicate-scan-options"><label htmlFor="duplicate-minimum-size">Minimum size</label><select id="duplicate-minimum-size" aria-label="Minimum duplicate file size" value={tools.minimumSizeBytes} disabled={tools.busy} onChange={(event) => tools.changeMinimumSize(Number(event.target.value))}><option value={200 * 1024}>200 KB (recommended)</option><option value={1024 * 1024}>1 MB</option><option value={10 * 1024 * 1024}>10 MB</option><option value={100 * 1024 * 1024}>100 MB</option><option value={0}>Any size (slower)</option></select><span>Changing this requires a new scan. Protected files and other profiles are hidden.</span></div>}
+          {tools.tool === "duplicates" && <div className="duplicate-scan-options"><label htmlFor="duplicate-minimum-size">Minimum size</label><select id="duplicate-minimum-size" aria-label="Minimum duplicate file size" value={tools.minimumSizeBytes} disabled={tools.busy} onChange={(event) => tools.changeMinimumSize(Number(event.target.value))}><option value={200 * 1024}>200 KB (recommended)</option><option value={1024 * 1024}>1 MB</option><option value={10 * 1024 * 1024}>10 MB</option><option value={100 * 1024 * 1024}>100 MB</option><option value={0}>Any size (slower)</option></select><span>Only files owned by this user are compared; protected files are hidden. Changing the minimum requires a new scan.</span></div>}
           {hasScan && (
             <div className="flex flex-wrap items-center gap-2 pt-1">
               {tools.tool === "duplicates" ? (
