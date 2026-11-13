@@ -121,6 +121,14 @@ describe("Vault policy save failures", () => {
     expect(failure.message).not.toContain("Run as administrator");
   });
 
+  test("explains the privileged service gate denial without exposing raw details", () => {
+    const failure = vaultPolicySaveFailure("service rejected request: forbidden (privileged verb requires SYSTEM/Admin caller)");
+
+    expect(failure.code).toBe("VLT.POLICY.ADMIN_ACCESS_REQUIRED");
+    expect(failure.message).toContain("not a local administrator");
+    expect(failure.message).not.toContain("SYSTEM/Admin caller");
+  });
+
   test("classifies Tauri's string rejection the same way as an Error", () => {
     const failure = vaultPolicySaveFailure("forbidden: vault policy operation requires Vault Policy Administrator");
 

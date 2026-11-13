@@ -425,13 +425,9 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         | "svc.vault.release_orphaned_drive_letters"
         | "svc.vault.list_authorized"
         | "svc.vault.drive_letters"
-        // A policy owner needs to load their own service-filtered fragment
-        // before they can make an owner-authorized change.  The handler
-        // still derives that fragment from the named-pipe SID; ReadOnly here
-        // never makes another owner's data available.
+        // Policy reads remain caller-filtered so authorized users can mount.
         | "svc.vault.get_policy"
         | "svc.vault.get_status"
-        | "svc.vault.apply_owner_fragment"
         | "svc.vault.capabilities"
         | "svc.search.fence_capabilities" => CapabilityClass::ReadOnly,
 
@@ -439,7 +435,9 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         // It is therefore a local-administrator management read, rather
         // than an interactive-session request whose result may vary with a
         // transient WTS session-state lookup.
-        "svc.vault.list_principals" | "svc.vault.apply_policy" => CapabilityClass::Privileged,
+        "svc.vault.list_principals" | "svc.vault.apply_policy" | "svc.vault.apply_owner_fragment" => {
+            CapabilityClass::Privileged
+        }
 
         // Creation is safe for a normal signed-in user only because the
         // service prepares a fixed driver and the Pro engine performs all
@@ -578,11 +576,10 @@ mod tests {
     }
 
     #[test]
-    fn vault_owner_operations_are_caller_bound_in_handlers_not_wts_state() {
+    fn vault_policy_reads_are_caller_bound_in_handlers_not_wts_state() {
         for verb in [
             "svc.vault.get_policy",
             "svc.vault.get_status",
-            "svc.vault.apply_owner_fragment",
         ] {
             assert_eq!(
                 classify_verb(verb),
@@ -594,7 +591,11 @@ mod tests {
 
     #[test]
     fn vault_principal_directory_is_admin_only() {
-        for verb in ["svc.vault.list_principals", "svc.vault.apply_policy"] {
+        for verb in [
+            "svc.vault.list_principals",
+            "svc.vault.apply_policy",
+            "svc.vault.apply_owner_fragment",
+        ] {
             assert_eq!(
                 classify_verb(verb),
                 CapabilityClass::Privileged,
