@@ -3030,7 +3030,7 @@ function Get-WCAmcacheSnapshotInventory {
             if (-not [int]::TryParse([string]$category.count, [ref]$count) -or $count -lt 0) { return $null }
             $samples = @($category.sample)
             if ($samples.Count -ne $count) { return $null }
-            $records = @()
+            $records = [System.Collections.Generic.List[object]]::new()
             foreach ($sample in $samples) {
                 if ($null -eq $sample -or [string]::IsNullOrWhiteSpace([string]$sample.id)) { return $null }
                 $record = @{ id = [string]$sample.id; name = [string]$sample.name; path = [string]$sample.path }
@@ -3038,9 +3038,9 @@ function Get-WCAmcacheSnapshotInventory {
                     if ($sample.$field -is [string] -and $sample.$field.Trim()) { $record[$field] = $sample.$field }
                 }
                 if (-not $FleetProjection -and $null -ne $sample.registryValues) { $record.registryValues = $sample.registryValues }
-                $records += $record
+                $records.Add($record)
             }
-            $entries += @{ category = $name; count = $count; sample = @($records) }
+            $entries += @{ category = $name; count = $count; sample = $records.ToArray() }
             $seen[$name] = $true; $total += $count
         }
         $reportedTotal = 0
