@@ -59,8 +59,8 @@ pub(super) fn open_verified_with_shared_admin(
 }
 
 #[cfg(windows)]
-#[derive(Debug, PartialEq, Eq)]
-pub(super) enum OwnerClass { CurrentUser, SharedAdministrators, Other }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OwnerClass { CurrentUser, SharedAdministrators, Other }
 
 #[cfg(windows)]
 fn owner_class_from_identity(is_current: bool, is_admin_owner: bool, is_admin_member: bool) -> OwnerClass {
@@ -70,7 +70,7 @@ fn owner_class_from_identity(is_current: bool, is_admin_owner: bool, is_admin_me
 }
 
 #[cfg(windows)]
-fn classify_owner(handle: &File) -> Result<OwnerClass, String> {
+pub(crate) fn classify_owner(handle: &File) -> Result<OwnerClass, String> {
     use std::{os::windows::io::AsRawHandle, ptr};
     use windows_sys::Win32::{
         Foundation::{CloseHandle, LocalFree},

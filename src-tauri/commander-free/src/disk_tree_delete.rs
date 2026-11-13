@@ -528,6 +528,7 @@ fn list_directory(dir: &File) -> io::Result<Vec<ListedEntry>> {
 struct Pinned {
     file: File,
     is_dir: bool,
+    owner: Option<crate::duplicate_finder::verified_file::OwnerClass>,
 }
 
 /// Hold protected identities without delete sharing until the operation ends,
@@ -766,6 +767,9 @@ impl PreparedTree {
         let folders = self.entries.iter().filter(|entry| entry.is_dir).count();
         (self.entries.len() - folders, folders)
     }
+    pub(crate) fn has_shared_administrator_owned_items(&self) -> bool {
+        self.entries.iter().any(|entry| entry.owner == Some(crate::duplicate_finder::verified_file::OwnerClass::SharedAdministrators))
+    }
 }
 
 fn open_selected(
@@ -870,12 +874,11 @@ pub(crate) fn prepare_fixture_authorized(target: AuthorizedRoot) -> io::Result<P
 fn prepare_opened(root: File, opened_path: PathBuf, actual: Identity, protected: ProtectedRoots, enforce_user_policy: bool) -> io::Result<PreparedTree> {
     let expected = actual;
     let policy = enforce_user_policy.then(crate::duplicate_finder::safety::RemovalPolicy::load);
-    if let Some(policy) = &policy {
-        check_owned_target(policy, &opened_path, &root)?;
-    }
+    let root_owner = policy.as_ref().map(|policy| check_owned_target(policy, &opened_path, &root)).transpose()?;
     let mut pinned = vec![Pinned {
         file: root,
         is_dir: true,
+        owner: root_owner,
     }];
     let mut pending = vec![(0usize, 0usize, opened_path.clone())];
     while let Some((index, depth, parent_path)) = pending.pop() {
@@ -902,13 +905,12 @@ fn prepare_opened(root: File, opened_path: PathBuf, actual: Identity, protected:
                     "folder contents changed or contain a protected item",
                 ));
             }
-            if let Some(policy) = &policy {
-                check_owned_target(policy, &child_path, &file)?;
-            }
+            let owner = policy.as_ref().map(|policy| check_owned_target(policy, &child_path, &file)).transpose()?;
             let child_index = pinned.len();
             pinned.push(Pinned {
                 file,
                 is_dir: child.is_dir,
+                owner,
             });
             if child.is_dir {
                 pending.push((child_index, depth + 1, child_path));
@@ -924,12 +926,32 @@ fn prepare_opened(root: File, opened_path: PathBuf, actual: Identity, protected:
     })
 }
 
-fn check_owned_target(policy: &crate::duplicate_finder::safety::RemovalPolicy, path: &Path, handle: &File) -> io::Result<()> {
+fn check_owned_target(policy: &crate::duplicate_finder::safety::RemovalPolicy, path: &Path, handle: &File) -> io::Result<crate::duplicate_finder::verified_file::OwnerClass> {
     if let Some(reason) = policy.protected_reason(path) {
         return Err(io::Error::new(io::ErrorKind::PermissionDenied, reason));
     }
-    crate::duplicate_finder::verified_file::verify_current_user_owns(handle)
-        .map_err(|message| io::Error::new(io::ErrorKind::PermissionDenied, message))
+    let owner = crate::duplicate_finder::verified_file::classify_owner(handle)
+        .map_err(|message| io::Error::new(io::ErrorKind::PermissionDenied, message))?;
+    match owner {
+        crate::duplicate_finder::verified_file::OwnerClass::CurrentUser | crate::duplicate_finder::verified_file::OwnerClass::SharedAdministrators => Ok(owner),
+        crate::duplicate_finder::verified_file::OwnerClass::Other => Err(io::Error::new(io::ErrorKind::PermissionDenied, "refused removal: file is not owned by the current user")),
+    }
+}
+
+fn owner_unchanged(expected: Option<crate::duplicate_finder::verified_file::OwnerClass>, actual: crate::duplicate_finder::verified_file::OwnerClass) -> bool {
+    use crate::duplicate_finder::verified_file::OwnerClass;
+    expected == Some(actual) && actual != OwnerClass::Other
+}
+
+#[test]
+fn confirmed_ownership_must_remain_unchanged() {
+    use crate::duplicate_finder::verified_file::OwnerClass::{CurrentUser, SharedAdministrators, Other};
+    assert!(owner_unchanged(Some(CurrentUser), CurrentUser));
+    assert!(owner_unchanged(Some(SharedAdministrators), SharedAdministrators));
+    assert!(!owner_unchanged(Some(CurrentUser), SharedAdministrators));
+    assert!(!owner_unchanged(Some(SharedAdministrators), CurrentUser));
+    assert!(!owner_unchanged(Some(Other), Other));
+    assert!(!owner_unchanged(None, CurrentUser));
 }
 
 #[derive(Debug)]
@@ -947,12 +969,22 @@ pub(crate) fn delete_prepared(mut tree: PreparedTree) -> Result<usize, DeleteFai
     let _protected_count = tree.protected.handles.len();
     if tree.enforce_user_policy {
         for entry in &tree.entries {
-            crate::duplicate_finder::verified_file::verify_current_user_owns(&entry.file)
+            let owner = crate::duplicate_finder::verified_file::classify_owner(&entry.file)
                 .map_err(|message| DeleteFailure { processed: 0, error: io::Error::new(io::ErrorKind::PermissionDenied, message) })?;
+            if !owner_unchanged(entry.owner, owner) {
+                return Err(DeleteFailure { processed: 0, error: io::Error::new(io::ErrorKind::PermissionDenied, "folder ownership changed after confirmation") });
+            }
         }
     }
     let mut processed = 0usize;
-    while let Some(Pinned { file, is_dir }) = tree.entries.pop() {
+    while let Some(Pinned { file, is_dir, owner }) = tree.entries.pop() {
+        if tree.enforce_user_policy {
+            let current = crate::duplicate_finder::verified_file::classify_owner(&file)
+                .map_err(|message| DeleteFailure { processed, error: io::Error::new(io::ErrorKind::PermissionDenied, message) })?;
+            if !owner_unchanged(owner, current) {
+                return Err(DeleteFailure { processed, error: io::Error::new(io::ErrorKind::PermissionDenied, "folder ownership changed after confirmation") });
+            }
+        }
         let disposition: u8 = 1; // FILE_DISPOSITION_INFO.DeleteFile
         // Unlink the verified handle on close even when another process has a
         // delete-sharing handle open. Keep Windows' image-section check.

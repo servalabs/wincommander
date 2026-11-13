@@ -56,6 +56,12 @@ fn safe_target(value: &str) -> String {
 
 /// The worker owns both the permit and root until the dialog actually closes,
 /// even if the caller abandons the async request.
+fn shared_ownership_warning(has_shared_items: bool) -> &'static str {
+    if has_shared_items {
+        "\n\nSome items are owned by the shared Administrators group and may be used by other administrators. Confirm only if you intend to delete these shared items."
+    } else { "" }
+}
+
 pub(super) async fn confirm(folder: PreparedTree, permit: Permit) -> Result<Option<PreparedTree>, String> {
     if crate::cli::tauri_runtime_active() { return Ok(None); }
     tokio::task::spawn_blocking(move || {
@@ -63,12 +69,13 @@ pub(super) async fn confirm(folder: PreparedTree, permit: Permit) -> Result<Opti
         let state = DialogState { started: Instant::now(), dismiss_failed: AtomicBool::new(false) };
         let target = safe_target(folder.authorization_target().0.to_str().ok_or("Folder path cannot be displayed accurately.")?);
         let (files, folders) = folder.item_counts();
+        let shared_warning = shared_ownership_warning(folder.has_shared_administrator_owned_items());
         // Release the retained directory handles even if the dialog's message
         // loop stalls and cannot process the automatic cancel message.
         let retained = Arc::new(Mutex::new(Some(folder)));
         let finished_tx = expire_retained(Arc::clone(&retained), DIALOG_TTL)?;
         let title = wide("WinCommander — confirm folder deletion");
-        let detail = wide(&format!("Permanently delete this folder?\n\nTarget: {}\nFreshly verified current tree: {} files · {} folders (including the selected folder). These counts are independent of the earlier scan.\n\nNew items are not included and may cause partial deletion. This confirmation expires after 30 seconds.", target, files, folders));
+        let detail = wide(&format!("Permanently delete this folder?\n\nTarget: {}\nFreshly verified current tree: {} files · {} folders (including the selected folder). These counts are independent of the earlier scan.{}\n\nNew items are not included and may cause partial deletion. This confirmation expires after 30 seconds.", target, files, folders, shared_warning));
         let config = TASKDIALOGCONFIG {
             cbSize: std::mem::size_of::<TASKDIALOGCONFIG>() as u32,
             dwFlags: TDF_ALLOW_DIALOG_CANCELLATION | TDF_CALLBACK_TIMER,
@@ -90,12 +97,19 @@ pub(super) async fn confirm(folder: PreparedTree, permit: Permit) -> Result<Opti
 
 #[cfg(test)]
 mod tests {
-    use super::{expire_retained, safe_target};
+    use super::{expire_retained, safe_target, shared_ownership_warning};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
     #[test]
     fn confirmation_escapes_direction_controls_and_newlines() {
         assert_eq!(safe_target("a\u{202e}b\nc"), "a\\u{202E}b\\u{000A}c");
+    }
+
+    #[test]
+    fn shared_ownership_warning_requires_explicit_confirmation() {
+        assert!(shared_ownership_warning(true).contains("shared Administrators"));
+        assert!(shared_ownership_warning(true).contains("other administrators"));
+        assert!(shared_ownership_warning(false).is_empty());
     }
 
     #[test]

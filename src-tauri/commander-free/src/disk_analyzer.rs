@@ -480,12 +480,10 @@ async fn delete_confirmed_folder(binding: String, capability_token: Option<Strin
     }).await.map_err(|_| "Folder deletion worker failed; rescan to determine what remains".to_string())?
 }
 
-// Keep folder deletion unavailable until its experimental design has passed
-// independent review and real-app acceptance on both administrator and
-// standard-user sessions. This guard also covers direct IPC requests.
+// The same capability guard applies to the UI and direct IPC requests.
 #[tauri::command]
 pub fn disk_folder_delete_available() -> bool {
-    false
+    cfg!(all(windows, feature = "experimental-disk-tree-delete"))
 }
 
 #[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
@@ -522,6 +520,23 @@ fn folder_replaced_after_scan_has_a_different_identity() {
     std::fs::create_dir(&selected).unwrap();
     let (volume, index) = crate::routine_cleaner::file_identity(&selected).unwrap();
     assert!(verify_scanned_folder_identity(expected, crate::disk_tree_delete::Identity { volume, index }).is_err());
+}
+
+#[cfg(all(test, windows, feature = "experimental-disk-tree-delete"))]
+#[test]
+fn scanned_alias_retargeted_to_another_folder_is_rejected() {
+    let base = tempfile::Builder::new().prefix("wincmd-folder-alias-test-").tempdir().unwrap();
+    let first = base.path().join("first");
+    let second = base.path().join("second");
+    std::fs::create_dir(&first).unwrap();
+    std::fs::create_dir(&second).unwrap();
+    std::fs::write(first.join("keep.txt"), b"first").unwrap();
+    std::fs::write(second.join("keep.txt"), b"second").unwrap();
+    let scanned_identity = crate::routine_cleaner::file_identity(&first).unwrap();
+    let (volume, index) = crate::routine_cleaner::file_identity(&second).unwrap();
+    assert!(verify_scanned_folder_identity(scanned_identity, crate::disk_tree_delete::Identity { volume, index }).is_err());
+    assert_eq!(std::fs::read(first.join("keep.txt")).unwrap(), b"first");
+    assert_eq!(std::fs::read(second.join("keep.txt")).unwrap(), b"second");
 }
 
 #[tauri::command]
