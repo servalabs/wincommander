@@ -10,6 +10,17 @@ export function shortcutWarningsAfterReconciliation(warnings: string[], sharedWa
   return sharedWarning ? warnings : warnings.filter((warning) => warning !== MANAGED_WARNING);
 }
 
+/** Keep startup reconciliation failures visible without repeating a service
+ * rejection for each claim. A development build outside the service's pinned
+ * location is a common cause, but no shortcut is assumed to be reconciled. */
+export function summarizeStartupShortcutWarnings(warnings: Array<string | null | undefined>): string[] {
+  const pathDenied = "session-helper peer binary path is not on the allow-list";
+  const serviceMismatch = "Shared shortcuts could not be synchronized because this app is not approved by the Windows service. Use the installed app or the protected development setup.";
+  return [...new Set(warnings.filter((warning): warning is string => Boolean(warning)).map((warning) =>
+    warning.includes(pathDenied) ? serviceMismatch : warning,
+  ))];
+}
+
 export async function syncSharedShortcutClaim(
   kind: SharedShortcutClaimKind,
   expectedActive?: boolean,

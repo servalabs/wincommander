@@ -1,5 +1,13 @@
 import { expect, test } from "bun:test";
-import { shortcutWarningsAfterReconciliation, syncSharedShortcutClaim } from "./sharedShortcutClaims";
+import { shortcutWarningsAfterReconciliation, summarizeStartupShortcutWarnings, syncSharedShortcutClaim } from "./sharedShortcutClaims";
+
+test("startup shows one actionable service mismatch without hiding other warnings", () => {
+  const denied = "Shared shortcut changes could not be confirmed: service rejected request: forbidden (session-helper peer binary path is not on the allow-list)";
+  const messages = summarizeStartupShortcutWarnings([`${denied} [operation 11]`, `${denied} [operation 12]`, "Other warning", null]);
+  expect(messages).toHaveLength(2);
+  expect(messages[0]).toContain("not approved by the Windows service");
+  expect(messages[1]).toBe("Other warning");
+});
 
 test("reports denied and incomplete shared shortcut changes", async () => {
   expect((await syncSharedShortcutClaim("hide", true, async () => { throw new Error("forbidden"); })).warning).toContain("forbidden");
