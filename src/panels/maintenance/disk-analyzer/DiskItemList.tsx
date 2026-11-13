@@ -27,7 +27,7 @@ export default function DiskItemList({ items, total, selected, focused, large, d
             const largeItem = item as LargeDiskItem;
             const isFocused = focusedIndex === index;
             return <div key={item.fullPath} className={`da-item${isFocused ? " active" : ""}${selected.has(item.fullPath) ? " selected" : ""}`}>
-                <span title={item.isDir && !folderDeleteAvailable ? "Folder deletion is unavailable in this build." : undefined}><CheckboxControl checked={selected.has(item.fullPath)} disabled={disabled || (item.isDir && !folderDeleteAvailable)} ariaLabel={`Select ${item.name}${item.isDir && !folderDeleteAvailable ? ". Folder deletion unavailable" : ""}`} onChange={() => onSelect(item)} /></span>
+                <span className={item.isDir && !folderDeleteAvailable ? "da-folder-select-unavailable" : undefined} title={item.isDir && !folderDeleteAvailable ? "Folder deletion is unavailable in this session." : undefined}><CheckboxControl checked={selected.has(item.fullPath)} disabled={disabled || (item.isDir && !folderDeleteAvailable)} ariaLabel={`Select ${item.name}${item.isDir && !folderDeleteAvailable ? ". Folder deletion unavailable" : ""}`} onChange={() => onSelect(item)} /></span>
                 <button type="button" className="da-item-main" disabled={disabled} onClick={() => onFocus(item)}
                     onDoubleClick={() => item.isDir && onNavigate(item.fullPath)} title={toExplorerDisplayPath(item.fullPath) ?? "Location unavailable"} aria-pressed={isFocused}>
                     <Icon icon={item.isDir ? "folder-close" : "document"} size={24} style={{ color: diskNodeColor(item, index) }} />
