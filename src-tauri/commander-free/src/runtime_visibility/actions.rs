@@ -364,6 +364,9 @@ pub fn hide_runtime(key: String) -> Result<HideReport, String> {
         return Err(format!("refusing to hide protected runtime '{}'", key));
     }
 
+    // Check process enumeration before any registry or shortcut changes.
+    let mut process_snapshot = sysinfo::System::new()
+        .map_err(|e| format!("Process enumeration unavailable: {e}"))?;
     let run_values = read_run_values();
     let uninstall = read_uninstall_entries();
 
@@ -572,8 +575,8 @@ pub fn hide_runtime(key: String) -> Result<HideReport, String> {
     const NO_KILL: &[&str] = &["tailscale.exe", "veracrypt.exe"];
     if !NO_KILL.iter().any(|nk| nk.eq_ignore_ascii_case(&key)) {
         let key_stem = key.trim_end_matches(".exe");
-        use sysinfo::{ProcessesToUpdate, System};
-        let mut sys = System::new();
+        use sysinfo::ProcessesToUpdate;
+        let sys = &mut process_snapshot;
         sys.refresh_processes(ProcessesToUpdate::All, false);
         let mut restart_cmd: Vec<String> = Vec::new();
         for process in sys.processes().values() {

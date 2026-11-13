@@ -7,7 +7,7 @@ use aes_gcm::{
 };
 use argon2::{Algorithm, Argon2, Params, Version};
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
-use rand::{rngs::OsRng, RngCore};
+use rand::{rngs::SysRng, TryRng};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
@@ -46,10 +46,10 @@ pub(super) fn encrypt(plaintext: &str, password: &str) -> Result<String, String>
     }
     let mut salt = [0u8; 16];
     let mut nonce = [0u8; 12];
-    OsRng
+    SysRng
         .try_fill_bytes(&mut salt)
         .map_err(|_| "Backup randomness unavailable.")?;
-    OsRng
+    SysRng
         .try_fill_bytes(&mut nonce)
         .map_err(|_| "Backup randomness unavailable.")?;
     let derived = key(password, &salt)?;

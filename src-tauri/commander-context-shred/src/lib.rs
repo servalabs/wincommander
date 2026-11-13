@@ -14,7 +14,7 @@ use std::{
 #[cfg(windows)]
 use std::io::{Read, Seek, SeekFrom};
 
-use rand::{rngs::OsRng, RngCore};
+use rand::{rngs::SysRng, TryRng};
 
 fn normalized(path: &Path) -> String {
     let value = path.to_string_lossy().replace('/', "\\");
@@ -254,7 +254,7 @@ fn overwrite_and_delete_file(path: &Path) -> Result<(), String> {
     let mut buffer = [0u8; 64 * 1024];
     while remaining > 0 {
         let bytes = remaining.min(buffer.len() as u64) as usize;
-        OsRng.fill_bytes(&mut buffer[..bytes]);
+        SysRng.try_fill_bytes(&mut buffer[..bytes]).map_err(|_| "overwrite randomness unavailable")?;
         file.write_all(&buffer[..bytes])
             .map_err(|error| format!("cannot overwrite file: {error}"))?;
         remaining -= bytes as u64;
@@ -344,7 +344,7 @@ fn overwrite_and_delete_file_inner(path: &Path) -> Result<(), String> {
     let mut actual = [0u8; 64 * 1024];
     while offset < length {
         let bytes = (length - offset).min(expected.len() as u64) as usize;
-        OsRng.fill_bytes(&mut expected[..bytes]);
+        SysRng.try_fill_bytes(&mut expected[..bytes]).map_err(|_| "overwrite randomness unavailable")?;
         file.seek(SeekFrom::Start(offset))
             .and_then(|_| file.write_all(&expected[..bytes]))
             .and_then(|_| file.flush())

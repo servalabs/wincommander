@@ -94,14 +94,14 @@ describe("filename engine failures", () => {
 });
 
 describe("shortcut match continuation", () => {
-  const plan: EverythingPlan = { tokens: ["parth*"], isBrowse: false };
+  const plan: EverythingPlan = { tokens: ["example*"], isBrowse: false };
 
   it("keeps the compact preview but reports that the full Search Files panel has more matches", async () => {
-    const rows = Array.from({ length: 99 }, (_, index) => file(`parth-${index}.txt`));
-    const page = await fetchMatchPage(plan, "parth", async () => ({
+    const rows = Array.from({ length: 99 }, (_, index) => file(`example-${index}.txt`));
+    const page = await fetchMatchPage(plan, "example", async () => ({
       results: rows,
       total: rows.length,
-      query: "parth*",
+      query: "example*",
       has_more: false,
     }));
     expect(page.rows).toHaveLength(10);
@@ -109,11 +109,11 @@ describe("shortcut match continuation", () => {
   });
 
   it("preserves the provider continuation signal even when the first page has only preview-sized rows", async () => {
-    const rows = Array.from({ length: 10 }, (_, index) => file(`parth-${index}.txt`));
-    const page = await fetchMatchPage(plan, "parth", async () => ({
+    const rows = Array.from({ length: 10 }, (_, index) => file(`example-${index}.txt`));
+    const page = await fetchMatchPage(plan, "example", async () => ({
       results: rows,
       total: rows.length,
-      query: "parth*",
+      query: "example*",
       has_more: true,
     }));
     expect(page.rows).toHaveLength(10);

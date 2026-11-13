@@ -2282,7 +2282,7 @@ mod tests {
     /// (signature check, key decode, device-hash binding) without any real
     /// private key material.
     fn test_keypair() -> (SigningKey, String) {
-        let signing_key = SigningKey::generate(&mut rand10::rng());
+        let signing_key = SigningKey::generate(&mut rand::rng());
         let public_key_b64 = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes());
         (signing_key, public_key_b64)
     }

@@ -43,8 +43,8 @@ use aes_gcm::{
 };
 use argon2::{Argon2, Params};
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
-use rand::rngs::OsRng;
-use rand::RngCore;
+use rand::rngs::SysRng;
+use rand::TryRng;
 use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
@@ -321,7 +321,7 @@ fn install_material() -> Result<[u8; 32], String> {
                 None => {
                     creation?;
                     let mut material = [0u8; 32];
-                    OsRng.fill_bytes(&mut material);
+                    SysRng.try_fill_bytes(&mut material).map_err(|_| "randomness unavailable")?;
                     let protected = dpapi_protect(&material)
                         .map_err(|e| format!("Failed to protect install material: {e}"))?;
                     crate::datastore_io::publish_new(&path, &protected)?;
@@ -438,7 +438,7 @@ fn write_new_user_material(
     current_user_install: bool,
 ) -> Result<[u8; 32], String> {
     let mut material = [0u8; 32];
-    OsRng.fill_bytes(&mut material);
+    SysRng.try_fill_bytes(&mut material).map_err(|_| "randomness unavailable")?;
     let protected = protect_user_store_material(&material, current_user_install)?;
     crate::datastore_io::publish_new(path, &protected)
         .map_err(|_| "could not write per-user store material".to_string())?;
@@ -544,7 +544,7 @@ fn encode_section(
 ) -> Result<String, String> {
     let cipher = Aes256Gcm::new(key.into());
     let mut nonce_bytes = [0u8; 12];
-    OsRng.fill_bytes(&mut nonce_bytes);
+    SysRng.try_fill_bytes(&mut nonce_bytes).map_err(|_| "randomness unavailable")?;
     let nonce = nonce_from_bytes(&nonce_bytes)?;
     let aad = section_aad(scope);
     let ciphertext = cipher
@@ -957,7 +957,7 @@ fn existing_protected_log_material(
 pub(crate) fn diagnostic_encrypt_line(date: &str, body: &str) -> Result<String, String> {
     let key = protected_log_key()?;
     let mut nonce = [0u8; 12];
-    OsRng.fill_bytes(&mut nonce);
+    SysRng.try_fill_bytes(&mut nonce).map_err(|_| "randomness unavailable")?;
     wincmd_shared::diagnostics::seal_diagnostic_record(
         &key,
         date,
@@ -988,7 +988,7 @@ pub(crate) fn diagnostic_decrypt_line(line: &str) -> Option<(String, String)> {
 pub fn log_encrypt_line(date: &str, body: &str) -> Result<String, String> {
     let key = protected_log_key()?;
     let mut nonce_bytes = [0u8; 12];
-    OsRng.try_fill_bytes(&mut nonce_bytes).map_err(|_| "log randomness unavailable")?;
+    SysRng.try_fill_bytes(&mut nonce_bytes).map_err(|_| "log randomness unavailable")?;
     seal_log_line(date, body, &key, nonce_bytes)
 }
 

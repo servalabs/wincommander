@@ -3,7 +3,7 @@
 //! authorization and transport are not implemented by this module.
 use crate::fleet_credential::{MachineDpapi, Protector};
 use crate::license_cache::licence_device_anchor as anchor;
-use rand::RngCore;
+use rand::TryRng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::sync::Mutex;
@@ -59,10 +59,10 @@ impl PendingCredential {
     pub(crate) fn generate() -> Result<Self, &'static str> {
         let mut id = [0u8; 32];
         let mut secret = Zeroizing::new([0u8; 32]);
-        rand::rngs::OsRng
+        rand::rngs::SysRng
             .try_fill_bytes(&mut id)
             .map_err(|_| INVALID)?;
-        rand::rngs::OsRng
+        rand::rngs::SysRng
             .try_fill_bytes(secret.as_mut())
             .map_err(|_| INVALID)?;
         Ok(Self { id, secret })

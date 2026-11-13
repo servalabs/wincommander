@@ -4,7 +4,7 @@
 use super::{verify_policy, FleetTrust};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use ed25519_dalek::{Signature, VerifyingKey};
-use rand::RngCore;
+use rand::TryRng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::time::{Duration, Instant};
@@ -70,7 +70,7 @@ impl PendingContact {
     pub fn issue(trust: FleetTrust, now: Instant) -> Result<Self, &'static str> {
         key(&trust)?;
         let mut random = [0u8; 16];
-        rand::rngs::OsRng
+        rand::rngs::SysRng
             .try_fill_bytes(&mut random)
             .map_err(|_| "random_unavailable")?;
         let nonce = format!(
