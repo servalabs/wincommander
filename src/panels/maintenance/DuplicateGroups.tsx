@@ -77,6 +77,7 @@ export function DuplicateGroups({ tools, onFilterChange, onRemoveFile }: { tools
   };
   return <section className="duplicate-workspace" aria-label="Discovered duplicate groups">
     {groups?.some((group) => group.files.some((file) => file.removalBlockReason === "profiles_unavailable")) && <p role="status" className="text-xs text-[var(--warn)]">Windows user profile locations could not be verified, so removal is unavailable. Reconnect any offline profile drives or ask an administrator, then scan again.</p>}
+    {groups?.some((group) => group.files.some((file) => file.removalBlockReason === "owner_unavailable")) && <p role="status" className="text-xs text-[var(--warn)]">Some copies are hidden because their ownership could not be verified as the current user. Ownership is checked again before removal.</p>}
     {groups?.some(group => group.files.some(file => file.removable === undefined)) && <p role="status" className="text-xs text-[var(--warn)]">Removal eligibility could not be verified for some copies. Update the app service and scan again.</p>}
     <form className="duplicate-filters" onSubmit={onSearch}>
       <label><Icon icon="search" size={14} /><input aria-label="Search duplicate files and locations" value={query} onChange={(event) => { setQuery(event.target.value); setVisibleCount(50); }} placeholder="Search file names or locations" /></label>

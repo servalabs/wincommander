@@ -28,6 +28,16 @@ test("older results without a positive removal classification are not exposed as
   expect(html).not.toContain("Remove unverified.dat");
 });
 
+test("unverified ownership is explained without exposing hidden file names", () => {
+  const file = { id: "unknown", name: "private-name.dat", path: "C:\\hidden\\private-name.dat", size: 10, modified: null, removable: false, removalBlockReason: "owner_unavailable" };
+  const group = { id: "g", files: [file], fileCount: 2, size: 10, reclaimableBytes: 10, memberOffset: 0, hasMoreFiles: false };
+  const tools = { duplicateScan: { groups: [group] }, selected: new Set(), busy: false, retainedFileId: () => "unknown", select() {}, openDuplicate() {}, keepFile() {}, loadMembers() {} };
+  const html = renderToStaticMarkup(createElement(DuplicateGroups, { tools: tools as never, onFilterChange() {}, onRemoveFile() {} }));
+  expect(html).toContain("ownership could not be verified as the current user");
+  expect(html).not.toContain("private-name.dat");
+  expect(html).not.toContain("Remove private-name.dat");
+});
+
 test("outside-profile-only groups require an explicit location filter", () => {
   const file = { id: "copy", name: "report.txt", path: "D:\\Work\\report.txt", size: 10, modified: null, removable: true, profileScope: "outside" };
   const group = { id: "g", files: [file], fileCount: 2, size: 10, reclaimableBytes: 10, memberOffset: 0, hasMoreFiles: false };
