@@ -691,6 +691,30 @@ fn blocked_copies_expose_only_stable_non_sensitive_reason_codes() {
     );
 }
 
+#[cfg(windows)]
+#[test]
+#[ignore = "requires an explicitly configured disposable test root"]
+fn duplicate_index_marks_vanished_copy_as_owner_unavailable() {
+    let test_root = std::env::var_os("WINCOMMANDER_OWNER_TEST_ROOT")
+        .expect("set WINCOMMANDER_OWNER_TEST_ROOT to a disposable, unprotected directory");
+    let directory = tempfile::tempdir_in(test_root).unwrap();
+    let first = directory.path().join("first.txt");
+    let second = directory.path().join("second.txt");
+    std::fs::write(&first, b"synthetic duplicate").unwrap();
+    std::fs::write(&second, b"synthetic duplicate").unwrap();
+    let roots = [std::fs::canonicalize(directory.path()).unwrap()];
+    let index = fixture_index(&roots, &AtomicBool::new(false));
+    // Remove only the task-owned fixture after enumeration to exercise a
+    // stale indexed path without changing any ACL or real user file.
+    std::fs::remove_file(&second).unwrap();
+    assert!(safety::protected_removal_reason(&second).is_none(), "fixture root must be unprotected");
+    let page = index.page(0).unwrap();
+    let group = page.groups.iter().find(|group| group.file_count == 2).unwrap();
+    let row = group.files.iter().find(|file| file.name == "second.txt").unwrap();
+    assert!(!row.removable);
+    assert_eq!(row.removal_block_reason, Some("owner_unavailable"));
+}
+
 #[test]
 fn literal_git_metadata_is_reviewable_but_not_removable() {
     let dir = tempfile::tempdir().unwrap();

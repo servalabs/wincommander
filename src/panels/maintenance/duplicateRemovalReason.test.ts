@@ -5,6 +5,10 @@ test("explains why inaccessible profiles block duplicate removal", () => {
   expect(duplicateRemovalReason("profiles_unavailable")).toContain("profiles could not be verified");
 });
 
+test("explains an unavailable or different owner without exposing details", () => {
+  expect(duplicateRemovalReason("owner_unavailable")).toBe("Ownership could not be verified as the current user.");
+});
+
 test("describes the limited Git metadata protection", () => {
   expect(duplicateRemovalReason("git_metadata")).toBe("Files inside .git directories are protected.");
 });

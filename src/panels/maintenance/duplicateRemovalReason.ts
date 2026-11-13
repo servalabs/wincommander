@@ -7,6 +7,7 @@ export function duplicateRemovalReason(code: string | null | undefined): string 
     case "git_metadata": return "Files inside .git directories are protected.";
     case "other_profile": return "Files in another Windows user's profile are protected.";
     case "profiles_unavailable": return "Windows user profiles could not be verified.";
+    case "owner_unavailable": return "Ownership could not be verified as the current user.";
     default: return "This copy cannot be verified for removal. Scan again or update WinCommander.";
   }
 }
