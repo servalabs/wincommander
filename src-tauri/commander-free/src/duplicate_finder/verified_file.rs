@@ -33,14 +33,18 @@ pub(super) fn current_user_owns_path(_path: &std::path::Path) -> bool {
 
 #[cfg(all(test, windows))]
 mod owner_projection_tests {
-    use super::current_user_owns_path;
+    use super::{current_user_owns_path, verify_current_user_owns};
 
     #[test]
-    fn owned_fixture_is_visible_and_missing_fixture_is_unverified() {
+    fn fixture_agrees_with_deletion_owner_check_and_missing_is_unverified() {
         let directory = tempfile::tempdir().unwrap();
         let file = directory.path().join("synthetic-copy.txt");
         std::fs::write(&file, b"synthetic fixture").unwrap();
-        assert!(current_user_owns_path(&file));
+        // Elevated Windows accounts can create files owned by the built-in
+        // Administrators group. Agree with the actual deletion check instead
+        // of assuming that a freshly created file is owned by this user.
+        let held = std::fs::File::open(&file).unwrap();
+        assert_eq!(current_user_owns_path(&file), verify_current_user_owns(&held).is_ok());
         assert!(!current_user_owns_path(&directory.path().join("missing")));
     }
 }
