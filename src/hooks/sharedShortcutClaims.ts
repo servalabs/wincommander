@@ -10,6 +10,13 @@ export function shortcutWarningsAfterReconciliation(warnings: string[], sharedWa
   return sharedWarning ? warnings : warnings.filter((warning) => warning !== MANAGED_WARNING);
 }
 
+/** Collapse only the exact known service rejection; retain combined or unknown warnings. */
+export function summarizeStartupShortcutWarnings(warnings: Array<string | null | undefined>): string[] {
+  const denial = /^Shared shortcut changes could not be confirmed: (?:Error: )?service rejected request: forbidden \(session-helper peer binary path is not on the allow-list\)(?: \[operation [0-9]+\])?$/;
+  const explanation = "Shared shortcuts could not be synchronized because this app is not approved by the Windows service. Use the installed app or the protected development setup.";
+  return [...new Set(warnings.filter((warning): warning is string => Boolean(warning)).map((warning) => denial.test(warning) ? explanation : warning))];
+}
+
 export async function syncSharedShortcutClaim(
   kind: SharedShortcutClaimKind,
   expectedActive?: boolean,
