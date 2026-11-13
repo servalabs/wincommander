@@ -134,6 +134,7 @@ pub(super) fn removal_block_code(reason: &str) -> &'static str {
         "Windows or application location is protected" => "protected_location",
         "application, executable or codec file is protected" => "protected_type",
         "application data is protected" => "application_data",
+        "source control metadata is protected" => "source_control",
         "another user profile is protected" => "other_profile",
         "user profile locations could not be verified" => "profiles_unavailable",
         "file owner cannot be verified as the current user" => "owner_unavailable",
@@ -164,6 +165,14 @@ impl RemovalPolicy {
 
     /// Paths remain reviewable even when removal is prohibited.
     pub(super) fn protected_reason(&self, path: &Path) -> Option<&'static str> {
+        // Git object stores include LFS content-addressed blobs whose bytes can
+        // match ordinary files. Removing them can break repositories, even if
+        // a scan found another copy of the same content.
+        if path.components().any(|part| {
+            part.as_os_str().to_string_lossy().eq_ignore_ascii_case(".git")
+        }) {
+            return Some("source control metadata is protected");
+        }
         if self
             .system_roots
             .iter()

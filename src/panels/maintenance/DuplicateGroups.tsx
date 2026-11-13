@@ -9,6 +9,7 @@ import type { useFileHygiene } from "./useFileHygiene";
 import { toExplorerDisplayPath } from "./maintenancePathDisplay";
 import { hasExpandedDuplicateGroups, isDuplicateGroupExpanded, setDuplicateGroupExpanded, toggleDuplicateGroups } from "./duplicateGroupPresentation";
 import { duplicateProfileKey, duplicateProfileLabel, isDuplicateGroupsFiltered } from "./duplicateProfile";
+import { isGitManagedDuplicate } from "../../lib/maintenanceSelection";
 import "./DuplicateGroups.css";
 
 type Tools = ReturnType<typeof useFileHygiene>;
@@ -27,6 +28,7 @@ function reviewReason(reason?: string | null): string {
     case "protected_location": return "Windows or application location is protected";
     case "protected_type": return "Application or executable files are protected";
     case "application_data": return "Application data is protected";
+    case "source_control": return "Git-managed data is protected";
     case "profiles_unavailable": return "Windows profiles could not be verified";
     case "owner_unavailable": return "File ownership could not be verified";
     default: return "Removal eligibility has not been verified";
@@ -110,28 +112,33 @@ export function DuplicateGroups({ tools, onFilterChange, onRemoveFile }: { tools
 
 function DuplicateGroupRows({ group, tools, onRemoveFile, open, onOpenChange, groupRef }: { group: DuplicateGroup; tools: Tools; onRemoveFile: (fileId: string) => void; open: boolean; onOpenChange: (open: boolean) => void; groupRef?: React.RefObject<HTMLDetailsElement | null> }) {
   const [visibleCount, setVisibleCount] = useState(50);
+  const [showGitCopies, setShowGitCopies] = useState(false);
   const selectedCount = group.files.filter((file) => tools.selected.has(file.id)).length;
   const retainedId = tools.retainedFileId(group);
-  const visibleFiles = group.files;
+  const gitCopies = group.files.filter((file) => isGitManagedDuplicate(file.path));
+  const visibleFiles = showGitCopies ? group.files : group.files.filter((file) => !isGitManagedDuplicate(file.path));
+  const displayFile = group.files.find((file) => !isGitManagedDuplicate(file.path)) ?? group.files[0];
   return <details ref={groupRef} className="duplicate-group" open={open} onToggle={(event) => onOpenChange(event.currentTarget.open)}>
     <summary>
-      <Icon icon={fileType(visibleFiles[0]?.name ?? "")?.icon ?? "document"} size={20} />
-      <span className="duplicate-group-heading"><strong>{visibleFiles[0]?.name ?? "Duplicate copies"}</strong><small>{group.fileCount} verified copies including protected · {formatBytes(group.size)} each · {formatBytes(group.reclaimableBytes)} potential duplicate data</small></span>
+      <Icon icon={fileType(displayFile?.name ?? "")?.icon ?? "document"} size={20} />
+      <span className="duplicate-group-heading"><strong>{displayFile?.name ?? "Duplicate copies"}</strong><small>{group.fileCount} full-content hash matches including protected · {formatBytes(group.size)} each · {formatBytes(group.reclaimableBytes)} potential duplicate data</small></span>
       {selectedCount > 0 && <Badge tone="accent">{selectedCount} selected</Badge>}
-      <Button type="button" size="sm" variant="outline" disabled={tools.busy || !visibleFiles.some(file => file.removable === true && file.id !== retainedId)} onClick={(event) => { event.preventDefault(); event.stopPropagation(); tools.selectGroupCopies(group.id); }}>Select copies</Button>
+      <Button type="button" size="sm" variant="outline" disabled={tools.busy || !visibleFiles.some(file => file.removable === true && !isGitManagedDuplicate(file.path) && file.id !== retainedId)} onClick={(event) => { event.preventDefault(); event.stopPropagation(); tools.selectGroupCopies(group.id); }}>Select copies</Button>
       <Icon icon="chevron-down" size={14} />
     </summary>
     <div className="duplicate-members">
-      {!visibleFiles.length && <p className="text-xs text-[var(--text-dim)]">No copies on this page. Check other pages for this group.</p>}
+      {gitCopies.length > 0 && <Button type="button" size="sm" variant="ghost" aria-expanded={showGitCopies} onClick={() => setShowGitCopies((show) => !show)}>{showGitCopies ? "Hide" : "Show"} {gitCopies.length} Git-managed {gitCopies.length === 1 ? "copy" : "copies"} on this page · review only</Button>}
+      {!visibleFiles.length && <p className="text-xs text-[var(--text-dim)]">{gitCopies.length ? "Only Git-managed copies are on this page." : "No copies on this page. Check other pages for this group."}</p>}
       {visibleFiles.slice(0, visibleCount).map((file) => {
         const retained = retainedId === file.id;
-        const protectedCopy = file.removable !== true;
+        const gitManaged = isGitManagedDuplicate(file.path);
+        const protectedCopy = gitManaged || file.removable !== true;
         const displayPath = toExplorerDisplayPath(file.path) ?? "Location unavailable";
         return <div key={file.id} className="duplicate-member" data-retained={retained || undefined}>
           <CheckboxControl checked={!protectedCopy && tools.selected.has(file.id)} disabled={tools.busy || retained || protectedCopy} ariaLabel={`${tools.selected.has(file.id) ? "Deselect" : "Select"} ${file.name} at ${displayPath}`} onChange={() => tools.select(file.id)} />
           <span className="duplicate-member-location"><strong>{file.name}</strong><small title={displayPath}>{displayPath} · {formatModified(file.modified)} · {duplicateProfileLabel(file)}</small></span>
           <Button size="sm" variant="ghost" disabled={tools.busy} aria-label={`Open ${file.name} in Explorer`} onClick={() => void tools.openDuplicate(file.id)}><Icon icon="folder-open" size={14} /></Button>
-          {protectedCopy ? <span title={reviewReason(file.removalBlockReason)}><Badge tone="neutral">{retained ? "Kept · review only" : "Review only"}</Badge></span> : retained ? <Badge tone="success">Kept copy</Badge> : <><Button size="sm" variant="ghost" disabled={tools.busy} aria-label={`Keep ${file.name} at ${displayPath}`} onClick={() => tools.keepFile(group.id, file.id)}>Keep</Button><Button size="sm" variant="outline" disabled={tools.busy} aria-label={`Remove ${file.name} at ${displayPath}`} title="Remove file" onClick={() => onRemoveFile(file.id)}><Icon icon="trash" size={14} /></Button></>}
+          {protectedCopy ? <span title={gitManaged ? "Git-managed data is protected" : reviewReason(file.removalBlockReason)}><Badge tone="neutral">{retained ? "Kept · review only" : "Review only"}</Badge></span> : retained ? <Badge tone="success">Kept copy</Badge> : <><Button size="sm" variant="ghost" disabled={tools.busy} aria-label={`Keep ${file.name} at ${displayPath}`} onClick={() => tools.keepFile(group.id, file.id)}>Keep</Button><Button size="sm" variant="outline" disabled={tools.busy} aria-label={`Remove ${file.name} at ${displayPath}`} title="Remove file" onClick={() => onRemoveFile(file.id)}><Icon icon="trash" size={14} /></Button></>}
         </div>;
       })}
       {visibleFiles.length > visibleCount && <Button size="sm" variant="ghost" onClick={() => setVisibleCount((count) => count + 50)}>Inspect more copies ({visibleFiles.length - visibleCount} remaining)</Button>}

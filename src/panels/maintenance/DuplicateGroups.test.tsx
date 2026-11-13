@@ -2,6 +2,23 @@ import { expect, test } from "bun:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { DuplicateGroups } from "./DuplicateGroups";
+import { canRemoveDuplicateFile, getRetainedFileId, selectDuplicateCopies } from "../../lib/maintenanceSelection";
+
+test("Git object copies are hidden behind a disclosure and excluded from selection even with stale eligibility", () => {
+  const git = { id: "git", name: "ca958bda29ff75dda1e59050be45efaa85974ed9d1f8c3ca1c9da45273f753c7", path: "D:\\Repo\\.git\\lfs\\objects\\ca\\95\\object", size: 10, modified: null, removable: true };
+  const keeper = { id: "keeper", name: "Theron_Signals.mp4", path: "D:\\Videos\\Theron_Signals.mp4", size: 10, modified: null, removable: true };
+  const group = { id: "g", files: [git, keeper], fileCount: 2, size: 10, reclaimableBytes: 10, memberOffset: 0, hasMoreFiles: false };
+  const tools = { duplicateScan: { groups: [group] }, selected: new Set(), busy: false, retainedFileId: () => "keeper", select() {}, openDuplicate() {}, keepFile() {}, loadMembers() {} };
+  const html = renderToStaticMarkup(createElement(DuplicateGroups, { tools: tools as never, onFilterChange() {}, onRemoveFile() {} }));
+  expect(html).toContain("Theron_Signals.mp4");
+  expect(html).toContain("full-content hash matches");
+  expect(html).toContain("Show 1 Git-managed copy on this page");
+  expect(html).not.toContain(git.name);
+  expect(getRetainedFileId(group as never, "first")).toBe("keeper");
+  expect(getRetainedFileId(group as never, "first", { g: "git" })).toBe("keeper");
+  expect(canRemoveDuplicateFile([group] as never, "git", "first", { g: "keeper" })).toBe(false);
+  expect(selectDuplicateCopies([group] as never, "first", { g: "keeper" }).has("git")).toBe(false);
+});
 
 test("protected copies are visible for review and cannot be removed", () => {
   const protectedFile = { id: "keeper", name: "protected-app.exe", path: "C:\\other\\protected-app.exe", size: 10, modified: null, removable: false, profileScope: "other", removalBlockReason: "other_profile" };

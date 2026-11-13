@@ -537,6 +537,29 @@ fn protected_application_and_codec_types_cannot_be_removed() {
 }
 
 #[test]
+fn git_object_copy_is_verified_for_review_but_cannot_be_deleted() {
+    let dir = tempfile::tempdir().unwrap();
+    let object_dir = dir.path().join(".GiT").join("lfs").join("objects");
+    std::fs::create_dir_all(&object_dir).unwrap();
+    std::fs::write(object_dir.join("aabbcc"), b"matching video bytes").unwrap();
+    std::fs::write(dir.path().join("video.mp4"), b"matching video bytes").unwrap();
+    let (page, files, _) = scan_fixture(
+        &[std::fs::canonicalize(dir.path()).unwrap()],
+        &AtomicBool::new(false),
+    );
+    assert_eq!(page.groups.len(), 1, "identical contents form a verified group");
+    let object = page.groups[0].files.iter().find(|file| file.name == "aabbcc").unwrap();
+    assert!(!object.removable);
+    assert_eq!(object.removal_block_reason, Some("source_control"));
+    let candidate = files.values().find(|file| file.path.ends_with("aabbcc")).unwrap().clone();
+    let keeper = files.values().find(|file| file.path.ends_with("video.mp4")).unwrap().clone();
+    let result = safety::remove_files(vec![candidate.clone()], vec![keeper], &AtomicBool::new(false));
+    assert_eq!(result.files_removed, 0);
+    assert!(candidate.path.exists());
+    assert!(result.errors.iter().any(|error| error.contains("source control metadata is protected")));
+}
+
+#[test]
 fn blocked_copies_expose_only_stable_non_sensitive_reason_codes() {
     assert_eq!(
         safety::removal_block_code("user profile locations could not be verified"),
