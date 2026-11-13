@@ -3152,7 +3152,7 @@ function Get-AmcacheEntries {
         $message = if ($partial) {
             if ($snapshotAttempted) { 'App Launch Cache inventory is unavailable. The temporary snapshot could not be read or verified. Check administrator access and scan again.' }
             elseif ($hveReadError -or $mountErrors.Count) { 'App Launch Cache inventory is unavailable. Windows could not verify access to its file or registry locations. Open WinCommander as administrator and scan again.' }
-            else { 'App Launch Cache inventory is unavailable. The Amcache file exists, but no readable registry inventory is mounted. The offline hive is not read by this scan.' }
+            else { 'App Launch Cache inventory is unavailable. This scan cannot read the offline Amcache file, so no records were scanned.' }
         } else { $null }
         @{ entries = $entries; hveFileSizeMb = $hveSize; hveFileExists = $hveExists; inventoryRoot = $inventoryRoot; total = if ($partial) { $null } else { $totalCount }; partial = $partial; status = if ($partial) { 'unavailable' } else { 'complete' }; message = $message }
     }
