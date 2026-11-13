@@ -674,6 +674,10 @@ fn protected_application_and_codec_types_cannot_be_removed() {
 #[test]
 fn blocked_copies_expose_only_stable_non_sensitive_reason_codes() {
     assert_eq!(
+        safety::removal_block_code("file ownership could not be verified as the current user"),
+        "owner_unavailable"
+    );
+    assert_eq!(
         safety::removal_block_code("user profile locations could not be verified"),
         "profiles_unavailable"
     );

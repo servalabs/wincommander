@@ -31,6 +31,17 @@ pub(super) fn count(row: &rusqlite::Row<'_>, column: usize) -> rusqlite::Result<
     })
 }
 
+// This is advisory display state. Deletion must repeat ownership checks on the
+// verified held handle because the path or its owner may change after this read.
+fn projection_reason(
+    protected: Option<&'static str>,
+    owner_verified: impl FnOnce() -> bool,
+) -> Option<&'static str> {
+    protected.or_else(|| {
+        (!owner_verified()).then_some("file ownership could not be verified as the current user")
+    })
+}
+
 pub(super) struct ScanIndex {
     pub connection: Connection,
     _database: std::fs::File,
@@ -200,7 +211,9 @@ impl ScanIndex {
             )
             .map_err(|error| error.to_string())?;
         let display = |(id, path, modified): (String, String, Option<String>)| {
-            let reason = policy.protected_reason(&PathBuf::from(&path));
+            let reason = projection_reason(policy.protected_reason(&PathBuf::from(&path)), || {
+                super::verified_file::current_user_owns_path(std::path::Path::new(&path))
+            });
             let (profile_scope, profile_root) = policy.profile(&PathBuf::from(&path));
             DuplicateFile {
                 name: PathBuf::from(&path)
@@ -320,5 +333,23 @@ impl ScanIndex {
             keepers.push(keeper.ok_or("No unchanged copy remains; scan again")?);
         }
         Ok((candidates, keepers))
+    }
+}
+
+#[cfg(test)]
+mod owner_projection_tests {
+    use super::projection_reason;
+
+    #[test]
+    fn only_verified_current_owner_is_offered_and_protection_takes_precedence() {
+        assert_eq!(projection_reason(None, || true), None);
+        assert_eq!(
+            projection_reason(None, || false),
+            Some("file ownership could not be verified as the current user")
+        );
+        assert_eq!(
+            projection_reason(Some("protected"), || panic!("must not inspect protected path")),
+            Some("protected")
+        );
     }
 }

@@ -137,6 +137,7 @@ pub(super) fn removal_block_code(reason: &str) -> &'static str {
         "Git metadata is protected" => "git_metadata",
         "another user profile is protected" => "other_profile",
         "user profile locations could not be verified" => "profiles_unavailable",
+        "file ownership could not be verified as the current user" => "owner_unavailable",
         _ => "unknown",
     }
 }

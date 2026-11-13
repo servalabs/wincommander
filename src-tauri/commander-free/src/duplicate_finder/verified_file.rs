@@ -2,6 +2,49 @@ use super::CachedFile;
 use std::fs::{File, OpenOptions};
 use std::sync::atomic::AtomicBool;
 
+/// A display-only snapshot. The destructive operation rechecks the owner on its
+/// pinned, identity-verified handle; no raw account identity leaves this module.
+#[cfg(windows)]
+pub(super) fn current_user_owns_path(path: &std::path::Path) -> bool {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
+        FILE_SHARE_WRITE, READ_CONTROL,
+    };
+    let handle = OpenOptions::new()
+        .read(true)
+        .access_mode(FILE_READ_ATTRIBUTES | READ_CONTROL)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path);
+    handle.is_ok_and(|handle| {
+        handle.metadata().is_ok_and(|metadata| {
+            metadata.is_file() && !super::safety::is_link_or_reparse(&metadata)
+        }) && verify_current_user_owns(&handle).is_ok()
+    })
+}
+
+// Ownership gating is a Windows product policy; retain existing behavior on
+// other platforms rather than pretending a Windows identity was established.
+#[cfg(not(windows))]
+pub(super) fn current_user_owns_path(_path: &std::path::Path) -> bool {
+    true
+}
+
+#[cfg(all(test, windows))]
+mod owner_projection_tests {
+    use super::current_user_owns_path;
+
+    #[test]
+    fn owned_fixture_is_visible_and_missing_fixture_is_unverified() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("synthetic-copy.txt");
+        std::fs::write(&file, b"synthetic fixture").unwrap();
+        assert!(current_user_owns_path(&file));
+        assert!(!current_user_owns_path(&directory.path().join("missing")));
+    }
+}
+
 pub(super) fn open_verified(
     file: &CachedFile,
     deleting: bool,
