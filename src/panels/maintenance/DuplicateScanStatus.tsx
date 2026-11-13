@@ -11,6 +11,8 @@ function displayScanError(entry: string): string {
   return path ? `${path}: ${entry.slice(delimiter + 2)}` : `Path unavailable: ${entry.slice(delimiter + 2)}`;
 }
 
+export const duplicateDiscoveryGuidance = "Changing this requires a new scan. Local-drive scans skip dot-named folders, .DS_Store files and .bin, .dll and .jar files. Choose folders to scan without these local-drive filters; the minimum size and other safety exclusions still apply.";
+
 export function DuplicateScanStatus({ progress, scan, scanning, local }: { progress?: DuplicateProgress; scan?: DuplicateScan; scanning: boolean; local: boolean }) {
   const state = scanning ? progress : scan;
   const roots = state?.scopeRoots ?? [];
