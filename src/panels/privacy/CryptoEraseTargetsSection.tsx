@@ -62,7 +62,7 @@ function HowItWorks() {
           <p>
             Only when the cascade runs — the sidebar button, the hotkey, a distress phrase, the
             dead-man&rsquo;s switch, or the Calculator gate&rsquo;s destroy PIN — and only if the
-            matching destruct step above is enabled.
+        matching destruct step in the Actions tab is enabled.
           </p>
           <strong>No second confirmation</strong>
           <p>
@@ -72,7 +72,7 @@ function HowItWorks() {
         </div>
       }
     >
-      <Button className="sd-bulk-btn" minimal small icon="info-sign" text="How it works" />
+      <Button className="sd-bulk-btn" minimal small icon="info-sign" aria-label="How crypto-erase works" title="How crypto-erase works" />
     </Popover>
   );
 }
@@ -125,7 +125,7 @@ export default function CryptoEraseTargetsSection({
       const picked = await openDialog({
         multiple: false,
         filters: [{ name: "Container File", extensions: ["hc", "tc", "*"] }],
-        title: "Pick a VeraCrypt container to crypto-erase on lockdown",
+        title: "Pick an encrypted container to crypto-erase on lockdown",
       });
       if (typeof picked !== "string") return;
       const next = addVeracryptPath(veracryptPaths, picked);
@@ -166,22 +166,18 @@ export default function CryptoEraseTargetsSection({
           minimal
           small
           icon="refresh"
-          text="Reload"
+          aria-label="Reload encrypted volumes"
+          title="Reload encrypted volumes"
           loading={loading}
           onClick={refresh}
         />
       </div>
 
-      <p className="sd-remove-users-warning">
-        Selected volumes have their encryption keys destroyed when the cascade fires —
-        via the sidebar button, hotkey, a distress phrase, the dead-man&rsquo;s switch, or the
-        Calculator gate&rsquo;s destroy PIN. This only takes effect if the corresponding step
-        (&ldquo;BitLocker Key Erase&rdquo; / &ldquo;VeraCrypt Header Destroy&rdquo; above) is enabled — nothing
-        selected here means that step cleanly skips instead. There is no separate
-        confirmation at trigger time: selecting a volume here, including the system
-        drive, means it WILL be targeted next time.
-      </p>
+      <p className="sd-remove-users-warning">Selected targets can be irreversibly destroyed when Lockdown fires. See the information button for details.</p>
 
+      <div className="ce-cascade-targets">
+      <section className="ce-cascade-target">
+      <div className="sd-shred-folders-label">BitLocker Volumes</div>
       {loading && volumes.length === 0 && (
         <div className="sd-remove-users-empty">
           <Spinner size={16} /> Looking for BitLocker volumes…
@@ -243,10 +239,12 @@ export default function CryptoEraseTargetsSection({
         </div>
       )}
 
-      <div className="sd-shred-folders-header" style={{ marginTop: "0.75rem" }}>
+      </section>
+      <section className="ce-cascade-target">
+      <div className="sd-shred-folders-header">
         <Icon icon="key" size={14} className="sd-shred-folders-icon" />
         <div className="sd-shred-folders-text">
-          <div className="sd-shred-folders-label">VeraCrypt Containers</div>
+          <div className="sd-shred-folders-label">Encrypted Containers</div>
         </div>
         <Button
           className="sd-bulk-btn"
@@ -257,10 +255,7 @@ export default function CryptoEraseTargetsSection({
           onClick={addContainer}
         />
       </div>
-      <p className="sd-remove-users-warning">
-        Unmounted VeraCrypt containers leave no trace for the cascade to auto-discover
-        (that&rsquo;s the point of their deniability), so they must be added here by path.
-      </p>
+      <Popover content={<div className="ce-cascade-explainer">Unmounted containers cannot be discovered automatically; add them here by path.</div>}><Button minimal small icon="info-sign" aria-label="About unmounted containers" title="About unmounted containers" /></Popover>
       {veracryptPaths.length > 0 ? (
         <div className="sd-shred-folders-list">
           {veracryptPaths.map((p) => (
@@ -280,22 +275,19 @@ export default function CryptoEraseTargetsSection({
       ) : (
         <EmptyState
           compact
-          title="No containers listed — the VeraCrypt Header Destroy step will skip cleanly."
+          title="No containers listed — the Encrypted Container Header Destroy step will skip cleanly."
         />
       )}
 
-      <div className="sd-shred-folders-header" style={{ marginTop: "0.75rem" }}>
+      </section>
+      <section className="ce-cascade-target">
+      <div className="sd-shred-folders-header">
         <Icon icon="database" size={14} className="sd-shred-folders-icon" />
         <div className="sd-shred-folders-text">
-          <div className="sd-shred-folders-label">Enrolled VeraCrypt Partitions</div>
+          <div className="sd-shred-folders-label">Enrolled Encrypted Partitions</div>
         </div>
       </div>
-      <p className="sd-remove-users-warning">
-        Only raw partitions you explicitly enrolled are shown. Automatic suggestions are disabled
-        because Windows cannot prove that an ordinary writable partition contains VeraCrypt. Saved
-        targets remain visible while disconnected, and Lockdown rechecks their disk ID, partition
-        GUID, offset, size, and safety immediately before overwriting any header bytes.
-      </p>
+      <Popover content={<div className="ce-cascade-explainer">Only explicitly enrolled partitions are shown. Windows cannot reliably identify encrypted partitions. Saved targets remain visible while disconnected; disk identity and safety are checked again before erasing.</div>}><Button minimal small icon="info-sign" aria-label="About enrolled partitions" title="About enrolled partitions" /></Popover>
       {veracryptDevices.length > 0 ? (
         <div className="sd-remove-users-list">
           {veracryptDevices.map((target) => {
@@ -323,19 +315,22 @@ export default function CryptoEraseTargetsSection({
       ) : (
         <EmptyState
           compact
-          title="No VeraCrypt partitions enrolled — ordinary disks are intentionally not suggested."
+          title="No encrypted partitions enrolled — ordinary disks are intentionally not suggested."
         />
       )}
 
+      </section>
+      </div>
+
       {(bitlockerDrives.length > 0 || veracryptPaths.length > 0 || veracryptDevices.length > 0) && (
-        <Callout intent="danger" title="Armed">
+        <Callout intent="danger" title="Selected erase targets">
           {bitlockerDrives.length > 0 && `${bitlockerDrives.length} BitLocker volume${bitlockerDrives.length === 1 ? "" : "s"}`}
           {bitlockerDrives.length > 0 && veracryptPaths.length > 0 && " and "}
-          {veracryptPaths.length > 0 && `${veracryptPaths.length} VeraCrypt container${veracryptPaths.length === 1 ? "" : "s"}`}
+          {veracryptPaths.length > 0 && `${veracryptPaths.length} encrypted container${veracryptPaths.length === 1 ? "" : "s"}`}
           {(bitlockerDrives.length > 0 || veracryptPaths.length > 0) && veracryptDevices.length > 0 && " and "}
-          {veracryptDevices.length > 0 && `${veracryptDevices.length} VeraCrypt partition${veracryptDevices.length === 1 ? "" : "s"}`}
-          {" "}will have their keys destroyed the next time the cascade fires. There is no prompt at
-          that moment.
+          {veracryptDevices.length > 0 && `${veracryptDevices.length} encrypted partition${veracryptDevices.length === 1 ? "" : "s"}`}
+          {" "}will have their keys destroyed if their corresponding action is enabled when the cascade fires.
+          There is no prompt at that moment.
         </Callout>
       )}
     </div>

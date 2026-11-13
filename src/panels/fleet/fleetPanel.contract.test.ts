@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
 const panel = readFileSync("src/panels/fleet/index.tsx", "utf8");
+const management = readFileSync("src/panels/fleet/FleetManagementSection.tsx", "utf8");
+const managementAccess = readFileSync("src/panels/fleet/useFleetManagementAccess.ts", "utf8");
 const access = readFileSync("src/panels/fleet/AccessControlTab.tsx", "utf8");
 const vault = readFileSync("src/panels/fleet/VaultAccessTab.tsx", "utf8");
 const vaultEditor = readFileSync("src/panels/fleet/VaultAccessEditor.tsx", "utf8");
@@ -16,34 +18,17 @@ const css = readFileSync("src/panels/fleet/index.css", "utf8");
 const cleanupBackend = readFileSync("src-tauri/commander-free/scripts/modules/privacy/cleanup.ps1", "utf8");
 
 describe("Fleet access-control panel contracts", () => {
-  test("keeps only enrollment, universal access control, and Vault permissions", () => {
-    expect(panel).toContain("Enrollment");
-    expect(panel).toContain("Access control");
-    expect(panel).toContain("Vault permissions");
-    expect(panel).not.toContain("FleetConsoleLink");
-    expect(panel).not.toContain("ClipboardGuardTab");
-    expect(panel).not.toContain("InkReceiptTab");
+  test("retains the caller-filtered My vaults route without administrative tabs", () => {
+    expect(panel).toContain("My vaults");
+    expect(panel).toContain('<VaultAccessTab isAdmin={false} directory={DEFAULT_ACCESS_DIRECTORY} />');
+    expect(panel).not.toContain("FleetConnectView");
+    expect(panel).not.toContain("AccessControlTab");
   });
 
-  test("keeps non-admin users on My vaults without administrative Fleet tabs", () => {
-    expect(panel).toContain("getCapabilities()");
-    expect(panel).toContain("capabilities.can_manage_policy");
-    expect(panel).not.toContain("systemInfo?.isAdmin");
-    expect(panel).toContain('value={activeTab} onValueChange={setActiveTab}');
-    expect(panel).toContain('{isAdmin && <TabsTrigger value="enrollment">Enrollment</TabsTrigger>}');
-    expect(panel).toContain('{isAdmin && <TabsTrigger value="access-control">Access control</TabsTrigger>}');
-    expect(panel).toContain('{isAdmin ? "Vault permissions" : "My vaults"}');
-    expect(panel).toContain('<VaultAccessTab isAdmin={isAdmin} directory={directory} />');
-  });
-
-  test("retries transient service failures instead of permanently demoting an administrator", () => {
-    expect(panel).toContain("retriesRemaining > 0");
-    expect(panel).toContain("setTimeout(() => { void probe(retriesRemaining - 1); }, 750)");
-    expect(panel).toContain('window.addEventListener("focus", refreshOnFocus)');
-    expect(panel).toContain('setActiveTab("vault")');
-    expect(panel).toContain('setCapabilityState("unavailable")');
-    expect(panel).toContain("Retry permission check");
-    expect(panel).toContain('if (canManage && lastCapability.current !== true) setActiveTab("enrollment")');
+  test("requires both process elevation and service management permission", () => {
+    expect(managementAccess).toContain('elevation === "administrator" && capability === "allowed"');
+    expect(managementAccess).toContain("result.can_manage_policy === true");
+    expect(management).toContain("hidden={!canManage}");
   });
 
   test("uses one checkbox directory and sorts selected users first", () => {
@@ -130,9 +115,9 @@ describe("Fleet access-control panel contracts", () => {
   });
 
   test("hydrates and saves access groups through the protected service instead of browser storage", () => {
-    expect(panel).toContain("getAccessDirectory");
-    expect(panel).toContain("useFleetAccessDirectory(isAdmin, activeTab, getAccessDirectory, saveAccessDirectory)");
-    expect(panel).toContain("onSave={groups.save}");
+    expect(management).toContain("getAccessDirectory");
+    expect(management).toContain("useFleetAccessDirectory(canManage, section, getAccessDirectory, saveAccessDirectory)");
+    expect(management).toContain("onSave={groups.save}");
     expect(access).toContain("onSave: (directory: FleetAccessDirectory) => Promise<VaultSaveAccessDirectoryResponse>");
     expect(access).toContain("await onSave(directory)");
     expect(vaultHook).toContain('invoke<VaultAccessDirectory>("get_vault_access_directory")');

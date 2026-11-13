@@ -825,6 +825,8 @@ export function uiAuditDirectResponse(command: string): unknown {
       return null;
     case "is_dev_build":
       return true;
+    case "is_current_process_elevated":
+      return true;
     case "get_license_status":
     case "refresh_license_if_due":
     case "refresh_license":
@@ -841,13 +843,19 @@ export function uiAuditDirectResponse(command: string): unknown {
       return uiAuditBackendResponse("Get-AvailableDriveLetters");
     case "get_vault_access_capabilities":
       return { can_manage_policy: true };
+    case "get_vault_access_directory":
+      return {
+        schema_version: 1,
+        users: [{ sid: "S-1-5-21-1000-1000-1000-1001", username: "AuditAnalyst", display_name: "Audit Analyst" }],
+        groups: [{ id: "audit-team", name: "Audit team", local_group: "AuditTeam", member_sids: ["S-1-5-21-1000-1000-1000-1001"] }],
+      };
     case "get_vault_access_policy":
       return {
         schema_version: 1,
         policy_id: "audit-vault-policy",
         version: 4,
         expected_previous_version: 3,
-        entries: [{
+        entries: [{ entry: {
           id: "audit-team-vault",
           label: "Team documents",
           container_path: "D:\\Vaults\\Team\\team-documents.hc",
@@ -858,7 +866,7 @@ export function uiAuditDirectResponse(command: string): unknown {
             { principal_name: "AuditReviewer", access: "write" },
           ],
           mount: { presentation: "machine", preferred_letter: "V" },
-        }],
+        }, container_path_state: "available", can_edit_policy: true, can_remove_policy: true }],
       };
     case "get_vault_access_status":
     case "apply_vault_access_policy":

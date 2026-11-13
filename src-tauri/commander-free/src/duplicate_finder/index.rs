@@ -89,8 +89,9 @@ impl ScanIndex {
                 row.get::<_, String>(0)
             })
             .map_err(|error| error.to_string())?;
+        let policy = super::safety::RemovalPolicy::load();
         let groups = ids
-            .map(|id| self.group(&id.map_err(|error| error.to_string())?, 0))
+            .map(|id| self.group_with_policy(&id.map_err(|error| error.to_string())?, 0, &policy))
             .collect::<Result<Vec<_>, _>>()?;
         let mut total_duplicate_bytes = 0u64;
         let mut sizes = self
@@ -135,6 +136,15 @@ impl ScanIndex {
     }
 
     pub fn group(&self, group_id: &str, offset: usize) -> Result<DuplicateGroup, String> {
+        self.group_with_policy(group_id, offset, &super::safety::RemovalPolicy::load())
+    }
+
+    fn group_with_policy(
+        &self,
+        group_id: &str,
+        offset: usize,
+        policy: &super::safety::RemovalPolicy,
+    ) -> Result<DuplicateGroup, String> {
         let (size, count): (u64, usize) = self
             .connection
             .query_row(
@@ -161,7 +171,8 @@ impl ScanIndex {
             )
             .map_err(|error| error.to_string())?;
         let display = |(id, path, modified): (String, String, Option<String>)| {
-            let removable = !super::safety::is_inside_system_root(&PathBuf::from(&path));
+            let reason = policy.protected_reason(&PathBuf::from(&path));
+            let (profile_scope, profile_root) = policy.profile(&PathBuf::from(&path));
             DuplicateFile {
                 name: PathBuf::from(&path)
                     .file_name()
@@ -172,7 +183,10 @@ impl ScanIndex {
                 path,
                 size,
                 modified,
-                removable,
+                removable: reason.is_none(),
+                removal_block_reason: reason.map(super::safety::removal_block_code),
+                profile_scope,
+                profile_root,
             }
         };
         files.push(display(keeper));
@@ -219,6 +233,7 @@ impl ScanIndex {
     pub fn removal_selection(
         &self,
         selected: &HashSet<String>,
+        requested_keepers: Option<&HashSet<String>>,
     ) -> Result<(Vec<CachedFile>, Vec<CachedFile>), String> {
         let mut candidates = Vec::new();
         let mut groups: HashMap<String, usize> = HashMap::new();
@@ -226,6 +241,17 @@ impl ScanIndex {
             let file = self.file(id)?;
             *groups.entry(file.group_id.clone()).or_default() += 1;
             candidates.push(file);
+        }
+        let mut explicit = HashMap::new();
+        if let Some(ids) = requested_keepers {
+            for id in ids {
+                if selected.contains(id) { return Err("The kept copy cannot also be removed".into()); }
+                let keeper = self.file(id)?;
+                if !groups.contains_key(&keeper.group_id) || explicit.insert(keeper.group_id.clone(), keeper).is_some() {
+                    return Err("Invalid kept copy for duplicate selection".into());
+                }
+            }
+            if explicit.len() != groups.len() { return Err("Choose one kept copy for each group".into()); }
         }
         let mut keepers = Vec::new();
         for (group, selected_count) in groups {
@@ -237,6 +263,12 @@ impl ScanIndex {
                 .map_err(|error| error.to_string())?;
             if selected_count >= count {
                 return Err("Every group must retain at least one verified copy".into());
+            }
+            if requested_keepers.is_some() {
+                let keeper = explicit.remove(&group).ok_or("Choose one kept copy for each group")?;
+                if super::safety::validated_file(&keeper).is_err() { return Err("The chosen kept copy changed; scan again".into()); }
+                keepers.push(keeper);
+                continue;
             }
             let mut statement = self
                 .connection

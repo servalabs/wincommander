@@ -48,3 +48,21 @@
 }
 .port-guard-card .port-guard-form > * { min-width: 0; max-width: 100%; }
 .port-guard-card .port-guard-preset { height: auto; white-space: normal; flex-wrap: wrap; max-width: 100%; }
+.port-guard-card .port-guard-firewall {
+  min-width: 0;
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-secondary);
+}
+.port-guard-card .port-guard-firewall > summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.port-guard-card .port-guard-firewall .port-guard-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
+  align-items: end;
+}

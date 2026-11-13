@@ -41,13 +41,17 @@ experimental-pq-free-release = ["dep:wincmd-pq-experiment"]
 # Closed lab controls for debug artifacts only. This intentionally adds no
 # generic command dispatcher and never appears in a release artifact.
 autonomous-test = ["dep:fleet-proto", "fleet-proto/autonomous-test"]
+# Opt-in only until privileged native snapshot and recovery acceptance is complete.
+amcache-snapshot-experimental = ["dep:cc", "dep:notatin"]
 
 [build-dependencies]
+cc = { version = "1", optional = true }
 tauri-build = { version = "2", features = [] }
 aes-gcm = "0.11"
 sha2 = "0.11"
 
 [dependencies]
+notatin = { version = "=1.0.1", optional = true }
 tempfile = "3"
 futures = "0.3"
 # 2.12 includes Tao's Windows/RDP keyboard reentrancy deadlock fix.

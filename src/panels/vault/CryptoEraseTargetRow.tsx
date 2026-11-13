@@ -33,7 +33,7 @@ export default function CryptoEraseTargetRow({
       <div className="crypto-erase-row-main">
         <span className="crypto-erase-row-label">
           <span className="crypto-erase-kind">
-            {target.kind === "veracrypt" ? "VeraCrypt" : "BitLocker"}
+            {target.kind === "veracrypt" ? "Encrypted container" : "BitLocker"}
           </span>
           <span className="crypto-erase-row-name" title={targetSubject(target)}>
             {targetSubject(target)}

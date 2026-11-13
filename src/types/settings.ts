@@ -295,6 +295,8 @@ export interface AppPreferences {
   /** Right-sidebar quick actions the user has chosen to hide. Recognised keys:
    *  "dismount", "delete", "scrubMeta", "lockdown". Configured in Secret Settings. */
   hiddenSidebarActions?: string[];
+  /** Explicit opt-in for the Advisor quick action. */
+  showAdvisorAction?: boolean;
   /** Panel IDs hidden permanently (regardless of Borrowed-PC mode state).
    *  Distinct from lockedPanelIds which only hide while Borrowed-PC is active. */
   permanentlyHiddenPanels?: string[];

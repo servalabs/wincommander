@@ -16,6 +16,7 @@ import EmptyState from "../../components/shared/EmptyState";
 import SectionCard from "../../components/shared/SectionCard";
 import { useCryptoErase } from "../../hooks/useCryptoErase";
 import { isVeraCryptDevicePath, type EncryptedTarget } from "../../lib/cryptoEraseTargets";
+import { displayEraseDetail } from "../../lib/cryptoEraseReceipt";
 import { showError, showSuccess } from "../../utils/toast";
 import CryptoEraseConfirmDialog from "./CryptoEraseConfirmDialog";
 import CryptoEraseReceiptPanel from "./CryptoEraseReceiptPanel";
@@ -38,7 +39,7 @@ function HowItWorks() {
           </p>
           <strong>The two methods differ</strong>
           <p>
-            <em>VeraCrypt</em> — the volume header holds the only copy of the master key. It gets
+            <em>Encrypted containers</em> — the volume header holds the only copy of the master key. It gets
             overwritten with random bytes, so the password can never derive the key again.
             <br />
             <em>BitLocker</em> — every key protector (TPM, PIN, recovery key) is removed and the
@@ -64,7 +65,13 @@ function HowItWorks() {
         </div>
       }
     >
-      <Button minimal small icon="info-sign" text="How it works" />
+      <Button
+        minimal
+        small
+        icon="help"
+        aria-label="How crypto-erase works"
+        title="How crypto-erase works"
+      />
     </Popover>
   );
 }
@@ -84,7 +91,7 @@ export default function CryptoEraseSection({ veracryptVolumes }: { veracryptVolu
       const target: EncryptedTarget = {
         id: `vcfile:${selected}`,
         kind: "veracrypt",
-        label: `VeraCrypt container ${selected}`,
+        label: `Encrypted container ${selected}`,
         path: selected,
         isOsVolume: isVeraCryptDevicePath(selected),
         eligible: true,
@@ -124,7 +131,9 @@ export default function CryptoEraseSection({ veracryptVolumes }: { veracryptVolu
       headerRight={
         <div className="crypto-erase-header-actions">
           <HowItWorks />
-          <Button minimal small icon="folder-open" text="Erase container file…" onClick={eraseByPath} />
+          {displayTargets.length > 0 && (
+            <Button minimal small icon="folder-open" text="Erase container file…" onClick={eraseByPath} />
+          )}
           <Button
             minimal
             small
@@ -143,9 +152,8 @@ export default function CryptoEraseSection({ veracryptVolumes }: { veracryptVolu
         </p>
 
         {loadError && (
-          <Callout intent="warning" title="Couldn't read the BitLocker volume list">
-            {loadError} VeraCrypt volumes are still listed below, and you can always erase a container
-            by picking its file.
+          <Callout intent="warning" title="BitLocker volume list unavailable">
+            {displayEraseDetail(loadError)} The list may be incomplete. You can still select an encrypted container file to erase it.
           </Callout>
         )}
 
@@ -158,7 +166,7 @@ export default function CryptoEraseSection({ veracryptVolumes }: { veracryptVolu
           <EmptyState
             icon="key"
             title="No encrypted containers detected"
-            hint="Mount a VeraCrypt volume or enable BitLocker to see it here. An unmounted container can still be erased directly from its file."
+            hint="Mount an encrypted volume or enable BitLocker to see it here. An unmounted container can still be erased directly from its file."
             action={
               <Button minimal small icon="folder-open" text="Erase container file…" onClick={eraseByPath} />
             }

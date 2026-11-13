@@ -564,6 +564,37 @@ pub struct WipeDriveEntry {
     pub is_system: bool,
 }
 
+/// List locally attached drive letters for choosing scan roots without the slower wipe hardware probe.
+#[tauri::command]
+pub fn get_scan_drive_list() -> Result<Vec<String>, String> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::{GetDriveTypeW, GetLogicalDrives};
+        let mask = unsafe { GetLogicalDrives() };
+        if mask == 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        Ok((0u32..26)
+            .filter_map(|bit| {
+                if mask & (1 << bit) == 0 {
+                    return None;
+                }
+                let root = format!("{}:\\", (b'A' + bit as u8) as char);
+                let wide: Vec<u16> = std::ffi::OsStr::new(&root)
+                    .encode_wide()
+                    .chain(Some(0))
+                    .collect();
+                matches!(unsafe { GetDriveTypeW(wide.as_ptr()) }, 2 | 3).then_some(root)
+            })
+            .collect())
+    }
+    #[cfg(not(windows))]
+    {
+        Err("Drive selection is only available on Windows".into())
+    }
+}
+
 /// Enumerate local drives for the wipe selector; failure is not an empty inventory.
 #[tauri::command]
 pub async fn get_wipe_drive_list() -> Result<Vec<WipeDriveEntry>, String> {

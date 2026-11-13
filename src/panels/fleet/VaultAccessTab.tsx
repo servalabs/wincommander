@@ -206,7 +206,7 @@ function mergeObservedPolicyCapabilities(
   return changed ? { ...draft, entries } : draft;
 }
 
-export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolean; directory: FleetAccessDirectory }) {
+export default function VaultAccessTab({ isAdmin, directory, onVisibilityChange }: { isAdmin: boolean; directory: FleetAccessDirectory; onVisibilityChange?: (visible: boolean) => void }) {
   const initialDraft = useMemo(() => readVaultAccessDraftSnapshot(), []);
   const [policy, setPolicy] = useState<VaultAccessPolicy | null>(initialDraft?.policy ?? null);
   const [status, setStatus] = useState<VaultPolicyStatus | null>(null);
@@ -312,7 +312,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
         return getCapabilities();
       });
       let ownerDirectory: { current_caller_sid: string; principals: VaultOwnerPrincipal[] } | null = null;
-      if (capabilities.can_manage_policy) {
+      if (isAdmin && capabilities.can_manage_policy) {
         request = "administrator list";
         try {
           ownerDirectory = await listOwnerPrincipals();
@@ -327,9 +327,9 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
       setAuthorizedEntries(entries);
       setOwnerPrincipals(ownerDirectory?.principals ?? []);
       setCurrentCallerSid(ownerDirectory?.current_caller_sid ?? null);
-      setOwnerDirectoryUnavailable(capabilities.can_manage_policy && ownerDirectory === null);
+      setOwnerDirectoryUnavailable(isAdmin && capabilities.can_manage_policy && ownerDirectory === null);
       setMountResults({});
-      setCanManagePolicy(capabilities.can_manage_policy);
+      setCanManagePolicy(isAdmin && capabilities.can_manage_policy);
       setPolicyLoadUnavailable(false);
       setPolicyReadFailure("");
       try {
@@ -432,7 +432,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
     } finally {
       setLoading(false);
     }
-  }, [getCapabilities, getOwnerPolicyFragment, getStatus, listAuthorizedEntries, listOwnerPrincipals, replacePolicy]);
+  }, [getCapabilities, getOwnerPolicyFragment, getStatus, listAuthorizedEntries, listOwnerPrincipals, replacePolicy, isAdmin]);
 
   useEffect(() => {
     if (draftBaseRef.current || !currentCallerSid || ownerPrincipals.length === 0) return;
@@ -1079,11 +1079,13 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
     } catch (error) { setOperationFeedback(vaultOperationError(error, "open")); }
   };
 
+  useEffect(() => { onVisibilityChange?.(loading || policyLoadUnavailable || statusLoadUnavailable || authorizedEntries.length > 0); }, [onVisibilityChange, loading, policyLoadUnavailable, statusLoadUnavailable, authorizedEntries.length]);
+
   if (loading) return <div className="fleet-admin-stack">Loading your Vault access…</div>;
   const activePolicy = policy;
   const authorizedById = new Map(authorizedEntries.map(entry => [entry.entry_id, entry]));
   const policyEntries = activePolicy?.entries ?? [];
-  const canEditVisiblePolicy = policyEntries.some(entry => entry.can_edit_policy === true);
+  const canEditVisiblePolicy = isAdmin && policyEntries.some(entry => entry.can_edit_policy === true);
   const canOpenPolicyEditor = canManagePolicy || canEditVisiblePolicy;
   const policyEditorOpen = canManagePolicy ? editorOpen : canEditVisiblePolicy;
   const selectedEntry = policyEntries.find(entry => entry.id === selectedEntryId)

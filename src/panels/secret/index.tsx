@@ -1,3 +1,4 @@
+import { createCountdownSaver } from "./countdownSaver";
 // src/panels/secret/index.tsx
 //
 // Secret Settings — rebuilt 2026-06-13, retabbed 2026-07-27.
@@ -42,9 +43,13 @@ import RuntimeStatusSection from "./RuntimeStatusSection";
 import SupportConsole from "./SupportConsole";
 import SilentStartSetting from "./SilentStartSetting";
 import ProcessElevationStatus from "./ProcessElevationStatus";
+import FleetConnectView from "../fleet/FleetConnectView";
+import { useFleetManagementAccess } from "../fleet/useFleetManagementAccess";
+import { InfoPopover } from "../network/InfoTip";
 import { DEFAULT_BORROWED_PANELS } from "../../lib/visibilityDefaults";
 import "./index.css";
 import "../privacy/index.css";
+import "../fleet/index.css";
 
 // Empty by default: the cover-name field starts blank (no pre-filled
 // Microsoft-impersonation suggestion). When the user enables cover mode
@@ -85,8 +90,9 @@ function DgzTile({ icon, title, desc, checked, warn, loading, disabled, onChange
                 <span className="dgz-tile-ico"><Icon icon={icon} size={15} /></span>
                 <div className="dgz-tile-body">
                     <div className="dgz-tile-title">{title}</div>
-                    <div className="dgz-tile-desc">{desc}</div>
+                    {disabled && <div className="dgz-tile-desc">{desc}</div>}
                 </div>
+                <InfoPopover iconOnly title={title}><p>{desc}</p></InfoPopover>
                 {control ?? (
                     <Switch
                         checked={checked}
@@ -239,9 +245,10 @@ function AutoStartTile() {
             : "Auto Start change could not be completed";
 
     return (
+        <>
         <DgzTile
             icon="time"
-            title="Start WinCommander at sign-in"
+            title="Auto start WinCommander"
             desc={description}
             checked={autostartEnabled === true}
             onChange={handleToggleAutostart}
@@ -252,11 +259,10 @@ function AutoStartTile() {
                     {errorHeading}: {autostartError.message}
                 </p>
             )}
-            <p className="dgz-autostart-note">
-                {autostartPolicyLocked ? "Set by your administrator." : "Windows will ask for approval if needed."}
-            </p>
-            <SilentStartSetting autostartEnabled={autostartEnabled === true} />
+            {autostartPolicyLocked && <p className="dgz-autostart-note">Set by your administrator.</p>}
         </DgzTile>
+        <SilentStartSetting autostartEnabled={autostartEnabled === true} />
+        </>
     );
 }
 
@@ -685,6 +691,13 @@ function LockDisguiseSection() {
     );
 }
 
+function FleetSettingsCard() {
+    const { canManage } = useFleetManagementAccess();
+    const wasAuthorized = useRef(false);
+    if (canManage) wasAuthorized.current = true;
+    return wasAuthorized.current ? <section className="fleet-panel" aria-label="Fleet settings" hidden={!canManage}><FleetConnectView /></section> : null;
+}
+
 // ── 3. BORROWED MODE ──────────────────────────────────────────────────────────
 
 function BorrowedModeSection() {
@@ -755,20 +768,24 @@ function LockdownTimerRow() {
     const { appSettings, patchAppSettings } = useAppState();
     const persisted = appSettings?.app?.lockdownTimerSec ?? 4;
     const [timerSec, setTimerSec] = useState(persisted);
+    const [timerInput, setTimerInput] = useState(String(persisted));
     // Re-sync local value if the persisted value changes elsewhere.
-    useEffect(() => { setTimerSec(persisted); }, [persisted]);
-    // Debounce the disk write: range onChange fires per pixel; without this each
-    // pixel was a full patch_settings_cmd IPC + disk write (a UI-freeze cause).
-    const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    useEffect(() => { setTimerSec(persisted); setTimerInput(String(persisted)); }, [persisted]);
+    const patchRef = useRef(patchAppSettings);
+    patchRef.current = patchAppSettings;
+    const saverRef = useRef<ReturnType<typeof createCountdownSaver> | null>(null);
+    if (!saverRef.current) {
+        saverRef.current = createCountdownSaver((v) => {
+            patchRef.current({ app: { lockdownTimerSec: v } } as any).catch(reportSettingsWriteFailure);
+        });
+    }
     const handleChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-        const v = Math.max(3, Math.min(30, parseInt(e.target.value, 10) || 4));
-        setTimerSec(v); // instant visual feedback, no IPC
-        if (debounceRef.current) clearTimeout(debounceRef.current);
-        debounceRef.current = setTimeout(() => {
-            patchAppSettings({ app: { lockdownTimerSec: v } } as any).catch(reportSettingsWriteFailure);
-        }, 250);
-    }, [patchAppSettings]);
-    useEffect(() => () => { if (debounceRef.current) clearTimeout(debounceRef.current); }, []);
+        const v = Math.max(3, Math.min(86400, parseInt(e.target.value, 10) || 4));
+        setTimerSec(v);
+        setTimerInput(String(v));
+        saverRef.current?.queue(v);
+    }, []);
+    useEffect(() => () => saverRef.current?.flush(), []);
 
     return (
         <div className="sec-timer-row">
@@ -782,14 +799,13 @@ function LockdownTimerRow() {
                     min={3}
                     max={30}
                     step={1}
-                    value={timerSec}
+                    value={Math.min(30, timerSec)}
                     onChange={handleChange}
                     className="sec-timer-slider"
                     aria-label="Lockdown countdown seconds"
                 />
-                <span className="sec-timer-value">{timerSec}s</span>
+                <input type="number" min={3} max={86400} step={1} value={timerInput} onChange={(e) => { const raw = e.currentTarget.value; setTimerInput(raw); const value = Number(raw); if (/^\d+$/.test(raw) && value >= 3 && value <= 86400) { setTimerSec(value); saverRef.current?.queue(value); } }} onBlur={(e) => handleChange(e)} onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }} aria-label="Custom lockdown countdown in seconds" className="sec-timer-input" /> <span>sec</span>
             </div>
-            <p className="dgz-hint">Seconds before the sidebar Lockdown button fires (3–30). Default: 4.</p>
         </div>
     );
 }
@@ -827,7 +843,7 @@ function SelfDestructSection() {
             <p className="sec-hint">
                 Armed by: the Destroy PIN on the calculator, any trigger below, or the Lockdown button in the sidebar.
                 Before shutting down, WinCommander restores the genuine Windows calculator so no trace of the disguise remains.
-                Clearing VeraCrypt keys wipes cached passwords from memory — it does <strong>not</strong> delete your volumes.
+                Clearing encryption keys wipes cached passwords from memory — it does <strong>not</strong> delete your volumes.
             </p>
 
             {/* ── Master opt-in toggle ── */}
@@ -929,11 +945,12 @@ export default function SecretPanel() {
                     <TabsTrigger value="disguise">Disguise &amp; branding</TabsTrigger>
                     <TabsTrigger value="borrowed">Borrowed mode &amp; visibility</TabsTrigger>
                     <TabsTrigger value="lockdown">Lockdown &amp; self-destruct</TabsTrigger>
-                    <TabsTrigger value="diagnostics">Diagnostics</TabsTrigger>
+                    <TabsTrigger value="diagnostics">Logs</TabsTrigger>
                 </TabsList>
                 <TabsContent value="disguise">
                     <div className="secret-grid">
                         <LockDisguiseSection />
+                        <FleetSettingsCard />
                     </div>
                 </TabsContent>
                 <TabsContent value="borrowed">
@@ -950,7 +967,7 @@ export default function SecretPanel() {
                 <TabsContent value="diagnostics" className="secret-diagnostics-tab">
                     <div className="secret-grid secret-diagnostics-grid">
                         <RuntimeStatusSection />
-                        <SectionCard title="Diagnostic Center" icon="document" className="secret-grid__wide secret-diagnostics-log-card">
+                        <SectionCard title="Logs" icon="document" className="secret-grid__wide secret-diagnostics-log-card">
                             <SupportConsole />
                         </SectionCard>
                     </div>

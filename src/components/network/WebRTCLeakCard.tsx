@@ -95,7 +95,7 @@ export function WebRTCHeaderButton() {
       ? 'WebRTC API unavailable in this environment.'
       : result.leaked
         ? `Your local IP (${result.localIPs.join(', ')}) was exposed to remote peers via WebRTC — your real network identity can leak even through a VPN.`
-        : 'No local IPs exposed — WebRTC cannot leak your network identity to remote peers.'
+        : 'No private IPv4 address was observed in this test. Other addresses or browser settings may still reveal network information.'
     : undefined;
 
   return (
@@ -115,29 +115,17 @@ export function WebRTCHeaderButton() {
             cursor: 'help',
           }}
         >
-          {result.error ? 'UNAVAIL' : result.leaked ? '⚠ LEAK' : '✓ SAFE'}
-        </span>
-      )}
-      {result && explanation && (
-        <span style={{
-          fontSize: 9.5,
-          color: statusColor,
-          maxWidth: 200,
-          lineHeight: 1.3,
-          opacity: 0.85,
-        }}>
-          {explanation}
+          {result.error ? 'UNAVAILABLE' : result.leaked ? '⚠ EXPOSED' : '✓ NO PRIVATE IP FOUND'}
         </span>
       )}
       <Button
         small
-        minimal
         icon={running ? undefined : result ? 'refresh' : 'shield'}
         loading={running}
         onClick={run}
         title={result ? 'Re-run WebRTC leak test' : 'Run WebRTC leak test'}
-        text={result ? undefined : 'WebRTC'}
-        style={{ fontSize: 10 }}
+        text={result ? 'Test again' : 'Test WebRTC'}
+        style={{ fontSize: 12, whiteSpace: "nowrap" }}
       />
     </div>
   );

@@ -9,6 +9,7 @@ import { runOperation } from "../../context/OperationContext";
 import { showSuccess } from "../../utils/toast";
 import { formatMaintenanceSuccess, getMaintenanceFailureMessage } from "../../utils/maintenance";
 import RunOnceButton from "../../components/cleanup/RunOnceButton";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../../components/ui/tooltip";
 
 /**
  * Windows' own repair tooling — SFC/DISM, the Windows Update reset chain, and
@@ -129,7 +130,7 @@ export default function OsRepairCard({ embedded = false, group = "all" }: OsRepa
     );
     return (
       <div key={action.key} className={embedded
-        ? "flex min-h-[104px] items-center gap-3 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-bg-card)] px-3 py-2.5"
+        ? "flex min-w-0 flex-wrap items-center gap-2 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-bg-card)] px-3 py-2.5"
         : "flex flex-wrap items-start gap-3 rounded-[var(--r)] border border-[var(--border)] bg-[var(--surface-2)] p-3"}
       >
         {embedded ? (
@@ -137,15 +138,16 @@ export default function OsRepairCard({ embedded = false, group = "all" }: OsRepa
             <Icon icon={action.icon} size={15} className="text-[var(--color-accent)]" />
           </div>
         ) : <Icon icon={action.icon} className="mt-0.5 shrink-0 text-[var(--accent)]" />}
-        <div className="min-w-0 flex-1">
+        <div className="min-w-[100px] flex-1">
           <div className={embedded ? "flex min-w-0 items-center gap-2" : "flex flex-wrap items-center gap-2"}>
-            <span className={embedded ? "truncate text-[11px] font-bold uppercase tracking-[0.4px] text-[var(--color-text-primary)]" : "text-sm font-medium text-[var(--text)]"}>{action.label}</span>
+            <span className={embedded ? "text-[11px] font-bold uppercase tracking-[0.4px] text-[var(--color-text-primary)]" : "text-sm font-medium text-[var(--text)]"}>{action.label}</span>
             {!embedded && <Badge tone={history.tone}>{history.label}</Badge>}
             {!embedded && history.runCount > 0 && <span className="font-mono text-[10.5px] text-[var(--text-mute)]">{history.runCount} run{history.runCount === 1 ? "" : "s"}</span>}
           </div>
-          <p className={embedded ? "truncate text-[10.5px] text-[var(--color-text-muted)]" : "mt-1 text-xs text-[var(--text-dim)]"}>{action.description}</p>
+          {!embedded && <p className="mt-1 text-xs text-[var(--text-dim)]">{action.description}</p>}
           {embedded && <span className="block truncate text-[9px] text-[var(--color-text-muted)] opacity-70">{history.label}{history.runCount > 0 ? ` · ${history.runCount} run${history.runCount === 1 ? "" : "s"}` : ""}</span>}
         </div>
+        {embedded && <Tooltip><TooltipTrigger asChild><button type="button" className="grid h-8 w-8 shrink-0 place-items-center rounded" aria-label={`About ${action.label}`}><Icon icon="info-sign" size={14} /></button></TooltipTrigger><TooltipContent side="bottom" className="max-w-[260px] text-xs">{action.description}</TooltipContent></Tooltip>}
         {runButton}
       </div>
     );
