@@ -21,16 +21,22 @@ fn enrollment_v2_preimage(body: &serde_json::Value) -> Result<Vec<u8>, &'static 
 }
 static LOCK: Mutex<()> = Mutex::new(());
 
-#[derive(Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Receipt {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    version: Option<u8>,
     org_id: String, old_device_id: String, old_generation: String, retirement_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    device_hash: Option<String>,
     issued_at: i64, signer_key: String, signature: String,
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Candidate {
     trust: FleetTrust, retirement_id: String, public_key: String, sealed_seed: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    retirement_receipt: Option<Receipt>,
 }
 fn uuid(value: &str) -> bool {
     uuid::Uuid::parse_str(value).ok().is_some_and(|v| !v.is_nil() && v.to_string() == value)
@@ -41,17 +47,22 @@ fn decode<const N: usize>(s: &str) -> Result<[u8; N], &'static str> {
     b.try_into().map_err(|_| INVALID)
 }
 impl Receipt {
-    fn verify(&self, trust: &FleetTrust, now: i64) -> Result<(), &'static str> {
+    fn verify(&self, trust: &FleetTrust, now: Option<i64>) -> Result<(), &'static str> {
         if self.org_id != trust.org_id || self.org_id.is_empty() || self.org_id.len() > 256
             || self.old_device_id != trust.device_id || self.old_generation != trust.enrollment_generation
             || self.signer_key != trust.signer_key || !uuid(&self.old_device_id)
             || !uuid(&self.old_generation) || !uuid(&self.retirement_id)
-            || !crate::fleet_identity_handoff::recovery_timestamp_valid(self.issued_at, now) { return Err(INVALID); }
+            || self.issued_at <= 0 || now.is_some_and(|now| !crate::fleet_identity_handoff::recovery_timestamp_valid(self.issued_at, now)) { return Err(INVALID); }
         let key = VerifyingKey::from_bytes(&decode::<32>(&trust.signer_key)?).map_err(|_| INVALID)?;
         if key.is_weak() { return Err(INVALID); }
-        let bytes = serde_json::to_vec(&("fleet.windows.admin-retirement.v1", &self.org_id,
-            &self.old_device_id, &self.old_generation, &self.retirement_id, self.issued_at,
-            &self.signer_key)).map_err(|_| INVALID)?;
+        let bytes = match (self.version, self.device_hash.as_deref()) {
+            (None, None) => serde_json::to_vec(&("fleet.windows.admin-retirement.v1", &self.org_id,
+                &self.old_device_id, &self.old_generation, &self.retirement_id, self.issued_at, &self.signer_key)),
+            (Some(2), Some(hash)) if !hash.is_empty() && hash.len() <= 256 && hash != "recovery-candidate" =>
+                serde_json::to_vec(&("fleet.windows.admin-retirement.v2", &self.org_id, &self.old_device_id,
+                    &self.old_generation, &self.retirement_id, hash, self.issued_at, &self.signer_key)),
+            _ => return Err(INVALID),
+        }.map_err(|_| INVALID)?;
         key.verify_strict(&bytes, &Signature::from_bytes(&decode::<64>(&self.signature)?)).map_err(|_| INVALID)
     }
 }
@@ -135,6 +146,20 @@ impl<'a> CandidateStore<'a> {
         if candidate.trust!=*trust || candidate.retirement_id!=retirement { return Err(INVALID); }
         Ok(candidate)
     }
+    fn retain_v2_receipt(&self, path: &std::path::Path, candidate: &Candidate, receipt: &Receipt) -> Result<(), &'static str> {
+        if receipt.version != Some(2) { return Ok(()); }
+        if let Some(existing) = &candidate.retirement_receipt {
+            if existing.device_hash != receipt.device_hash { return Err(INVALID); }
+            existing.verify(&candidate.trust, None)?;
+            return Ok(());
+        }
+        let mut next = candidate.clone();
+        next.retirement_receipt = Some(receipt.clone());
+        let encoded = serde_json::to_vec(&next).map_err(|_| INVALID)?;
+        self.fs.atomic_write(path, &encoded).map_err(|_| INVALID)?;
+        if self.fs.read(path).map_err(|_| INVALID)? != encoded { return Err(INVALID); }
+        Ok(())
+    }
     /// Caller must hold protected trust and independently verify the previous
     /// active commit. This preserves the exact sealed key before any replacement.
     pub(crate) fn archive_activated(&self,old:&FleetTrust,retirement:&str,fingerprint:&[u8;32])->Result<(),&'static str> {
@@ -168,19 +193,23 @@ impl<'a> CandidateStore<'a> {
     pub(crate) fn stage(&self, trust: &FleetTrust, receipt_json: &[u8], now: i64) -> Result<String, &'static str> {
         if receipt_json.len() > 8192 { return Err(INVALID); }
         let receipt: Receipt = serde_json::from_slice(receipt_json).map_err(|_| INVALID)?;
-        receipt.verify(trust, now)?;
+        receipt.verify(trust, Some(now))?;
         let _guard = LOCK.lock().map_err(|_| INVALID)?;
         let primary=self.read()?;
         if let Some(candidate)=primary.as_ref() {
             if candidate.trust==*trust && candidate.retirement_id==receipt.retirement_id {
-                self.signing_key(candidate,trust,&receipt.retirement_id)?; return Ok(candidate.public_key.clone());
+                self.signing_key(candidate,trust,&receipt.retirement_id)?;
+                self.retain_v2_receipt(&self.path,candidate,&receipt)?;
+                return Ok(candidate.public_key.clone());
             }
         }
         let path=if primary.is_some() { self.archive_path(&receipt.retirement_id)? } else { self.path.clone() };
         match self.fs.read(&path) {
             Ok(bytes) if bytes.len()<=65536=>{
                 let candidate:Candidate=serde_json::from_slice(&bytes).map_err(|_| INVALID)?;
-                self.signing_key(&candidate,trust,&receipt.retirement_id)?; return Ok(candidate.public_key);
+                self.signing_key(&candidate,trust,&receipt.retirement_id)?;
+                self.retain_v2_receipt(&path,&candidate,&receipt)?;
+                return Ok(candidate.public_key);
             },
             Err(e) if e.kind()==std::io::ErrorKind::NotFound=>{},
             _=>return Err(INVALID),
@@ -190,8 +219,9 @@ impl<'a> CandidateStore<'a> {
         let key = SigningKey::from_bytes(&seed);
         let sealed = self.protector.protect(seed.as_ref(), &entropy(trust, &receipt.retirement_id)?)?;
         if sealed.is_empty() || sealed.len() > 32768 { return Err(INVALID); }
-        let candidate = Candidate { trust: trust.clone(), retirement_id: receipt.retirement_id,
-            public_key: B64.encode(key.verifying_key().as_bytes()), sealed_seed: B64.encode(sealed) };
+        let candidate = Candidate { trust: trust.clone(), retirement_id: receipt.retirement_id.clone(),
+            public_key: B64.encode(key.verifying_key().as_bytes()), sealed_seed: B64.encode(sealed),
+            retirement_receipt: (receipt.version == Some(2)).then_some(receipt) };
         let encoded = serde_json::to_vec(&candidate).map_err(|_| INVALID)?;
         self.fs.atomic_write(&path, &encoded).map_err(|_| INVALID)?;
         if self.fs.read(&path).map_err(|_| INVALID)?!=encoded { return Err(INVALID); }
@@ -280,14 +310,24 @@ impl<'a> CandidateStore<'a> {
         now: i64) -> Result<serde_json::Value, &'static str> {
         self.sign_enrollment_body(trust, retirement, now, "recovery-candidate", &trust.enrollment_generation)
     }
-    /// Disposable paired fixture only. Production has not established a
-    /// protected source for the server's existing device hash.
+    /// Disposable paired fixture only. The hash must be authenticated by a
+    /// protected v2 retirement receipt; no caller-provided hash is accepted.
     #[cfg(test)]
     pub(crate) fn sign_fixture_readmission(&self, old: &FleetTrust, current: &FleetTrust, retirement: &str,
         now: i64) -> Result<serde_json::Value, &'static str> {
         if old.org_id != current.org_id || old.device_id != current.device_id || old.signer_key != current.signer_key
             || !uuid(&current.enrollment_generation) { return Err(INVALID); }
-        self.sign_enrollment_body(old, retirement, now, "loopback", &current.enrollment_generation)
+        let device_hash = self.verified_device_hash(old, retirement)?;
+        self.sign_enrollment_body(old, retirement, now, &device_hash, &current.enrollment_generation)
+    }
+    fn verified_device_hash(&self, old: &FleetTrust, retirement: &str) -> Result<String, &'static str> {
+        let _guard = LOCK.lock().map_err(|_| INVALID)?;
+        let candidate = self.read_for(old, retirement)?;
+        self.signing_key(&candidate, old, retirement)?;
+        let receipt = candidate.retirement_receipt.as_ref().ok_or(INVALID)?;
+        receipt.verify(old, None)?;
+        if receipt.version != Some(2) || receipt.retirement_id != retirement { return Err(INVALID); }
+        receipt.device_hash.clone().ok_or(INVALID)
     }
     fn sign_enrollment_body(&self, trust: &FleetTrust, retirement: &str,
         now: i64, device_hash: &str, generation: &str) -> Result<serde_json::Value, &'static str> {
@@ -338,6 +378,36 @@ mod tests {
         let body = serde_json::json!({"shield_progress_challenge":"challenge", "previous_generation":"generation", "recovery_retirement_id":"retirement",
             "enrollment_proof_version":2, "device_id":"device", "enrollment_signature_b64":"ignored"});
         assert_eq!(enrollment_v2_preimage(&body).unwrap(), b"WinCommander Fleet enrollment proof v2\nPOST\n/v1/windows/enroll-v2\n{\"device_id\":\"device\",\"enrollment_proof_version\":2,\"previous_generation\":\"generation\",\"recovery_retirement_id\":\"retirement\",\"shield_progress_challenge\":\"challenge\"}");
+    }
+    #[test]
+    fn signed_retirement_hash_upgrades_legacy_candidate_and_rejects_tampering() {
+        let fs=Fs::default(); let protector=TestProtector;
+        let signer=SigningKey::from_bytes(&[41;32]);
+        let trust=FleetTrust { org_id:"org".into(), device_id:"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".into(),
+            enrollment_generation:"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb".into(), signer_key:B64.encode(signer.verifying_key().as_bytes()) };
+        let retirement="11111111-1111-4111-8111-111111111111";
+        let v1=serde_json::to_vec(&("fleet.windows.admin-retirement.v1",&trust.org_id,&trust.device_id,&trust.enrollment_generation,retirement,1000i64,&trust.signer_key)).unwrap();
+        let mut receipt=serde_json::json!({"org_id":trust.org_id,"old_device_id":trust.device_id,
+            "old_generation":trust.enrollment_generation,"retirement_id":retirement,"issued_at":1000,
+            "signer_key":trust.signer_key,"signature":B64.encode(signer.sign(&v1).to_bytes())});
+        let store=CandidateStore::open(&fs,"protected".into(),&protector).unwrap();
+        let public=store.stage(&trust,&serde_json::to_vec(&receipt).unwrap(),1001).unwrap();
+        assert!(store.verified_device_hash(&trust,retirement).is_err());
+        let v2=serde_json::to_vec(&("fleet.windows.admin-retirement.v2",&trust.org_id,&trust.device_id,&trust.enrollment_generation,retirement,"loopback",1000i64,&trust.signer_key)).unwrap();
+        receipt["version"]=2.into(); receipt["device_hash"]="loopback".into();
+        receipt["signature"]=B64.encode(signer.sign(&v2).to_bytes()).into();
+        assert_eq!(store.stage(&trust,&serde_json::to_vec(&receipt).unwrap(),1001).unwrap(),public);
+        assert_eq!(store.verified_device_hash(&trust,retirement).unwrap(),"loopback");
+        for (field,value) in [("device_hash",serde_json::json!("tampered")),("device_hash",serde_json::json!("")),
+            ("device_hash",serde_json::json!("x".repeat(257))),("device_hash",serde_json::json!("recovery-candidate")),("version",serde_json::json!(3))] {
+            let mut bad=receipt.clone();bad[field]=value;
+            assert!(store.stage(&trust,&serde_json::to_vec(&bad).unwrap(),1001).is_err());
+        }
+        let path=std::path::Path::new("protected/recovery-candidate.json");
+        let mut saved:serde_json::Value=serde_json::from_slice(&fs.read(path).unwrap()).unwrap();
+        saved["retirement_receipt"]["device_hash"]="tampered".into();
+        fs.atomic_write(path,&serde_json::to_vec(&saved).unwrap()).unwrap();
+        assert!(store.verified_device_hash(&trust,retirement).is_err());
     }
     impl Protector for TestProtector {
         fn protect(&self, plain: &[u8], entropy: &[u8]) -> Result<Vec<u8>, &'static str> {

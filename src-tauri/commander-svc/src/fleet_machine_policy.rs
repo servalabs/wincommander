@@ -3233,6 +3233,25 @@ mod recovery_commit_tests {
         assert!(!crate::pipe::fleet_handoff_confirmation::test_recovery_contact(&store,false,false,&protector).await.unwrap());
         crate::pipe::fleet_handoff_confirmation::test_recovery_contact(&store,false,true,&protector).await.unwrap();
         crate::pipe::fleet_handoff_confirmation::test_recovery_contact(&store,true,false,&protector).await.unwrap();
+        if std::env::var("FLEET_FINAL_READMISSION_LOOPBACK").ok().as_deref()==Some("1") {
+            // Test-only server gate and disposable DB; these exact bytes are
+            // available only after the local one-use authority is consumed.
+            let id=store.offer_readmission(&protector,now()).unwrap();
+            let claim=store.claim_readmission(&id).unwrap();
+            let request=claim.request().to_vec();
+            let reply=http.post(format!("{base}/v1/windows/enroll-v2"))
+                .header(reqwest::header::CONTENT_TYPE,"application/json").body(request.clone()).send().await.unwrap();
+            let status=reply.status().as_u16();
+            let values=reply.headers().get_all("x-fleet-windows-v2-enrollment");
+            let mut headers=values.iter();
+            let header=headers.next().unwrap().to_str().unwrap().to_owned();
+            assert!(headers.next().is_none());
+            let body=reply.bytes().await.unwrap();
+            store.finish_readmission(claim,status,&body,&header,||()).unwrap();
+            let replay=http.post(format!("{base}/v1/windows/enroll-v2"))
+                .header(reqwest::header::CONTENT_TYPE,"application/json").body(request).send().await.unwrap();
+            assert!(!replay.status().is_success(),"a replay must not be admitted");
+        }
         if std::env::var("FLEET_SIMPLE_LEAVE_LOOPBACK").ok().as_deref()==Some("1") {
             // Leave proof and cleanup need no separate operator key. The test
             // modifies only its in-memory mock store after recovery setup.

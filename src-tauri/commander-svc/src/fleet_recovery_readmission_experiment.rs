@@ -149,11 +149,11 @@ mod tests {
             &binding.device_id, &binding.enrollment_generation, &challenge]).unwrap();
         store.provision(binding.clone(), &STANDARD.encode(key().sign(&bytes).to_bytes()), "S-1-5-18").unwrap();
         let retirement = "11111111-1111-4111-8111-111111111111";
-        let signed = serde_json::to_vec(&("fleet.windows.admin-retirement.v1", &binding.org_id, &binding.device_id,
-            &binding.enrollment_generation, retirement, 1000i64, &binding.signer_key)).unwrap();
+        let signed = serde_json::to_vec(&("fleet.windows.admin-retirement.v2", &binding.org_id, &binding.device_id,
+            &binding.enrollment_generation, retirement, "loopback", 1000i64, &binding.signer_key)).unwrap();
         let receipt = serde_json::json!({"org_id":binding.org_id,"old_device_id":binding.device_id,
             "old_generation":binding.enrollment_generation,"retirement_id":retirement,"issued_at":1000,
-            "signer_key":binding.signer_key,"signature":STANDARD.encode(key().sign(&signed).to_bytes())});
+            "version":2,"device_hash":"loopback","signer_key":binding.signer_key,"signature":STANDARD.encode(key().sign(&signed).to_bytes())});
         let candidates = crate::fleet_recovery_candidate::CandidateStore::open(store.fs.as_ref(), "readmission".into(), &TestProtector).unwrap();
         let public = candidates.stage(&binding, &serde_json::to_vec(&receipt).unwrap(), 1001).unwrap();
         submit(&store, "https://fleet.test", &[4;32]).unwrap();
