@@ -11,6 +11,14 @@ use std::{path::PathBuf, sync::Mutex};
 use zeroize::Zeroizing;
 
 const INVALID: &str = "invalid recovery candidate";
+
+fn enrollment_v2_preimage(body: &serde_json::Value) -> Result<Vec<u8>, &'static str> {
+    let mut unsigned = body.clone();
+    unsigned.as_object_mut().ok_or(INVALID)?.remove("enrollment_signature_b64");
+    let mut bytes = b"WinCommander Fleet enrollment proof v2\nPOST\n/v1/windows/enroll-v2\n".to_vec();
+    bytes.extend(fleet_proto::canonical_json_bytes(&unsigned));
+    Ok(bytes)
+}
 static LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Deserialize)]
@@ -271,21 +279,25 @@ impl<'a> CandidateStore<'a> {
     pub(crate) fn sign_enrollment(&self, trust: &FleetTrust, retirement: &str,
         now: i64) -> Result<serde_json::Value, &'static str> {
         let _guard = LOCK.lock().map_err(|_| INVALID)?;
+        if now <= 0 { return Err(INVALID); }
         let candidate = self.read_for(trust,retirement)?;
         let key = self.signing_key(&candidate, trust, retirement)?;
         let mut body = serde_json::json!({"device_id":trust.device_id,"device_hash":"recovery-candidate",
             "agent_version":env!("CARGO_PKG_VERSION"),"device_kind":"wincommander",
             "capabilities":[fleet_agent_core::HMAC_BODY_V2_CAPABILITY],
-            "outcome_pubkey_b64":candidate.public_key,"enrollment_intent":"explicit_connect"});
+            "outcome_pubkey_b64":candidate.public_key,"enrollment_intent":"explicit_connect",
+            "previous_generation":trust.enrollment_generation});
         let obj = body.as_object_mut().ok_or(INVALID)?;
-        obj.insert("enrollment_proof_version".into(), 1.into());
+        obj.insert("enrollment_proof_version".into(), 2.into());
         obj.insert("enrollment_server_key_b64".into(), trust.signer_key.clone().into());
         obj.insert("enrollment_ts".into(), now.into());
         let mut nonce = [0u8;16]; SysRng.try_fill_bytes(&mut nonce).map_err(|_| INVALID)?;
         nonce[6] = (nonce[6] & 15) | 64; nonce[8] = (nonce[8] & 63) | 128;
         obj.insert("enrollment_nonce".into(), uuid::Uuid::from_bytes(nonce).to_string().into());
-        let mut bytes = b"WinCommander Fleet enrollment proof v1\nPOST\n/v1/agents/enroll\n".to_vec();
-        bytes.extend(serde_json::to_vec(&body).map_err(|_| INVALID)?);
+        let mut challenge = [0u8;16]; SysRng.try_fill_bytes(&mut challenge).map_err(|_| INVALID)?;
+        challenge[6] = (challenge[6] & 15) | 64; challenge[8] = (challenge[8] & 63) | 128;
+        obj.insert("shield_progress_challenge".into(), uuid::Uuid::from_bytes(challenge).to_string().into());
+        let bytes = enrollment_v2_preimage(&body)?;
         body["enrollment_signature_b64"] = B64.encode(key.sign(&bytes).to_bytes()).into();
         Ok(body)
     }
@@ -307,6 +319,13 @@ mod tests {
         fn ensure_dir_secure(&self, _: &Path) -> Result<(), crate::policy_store::PolicyStoreError> { Ok(()) }
     }
     struct TestProtector;
+
+    #[test]
+    fn recovery_enrollment_v2_matches_server_canonical_vector() {
+        let body = serde_json::json!({"shield_progress_challenge":"challenge", "previous_generation":"generation",
+            "enrollment_proof_version":2, "device_id":"device", "enrollment_signature_b64":"ignored"});
+        assert_eq!(enrollment_v2_preimage(&body).unwrap(), b"WinCommander Fleet enrollment proof v2\nPOST\n/v1/windows/enroll-v2\n{\"device_id\":\"device\",\"enrollment_proof_version\":2,\"previous_generation\":\"generation\",\"shield_progress_challenge\":\"challenge\"}");
+    }
     impl Protector for TestProtector {
         fn protect(&self, plain: &[u8], entropy: &[u8]) -> Result<Vec<u8>, &'static str> {
             let mut out = entropy.to_vec(); out.extend(plain.iter().zip(entropy).map(|(a,b)| a ^ b)); Ok(out)
@@ -351,10 +370,17 @@ mod tests {
         let signed=store.sign_enrollment(&trust,"11111111-1111-4111-8111-111111111111",1002).unwrap();
         assert_eq!(signed["device_hash"],"recovery-candidate");
         assert_eq!(signed["outcome_pubkey_b64"],key);
+        assert_eq!(signed["enrollment_proof_version"],2);
+        assert_eq!(signed["previous_generation"],trust.enrollment_generation);
+        assert!(uuid::Uuid::parse_str(signed["shield_progress_challenge"].as_str().unwrap()).is_ok_and(|id| !id.is_nil() && id.get_version_num()==4));
         let mut unsigned=signed.clone(); let signature=unsigned.as_object_mut().unwrap().remove("enrollment_signature_b64").unwrap();
-        let mut bytes=b"WinCommander Fleet enrollment proof v1\nPOST\n/v1/agents/enroll\n".to_vec(); bytes.extend(serde_json::to_vec(&unsigned).unwrap());
+        let mut bytes=b"WinCommander Fleet enrollment proof v2\nPOST\n/v1/windows/enroll-v2\n".to_vec(); bytes.extend(fleet_proto::canonical_json_bytes(&unsigned));
         let verifier=VerifyingKey::from_bytes(&decode::<32>(&key).unwrap()).unwrap();
         assert!(verifier.verify_strict(&bytes,&Signature::from_bytes(&decode::<64>(signature.as_str().unwrap()).unwrap())).is_ok());
+        unsigned["previous_generation"]="33333333-3333-4333-8333-333333333333".into();
+        let mut tampered=b"WinCommander Fleet enrollment proof v2\nPOST\n/v1/windows/enroll-v2\n".to_vec(); tampered.extend(fleet_proto::canonical_json_bytes(&unsigned));
+        assert!(verifier.verify_strict(&tampered,&Signature::from_bytes(&decode::<64>(signature.as_str().unwrap()).unwrap())).is_err());
+        assert!(store.sign_enrollment(&trust,"11111111-1111-4111-8111-111111111111",0).is_err());
         assert!(store.sign_enrollment(&trust,"33333333-3333-4333-8333-333333333333",1002).is_err());
     }
     #[test]

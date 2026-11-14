@@ -53,7 +53,7 @@ pub(crate) async fn submit_candidate(store:&FleetMachinePolicy, candidate:&Candi
         candidate.sign_enrollment(current,retirement,now()?)
     })?;
     let client=fleet_agent_core::build_client_without_redirects(pins).map_err(|_| "recovery transport unavailable")?;
-    let response=tokio::time::timeout(Duration::from_secs(30),client.post(format!("{origin}/v1/agents/enroll")).json(&request).send())
+    let response=tokio::time::timeout(Duration::from_secs(30),client.post(format!("{origin}/v1/windows/enroll-v2")).json(&request).send())
         .await.map_err(|_| "recovery transport unavailable")?.map_err(|_| "recovery transport unavailable")?;
     // A conflict may mean an older identity is already pending, or a replayed
     // nonce. Expose the locally generated fingerprint for comparison, without
