@@ -15,10 +15,7 @@ const TTL: Duration = Duration::from_secs(30);
 // Until recovered readmission verifies the independently pinned hybrid proof
 // and commits its epoch floor, a classical reply must not downgrade any record
 // that requires or retains evidence of hybrid enrollment.
-fn classical_only(record: &Record) -> bool {
-    record.hybrid_trust.is_none() && record.hybrid_epoch_floor == 0
-        && record.hybrid_credential.is_none() && !record.hybrid_initial_pending && !record.hybrid_unconfirmed
-}
+fn classical_only(record: &Record) -> bool { classical_recovery_allowed(record) }
 
 mod sealed { pub trait Sealed {} }
 pub(crate) trait ReadmissionAuthorization: sealed::Sealed + Sync {

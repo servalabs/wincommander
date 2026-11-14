@@ -330,6 +330,13 @@ fn effective_hybrid_trust(record: &Record) -> Option<FleetHybridTrust> {
     })
 }
 
+// Classical recovery must not overwrite or activate a record that carries
+// hybrid state until the recovered-hybrid journal transition exists.
+fn classical_recovery_allowed(record: &Record) -> bool {
+    record.hybrid_trust.is_none() && record.hybrid_epoch_floor == 0
+        && record.hybrid_credential.is_none() && !record.hybrid_initial_pending && !record.hybrid_unconfirmed
+}
+
 fn validate_hybrid_state(record: &Record) -> Result<(), &'static str> {
     if record.hybrid_initial_pending
         && (record.hybrid_trust.as_ref().and_then(|trust| trust.outcome_key_b64.as_ref()).is_none() || record.hybrid_epoch_floor != 0
@@ -784,6 +791,12 @@ impl FleetMachinePolicy {
         let mut guard = self.state.lock().map_err(|_| "store_unavailable")?;
         let current = guard.record.as_ref().ok_or("not_provisioned")?;
         if current.trust != expected { return Err("binding_changed"); }
+        // Provisioning clears the classical credential. Recovery requires
+        // its own coordinated hybrid transition for both pending and active
+        // handoffs; ordinary setup must not erase the recovered credential.
+        if let Some(commit)=current.recovery_commit.as_ref() {
+            return Err(if commit.activation_pending { "recovery_pending" } else { "recovery_hybrid_transition_required" });
+        }
         if let Some(existing) = &current.hybrid_trust {
             if *existing == hybrid {
                 if !current.hybrid_unconfirmed { return Ok(()); }
@@ -2812,6 +2825,7 @@ impl FleetMachinePolicy {
             || credential.archive_sha256()!=archive { return Err("invalid recovery commit"); }
         let mut guard=self.state.lock().map_err(|_| "store_unavailable")?;
         let current=guard.record.as_ref().ok_or("not_provisioned")?;
+        if !classical_recovery_allowed(current) { return Err("hybrid_recovery_unavailable"); }
         let retry_matches_old=current.recovery_commit.as_ref().is_some_and(|prepared| {
             prepared.activation_pending && prepared.recovery_id==verified.retirement_id()
                 && verified.matches_trust(&prepared.old_trust)
@@ -2940,6 +2954,7 @@ impl FleetMachinePolicy {
         let guard=self.state.lock().map_err(|_| "store_unavailable")?;
         let Some(record)=guard.record.as_ref() else { return Ok(None) };
         let Some(commit)=record.recovery_commit.as_ref() else { return Ok(None) };
+        if !classical_recovery_allowed(record) { return Err("hybrid_recovery_unavailable"); }
         validate_operator_key(&record.trust,record.operator_key.as_deref().ok_or("operator_key_not_pinned")?)?;
         if !commit.activation_pending { return Ok(None); }
         let credential=record.credential.as_ref().ok_or("invalid_store")?;
@@ -2968,6 +2983,7 @@ impl FleetMachinePolicy {
         }
         let mut guard=self.state.lock().map_err(|_| "store_unavailable")?;
         let record=guard.record.as_ref().ok_or("not_provisioned")?;
+        if !classical_recovery_allowed(record) { return Err("hybrid_recovery_unavailable"); }
         let commit=record.recovery_commit.as_ref().ok_or("recovery_not_prepared")?;
         if commit.recovery_id!=expected.recovery_id || commit.old_trust!=expected.old_trust
             || commit.new_generation!=expected.new_generation || commit.decision_digest!=expected.decision_digest
@@ -3367,6 +3383,25 @@ mod recovery_commit_tests {
         fs.atomic_write(&dir.join(format!("review-{}.json",verified.retirement_id())),&serde_json::to_vec(&review).unwrap()).unwrap();
         let store=FleetMachinePolicy::open(Box::new(fs.clone()),dir.clone()).unwrap();
         assert_eq!(store.recovery_execution_mode().unwrap(),(trust.device_id.clone(),"legacy"));
+        // Even inconsistent in-memory combinations must be rejected before
+        // any replacement journal, rollback snapshot or credential write.
+        for variant in 0..5 {
+            let original=store.state.lock().unwrap().record.clone();
+            {
+                let mut state=store.state.lock().unwrap(); let record=state.record.as_mut().unwrap();
+                match variant {
+                    0 => record.hybrid_trust=Some(FleetHybridTrust {minimum_epoch:1,ed_key_id:"ed".into(),pq_key_id:"pq".into(),ml_dsa_65_public_b64:STANDARD.encode([1;1952]),outcome_key_b64:None}),
+                    1 => record.hybrid_epoch_floor=1,
+                    2 => record.hybrid_credential=Some(StoredHybridCredential {origin:"https://fleet.example".into(),ciphertext:STANDARD.encode([1]),epoch:1}),
+                    3 => record.hybrid_initial_pending=true,
+                    _ => record.hybrid_unconfirmed=true,
+                }
+            }
+            let before=fs.files.lock().unwrap().clone();
+            assert!(matches!(store.prepare_recovery_commit(&verified,&credential,&archive,"https://fleet.example",&Protector,1001),Err("hybrid_recovery_unavailable")));
+            assert_eq!(*fs.files.lock().unwrap(),before);
+            store.state.lock().unwrap().record=original;
+        }
         fs.fail.store(true,Ordering::SeqCst);
         assert!(store.prepare_recovery_commit(&verified,&credential,&archive,"https://fleet.example",&Protector,1001).is_err());
         assert_eq!(store.trust_snapshot().unwrap().unwrap().0,trust);
@@ -3376,6 +3411,11 @@ mod recovery_commit_tests {
         let reopened=FleetMachinePolicy::open(Box::new(fs.clone()),dir.clone()).unwrap();
         let expected=reopened.pending_recovery().unwrap().unwrap(); assert_eq!(expected.local_commit_digest(),digest);
         let (pending_trust,_,pending_origins,pending_profile,_)=reopened.trust_with_origins().unwrap().unwrap();
+        let pending_before=fs.read(&path).unwrap();
+        let proposed_hybrid=FleetHybridTrust {minimum_epoch:1,ed_key_id:"ed".into(),pq_key_id:"pq".into(),
+            ml_dsa_65_public_b64:STANDARD.encode([1;1952]),outcome_key_b64:Some(STANDARD.encode(key))};
+        assert_eq!(reopened.provision_hybrid_trust(pending_trust.clone(),proposed_hybrid,"S-1-5-18"),Err("recovery_pending"));
+        assert_eq!(fs.read(&path).unwrap(),pending_before);
         let pending_connection=reopened.contact_state().unwrap().unwrap().3;
         assert!(matches!(reopened.prepare_candidate((&pending_trust,&pending_connection),&pending_origins,
             &pending_profile.unwrap(),"https://fleet.example",&secret,&Protector),Err("service_disabled")));
@@ -3417,6 +3457,23 @@ mod recovery_commit_tests {
         let activation=crate::fleet_recovery_credential::verify_commit_response(&serde_json::to_vec(&commit).unwrap(),&expected,nonce,1001).unwrap();
         let unchanged=reopened.state.lock().unwrap().clone();
         let persisted=fs.read(&path).unwrap();
+        for variant in 0..5 {
+            {
+                let mut state=reopened.state.lock().unwrap(); let record=state.record.as_mut().unwrap();
+                match variant {
+                    0 => record.hybrid_trust=Some(FleetHybridTrust {minimum_epoch:1,ed_key_id:"ed".into(),pq_key_id:"pq".into(),ml_dsa_65_public_b64:STANDARD.encode([1;1952]),outcome_key_b64:None}),
+                    1 => record.hybrid_epoch_floor=1,
+                    2 => record.hybrid_credential=Some(StoredHybridCredential {origin:"https://fleet.example".into(),ciphertext:STANDARD.encode([1]),epoch:1}),
+                    3 => record.hybrid_initial_pending=true,
+                    _ => record.hybrid_unconfirmed=true,
+                }
+            }
+            assert!(matches!(reopened.pending_recovery(),Err("hybrid_recovery_unavailable")));
+            assert_eq!(reopened.validate_pending_recovery_credential(&expected,&Protector),Err("hybrid_recovery_unavailable"));
+            assert_eq!(reopened.activate_recovery(&expected,&activation,1001),Err("hybrid_recovery_unavailable"));
+            assert_eq!(fs.read(&path).unwrap(),persisted);
+            *reopened.state.lock().unwrap()=unchanged.clone();
+        }
         for malformed in ["invalid!", "AQ"] {
             reopened.state.lock().unwrap().record.as_mut().unwrap().credential.as_mut().unwrap().ciphertext=malformed.into();
             assert!(reopened.pending_recovery().is_err());
@@ -3462,6 +3519,12 @@ mod recovery_commit_tests {
         reopened.activate_recovery(&expected,&activation,1001).unwrap();
         reopened.activate_recovery(&expected,&activation,1001).unwrap();
         assert_eq!(reopened.recovery_execution_mode().unwrap(),(trust.device_id.clone(),"recovered"));
+        let active_before=fs.read(&path).unwrap();
+        let active_trust=reopened.trust_snapshot().unwrap().unwrap().0;
+        let proposed_hybrid=FleetHybridTrust {minimum_epoch:1,ed_key_id:"ed".into(),pq_key_id:"pq".into(),
+            ml_dsa_65_public_b64:STANDARD.encode([1;1952]),outcome_key_b64:Some(STANDARD.encode(key))};
+        assert_eq!(reopened.provision_hybrid_trust(active_trust,proposed_hybrid,"S-1-5-18"),Err("recovery_hybrid_transition_required"));
+        assert_eq!(fs.read(&path).unwrap(),active_before);
         let mut snapshot=reopened.credential_snapshot(&Protector).unwrap().unwrap();
         assert_eq!(snapshot.secret.as_slice(),&secret);
         assert!(reopened.pending_recovery().unwrap().is_none());
@@ -3554,6 +3617,7 @@ impl FleetMachinePolicy {
         use sha2::{Digest,Sha256};
         let guard=self.state.lock().map_err(|_| "store_unavailable")?;
         let record=guard.record.as_ref().ok_or("not_provisioned")?;
+        if !classical_recovery_allowed(record) { return Err("hybrid_recovery_unavailable"); }
         let commit=record.recovery_commit.as_ref().ok_or("recovery_not_prepared")?;
         if !commit.activation_pending || record.service_enabled || !pending_credential_matches(record,expected) || commit.recovery_id!=expected.recovery_id
             || commit.local_commit_digest!=expected.local_commit_digest || commit.credential_sha256!=expected.credential_sha256
