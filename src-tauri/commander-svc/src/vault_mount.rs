@@ -22,6 +22,8 @@ mod letter_cleanup;
 mod recovery;
 #[path = "vault_sync_management.rs"]
 mod sync_management;
+#[path = "vault_slot.rs"]
+mod slot;
 
 use crate::vault_access::{ResolvedGrant, VaultAccessStore};
 use crate::vault_syncthing_recovery::{
@@ -1178,6 +1180,7 @@ impl VaultMountBroker {
         let result = self.broker.mount(&mut internal);
         internal.zeroize_secrets();
         let reply = result?;
+        self.ensure_reply_slot_unclaimed(reply.internal_drive)?;
         if !valid_drive_letter(&reply.drive_letter) || reply.internal_drive > 25 {
             let cleanup = self.broker.dismount(BrokerDismountRequest {
                 owner_logon_ended: false,
@@ -1534,6 +1537,9 @@ impl VaultMountBroker {
             Ok(reply) => reply,
             Err(reason) => return failed(entry_id, Some(presentation), reason),
         };
+        if let Err(reason) = self.ensure_reply_slot_unclaimed(reply.internal_drive) {
+            return failed(entry_id, Some(presentation), reason);
+        }
         if !reply.acl_attested
             || !valid_drive_letter(&reply.drive_letter)
             || reply.internal_drive > 25
@@ -1777,6 +1783,27 @@ impl VaultMountBroker {
         self.dismount_entry_locked_for_client(next_internal_operation_id(), store, entry_id, None)
     }
 
+    // An ambiguous broker reply cannot identify which volume a cleanup would
+    // close. Retain existing records and require recovery instead of issuing
+    // a destructive rollback against a slot already owned by another mount.
+    fn ensure_reply_slot_unclaimed(&self, internal_drive: u8) -> Result<(), VaultMountReason> {
+        let claimed = self.active.lock().map_or(true, |active| active.values().any(|mount| mount.internal_drive == internal_drive));
+        if claimed {
+            self.mark_registry_untrusted();
+            return Err(VaultMountReason::MountStateUnknown);
+        }
+        Ok(())
+    }
+
+    fn take_unique_mount(&self, entry_id: &str) -> Result<Option<ActiveMount>, VaultMountReason> {
+        let mut active = self.active.lock().map_err(|_| VaultMountReason::MountStateUnknown)?;
+        let Some(mount) = active.get(entry_id) else { return Ok(None) };
+        let owner = slot::unique_entry(active.iter().map(|(id, mount)| (id.as_str(), mount.internal_drive)), mount.internal_drive)
+            .map_err(|_| VaultMountReason::MountStateUnknown)?;
+        if owner != Some(entry_id) { return Err(VaultMountReason::MountStateUnknown); }
+        Ok(active.remove(entry_id))
+    }
+
     fn dismount_entry_locked_for_client(
         &self,
         operation_id: u64,
@@ -1806,11 +1833,10 @@ impl VaultMountBroker {
             &ActiveMount,
         ) -> Result<SyncthingLifecycleResult, VaultMountReason>,
     ) -> VaultMountResult {
-        let active = self
-            .active
-            .lock()
-            .ok()
-            .and_then(|mut active| active.remove(entry_id));
+        let active = match self.take_unique_mount(entry_id) {
+            Ok(active) => active,
+            Err(reason) => return failed(entry_id, None, reason),
+        };
         let Some(mut active) = active else {
             return VaultMountResult {
                 entry_id: entry_id.to_owned(),
@@ -1918,11 +1944,10 @@ impl VaultMountBroker {
         owner_logon_ended: bool,
         verified_private_cleanup: bool,
     ) -> VaultMountResult {
-        let active = self
-            .active
-            .lock()
-            .ok()
-            .and_then(|mut active| active.remove(entry_id));
+        let active = match self.take_unique_mount(entry_id) {
+            Ok(active) => active,
+            Err(reason) => return failed(entry_id, None, reason),
+        };
         let Some(active) = active else {
             return VaultMountResult {
                 entry_id: entry_id.to_owned(),
@@ -2025,11 +2050,17 @@ impl VaultMountBroker {
         store: &VaultAccessStore,
         request: &AuthorizedDismount<'_>,
     ) -> VaultMountResult {
-        let active = self
-            .active
-            .lock()
-            .ok()
-            .and_then(|active| active.get(request.entry_id).cloned());
+        let active = match self.active.lock() {
+            Ok(active) => match active.get(request.entry_id) {
+                Some(mount) => {
+                    let owner = slot::unique_entry(active.iter().map(|(id, item)| (id.as_str(), item.internal_drive)), mount.internal_drive);
+                    if owner != Ok(Some(request.entry_id)) { return failed(request.entry_id, None, VaultMountReason::MountStateUnknown); }
+                    Some(mount.clone())
+                }
+                None => None,
+            },
+            Err(_) => return failed(request.entry_id, None, VaultMountReason::MountStateUnknown),
+        };
         let Some(active) = active else {
             return self.confirm_unmounted_policy_entry(store, request);
         };
@@ -2196,14 +2227,13 @@ impl VaultMountBroker {
         caller_elevated: bool,
     ) -> VaultMountResult {
         self.with_exclusive_operation(|| {
-            let active = self.active.lock().ok();
-            let matching = active.as_ref().and_then(|mounts| {
-                mounts
-                    .iter()
-                    .find(|(_, mount)| mount.internal_drive == internal_drive)
-                    .map(|(entry_id, _)| entry_id.clone())
-            });
-            drop(active);
+            let matching = match self.active.lock() {
+                Ok(active) => match slot::unique_entry(active.iter().map(|(id, mount)| (id.as_str(), mount.internal_drive)), internal_drive) {
+                    Ok(entry) => entry.map(str::to_owned),
+                    Err(()) => return denied(&format!("personal:{internal_drive}"), VaultMountReason::MountStateUnknown),
+                },
+                Err(_) => return denied(&format!("personal:{internal_drive}"), VaultMountReason::MountStateUnknown),
+            };
 
             let synthetic_entry_id = format!("personal:{internal_drive}");
             let Some(entry_id) = matching else {
@@ -2285,17 +2315,13 @@ impl VaultMountBroker {
         caller_sid: &str,
         require_syncthing_opt_in: bool,
     ) -> Result<(String, ActiveMount), VaultMountReason> {
-        let (entry_id, active) = self
-            .active
-            .lock()
-            .ok()
-            .and_then(|mounts| {
-                mounts
-                    .iter()
-                    .find(|(_, mount)| mount.internal_drive == internal_drive)
-                    .map(|(entry_id, mount)| (entry_id.clone(), mount.clone()))
-            })
-            .ok_or(VaultMountReason::MountStateUnknown)?;
+        let (entry_id, active) = {
+            let mounts = self.active.lock().map_err(|_| VaultMountReason::MountStateUnknown)?;
+            let entry = slot::unique_entry(mounts.iter().map(|(id, mount)| (id.as_str(), mount.internal_drive)), internal_drive)
+                .map_err(|_| VaultMountReason::MountStateUnknown)?
+                .ok_or(VaultMountReason::MountStateUnknown)?;
+            (entry.to_owned(), mounts.get(entry).ok_or(VaultMountReason::MountStateUnknown)?.clone())
+        };
         let eligible_policy_owner =
             !active.personal && store.is_exclusive_per_user_policy_owner(&entry_id, caller_sid);
         if !(active.personal || eligible_policy_owner)
@@ -2948,6 +2974,7 @@ impl VaultMountBroker {
             }
         };
         if registry.mounts.len() > MAX_DURABLE_MOUNTS
+            || !slot::all_unique(registry.mounts.values().map(|mount| mount.internal_drive))
             || registry
                 .mounts
                 .iter()

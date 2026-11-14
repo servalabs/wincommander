@@ -1,6 +1,120 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 #[test]
+fn ambiguous_slot_never_selects_or_dismounts_a_vault() {
+    let files = Arc::new(Mutex::new(HashMap::new()));
+    let store = mount_store(files.clone(), Arc::new(AtomicBool::new(false)));
+    let events = Arc::new(Mutex::new(BrokerEvents::default()));
+    let broker = VaultMountBroker::with_broker(Box::new(MountBroker(events.clone())));
+    let mut personal = active_mount_for_owner(7, "S-1-5-21-owner");
+    personal.personal = true;
+    personal.presentation = VaultPresentation::PerUser;
+    let mut managed = personal.clone();
+    managed.personal = false;
+    managed.container_identity = "other-fixture".into();
+    {
+        let mut active = broker.active.lock().unwrap();
+        active.insert("personal".into(), personal);
+        active.insert("managed".into(), managed);
+    }
+    let before = files.lock().unwrap().clone();
+    let result = broker.dismount_personal_for_caller(&store, 1, 12, std::ptr::null_mut(), 7, "S-1-5-21-owner", false);
+    assert_eq!(result.reason, Some(VaultMountReason::MountStateUnknown));
+    let direct = broker.dismount_entry_locked(&store, "personal");
+    assert_eq!(direct.reason, Some(VaultMountReason::MountStateUnknown));
+    let authorized = broker.dismount_authorized(&store, AuthorizedDismount {
+        caller_authentication_id: None, operation_id: 2, entry_id: "managed",
+        caller_token: std::ptr::null_mut(), caller_session: 7,
+        caller_sid: "S-1-5-21-owner", caller_elevated: false,
+    });
+    assert_eq!(authorized.reason, Some(VaultMountReason::MountStateUnknown));
+    let member = broker.dismount_entry_locked_for_authorized_member(&store, "managed", false, false, false);
+    assert_eq!(member.reason, Some(VaultMountReason::MountStateUnknown));
+    assert!(matches!(broker.eligible_syncthing_mount_locked(&store, 12, std::ptr::null_mut(), 7, "S-1-5-21-owner", false), Err(VaultMountReason::MountStateUnknown)));
+    assert_eq!(broker.active.lock().unwrap().len(), 2);
+    assert!(events.lock().unwrap().dismounted.is_empty());
+    assert!(events.lock().unwrap().recovered.is_empty());
+    assert_eq!(*files.lock().unwrap(), before);
+}
+
+#[test]
+fn duplicate_slot_registry_is_rejected_before_recovery_side_effects() {
+    let files = Arc::new(Mutex::new(HashMap::new()));
+    let store = mount_store(files.clone(), Arc::new(AtomicBool::new(false)));
+    let events = Arc::new(Mutex::new(BrokerEvents::default()));
+    let broker = VaultMountBroker::with_broker(Box::new(MountBroker(events.clone())));
+    let first = active_mount_for_owner(7, "S-1-5-21-owner");
+    let mut second = first.clone();
+    second.container_identity = "other-fixture".into();
+    let registry = DurableMountRegistry { mounts: HashMap::from([("first".into(), first), ("second".into(), second)]) };
+    let bytes = serde_json::to_vec(&registry).unwrap();
+    store.write_active_mounts(&bytes).unwrap();
+    assert!(broker.load_and_cleanup(&store).is_err());
+    assert!(broker.active.lock().unwrap().is_empty());
+    assert!(events.lock().unwrap().dismounted.is_empty());
+    assert!(events.lock().unwrap().recovered.is_empty());
+    assert_eq!(store.read_active_mounts().unwrap(), bytes);
+}
+
+#[test]
+fn duplicate_mount_reply_does_not_dismount_existing_slot() {
+    let files = Arc::new(Mutex::new(HashMap::new()));
+    let store = mount_store(files.clone(), Arc::new(AtomicBool::new(false)));
+    let events = Arc::new(Mutex::new(BrokerEvents::default()));
+    let broker = VaultMountBroker::with_broker(Box::new(MountBroker(events.clone())));
+    let existing = active_mount_for_owner(7, "S-1-5-21-owner");
+    broker.active.lock().unwrap().insert("existing".into(), existing);
+    let before = files.lock().unwrap().clone();
+    let record = personal_record();
+    let mut request = personal_request();
+    let result = broker.mount_personal_authorized(1, &store, &record, &mut request,
+        std::ptr::null_mut(), 7, "S-1-5-21-owner", (0, 0));
+    assert!(matches!(result, Err(VaultMountReason::MountStateUnknown)));
+    assert_eq!(events.lock().unwrap().mounted, 1);
+    assert!(events.lock().unwrap().dismounted.is_empty());
+    assert!(events.lock().unwrap().recovered.is_empty());
+    assert!(broker.active.lock().unwrap().contains_key("existing"));
+    assert!(broker.recovery.lock().unwrap().registry_untrusted);
+    assert_eq!(*files.lock().unwrap(), before);
+    assert!(request.password.is_empty());
+}
+
+#[test]
+fn duplicate_policy_mount_reply_does_not_dismount_existing_slot() {
+    struct FixtureResolver;
+    impl PrincipalResolver for FixtureResolver {
+        fn resolve_sid(&self, _: &str) -> Result<String, crate::vault_access::VaultError> {
+            Ok("S-1-5-21-1-2-3-1001".into())
+        }
+    }
+    let files = Arc::new(Mutex::new(HashMap::new()));
+    let store = VaultAccessStore::open(
+        Box::new(MountFs { files: files.clone(), fail_next_active_write: Arc::new(AtomicBool::new(false)) }),
+        Box::new(FixtureResolver), Box::new(MountAcl), PathBuf::from("/policy"),
+    );
+    dismount_policy_fixture(&store, VaultPresentation::PerUser);
+    let events = Arc::new(Mutex::new(BrokerEvents::default()));
+    let broker = VaultMountBroker::with_broker(Box::new(MountBroker(events.clone())));
+    let mut existing = active_mount_for_owner(7, "S-1-5-21-owner");
+    existing.drive_letter = "X:".into();
+    existing.personal = true;
+    broker.active.lock().unwrap().insert("existing".into(), existing);
+    let before = files.lock().unwrap().clone();
+    let mut password = "fixture".to_owned();
+    let mut hidden = None;
+    let result = broker.mount_authorized(1, &store, "managed", &mut password, &mut hidden,
+        VaultVolumeRole::Outer, std::ptr::null_mut(), 7, "S-1-5-21-owner", (0, 0), VaultAccess::Write);
+    assert_eq!(result.reason, Some(VaultMountReason::MountStateUnknown));
+    assert_eq!(events.lock().unwrap().mounted, 1);
+    assert!(events.lock().unwrap().dismounted.is_empty());
+    assert!(events.lock().unwrap().recovered.is_empty());
+    assert!(broker.active.lock().unwrap().contains_key("existing"));
+    assert!(broker.recovery.lock().unwrap().registry_untrusted);
+    assert_eq!(*files.lock().unwrap(), before);
+    assert!(password.is_empty());
+}
+
+#[test]
 #[ignore = "read-only installed registry and driver comparison; no live operations"]
 fn live_registry_projection_diagnostic_reads_only() {
     let path = crate::policy_store::default_policy_dir().join("vault-active-mounts-v1.json");
