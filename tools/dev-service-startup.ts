@@ -17,11 +17,13 @@ export function readDevelopmentVaultState(output: string, exitCode: number | nul
 export async function syncDevelopmentService(
   freeOnly: boolean,
   run: (args: string[]) => Promise<number>,
+  noServiceRestart = false,
 ): Promise<void> {
   const result = await run([
     "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
     "tools/sync-dev-service.ps1",
     ...(!freeOnly ? ["-SyncPro"] : []),
+    ...(noServiceRestart ? ["-NoServiceRestart"] : []),
   ]);
   if (result !== 0) {
     throw new Error(`development service synchronization failed (exit ${result}); Vite was not started`);

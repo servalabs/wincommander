@@ -8,6 +8,8 @@ param(
     # differences could otherwise stop the old service and strand it.
     [switch]$UseExistingBuild,
     [switch]$SyncPro,
+    # Multi-session bootstrap must not restart or replace the shared service.
+    [switch]$NoServiceRestart,
     [switch]$StageFleetDebug,
     # Replacing the SYSTEM service cleanly dismounts every Vault it owns. An
     # explicit opt-in keeps an ordinary frontend restart from unexpectedly
@@ -21,6 +23,9 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+if ($NoServiceRestart -and $Elevated) {
+    throw 'Session-preserving service verification cannot enter the elevated mutation path.'
+}
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $tauriRoot = Join-Path $repoRoot 'src-tauri'
@@ -498,6 +503,16 @@ function Start-ElevatedSync([switch]$UseExistingBuild) {
 }
 
 if (-not $Elevated) {
+    if ($NoServiceRestart) {
+        # Do not build over an unstaged running service while other sessions
+        # still use it. Only an already-staged service can be checked safely.
+        $configuredPath = Get-ServiceImagePath
+        $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+        if (-not $configuredPath -or -not $configuredPath.Equals($stagedService, [StringComparison]::OrdinalIgnoreCase) -or
+            $null -eq $service -or $service.Status -ne 'Running' -or -not (Test-ServiceProcessCurrent)) {
+            throw 'The running development service is not safely staged. Existing sessions and the service were preserved; synchronize it separately when safe.'
+        }
+    }
     try {
         # Once the service runs from the staging directory, Cargo can rebuild
         # its normal target without a running Windows service locking the EXE.
@@ -524,6 +539,9 @@ if (-not $Elevated) {
         return
     }
 
+    if ($NoServiceRestart) {
+        throw 'The development service is not current. Existing sessions and the service were preserved; synchronize it separately when safe.'
+    }
     Invoke-NonElevatedVaultGuard {
         if (Test-Path -LiteralPath $activeMountRegistry -PathType Leaf) {
             $stream = [IO.File]::OpenRead($activeMountRegistry)

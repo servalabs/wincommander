@@ -16,6 +16,13 @@ test("Pro development synchronizes both service and Pro", async () => {
   expect(calls[0]).toContain("-SyncPro");
 });
 
+test("session-preserving startup requests a current service without restarting it", async () => {
+  const calls: string[][] = [];
+  await syncDevelopmentService(true, async args => { calls.push(args); return 0; }, true);
+  expect(calls[0]).toContain("-NoServiceRestart");
+  expect(calls[0]).not.toContain("-SyncPro");
+});
+
 test("both modes stop startup if service synchronization fails", async () => {
   for (const freeOnly of [true, false]) {
     await expect(syncDevelopmentService(freeOnly, async () => 5))

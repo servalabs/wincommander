@@ -38,6 +38,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import { readDevelopmentVaultState, syncDevelopmentService } from "./dev-service-startup";
 import { assertSharedAssets } from "./check-shared-assets";
+import { developmentStartupPolicy, vitePortOwner } from "./dev-startup-policy";
 
 const ROOT = resolve(import.meta.dir, "..");
 // The Codex/runtime environment can place a PowerShell-compatible shim ahead
@@ -96,21 +97,7 @@ function freeVitePort(): void {
 
 function activeVitePortOwner(): string | null {
   const netstat = spawnSync("netstat", ["-ano"], { cwd: ROOT, encoding: "utf8", shell: false });
-  if (netstat.status !== 0) return null;
-  return netstat.stdout
-    .split(/\r?\n/)
-    .map((line) => line.match(/:1420\s+\S+\s+LISTENING\s+(\d+)\s*$/i))
-    .find((match): match is RegExpMatchArray => match !== null)?.[1] ?? null;
-}
-
-function desktopDevWindowIsRunning(): boolean {
-  if (process.platform !== "win32") return false;
-  const tasklist = spawnSync("tasklist", ["/FI", "IMAGENAME eq wincommander-free.exe", "/NH"], {
-    cwd: ROOT,
-    encoding: "utf8",
-    shell: false,
-  });
-  return tasklist.status === 0 && /wincommander-free\.exe/i.test(tasklist.stdout);
+  return vitePortOwner(netstat.stdout ?? "", netstat.status, PRESERVE_WINCOMMANDER);
 }
 
 async function main(): Promise<void> {
@@ -138,22 +125,22 @@ async function main(): Promise<void> {
       ? "A Vault or pending Vault cleanup is protected." : "Mounted Vault state could not be verified."));
     console.log("[dev-server] Existing desktop, Pro, service, driver and Vaults are preserved. Backend update pending; native changes are not loaded or verified.");
   }
-  // Keep this guard for the shared multi-user server. Normal Tauri startup
-  // clears stale processes synchronously at the start of beforeDevCommand and
-  // must not classify its own newly launched app as an existing session here.
   const existingViteOwner = activeVitePortOwner();
-  if (existingViteOwner && (frontendOnly || (PRESERVE_WINCOMMANDER && desktopDevWindowIsRunning()))) {
+  const policy = developmentStartupPolicy({ preserveSessions: PRESERVE_WINCOMMANDER,
+    freeOnly: FREE_ONLY || frontendOnly, precleaned: PRE_CLEANED, portOwner: existingViteOwner });
+  if (existingViteOwner && frontendOnly) {
     throw new Error(
       "Port 1420 is already in use; its listener was preserved. Use the existing frontend server or close it yourself before starting another.",
     );
   }
 
-  console.log(frontendOnly ? "[dev-server] installing frontend dependencies..." : PRE_CLEANED
+  console.log(frontendOnly ? "[dev-server] installing frontend dependencies..." : PRESERVE_WINCOMMANDER
+    ? "[dev-server] preserving existing sessions; installing dependencies..." : PRE_CLEANED
     ? "[dev-server] prior dev processes already cleared; installing dependencies..."
     : "[dev-server] kill:dev and bun install running in parallel...");
 
   const steps: Array<{ name: string; promise: Promise<number> }> = frontendOnly ? [] : [
-    ...(!PRE_CLEANED ? [{
+    ...(policy.cleanProcesses ? [{
       name: "kill:dev",
       promise: run("[kill]", WINDOWS_POWERSHELL, [
         "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "tools/kill-dev.ps1",
@@ -172,7 +159,9 @@ async function main(): Promise<void> {
 
   if (!frontendOnly) {
   console.log(
-    FREE_ONLY
+    PRESERVE_WINCOMMANDER
+      ? "[dev-server] verifying the current service without restarting it..."
+      : FREE_ONLY
       ? "[dev-server] kill:dev/install done — preparing the settings service..."
       : "[dev-server] kill:dev/install done — building Pro before starting vite...",
   );
@@ -187,12 +176,12 @@ async function main(): Promise<void> {
 
   // Free also persists account preferences through the authenticated service.
   // Pro is optional; the service must be ready before either desktop starts.
-  await syncDevelopmentService(FREE_ONLY, args => run("[service]", WINDOWS_POWERSHELL, args));
+  await syncDevelopmentService(FREE_ONLY, args => run("[service]", WINDOWS_POWERSHELL, args), policy.noServiceRestart);
   console.log(PREPARE_ONLY
     ? "[dev-server] SYSTEM settings service verified — native preparation ready."
     : "[dev-server] SYSTEM settings service verified — starting vite.");
 
-  freeVitePort();
+  if (policy.releasePort) freeVitePort();
   }
 
   if (PREPARE_ONLY) {

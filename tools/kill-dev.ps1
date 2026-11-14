@@ -9,6 +9,10 @@ param(
     [switch]$PreserveWinCommander
 )
 
+if ($PreserveWinCommander) {
+    Write-Host 'Existing WinCommander processes and frontend listener were preserved.'
+    exit 0
+}
 if (-not $PreserveWinCommander) {
     . (Join-Path $PSScriptRoot 'dev-vault-state.ps1')
     $vaultState = Get-WcDevelopmentVaultState
