@@ -177,6 +177,17 @@ pub fn search_show_properties(path: String) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn direct_search_shred_rejects_missing_and_forged_confirmation() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("fixture.txt");
+        std::fs::write(&target, b"preserve").unwrap();
+        let path = target.to_string_lossy().into_owned();
+        assert!(search_shred_direct(path.clone(), None).await.is_err());
+        assert!(search_shred_direct(path, Some("forged".into())).await.is_err());
+        assert_eq!(std::fs::read(target).unwrap(), b"preserve");
+    }
+
     #[test]
     fn search_actions_reject_relative_paths() {
         assert!(existing_path("relative.txt").is_err());

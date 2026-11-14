@@ -22,6 +22,23 @@ fn consume_rejects_wrong_args() {
     assert!(consume(&tok, DestructiveAction::DiskDelete, "path=/b").is_err());
 }
 
+#[tokio::test]
+async fn search_shred_rejects_wrong_target_and_consumes_confirmation() {
+    let dir = tempfile::tempdir().unwrap();
+    let approved = dir.path().join("approved.txt");
+    let other = dir.path().join("other.txt");
+    std::fs::write(&approved, b"approved fixture").unwrap();
+    std::fs::write(&other, b"other fixture").unwrap();
+    let approved_path = approved.to_string_lossy().into_owned();
+    let other_path = other.to_string_lossy().into_owned();
+    let canonical = canonical_path(&approved_path);
+    let token = mint(DestructiveAction::DiskDelete, &secure_erase_args(&canonical)).unwrap();
+    assert!(crate::search_actions::search_shred_direct(other_path, Some(token.clone())).await.is_err());
+    assert!(crate::search_actions::search_shred_direct(approved_path, Some(token)).await.is_err());
+    assert_eq!(std::fs::read(approved).unwrap(), b"approved fixture");
+    assert_eq!(std::fs::read(other).unwrap(), b"other fixture");
+}
+
 #[test]
 fn token_is_single_use() {
     let tok = mint(DestructiveAction::KillSwitch, "on").unwrap();
