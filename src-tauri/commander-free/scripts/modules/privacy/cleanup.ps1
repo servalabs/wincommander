@@ -3031,8 +3031,13 @@ function Get-AmcacheEntries {
                 $sample = @($children | ForEach-Object {
                     $child = $_
                     $props = Get-ItemProperty $child.PSPath -ErrorAction Stop
-                    $name = @($props.Name, $props.ProductName, $props.BinFileVersion) | Where-Object { $_ -is [string] -and $_.Trim() } | Select-Object -First 1
-                    $path = @($props.LowerCaseLongPath, $props.LongPathHash) | Where-Object { $_ -is [string] -and $_.Trim() } | Select-Object -First 1
+                    # The local view may show additional fields. Keep Fleet's
+                    # existing source-field scope while dropping misleading fallbacks.
+                    $nameCandidates = @($props.Name, $props.ProductName)
+                    $pathCandidates = @($props.LowerCaseLongPath)
+                    if (-not $FleetProjection) { $nameCandidates += $props.FileName; $pathCandidates += $props.LongPath }
+                    $name = $nameCandidates | Where-Object { $_ -is [string] -and $_.Trim() } | Select-Object -First 1
+                    $path = $pathCandidates | Where-Object { $_ -is [string] -and $_.Trim() } | Select-Object -First 1
                     $entry = @{ id = $child.PSChildName; name = if ($name) { $name } else { '' }; path = if ($path) { $path } else { '' } }
                     foreach ($pair in @(@('productName','ProductName'), @('binaryVersion','BinFileVersion'), @('longPath','LowerCaseLongPath'), @('longPathHash','LongPathHash'))) {
                         $value = $props.($pair[1])
