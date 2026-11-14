@@ -212,12 +212,29 @@ fn failed_dismount_resumes_only_when_the_same_slot_and_caller_drive_are_verified
         fn cleanup_orphans(&self) -> Result<(), VaultMountReason> { Ok(()) }
         fn recover_dismount(&self, _: BrokerDismountRequest<'_>) -> Result<(), VaultMountReason> { unreachable!() }
     }
-    for (slot, presentation, expected_resume) in [
-        ("same", true, true), ("same", false, false),
-        ("missing", true, false), ("replaced", true, false), ("unknown", true, false),
+    for (slot, presentation, token, expected_resume) in [
+        ("same", "available", "valid", true),
+        ("same", "missing", "valid", false),
+        ("same", "denied", "valid", false),
+        ("same", "read-error", "valid", false),
+        ("same", "available", "null", false),
+        ("same", "available", "absent", false),
+        ("missing", "available", "valid", false),
+        ("replaced", "available", "valid", false),
+        ("unknown", "available", "valid", false),
     ] {
         let store = mount_store(Arc::new(Mutex::new(HashMap::new())), Arc::new(AtomicBool::new(false)));
-        let attestor: CallerMountAttestor = if presentation { caller_can_list_root } else { caller_cannot_resolve_drive };
+        let attestor: CallerMountAttestor = match presentation {
+            "available" => caller_can_list_root,
+            "missing" => caller_cannot_resolve_drive,
+            "denied" => caller_cannot_list_root,
+            _ => caller_root_read_has_other_error,
+        };
+        let token = match token {
+            "valid" => Some(1usize as _),
+            "null" => Some(std::ptr::null_mut()),
+            _ => None,
+        };
         let broker = VaultMountBroker::with_broker_and_attestor(
             Box::new(FailedDismount { after: slot, attempted: Mutex::new(false) }), attestor,
         );
@@ -227,13 +244,13 @@ fn failed_dismount_resumes_only_when_the_same_slot_and_caller_drive_are_verified
         broker.active.lock().unwrap().insert("managed".into(), mount);
         let mut calls = Vec::new();
         let result = broker.dismount_entry_locked_for_client_inner(
-            42, &store, "managed", Some(1usize as _), |feature, _| {
+            42, &store, "managed", token, |feature, _| {
                 calls.push(feature);
                 Ok(SyncthingLifecycleResult { managed: true, pause_guaranteed: true, warning: None })
             },
         );
         assert_eq!(result.reason, Some(VaultMountReason::DismountFailed));
-        assert_eq!(calls.contains(&"vault.syncthing.resume"), expected_resume, "slot={slot}, presentation={presentation}");
+        assert_eq!(calls.contains(&"vault.syncthing.resume"), expected_resume, "slot={slot}, presentation={presentation}, token={token:?}");
         assert!(broker.active.lock().unwrap()["managed"].cleanup_required);
     }
 }
