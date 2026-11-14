@@ -12,6 +12,14 @@ use zeroize::Zeroize;
 const INVALID: &str = "recovery readmission unavailable";
 const TTL: Duration = Duration::from_secs(30);
 
+// Until recovered readmission verifies the independently pinned hybrid proof
+// and commits its epoch floor, a classical reply must not downgrade any record
+// that requires or retains evidence of hybrid enrollment.
+fn classical_only(record: &Record) -> bool {
+    record.hybrid_trust.is_none() && record.hybrid_epoch_floor == 0
+        && record.hybrid_credential.is_none() && !record.hybrid_initial_pending && !record.hybrid_unconfirmed
+}
+
 mod sealed { pub trait Sealed {} }
 pub(crate) trait ReadmissionAuthorization: sealed::Sealed + Sync {
     fn authorized(&self) -> bool;
@@ -74,7 +82,7 @@ impl FleetMachinePolicy {
         if !snapshot.is_recovered { return Err(INVALID); }
         let guard = self.state.lock().map_err(|_| INVALID)?;
         let record = guard.record.as_ref().ok_or(INVALID)?;
-        if !authorized.authorized() || !Self::credential_matches(record, &snapshot) { return Err(INVALID); }
+        if !authorized.authorized() || !classical_only(record) || !Self::credential_matches(record, &snapshot) { return Err(INVALID); }
         let commit = record.recovery_commit.as_ref().ok_or(INVALID)?;
         let candidate = crate::fleet_recovery_candidate::CandidateStore::open(
             self.fs.as_ref(), self.path.parent().ok_or(INVALID)?.to_path_buf(), protector)?;
@@ -101,7 +109,7 @@ impl FleetMachinePolicy {
         if !offers.pending.as_ref().is_some_and(|offer| offer.id == id && offer.owner == owner) { return Err(INVALID); }
         let offer = offers.pending.take().ok_or(INVALID)?;
         let record = guard.record.as_ref().ok_or(INVALID)?;
-        if !authorized.authorized() || authorized.binding()? != offer.owner || Instant::now() >= offer.expires || !Self::credential_matches(record, &offer.snapshot) { return Err(INVALID); }
+        if !authorized.authorized() || authorized.binding()? != offer.owner || Instant::now() >= offer.expires || !classical_only(record) || !Self::credential_matches(record, &offer.snapshot) { return Err(INVALID); }
         offers.claimed = Some(offer.id.clone());
         Ok(Claim(offer))
     }
@@ -114,7 +122,7 @@ impl FleetMachinePolicy {
         let registry=self.recovery_readmission.lock().map_err(|_| INVALID)?;
         let record=guard.record.as_ref().ok_or(INVALID)?;
         if !authorized.authorized() || authorized.binding()?!=offer.owner || registry.claimed.as_deref()!=Some(&offer.id) || Instant::now()>=offer.expires
-            || !Self::credential_matches(record,&offer.snapshot)
+            || !classical_only(record) || !Self::credential_matches(record,&offer.snapshot)
             || crate::fleet_runtime_env::fingerprint().as_deref()!=Some(offer.snapshot.profile.environment_fingerprint.as_str()) {
             return Err(INVALID);
         }
@@ -133,7 +141,7 @@ impl FleetMachinePolicy {
                 let guard=self.state.lock().map_err(|_| INVALID)?;
                 let registry=self.recovery_readmission.lock().map_err(|_| INVALID)?;
                 if !authorized.authorized() || authorized.binding()?!=claim.0.owner || registry.claimed.as_deref()!=Some(&claim.0.id)
-                    || Instant::now()>=claim.0.expires || !guard.record.as_ref().is_some_and(|record|Self::credential_matches(record,&claim.0.snapshot)) {
+                    || Instant::now()>=claim.0.expires || !guard.record.as_ref().is_some_and(|record|classical_only(record) && Self::credential_matches(record,&claim.0.snapshot)) {
                     return Err(INVALID);
                 }
             }
@@ -197,7 +205,7 @@ impl FleetMachinePolicy {
         if registry.claimed.as_deref() != Some(&offer.id) { return Err(INVALID); }
         registry.claimed = None;
         if !authorized.authorized() || authorized.binding()? != offer.owner || Instant::now() >= offer.expires
-            || !Self::credential_matches(record, &offer.snapshot) { return Err(INVALID); }
+            || !classical_only(record) || !Self::credential_matches(record, &offer.snapshot) { return Err(INVALID); }
         Ok(publish())
     }
 }
@@ -323,5 +331,38 @@ mod tests {
         let published=AtomicBool::new(false);
         assert!(store.finish_readmission(claim,200,&body,&header,&authorized,||published.store(true,Ordering::SeqCst)).is_err());
         assert!(!published.load(Ordering::SeqCst));
+    }
+    fn add_hybrid_state(store:&FleetMachinePolicy, variant:u8) {
+        let mut state=store.state.lock().unwrap();let record=state.record.as_mut().unwrap();
+        match variant {
+            0 => record.hybrid_trust=Some(FleetHybridTrust { minimum_epoch:1,ed_key_id:"ed".into(),pq_key_id:"pq".into(),
+                ml_dsa_65_public_b64:STANDARD.encode([1;1952]),outcome_key_b64:None }),
+            1 => record.hybrid_credential=Some(StoredHybridCredential { origin:"https://fleet.test".into(),ciphertext:"fixture".into(),epoch:1 }),
+            2 => record.hybrid_epoch_floor=1,
+            3 => record.hybrid_initial_pending=true,
+            _ => record.hybrid_unconfirmed=true,
+        }
+    }
+    #[test]
+    fn classical_readmission_refuses_hybrid_state_at_every_boundary() {
+        use std::sync::atomic::{AtomicBool,Ordering};
+        let authorized=TestAuthorization(||true);
+        for variant in 0..5 {
+            let store=setup();add_hybrid_state(&store,variant);
+            assert!(store.offer_readmission(&TestProtector,1001,&authorized).is_err());
+
+            let store=setup();let id=store.offer_readmission(&TestProtector,1001,&authorized).unwrap();
+            add_hybrid_state(&store,variant);
+            assert!(store.claim_readmission(&id,&authorized).is_err());
+
+            let store=setup();let id=store.offer_readmission(&TestProtector,1001,&authorized).unwrap();
+            let claim=store.claim_readmission(&id,&authorized).unwrap();
+            let (body,header)=response(claim.request(),&[4;32],false);
+            add_hybrid_state(&store,variant);
+            assert!(store.readmission_transport(&claim,&authorized).is_err());
+            let published=AtomicBool::new(false);
+            assert!(store.finish_readmission(claim,200,&body,&header,&authorized,||published.store(true,Ordering::SeqCst)).is_err());
+            assert!(!published.load(Ordering::SeqCst));
+        }
     }
 }
