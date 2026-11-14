@@ -1265,6 +1265,21 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires a disposable, non-protected WINCOMMANDER_DISK_TREE_TEST_BASE"]
+    fn production_policy_deletes_a_confirmed_safe_tree() {
+        assert!(std::env::var_os("WINCOMMANDER_DISK_TREE_TEST_BASE").is_some(), "a disposable test base is required");
+        let fixture = Fixture::new();
+        let target = fixture.target();
+        std::fs::create_dir_all(target.join("nested")).unwrap();
+        std::fs::write(target.join("nested").join("item.txt"), b"fixture").unwrap();
+        let authorized = AuthorizedRoot::open(&target, ProtectedRoots::fixture(&fixture.root).unwrap()).unwrap();
+        let prepared = prepare_authorized(authorized).expect("safe owned folder should pass real policy");
+        assert_eq!(prepared.item_counts(), (1, 2));
+        assert_eq!(delete_prepared(prepared).unwrap(), 3);
+        assert!(!target.exists());
+    }
+
+    #[test]
     fn production_preflight_rejects_protected_descendant_before_any_deletion() {
         // Run only when the caller supplies a disposable, non-AppData base.
         if std::env::var_os("WINCOMMANDER_DISK_TREE_TEST_BASE").is_none() { return; }
