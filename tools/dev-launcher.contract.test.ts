@@ -93,12 +93,66 @@ ConvertTo-Json -Compress -InputObject @($results)
     );
     expect(tauri.build.beforeDevCommand).toContain("dev:server --precleaned");
     expect(devServer).toContain('const PRE_CLEANED = process.argv.includes("--precleaned")');
-    expect(devServer).toContain("...(!PRE_CLEANED ? [{");
+    expect(devServer).toContain("...(policy.cleanProcesses ? [{");
     // A fresh launch must not preserve a stale wincommander-pro.exe because
     // Cargo has to replace that exact debug binary before Vite is exposed.
-    expect(devServer).toContain("desktopDevWindowIsRunning()");
+    expect(devServer).toContain("developmentStartupPolicy({ preserveSessions: PRESERVE_WINCOMMANDER");
     expect(devServer).toContain('"tools/build-pro.ts"');
     expect(devServer).not.toContain('PRESERVE_WINCOMMANDER ? ["-PreserveWinCommander"]');
+  });
+
+  test.skipIf(process.platform !== "win32")("preserve mode never inspects or stops processes or the listener", () => {
+    const script = String.raw`
+$ErrorActionPreference = 'Stop'
+function Get-Process { throw 'unexpected process inspection' }
+function Stop-Process { throw 'unexpected process termination' }
+function netstat { throw 'unexpected listener inspection' }
+& (Join-Path (Get-Location) 'tools/kill-dev.ps1') -PreserveWinCommander
+`;
+    const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand",
+      Buffer.from(script, "utf16le").toString("base64")], { encoding: "utf8" });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("processes and frontend listener were preserved");
+    expect(result.stderr).toBe("");
+  });
+
+  test.skipIf(process.platform !== "win32")("preserve service mode refuses an unstaged or changed service before mutation", () => {
+    const script = String.raw`
+$tokens = $null; $errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(
+  (Join-Path (Get-Location) 'tools/sync-dev-service.ps1'), [ref]$tokens, [ref]$errors)
+if ($errors.Count) { throw 'PowerShell parse failed' }
+$node = $ast.FindAll({ param($item) $item -is [System.Management.Automation.Language.IfStatementAst] -and
+  $item.Extent.Text.StartsWith('if (-not $Elevated)') }, $true) | Select-Object -First 1
+if (-not $node) { throw 'Service guard was not found' }
+$NoServiceRestart = $true; $Elevated = $false; $StageFleetDebug = $false; $SyncPro = $false
+$stagedService = 'C:\safe\service.exe'; $builtService = 'C:\build\service.exe'; $serviceName = 'fixture'
+$global:BuildCalls = 0; $global:MutationCalls = 0
+function Get-ServiceImagePath { return $global:ConfiguredPath }
+function Get-Service { [pscustomobject]@{ Status = 'Running' } }
+function Test-ServiceProcessCurrent { return $true }
+function Build-Service { $global:BuildCalls++ }
+function Get-Sha256 { return 'fixture' }
+function Test-Path { return $false }
+function Start-ElevatedSync { $global:MutationCalls++; throw 'unexpected mutation' }
+function Invoke-NonElevatedVaultGuard { $global:MutationCalls++; throw 'unexpected mutation' }
+$global:ConfiguredPath = 'C:\other\service.exe'
+try { & ([scriptblock]::Create($node.Extent.Text)); throw 'unstaged service was accepted' } catch {
+  if ($_.Exception.Message -notmatch 'not safely staged') { throw }
+}
+if ($global:BuildCalls -ne 0 -or $global:MutationCalls -ne 0) { throw 'unstaged service was changed' }
+$global:ConfiguredPath = $stagedService
+try { & ([scriptblock]::Create($node.Extent.Text)); throw 'changed service was accepted' } catch {
+  if ($_.Exception.Message -notmatch 'not current') { throw }
+}
+if ($global:BuildCalls -ne 1 -or $global:MutationCalls -ne 0) { throw 'changed service was restarted' }
+Write-Output 'preserved'
+`;
+    const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand",
+      Buffer.from(script, "utf16le").toString("base64")], { encoding: "utf8" });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("preserved");
+    expect(result.stderr).toBe("");
   });
 
   test("offers an explicit elevated launcher for privileged development checks", () => {
