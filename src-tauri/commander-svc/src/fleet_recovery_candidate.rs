@@ -409,6 +409,23 @@ mod tests {
         assert_eq!(fs.read(&path).unwrap(),b"conflicting evidence");
     }
     #[test]
+    fn restarted_candidate_signs_only_its_original_retirement_and_generation() {
+        let fs=Fs::default(); let protector=TestProtector; let (trust,receipt)=fixture();
+        let retirement="11111111-1111-4111-8111-111111111111";
+        let store=CandidateStore::open(&fs,"protected".into(),&protector).unwrap();
+        let key=store.stage(&trust,&receipt,1001).unwrap();
+        drop(store);
+        let reopened=CandidateStore::open(&fs,"protected".into(),&protector).unwrap();
+        let signed=reopened.sign_enrollment(&trust,retirement,1002).unwrap();
+        assert_eq!(signed["outcome_pubkey_b64"],key);
+        assert_eq!(signed["recovery_retirement_id"],retirement);
+        assert_eq!(signed["previous_generation"],trust.enrollment_generation);
+        let mut changed=trust.clone();
+        changed.enrollment_generation="33333333-3333-4333-8333-333333333333".into();
+        assert!(reopened.sign_enrollment(&changed,retirement,1002).is_err());
+        assert!(reopened.sign_enrollment(&trust,"44444444-4444-4444-8444-444444444444",1002).is_err());
+    }
+    #[test]
     fn later_signed_retirement_stages_distinct_key_without_replacing_prior_key() {
         let fs=Fs::default();let protector=TestProtector;let (old,receipt)=fixture();
         let store=CandidateStore::open(&fs,"protected".into(),&protector).unwrap();

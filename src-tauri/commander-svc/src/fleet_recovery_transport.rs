@@ -53,6 +53,7 @@ pub(crate) async fn submit_candidate(store:&FleetMachinePolicy, candidate:&Candi
         candidate.sign_enrollment(current,retirement,now()?)
     })?;
     let client=fleet_agent_core::build_client_without_redirects(pins).map_err(|_| "recovery transport unavailable")?;
+    if !authorized() { return Err("administrator authorization changed"); }
     let response=tokio::time::timeout(Duration::from_secs(30),client.post(format!("{origin}/v1/windows/enroll-v2")).json(&request).send())
         .await.map_err(|_| "recovery transport unavailable")?.map_err(|_| "recovery transport unavailable")?;
     // A conflict may mean an older identity is already pending, or a replayed
@@ -73,7 +74,7 @@ pub(crate) async fn request_handoff(store:&FleetMachinePolicy, candidate:&Candid
     receipt:&[u8], authorized:impl Fn()->bool) -> Result<crate::fleet_identity_handoff::Handoff,&'static str> {
     use base64::{engine::general_purpose::STANDARD,Engine};
     let (trust,_,origins,profile,enabled)=store.trust_with_origins()?.ok_or("not provisioned")?;
-    if !enabled { return Err("service trust unavailable"); }
+    if !enabled || !authorized() { return Err("service trust unavailable"); }
     let profile=profile.ok_or("network configuration unavailable")?;
     let origin=origins.first().ok_or("network configuration unavailable")?;
     if crate::fleet_runtime_env::fingerprint().as_deref()!=Some(profile.environment_fingerprint.as_str()) { return Err("network configuration differs"); }
@@ -83,8 +84,8 @@ pub(crate) async fn request_handoff(store:&FleetMachinePolicy, candidate:&Candid
     let retirement=value.get("retirement_id").and_then(serde_json::Value::as_str).ok_or("invalid retirement receipt")?;
     let (key,request)=store.with_handoff_trust(|current| {
         if current!=&trust { return Err("service trust changed"); }
-        let key=candidate.stage(current,receipt,now()?)?;
-        let request=candidate.sign_handoff_request(current,retirement,now()?)?;
+        let key=activate_if_authorized(&authorized,||candidate.stage(current,receipt,now()?))?;
+        let request=activate_if_authorized(&authorized,||candidate.sign_handoff_request(current,retirement,now()?))?;
         Ok((key,request))
     })?;
     let local:[u8;32]=STANDARD.decode(&key).map_err(|_| "invalid candidate")?.try_into().map_err(|_| "invalid candidate")?;
@@ -99,11 +100,12 @@ pub(crate) async fn request_handoff(store:&FleetMachinePolicy, candidate:&Candid
         }
         Ok(bytes)
     };
+    if !authorized() { return Err("administrator authorization changed"); }
     let response=tokio::time::timeout(Duration::from_secs(30),operation).await.map_err(|_| "recovery transport unavailable")??;
     let handoff:crate::fleet_identity_handoff::Handoff=serde_json::from_slice(&response).map_err(|_| "invalid recovery response")?;
     if !authorized() { return Err("administrator authorization changed"); }
     store.with_handoff_trust(|current| {
-        if current!=&trust { return Err("service trust changed"); }
+        if current!=&trust || !authorized() { return Err("service trust changed"); }
         handoff.verify(current,retirement,handoff.new_generation(),&local,now()?)?;
         Ok(())
     })?;
@@ -116,6 +118,7 @@ pub(crate) async fn resume_prepared(store:&FleetMachinePolicy, candidate:&Candid
 }
 #[cfg(windows)]
 async fn resume_prepared_with(store:&FleetMachinePolicy, candidate:&CandidateStore<'_>, protector:&dyn crate::fleet_credential::Protector, authorized:impl Fn()->bool) -> Result<String,&'static str> {
+    if !authorized() { return Err("administrator authorization changed"); }
     let expected=store.pending_recovery()?.ok_or("recovery not pending")?;
     store.validate_pending_recovery_credential(&expected,protector)?;
     if crate::fleet_runtime_env::fingerprint().as_deref()!=Some(expected.profile().environment_fingerprint.as_str()) {
@@ -124,7 +127,7 @@ async fn resume_prepared_with(store:&FleetMachinePolicy, candidate:&CandidateSto
     let pins=fleet_agent_core::SpkiPinSet::from_hex_list(&expected.profile().spki_pins);
     if !expected.profile().spki_pins.trim().is_empty() && pins.is_none() { return Err("transport security invalid"); }
     let client=fleet_agent_core::build_client_without_redirects(pins).map_err(|_| "recovery transport unavailable")?;
-    let request=candidate.sign_commit(&expected,now()?)?;
+    let request=activate_if_authorized(&authorized,||candidate.sign_commit(&expected,now()?))?;
     let nonce=request.get("nonce").and_then(serde_json::Value::as_str).ok_or("invalid recovery request")?.to_owned();
     let operation=async {
         let mut response=client.post(format!("{}{}",expected.origin(),PATH)).json(&request).send().await.map_err(|_| "recovery transport unavailable")?;
@@ -136,6 +139,7 @@ async fn resume_prepared_with(store:&FleetMachinePolicy, candidate:&CandidateSto
         }
         Ok(bytes)
     };
+    if !authorized() { return Err("administrator authorization changed"); }
     let response=tokio::time::timeout(Duration::from_secs(30),operation).await.map_err(|_| "recovery transport unavailable")??;
     let activation=crate::fleet_recovery_credential::verify_commit_response(&response,&expected,&nonce,now()?)?;
     let status=activation.status().to_owned();
@@ -168,6 +172,15 @@ mod tests {
         assert!(super::activate_if_authorized(||active.get() && administrator.get(),|| { activated.set(true); Ok(()) }).is_ok());
         assert!(activated.get());
     }
+    #[test]
+    fn revoked_session_prevents_the_next_candidate_operation() {
+        use std::cell::Cell;
+        let authorized=Cell::new(true);
+        let signed=Cell::new(false);
+        super::activate_if_authorized(||authorized.get(),|| { authorized.set(false); Ok(()) }).unwrap();
+        assert!(super::activate_if_authorized(||authorized.get(),|| { signed.set(true); Ok(()) }).is_err());
+        assert!(!signed.get());
+    }
 }
 
 /// Begins only from a reviewed, protected old trust and signed retirement.
@@ -180,20 +193,26 @@ pub(crate) async fn prepare_and_resume(store:&FleetMachinePolicy, candidate:&Can
     -> Result<String,&'static str> {
     use base64::{engine::general_purpose::STANDARD,Engine};
     let (trust,_audit,origins,profile,enabled)=store.trust_with_origins()?.ok_or("not provisioned")?;
-    if !enabled { return Err("service trust unavailable"); }
+    if !enabled || !authorized() { return Err("service trust unavailable"); }
     let profile=profile.ok_or("network configuration unavailable")?;
     let origin=origins.first().ok_or("network configuration unavailable")?.clone();
     if crate::fleet_runtime_env::fingerprint().as_deref()!=Some(profile.environment_fingerprint.as_str()) { return Err("network configuration differs"); }
     let pins=fleet_agent_core::SpkiPinSet::from_hex_list(&profile.spki_pins);
     if !profile.spki_pins.trim().is_empty() && pins.is_none() { return Err("transport security invalid"); }
     let client=fleet_agent_core::build_client_without_redirects(pins).map_err(|_| "recovery transport unavailable")?;
-    let key=candidate.stage(&trust,retirement_receipt,now()?)?;
+    let key=store.with_handoff_trust(|current| {
+        if current!=&trust { return Err("service trust changed"); }
+        activate_if_authorized(&authorized,||candidate.stage(current,retirement_receipt,now()?))
+    })?;
     let public:[u8;32]=STANDARD.decode(&key).map_err(|_| "invalid candidate")?.try_into().map_err(|_| "invalid candidate")?;
     let verified=handoff.verify(&trust,recovery,generation,&public,now()?)?;
     store.validate_recovery_review(&verified,archive)?;
     if !authorized() { return Err("administrator authorization changed"); }
     let decision=verified.decision_digest().iter().map(|b|format!("{b:02x}")).collect::<String>();
-    let request=candidate.sign_confirmation(&trust,recovery,generation,&decision,archive,verified.fingerprint(),now()?)?;
+    let request=store.with_handoff_trust(|current| {
+        if current!=&trust { return Err("service trust changed"); }
+        activate_if_authorized(&authorized,||candidate.sign_confirmation(current,recovery,generation,&decision,archive,verified.fingerprint(),now()?))
+    })?;
     let nonce=request.get("nonce").and_then(serde_json::Value::as_str).ok_or("invalid recovery request")?.to_owned();
     let operation=async {
         let mut response=client.post(format!("{origin}/v1/agents/identity-handoff/confirm"))
@@ -206,6 +225,7 @@ pub(crate) async fn prepare_and_resume(store:&FleetMachinePolicy, candidate:&Can
         }
         Ok(bytes)
     };
+    if !authorized() { return Err("administrator authorization changed"); }
     let response=tokio::time::timeout(Duration::from_secs(30),operation).await.map_err(|_| "recovery transport unavailable")??;
     let credential=crate::fleet_recovery_credential::verify_response(&response,&trust,&verified,archive,&nonce,now()?)?;
     if !authorized() { return Err("administrator authorization changed"); }
