@@ -3239,7 +3239,30 @@ mod recovery_commit_tests {
             let id=store.offer_readmission(&protector,now(),&recovery_readmission_experiment::TestAuthorization(||true)).unwrap();
             let claim=store.claim_readmission(&id,&recovery_readmission_experiment::TestAuthorization(||true)).unwrap();
             let request=claim.request().to_vec();
-            store.send_readmission(claim,&recovery_readmission_experiment::TestAuthorization(||true)).await.unwrap();
+            if std::env::var("FLEET_HYBRID_READMISSION_LOOPBACK").ok().as_deref()==Some("1") {
+                // This synthetic proof test uses the fixture's ephemeral public
+                // key; it does not provision protected hybrid trust or activate it.
+                use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+                use fleet_proto::windows_v2::{verify_windows_hybrid_enrollment,WindowsHybridTrust};
+                let request_value:serde_json::Value=serde_json::from_slice(&request).unwrap();
+                let challenge=request_value["shield_progress_challenge"].as_str().unwrap();
+                let response=http.post(format!("{base}/v1/windows/enroll-v2"))
+                    .header(reqwest::header::CONTENT_TYPE,"application/json").body(request.clone()).send().await.unwrap().error_for_status().unwrap();
+                let header=response.headers().get("x-fleet-windows-v2-hybrid-enrollment").unwrap().to_str().unwrap().to_owned();
+                let body=response.bytes().await.unwrap();
+                let proof=URL_SAFE_NO_PAD.decode(header).unwrap();
+                let ed:[u8;32]=STANDARD.decode(&trust.signer_key).unwrap().try_into().unwrap();
+                let pq:[u8;1952]=STANDARD.decode(field("hybrid_pq_public_b64")).unwrap().try_into().unwrap();
+                let ed_id=field("hybrid_ed_key_id");let pq_id=field("hybrid_pq_key_id");
+                let epoch=fixture["hybrid_epoch"].as_u64().unwrap();
+                let pinned=WindowsHybridTrust {minimum_epoch:epoch,ed_key_id:&ed_id,ed25519_public:&ed,pq_key_id:&pq_id,ml_dsa_65_public:&pq};
+                assert_eq!(verify_windows_hybrid_enrollment(challenge,&request,200,&body,&trust.signer_key,&proof,&pinned),Some(epoch));
+                assert!(verify_windows_hybrid_enrollment(challenge,b"tampered",200,&body,&trust.signer_key,&proof,&pinned).is_none());
+                assert!(verify_windows_hybrid_enrollment(challenge,&request,200,b"tampered",&trust.signer_key,&proof,&pinned).is_none());
+                drop(claim);
+            } else {
+                store.send_readmission(claim,&recovery_readmission_experiment::TestAuthorization(||true)).await.unwrap();
+            }
             let replay=http.post(format!("{base}/v1/windows/enroll-v2"))
                 .header(reqwest::header::CONTENT_TYPE,"application/json").body(request).send().await.unwrap();
             assert!(!replay.status().is_success(),"a replay must not be admitted");
