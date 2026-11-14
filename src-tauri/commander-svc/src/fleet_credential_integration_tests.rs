@@ -139,6 +139,30 @@ fn verified_credential_survives_restart_and_rotation_fences_stale_work() {
 }
 
 #[test]
+fn current_snapshot_rejects_connection_and_sealed_credential_changes() {
+    let (store, _) = setup();
+    submit(&store, "https://fleet.test", &[4; 32]).unwrap();
+    let snapshot = store.credential_snapshot(&TestProtector).unwrap().unwrap();
+    assert!(store.credential_is_current(&snapshot));
+    let original = store.state.lock().unwrap().record.clone().unwrap();
+    for mutation in 0..3 {
+        {
+            let mut state = store.state.lock().unwrap();
+            let record = state.record.as_mut().unwrap();
+            *record = original.clone();
+            match mutation {
+                0 => record.connection_revision += 1,
+                1 => record.credential.as_mut().unwrap().ciphertext.push('A'),
+                _ => record.runtime_profile_changed = true,
+            }
+        }
+        assert!(!store.credential_is_current(&snapshot));
+    }
+    store.state.lock().unwrap().record = Some(original);
+    assert!(store.credential_is_current(&snapshot));
+}
+
+#[test]
 fn changed_runtime_origin_or_proxy_profile_can_only_suspend_service_transport() {
     let (store, _) = setup();
     let key = [4u8; 32];

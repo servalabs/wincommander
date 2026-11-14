@@ -222,6 +222,8 @@ pub(crate) struct CredentialSnapshot {
     pub origin: String,
     pub profile: TransportProfile,
     pub revision: u64,
+    pub connection_revision: u64,
+    pub sealed_credential_sha256: [u8; 32],
     pub secret: zeroize::Zeroizing<Vec<u8>>,
     pub operator_key: Option<String>,
     pub is_recovered: bool,
@@ -1352,20 +1354,28 @@ impl FleetMachinePolicy {
         verify_recovered_credential(record,&credential.origin,&secret)?;
         Ok(Some(CredentialSnapshot {
             trust: record.trust.clone(), origins: record.origins.clone(), origin:credential.origin.clone(), profile: profile.clone(),
-            revision: record.credential_revision, secret, operator_key:record.operator_key.clone(),
+            revision: record.credential_revision, connection_revision: record.connection_revision,
+            sealed_credential_sha256: { use sha2::{Digest,Sha256}; Sha256::digest(credential.ciphertext.as_bytes()).into() },
+            secret, operator_key:record.operator_key.clone(),
             is_recovered:record.recovery_commit.as_ref().is_some_and(|commit|!commit.activation_pending),
         }))
     }
 
     pub(crate) fn credential_is_current(&self, snapshot: &CredentialSnapshot) -> bool {
         let Ok(guard) = self.state.lock() else { return false; };
-        guard.record.as_ref().is_some_and(|record| {
-            record.service_enabled && record.trust == snapshot.trust && record.credential.as_ref().is_some_and(|credential|credential.origin==snapshot.origin)
+        guard.record.as_ref().is_some_and(|record| Self::credential_matches(record, snapshot))
+    }
+
+    fn credential_matches(record: &Record, snapshot: &CredentialSnapshot) -> bool {
+        use sha2::{Digest,Sha256};
+        record.service_enabled && !record.runtime_profile_changed && record.trust == snapshot.trust
+                && record.credential.as_ref().is_some_and(|credential| credential.origin == snapshot.origin
+                    && <[u8; 32]>::from(Sha256::digest(credential.ciphertext.as_bytes())) == snapshot.sealed_credential_sha256)
                 && record.credential_revision == snapshot.revision
+                && record.connection_revision == snapshot.connection_revision
                 && record.origins == snapshot.origins && record.transport_profile.as_ref() == Some(&snapshot.profile)
                 && record.operator_key == snapshot.operator_key
                 && record.recovery_commit.as_ref().is_some_and(|commit|!commit.activation_pending)==snapshot.is_recovered
-        })
     }
 
     pub(crate) fn credential_revision_is_current(&self, trust: &FleetTrust, revision: u64) -> bool {
@@ -1380,10 +1390,7 @@ impl FleetMachinePolicy {
         let guard = self.state.lock().map_err(|_| "store_unavailable")?;
         let record = guard.record.as_ref().ok_or("not_provisioned")?;
         let commit = record.recovery_commit.as_ref().ok_or("recovery_not_prepared")?;
-        if commit.activation_pending || !snapshot.is_recovered || !record.service_enabled || record.credential.is_none()
-            || record.trust != snapshot.trust || record.credential_revision != snapshot.revision
-            || record.origins != snapshot.origins || record.transport_profile.as_ref() != Some(&snapshot.profile)
-            || !record.credential.as_ref().is_some_and(|v| v.origin == snapshot.origin)
+        if commit.activation_pending || !snapshot.is_recovered || !Self::credential_matches(record, snapshot)
             || record.trust.org_id != commit.old_trust.org_id || record.trust.device_id != commit.old_trust.device_id
             || record.trust.signer_key != commit.old_trust.signer_key || record.trust.enrollment_generation != commit.new_generation {
             return Err("recovery_credential_changed");
