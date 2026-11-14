@@ -3239,7 +3239,9 @@ mod recovery_commit_tests {
             let id=store.offer_readmission(&protector,now()).unwrap();
             let claim=store.claim_readmission(&id).unwrap();
             let request=claim.request().to_vec();
-            let reply=http.post(format!("{base}/v1/windows/enroll-v2"))
+            let (origin,readmission_http)=store.readmission_transport(&claim).unwrap();
+            assert_eq!(origin,base);
+            let reply=readmission_http.post(format!("{origin}/v1/windows/enroll-v2"))
                 .header(reqwest::header::CONTENT_TYPE,"application/json").body(request.clone()).send().await.unwrap();
             let status=reply.status().as_u16();
             let values=reply.headers().get_all("x-fleet-windows-v2-enrollment");

@@ -81,6 +81,24 @@ impl FleetMachinePolicy {
         Ok(Claim(offer))
     }
 
+    /// Build only the protected origin/profile transport. This check does not
+    /// cancel an HTTP request already in flight after a concurrent revocation.
+    pub(super) fn readmission_transport(&self, claim: &Claim) -> Result<(String, reqwest::Client), &'static str> {
+        let offer=&claim.0;
+        let guard=self.state.lock().map_err(|_| INVALID)?;
+        let registry=self.recovery_readmission.lock().map_err(|_| INVALID)?;
+        let record=guard.record.as_ref().ok_or(INVALID)?;
+        if registry.claimed.as_deref()!=Some(&offer.id) || Instant::now()>=offer.expires
+            || !Self::credential_matches(record,&offer.snapshot)
+            || crate::fleet_runtime_env::fingerprint().as_deref()!=Some(offer.snapshot.profile.environment_fingerprint.as_str()) {
+            return Err(INVALID);
+        }
+        let pins=fleet_agent_core::SpkiPinSet::from_hex_list(&offer.snapshot.profile.spki_pins);
+        if !offer.snapshot.profile.spki_pins.trim().is_empty() && pins.is_none() { return Err(INVALID); }
+        let client=fleet_agent_core::build_client_without_redirects(pins).map_err(|_| INVALID)?;
+        Ok((offer.snapshot.origin.clone(),client))
+    }
+
     /// Verify exact transport bytes, then hold the policy lock through the
     /// final snapshot check and publication. The test-only publisher must be
     /// bounded and non-reentrant because both policy and registry locks are held.
@@ -165,6 +183,7 @@ mod tests {
         submit(&store, "https://fleet.test", &[4;32]).unwrap();
         let mut state = store.state.lock().unwrap();
         let record = state.record.as_mut().unwrap();
+        record.transport_profile.as_mut().unwrap().environment_fingerprint=crate::fleet_runtime_env::fingerprint().unwrap();
         record.recovery_commit = Some(RecoveryCommit { recovery_id: retirement.into(), old_trust: binding.clone(),
             new_generation: binding.enrollment_generation.clone(), decision_digest: "11".repeat(32), archive_sha256:"22".repeat(32),
             credential_sha256:Sha256::digest([4;32]).iter().map(|b| format!("{b:02x}")).collect(),
@@ -193,6 +212,8 @@ mod tests {
         let id = store.offer_readmission(&TestProtector, 1001).unwrap();
         let claim = store.claim_readmission(&id).unwrap();
         assert!(store.claim_readmission(&id).is_err());
+        let (origin, _) = store.readmission_transport(&claim).unwrap();
+        assert_eq!(origin,"https://fleet.test");
         let (body, header) = response(claim.request(), &[4;32], false);
         assert_eq!(store.finish_readmission(claim, 200, &body, &header, || 7).unwrap(), 7);
         for scenario in 0..5 {
@@ -202,6 +223,7 @@ mod tests {
             if scenario == 1 { body.push(b' '); }
             if scenario == 2 { store.state.lock().unwrap().record.as_mut().unwrap().connection_revision += 1; }
             if scenario == 3 { store.offer_readmission(&TestProtector, 1001).unwrap(); }
+            if scenario == 2 || scenario == 3 { assert!(store.readmission_transport(&claim).is_err()); }
             assert!(store.finish_readmission(claim, 200, &body, &header, || ()).is_err());
         }
     }
