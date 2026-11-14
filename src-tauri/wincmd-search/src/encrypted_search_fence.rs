@@ -101,4 +101,32 @@ mod tests {
             .env(ENV, dir.path()).status().unwrap();
         assert!(status.success());
     }
+    #[test]
+    fn crashed_shared_process_releases_lease_for_maintenance() {
+        use std::time::{Duration, Instant};
+        const ENV: &str = "WINCMD_TEST_SHARED_SEARCH_FENCE_PARENT";
+        if let Some(parent) = std::env::var_os(ENV) {
+            let parent=std::path::PathBuf::from(parent);
+            let _shared=SearchOperationFence::acquire_shared(&parent).unwrap();
+            std::fs::write(parent.join("shared-ready"),b"ready").unwrap();
+            // The parent terminates this disposable child to simulate a crash.
+            std::thread::sleep(Duration::from_secs(20));
+            return;
+        }
+        struct Child(std::process::Child);
+        impl Drop for Child { fn drop(&mut self) { let _=self.0.kill(); let _=self.0.wait(); } }
+        let dir=tempfile::tempdir().unwrap();
+        let mut child=Child(std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact","encrypted_search_fence::tests::crashed_shared_process_releases_lease_for_maintenance"])
+            .env(ENV,dir.path()).spawn().unwrap());
+        let deadline=Instant::now()+Duration::from_secs(10);
+        while !dir.path().join("shared-ready").exists() {
+            assert!(child.0.try_wait().unwrap().is_none(),"shared child exited before acquiring the lease");
+            assert!(Instant::now()<deadline,"shared child did not acquire its lease");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(SearchOperationFence::acquire_exclusive(dir.path()).is_err());
+        child.0.kill().unwrap(); child.0.wait().unwrap();
+        assert!(SearchOperationFence::acquire_exclusive(dir.path()).is_ok());
+    }
 }
