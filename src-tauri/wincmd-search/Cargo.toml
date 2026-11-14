@@ -9,7 +9,7 @@ description = "Full-text file-content search for WinCommander (Free tier)"
 [features]
 experimental-encrypted-search = ["dep:aes-gcm", "dep:rand", "dep:zeroize", "dep:windows-sys", "dep:hmac"]
 experimental-space-guard = []
-experimental-ordinary-search-generation = []
+experimental-ordinary-search-generation = ["dep:windows-sys"]
 
 [dependencies]
 aes-gcm = { version = "0.11", features = ["zeroize"], optional = true }

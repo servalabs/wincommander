@@ -102,7 +102,7 @@ fn validate_storage_once(root: &Path) -> io::Result<()> {
 }
 
 impl CheckedDirectory {
-    #[cfg(all(windows, any(test, feature = "experimental-encrypted-search")))]
+    #[cfg(all(windows, any(test, feature = "experimental-encrypted-search", feature = "experimental-ordinary-search-generation")))]
     pub(crate) fn pin_root_path(root: &Path) -> io::Result<Vec<std::fs::File>> {
         use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
         use windows_sys::Win32::Storage::FileSystem::{

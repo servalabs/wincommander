@@ -18,6 +18,8 @@ pub mod encrypted_search_fence;
 pub mod backend;
 #[cfg(any(test, feature = "experimental-ordinary-search-generation"))]
 pub mod generation_admission;
+#[cfg(all(windows, feature = "experimental-ordinary-search-generation"))]
+pub mod generation_lease;
 #[cfg(any(test, all(windows, feature = "experimental-encrypted-search")))]
 mod encrypted_index_prototype;
 #[cfg(test)]
