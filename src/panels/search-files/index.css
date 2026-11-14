@@ -414,15 +414,21 @@ html.light .search-detective-body {
   overflow-x: hidden;
 }
 
+@supports not (scrollbar-color: auto) {
 .sfp-results-scroll::-webkit-scrollbar {
   width: 6px;
 }
+}
+@supports not (scrollbar-color: auto) {
 .sfp-results-scroll::-webkit-scrollbar-track {
   background: transparent;
 }
+}
+@supports not (scrollbar-color: auto) {
 .sfp-results-scroll::-webkit-scrollbar-thumb {
   background: color-mix(in srgb, var(--color-text-muted) 24%, transparent);
   border-radius: var(--radius-full);
+}
 }
 
 /* Section bars stick within their own section, so the second pushes the
@@ -992,3 +998,5 @@ html.light .sfp-section-bar {
     display: none;
   }
 }
+
+.sfp-results-scroll { scrollbar-color: var(--color-text-secondary) var(--color-bg-secondary); scrollbar-width: thin; }

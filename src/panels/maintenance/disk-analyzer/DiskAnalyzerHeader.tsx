@@ -1,3 +1,4 @@
+import { isImeComposing } from "@/lib/keyboard";
 import type { ReactNode } from "react";
 import { open as openFolderDialog } from "@tauri-apps/plugin-dialog";
 import { Button, Icon, Spinner } from "@/components/ui/bp";
@@ -23,7 +24,7 @@ export default function DiskAnalyzerHeader({ analyzer, mode, children }: { analy
             <div className="da-heading"><span className="da-eyebrow">STORAGE EXPLORER</span><h2>Disk Space Analysis</h2><p>Understand what takes up space. Review before removing.</p></div>
             <div className="da-scan-controls"><div className="da-location-input"><Icon icon="folder-open" size={15} />
                 <input aria-label="Drive or folder to analyze" value={analyzer.scanPath} disabled={busy} spellCheck={false}
-                    onChange={event => analyzer.setScanPath(event.target.value)} onKeyDown={event => { if (event.key === "Enter") void analyzer.startScan(); }} />
+                    onChange={event => analyzer.setScanPath(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !isImeComposing(event.nativeEvent)) void analyzer.startScan(); }} />
                 <Button minimal small icon="more" title="Choose folder" aria-label="Choose folder" disabled={busy} onClick={browse} />
             </div>
                 {mode === "large" && <label className="da-minimum-size">Minimum size<select aria-label="Minimum file size" value={analyzer.minSize} disabled={busy || analyzer.largeLoading} onChange={event => void analyzer.changeMinSize(Number(event.target.value))}>{[16, 50, 100, 500, 1024, 5120].map(size => <option key={size} value={size * 1024 * 1024}>{size >= 1024 ? `${size / 1024} GiB` : `${size} MiB`}</option>)}</select></label>}

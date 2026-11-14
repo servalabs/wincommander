@@ -1,3 +1,4 @@
+import { isImeComposing } from "@/lib/keyboard";
 import { Icon } from "./ui/icon";
 import { Spinner } from "./ui/spinner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "./ui/dialog";
@@ -1299,7 +1300,7 @@ export default function RightSidebar() {
                                             autoFocus
                                             value={qmEditing.path}
                                             onChange={(e) => setQmEditing(ed => ed && ({ ...ed, path: e.target.value }))}
-                                            onKeyDown={(e) => { if (e.key === 'Enter') handleQmSaveSlot(); }}
+                                            onKeyDown={(e) => { if (e.key === 'Enter' && !isImeComposing(e.nativeEvent)) handleQmSaveSlot(); }}
                                         />
                                         <button
                                             type="button"
@@ -1421,7 +1422,7 @@ export default function RightSidebar() {
                                                     value={fleetVaultPassword}
                                                     disabled={fleetVaultNeedsCleanup || qmBusy}
                                                     onChange={(event) => setFleetVaultPassword(event.target.value)}
-                                                    onKeyDown={(event) => { if (event.key === 'Enter') void handleFleetVaultMount(); }}
+                                                    onKeyDown={(event) => { if (event.key === 'Enter' && !isImeComposing(event.nativeEvent)) void handleFleetVaultMount(); }}
                                                 />
                                             </div>
                                             <div className="qm-actions">
@@ -1513,7 +1514,7 @@ export default function RightSidebar() {
                                                 autoFocus
                                                 value={qmPassword}
                                                 onChange={(e) => setQmPassword(e.target.value)}
-                                                onKeyDown={(e) => { if (e.key === 'Enter') handleQmMount(); }}
+                                                onKeyDown={(e) => { if (e.key === 'Enter' && !isImeComposing(e.nativeEvent)) handleQmMount(); }}
                                             />
                                         </div>
 

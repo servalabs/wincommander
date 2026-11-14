@@ -1,3 +1,4 @@
+import { isImeComposing } from "@/lib/keyboard";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -1421,7 +1422,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
             type="password"
             autoComplete="off"
             onKeyDown={event => {
-              if (event.key === "Enter") void mountSelectedEntry();
+              if (event.key === "Enter" && !isImeComposing(event.nativeEvent)) void mountSelectedEntry();
             }}
           />
           <DialogFooter>

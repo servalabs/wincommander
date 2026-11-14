@@ -3,6 +3,7 @@
 
 <head>
   <meta charset="UTF-8" />
+  <meta name="color-scheme" content="light dark" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>WinCommander</title>
   <!-- Synchronously mark the overlay window transparent BEFORE first paint to prevent white flash -->
@@ -27,6 +28,7 @@
       );
       document.documentElement.classList.add(isLight ? "light" : "dark");
       document.documentElement.setAttribute("data-theme", isLight ? "daylight" : "anduril");
+      document.querySelector('meta[name="color-scheme"]').content = isLight ? "light" : "dark";
     } catch (e) {
       document.documentElement.classList.add("dark");
       document.documentElement.setAttribute("data-theme", "anduril");

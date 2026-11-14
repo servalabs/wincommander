@@ -1,3 +1,4 @@
+import { isImeComposing } from "@/lib/keyboard";
 // src/panels/privacy/RdpIdleCard.tsx
 // Self-contained RDP Idle Disconnect card — no props needed.
 import { Switch, HTMLSelect, Icon, Spinner, Tag, CheckboxControl } from "@/components/ui/bp";
@@ -372,7 +373,7 @@ export default function RdpIdleCard({ embedded = false }: RdpIdleCardProps) {
                                                     aria-label="Custom outgoing RDP idle timeout in seconds"
                                                     onChange={e => setRdpCustomTime(e.target.value)}
                                                     onKeyDown={e => {
-                                                        if (e.key === 'Enter') {
+                                                        if (e.key === 'Enter' && !isImeComposing(e.nativeEvent)) {
                                                             const v = Math.max(3, Math.min(86400, Number(rdpCustomTime) || 120));
                                                             setRdpCustomTime(String(v)); patchRdpTracking({ rdpIdleDisconnectTimeout: v });
                                                             (e.target as HTMLInputElement).blur();
@@ -407,7 +408,7 @@ export default function RdpIdleCard({ embedded = false }: RdpIdleCardProps) {
                                                     aria-label="Custom outgoing RDP warning countdown in seconds"
                                                     onChange={e => setRdpCustomWarningTime(e.target.value)}
                                                     onKeyDown={e => {
-                                                        if (e.key === 'Enter') {
+                                                        if (e.key === 'Enter' && !isImeComposing(e.nativeEvent)) {
                                                             const v = Math.max(5, Math.min(3600, Number(rdpCustomWarningTime) || 5));
                                                             setRdpCustomWarningTime(String(v)); patchRdpTracking({ rdpIdleWarningSeconds: v });
                                                             (e.target as HTMLInputElement).blur();

@@ -1,3 +1,4 @@
+import { isImeComposing } from "@/lib/keyboard";
 // src/panels/privacy/StartupPinConfig.tsx
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -134,7 +135,7 @@ export default function StartupPinConfig() {
               const value = e.target.value.replace(/\D/g, "").slice(0, 12);
               setInputs((i) => ({ ...i, [mode]: value }));
             }}
-            onKeyDown={(e) => { if (e.key === "Enter") save(mode); }}
+            onKeyDown={(e) => { if (e.key === "Enter" && !isImeComposing(e.nativeEvent)) save(mode); }}
             style={{
               width: 110, padding: "5px 8px", fontSize: 13,
               background: "var(--color-bg-elevated)",

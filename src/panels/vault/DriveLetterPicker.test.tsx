@@ -36,3 +36,13 @@ test("the Secure Storage cleanup action is opt-in", () => {
   expect(normal).not.toContain("Check and free unavailable Vault letters");
   expect(secureStorage).toContain("Check and free unavailable Vault letters");
 });
+
+test("grid letters use an isolated native radio group", () => {
+  const html = renderToStaticMarkup(<><DriveLetterPicker id="first" value="W" letters={["W", "Z"]} variant="grid" onChange={() => undefined} /><DriveLetterPicker id="second" value="Z" letters={["W", "Z"]} variant="grid" onChange={() => undefined} /></>);
+  const names = [...html.matchAll(/type="radio" name="([^"]+)"/g)].map(match => match[1]);
+  expect(names).toHaveLength(4);
+  expect(names[0]).toBe(names[1]);
+  expect(names[2]).toBe(names[3]);
+  expect(names[0]).not.toBe(names[2]);
+  expect(html).toContain('checked="" value="W"');
+});
