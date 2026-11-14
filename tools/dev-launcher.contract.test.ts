@@ -94,11 +94,14 @@ ConvertTo-Json -Compress -InputObject @($results)
     expect(tauri.build.beforeDevCommand).toContain("dev:server --precleaned");
     expect(devServer).toContain('const PRE_CLEANED = process.argv.includes("--precleaned")');
     expect(devServer).toContain("...(policy.cleanProcesses ? [{");
+    expect(devServer).toContain("if (policy.releasePort) freeVitePort()");
+    expect(devServer).toContain("policy.noServiceRestart");
     // A fresh launch must not preserve a stale wincommander-pro.exe because
     // Cargo has to replace that exact debug binary before Vite is exposed.
     expect(devServer).toContain("developmentStartupPolicy({ preserveSessions: PRESERVE_WINCOMMANDER");
     expect(devServer).toContain('"tools/build-pro.ts"');
     expect(devServer).not.toContain('PRESERVE_WINCOMMANDER ? ["-PreserveWinCommander"]');
+    expect(serviceSync).toContain("if ($NoServiceRestart -and $Elevated)");
   });
 
   test.skipIf(process.platform !== "win32")("preserve mode never inspects or stops processes or the listener", () => {
