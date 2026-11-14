@@ -3164,9 +3164,14 @@ mod recovery_commit_tests {
         let base=std::env::var("FLEET_RECOVERY_LOOPBACK_BASE").expect("set isolated loopback fixture URL");
         let parsed=url::Url::parse(&base).unwrap();
         assert_eq!(parsed.scheme(),"http");
-        assert!(matches!(parsed.host_str(),Some("127.0.0.1")|Some("localhost")));
-        let http=reqwest::Client::new();
+        assert_eq!(parsed.host_str(),Some("127.0.0.1"));
+        assert!(parsed.username().is_empty() && parsed.password().is_none() && parsed.port().is_some()
+            && parsed.path()=="/" && parsed.query().is_none() && parsed.fragment().is_none());
+        let no_proxy=std::env::var("NO_PROXY").or_else(|_|std::env::var("no_proxy")).unwrap_or_default();
+        assert!(no_proxy.split(',').any(|entry|entry.trim()=="127.0.0.1"),"loopback must bypass proxies");
+        let http=reqwest::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none()).build().unwrap();
         let fixture:serde_json::Value=http.get(format!("{base}/test/fixture")).send().await.unwrap().error_for_status().unwrap().json().await.unwrap();
+        assert_eq!(fixture["fixture_kind"],"wincommander-disposable-recovery-v2");
         let field=|name:&str|fixture.get(name).and_then(serde_json::Value::as_str).unwrap().to_owned();
         let trust=FleetTrust { org_id:field("org_id"),device_id:field("device_id"),enrollment_generation:field("old_generation"),signer_key:field("server_key") };
         let recovery=field("recovery_id");let operator=field("operator_key");
