@@ -122,4 +122,23 @@ mod tests {
             std::thread::yield_now();
         }
     }
+
+    #[tokio::test]
+    #[ignore = "requires an interactive desktop and disposable WINCOMMANDER_DISK_TREE_TEST_BASE"]
+    async fn interactive_timeout_preserves_the_prepared_folder() {
+        use crate::disk_tree_delete::{AuthorizedRoot, ProtectedRoots, prepare_authorized};
+        let base = std::env::var_os("WINCOMMANDER_DISK_TREE_TEST_BASE").expect("a disposable test base is required");
+        let fixture = tempfile::Builder::new().prefix("folder-confirmation-").tempdir_in(base).unwrap();
+        let target = fixture.path().join("selected");
+        std::fs::create_dir(&target).unwrap();
+        let item = target.join("item.txt");
+        std::fs::write(&item, b"disposable confirmation fixture").unwrap();
+        let root = AuthorizedRoot::open(&target, ProtectedRoots::fixture(fixture.path()).unwrap()).unwrap();
+        let prepared = prepare_authorized(root).unwrap();
+        let started = std::time::Instant::now();
+        let result = super::confirm(prepared, super::Permit::acquire().unwrap()).await.unwrap();
+        assert!(result.is_none());
+        assert!(started.elapsed() >= Duration::from_secs(25), "dialog closed before the expiry interval");
+        assert_eq!(std::fs::read(item).unwrap(), b"disposable confirmation fixture");
+    }
 }
