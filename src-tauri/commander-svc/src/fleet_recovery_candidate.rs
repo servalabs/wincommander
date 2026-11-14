@@ -398,6 +398,12 @@ mod tests {
         receipt["signature"]=B64.encode(signer.sign(&v2).to_bytes()).into();
         assert_eq!(store.stage(&trust,&serde_json::to_vec(&receipt).unwrap(),1001).unwrap(),public);
         assert_eq!(store.verified_device_hash(&trust,retirement).unwrap(),"loopback");
+        let mut current=trust.clone();
+        current.enrollment_generation="cccccccc-cccc-4ccc-8ccc-cccccccccccc".into();
+        let request=store.sign_fixture_readmission(&trust,&current,retirement,1001).unwrap();
+        assert_eq!(request["previous_generation"],current.enrollment_generation);
+        assert_eq!(request["device_hash"],"loopback");
+        assert!(fleet_proto::verify_signature_b64(&public,&enrollment_v2_preimage(&request).unwrap(),request["enrollment_signature_b64"].as_str().unwrap()));
         for (field,value) in [("device_hash",serde_json::json!("tampered")),("device_hash",serde_json::json!("")),
             ("device_hash",serde_json::json!("x".repeat(257))),("device_hash",serde_json::json!("recovery-candidate")),("version",serde_json::json!(3))] {
             let mut bad=receipt.clone();bad[field]=value;

@@ -236,7 +236,11 @@ mod tests {
     fn signed_readmission_is_one_use_and_fenced() {
         let store = setup();
         let id = store.offer_readmission(&TestProtector, 1001).unwrap();
+        assert!(store.claim_readmission("foreign offer").is_err());
         let claim = store.claim_readmission(&id).unwrap();
+        let request:serde_json::Value=serde_json::from_slice(claim.request()).unwrap();
+        assert_eq!(request["device_hash"],"loopback");
+        assert_eq!(request["previous_generation"],trust().enrollment_generation);
         assert!(store.claim_readmission(&id).is_err());
         let (origin, _) = store.readmission_transport(&claim).unwrap();
         assert_eq!(origin,"https://fleet.test");
@@ -252,5 +256,9 @@ mod tests {
             if scenario == 2 || scenario == 3 { assert!(store.readmission_transport(&claim).is_err()); }
             assert!(store.finish_readmission(claim, 200, &body, &header, || ()).is_err());
         }
+        let id=store.offer_readmission(&TestProtector, 1001).unwrap();
+        store.recovery_readmission.lock().unwrap().pending.as_mut().unwrap().expires=Instant::now();
+        assert!(store.claim_readmission(&id).is_err());
+        assert!(store.claim_readmission(&id).is_err());
     }
 }
