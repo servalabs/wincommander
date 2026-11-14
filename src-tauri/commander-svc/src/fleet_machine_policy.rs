@@ -2782,6 +2782,11 @@ impl FleetMachinePolicy {
             || credential.archive_sha256()!=archive { return Err("invalid recovery commit"); }
         let mut guard=self.state.lock().map_err(|_| "store_unavailable")?;
         let current=guard.record.as_ref().ok_or("not_provisioned")?;
+        let retry_matches_old=current.recovery_commit.as_ref().is_some_and(|prepared| {
+            prepared.activation_pending && prepared.recovery_id==verified.retirement_id()
+                && verified.matches_trust(&prepared.old_trust)
+        });
+        if !verified.matches_trust(&current.trust) && !retry_matches_old { return Err("recovery trust changed"); }
         validate_operator_key(&current.trust,current.operator_key.as_deref().ok_or("operator_key_not_pinned")?)?;
         if let Some(prepared)=current.recovery_commit.as_ref() {
             if prepared.recovery_id==verified.retirement_id() && prepared.new_generation==verified.new_generation()
@@ -3035,6 +3040,22 @@ mod recovery_commit_tests {
             credential:Some(StoredCredential { origin:"https://fleet.example".into(),ciphertext:STANDARD.encode([1u8;32]) }),credential_revision:1,
             connection_revision:0,cleared:None,runtime_profile_changed:false,service_enabled:true,recovery_commit:Some(prior.clone()),
             operator_key:Some(STANDARD.encode(SigningKey::from_bytes(&[33;32]).verifying_key().as_bytes())) }),pending:None,contact_challenge:None,hybrid_enrollment:None,hybrid_claim:None };
+        for variant in 0..4 {
+            let mut changed=state.clone();
+            let changed_trust=&mut changed.record.as_mut().unwrap().trust;
+            match variant {
+                0 => changed_trust.signer_key=STANDARD.encode(SigningKey::from_bytes(&[12;32]).verifying_key().as_bytes()),
+                1 => changed_trust.org_id="other-org".into(),
+                2 => changed_trust.device_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".into(),
+                _ => changed_trust.enrollment_generation="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb".into(),
+            }
+            let isolated=Fs::default();
+            isolated.atomic_write(&dir.join("fleet-machine-policy.json"),&serde_json::to_vec(&changed).unwrap()).unwrap();
+            let changed_store=FleetMachinePolicy::open(Box::new(isolated.clone()),dir.clone()).unwrap();
+            let before=isolated.files.lock().unwrap().clone();
+            assert_eq!(changed_store.prepare_recovery_commit(&v2,&credential,&archive,"https://fleet.example",&protector,1001),Err("recovery trust changed"));
+            assert_eq!(*isolated.files.lock().unwrap(),before);
+        }
         let path=dir.join("fleet-machine-policy.json");fs.atomic_write(&path,&serde_json::to_vec(&state).unwrap()).unwrap();
         let store=FleetMachinePolicy::open(Box::new(fs.clone()),dir.clone()).unwrap();
         let journal_path=dir.join(format!("replacement-{first_id}.json"));

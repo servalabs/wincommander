@@ -1453,6 +1453,12 @@ mod review_tests {
         let archive="ab".repeat(32);
         assert!(initialize_replacement(&fs,dir,&trust,&v,&archive).is_err());
         persist_review(&fs,dir,&trust,&v,approval(&v),receipt()).unwrap();
+        let before_changed_trust=fs.0.lock().unwrap().clone();
+        let mut changed_signer=trust.clone();
+        changed_signer.signer_key=base64::Engine::encode(&base64::engine::general_purpose::STANDARD,
+            ed25519_dalek::SigningKey::from_bytes(&[12;32]).verifying_key().as_bytes());
+        assert!(initialize_replacement(&fs,dir,&changed_signer,&v,&archive).is_err());
+        assert_eq!(*fs.0.lock().unwrap(),before_changed_trust);
         initialize_replacement(&fs,dir,&trust,&v,&archive).unwrap();
         let before=fs.0.lock().unwrap().clone();
         initialize_replacement(&fs,dir,&trust,&v,&archive).unwrap();
@@ -1811,6 +1817,7 @@ static REPLACEMENT_LOCK:Mutex<()> = Mutex::new(());
 pub(crate) fn initialize_replacement(fs:&dyn crate::policy_store::PolicyFs, dir:&std::path::Path,
     trust:&crate::fleet_machine_policy::FleetTrust, verified:&VerifiedHandoff, archive_hash:&str)
     -> Result<(), &'static str> {
+    if !verified.matches_trust(trust) { return Err("replacement journal binding changed"); }
     fs.ensure_dir_secure(dir).map_err(|_| "replacement journal unavailable")?;
     let review_path=dir.join(format!("review-{}.json",verified.retirement_id()));
     let review:ReviewRecord=serde_json::from_slice(&fs.read(&review_path).map_err(|_| "replacement journal unavailable")?)

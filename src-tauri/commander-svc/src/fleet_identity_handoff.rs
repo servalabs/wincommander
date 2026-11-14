@@ -26,6 +26,7 @@ pub(crate) struct Handoff {
 }
 
 pub(crate) struct VerifiedHandoff {
+    verified_trust: FleetTrust,
     retirement_id: String,
     new_generation: String,
     fingerprint: [u8; 32],
@@ -37,6 +38,7 @@ pub(crate) struct VerifiedHandoff {
     issued_at: i64,
 }
 impl VerifiedHandoff {
+    pub(crate) fn matches_trust(&self, trust: &FleetTrust) -> bool { self.verified_trust == *trust }
     pub(crate) fn retirement_id(&self) -> &str { &self.retirement_id }
     pub(crate) fn new_generation(&self) -> &str { &self.new_generation }
     pub(crate) fn fingerprint(&self) -> &[u8;32] { &self.fingerprint }
@@ -104,7 +106,7 @@ impl Handoff {
         let decision=serde_json::to_vec(&("wincommander:fleet:identity-handoff-decision:v1", &self.recovery_id,
             &self.org_id,&self.device_id,&self.old_generation,&self.new_generation,&self.new_key,
             self.next_sequence,&self.previous_hash,&self.server_key)).map_err(|_| "invalid identity handoff")?;
-        Ok(VerifiedHandoff { retirement_id:self.recovery_id.clone(), new_generation:self.new_generation.clone(), fingerprint:Sha256::digest(local_key).into(), digest:Sha256::digest(&bytes).into(), decision_digest:Sha256::digest(&decision).into(), public_key:*local_key, next_sequence:self.next_sequence, previous_hash:self.previous_hash.clone(), issued_at:self.issued_at })
+        Ok(VerifiedHandoff { verified_trust:trust.clone(), retirement_id:self.recovery_id.clone(), new_generation:self.new_generation.clone(), fingerprint:Sha256::digest(local_key).into(), digest:Sha256::digest(&bytes).into(), decision_digest:Sha256::digest(&decision).into(), public_key:*local_key, next_sequence:self.next_sequence, previous_hash:self.previous_hash.clone(), issued_at:self.issued_at })
     }
 }
 
@@ -139,7 +141,17 @@ mod tests {
         let trust = FleetTrust { org_id:h.org_id.clone(), device_id:h.device_id.clone(),
             enrollment_generation:h.old_generation.clone(), signer_key:h.server_key.clone() };
         let verify = |v:&Handoff, key:&[u8;32], now| v.verify(&trust, &h.recovery_id, &h.new_generation, key, now);
-        assert!(verify(&h, &local_key, 1001).is_ok());
+        let verified=verify(&h, &local_key, 1001).unwrap();
+        assert!(verified.matches_trust(&trust));
+        let mut replaced=trust.clone();
+        replaced.signer_key=STANDARD.encode(SigningKey::from_bytes(&[12;32]).verifying_key().as_bytes());
+        assert!(!verified.matches_trust(&replaced));
+        replaced=trust.clone(); replaced.org_id="other-org".into();
+        assert!(!verified.matches_trust(&replaced));
+        replaced=trust.clone(); replaced.device_id="44444444-4444-4444-8444-444444444444".into();
+        assert!(!verified.matches_trust(&replaced));
+        replaced=trust.clone(); replaced.enrollment_generation="55555555-5555-4555-8555-555555555555".into();
+        assert!(!verified.matches_trust(&replaced));
         assert!(verify(&h, &local_key, 995).is_ok());
         assert!(verify(&h, &local_key, 994).is_err());
         assert!(verify(&h, &[23;32], 1001).is_err());
