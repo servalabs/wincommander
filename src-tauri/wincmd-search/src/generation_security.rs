@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Experimental current-user handle verifier for a pre-provisioned search
-//! lease parent and lock. It never creates a file or repairs permissions.
+//! lease parent and lock. Provisioning creates only a missing lock and never
+//! repairs or replaces an existing object's permissions.
 //! Session binding, profile/ancestor authority, trusted generation selection,
 //! rollback resistance and legacy-process exclusion are separate requirements.
 use std::{fs::File, io, os::windows::io::AsRawHandle, ptr};
@@ -108,6 +109,39 @@ pub fn verify_current_user_handle(file:&File)->io::Result<()> {
     Ok(())
 }
 
+/// Explicit experimental provisioning under an already-authorized profile.
+/// Profile ancestry and active same-user interactive session must be proven by
+/// the caller. Existing locks are verified in place, never changed or removed.
+pub fn provision_generation_lock(parent:&std::path::Path,generation:[u8;16])->io::Result<()> {
+    use std::os::windows::{ffi::OsStrExt,io::FromRawHandle};
+    use windows_sys::Win32::{Foundation::{ERROR_ALREADY_EXISTS,ERROR_FILE_EXISTS,INVALID_HANDLE_VALUE},
+        Security::SECURITY_ATTRIBUTES,Storage::FileSystem::{CreateFileW,CREATE_NEW,OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,FILE_FLAG_OPEN_REPARSE_POINT,FILE_SHARE_READ,FILE_SHARE_WRITE}};
+    if generation==[0;16] { return Err(denied()); }
+    let pins=crate::read_only::CheckedDirectory::pin_root_path(parent)?;
+    verify_current_user_handle(pins.last().ok_or_else(denied)?)?;
+    let sid=effective_user_sid()?;
+    let descriptor=Descriptor::parse(&format!("O:{sid}D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;{sid})"))?;
+    let mut attributes=SECURITY_ATTRIBUTES { nLength:std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor:descriptor.0,bInheritHandle:0 };
+    let path:Vec<u16>=parent.join(format!(".ordinary-search-generation-{}.lock",hex::encode(generation)))
+        .as_os_str().encode_wide().chain(Some(0)).collect();
+    let access=0x8000_0000|0x4000_0000;
+    let share=FILE_SHARE_READ|FILE_SHARE_WRITE;
+    let flags=FILE_ATTRIBUTE_NORMAL|FILE_FLAG_OPEN_REPARSE_POINT;
+    let mut handle=unsafe { CreateFileW(path.as_ptr(),access,share,&mut attributes,CREATE_NEW,flags,ptr::null_mut()) };
+    if handle==INVALID_HANDLE_VALUE {
+        let error=io::Error::last_os_error();
+        if !matches!(error.raw_os_error(),Some(v) if v==ERROR_ALREADY_EXISTS as i32 || v==ERROR_FILE_EXISTS as i32) { return Err(error); }
+        handle=unsafe { CreateFileW(path.as_ptr(),access,share,ptr::null(),OPEN_EXISTING,flags,ptr::null_mut()) };
+        if handle==INVALID_HANDLE_VALUE { return Err(io::Error::last_os_error()); }
+    }
+    // SAFETY: CreateFileW returned one uniquely owned open handle.
+    let file=unsafe { File::from_raw_handle(handle) };
+    verify_current_user_handle(&file)?;
+    verify_current_user_handle(pins.last().ok_or_else(denied)?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,5 +187,28 @@ mod tests {
             let file=unsafe { File::from_raw_handle(handle) };
             assert_eq!(verify_current_user_handle(&file).is_ok(),expected);
         }
+    }
+    #[test]
+    fn provisioning_is_idempotent_and_preserves_foreign_lock() {
+        use std::os::windows::{ffi::OsStrExt,io::FromRawHandle};
+        use windows_sys::Win32::{Foundation::INVALID_HANDLE_VALUE,Security::SECURITY_ATTRIBUTES,
+            Storage::FileSystem::{CreateDirectoryW,CreateFileW,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,FILE_FLAG_OPEN_REPARSE_POINT,FILE_SHARE_READ,FILE_SHARE_WRITE}};
+        let sid=effective_user_sid().unwrap();let temp=tempfile::tempdir().unwrap();let parent=temp.path().join("protected");
+        let descriptor=Descriptor::parse(&format!("O:{sid}D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;{sid})")).unwrap();
+        let mut attributes=SECURITY_ATTRIBUTES { nLength:std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,lpSecurityDescriptor:descriptor.0,bInheritHandle:0 };
+        let parent_path:Vec<u16>=parent.as_os_str().encode_wide().chain(Some(0)).collect();
+        assert_ne!(unsafe { CreateDirectoryW(parent_path.as_ptr(),&mut attributes) },0);
+        provision_generation_lock(&parent,[1;16]).unwrap();provision_generation_lock(&parent,[1;16]).unwrap();
+        let lease=crate::generation_lease::GenerationLease::shared(&parent,[1;16],verify_current_user_handle).unwrap();drop(lease);
+        let foreign=parent.join(format!(".ordinary-search-generation-{}.lock",hex::encode([2;16])));
+        let other=Descriptor::parse("D:P(A;;FA;;;WD)").unwrap();attributes.lpSecurityDescriptor=other.0;
+        let path:Vec<u16>=foreign.as_os_str().encode_wide().chain(Some(0)).collect();
+        let handle=unsafe { CreateFileW(path.as_ptr(),0x8000_0000|0x4000_0000,FILE_SHARE_READ|FILE_SHARE_WRITE,
+            &mut attributes,CREATE_NEW,FILE_ATTRIBUTE_NORMAL|FILE_FLAG_OPEN_REPARSE_POINT,ptr::null_mut()) };
+        assert_ne!(handle,INVALID_HANDLE_VALUE);
+        let mut file=unsafe { File::from_raw_handle(handle) };
+        use std::io::Write;file.write_all(b"preserve").unwrap();drop(file);
+        assert!(provision_generation_lock(&parent,[2;16]).is_err());
+        assert_eq!(std::fs::read(foreign).unwrap(),b"preserve");
     }
 }
