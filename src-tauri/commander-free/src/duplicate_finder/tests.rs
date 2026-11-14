@@ -448,3 +448,23 @@ fn result_paging_rejects_a_different_scan_capability() {
     assert!(with_index(&id, |index| index.page(0)).is_ok());
     *cache().lock().unwrap() = None;
 }
+
+#[test]
+fn git_metadata_is_reviewable_but_never_a_removal_target() {
+    let root = tempfile::tempdir().unwrap();
+    let git = root.path().join(".GiT").join("objects");
+    std::fs::create_dir_all(&git).unwrap();
+    std::fs::write(git.join("blob"), b"synthetic duplicate").unwrap();
+    std::fs::write(root.path().join("ordinary-copy"), b"synthetic duplicate").unwrap();
+    let roots = [std::fs::canonicalize(root.path()).unwrap()];
+    let (scan, files, _) = scan_fixture(&roots, &AtomicBool::new(false));
+    let group = scan.groups.iter().find(|g| g.files.len() == 2).unwrap();
+    let protected = group.files.iter().find(|f| f.path.contains(".GiT")).unwrap();
+    let ordinary = group.files.iter().find(|f| f.name == "ordinary-copy").unwrap();
+    assert!(!protected.removable);
+    assert!(ordinary.removable);
+    let cached = files.get(&protected.id).unwrap();
+    assert!(safety::validated_file(cached).is_err());
+    assert!(safety::validated_review_file(cached).is_ok());
+    assert!(git.join("blob").exists());
+}
