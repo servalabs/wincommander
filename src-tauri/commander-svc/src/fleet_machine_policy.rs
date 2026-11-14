@@ -3011,6 +3011,9 @@ mod recovery_commit_tests {
         let (second,key2,v2)=make(&current,second_id,second_generation);
         let snapshot="34".repeat(32);let proof_nonce="77777777-7777-4777-8777-777777777777";
         let proof=candidate.sign_drain(&old,&current,first_id,&v2,&snapshot,1001,proof_nonce).unwrap();
+        let mut changed_current=current.clone();
+        changed_current.enrollment_generation="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb".into();
+        assert!(candidate.sign_drain(&old,&changed_current,first_id,&v2,&snapshot,1001,proof_nonce).is_err());
         let signed=serde_json::to_vec(&("wincommander:fleet:recovery-drain:v1",&current.org_id,&current.device_id,&current.enrollment_generation,
             first_id,second_id,second_generation,hex(v2.fingerprint()),hex(v2.decision_digest()),7u64,Some("ab".repeat(32)),
             &snapshot,&current.signer_key,1001i64,proof_nonce)).unwrap();

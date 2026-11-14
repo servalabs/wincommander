@@ -80,7 +80,7 @@ impl<'a> CandidateStore<'a> {
     /// next signed decision and the fully drained snapshot.
     pub(crate) fn sign_drain(&self,old:&FleetTrust,current:&FleetTrust,previous:&str,next:&crate::fleet_identity_handoff::VerifiedHandoff,
         snapshot:&str,now:i64,nonce:&str)->Result<String,&'static str> {
-        if !uuid(previous) || !uuid(next.retirement_id()) || !uuid(next.new_generation()) || !uuid(nonce)
+        if !next.matches_trust(current) || !uuid(previous) || !uuid(next.retirement_id()) || !uuid(next.new_generation()) || !uuid(nonce)
             || snapshot.len()!=64 || !snapshot.bytes().all(|b|b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
             || old.org_id!=current.org_id || old.device_id!=current.device_id || old.signer_key!=current.signer_key { return Err(INVALID); }
         let _guard=LOCK.lock().map_err(|_| INVALID)?;

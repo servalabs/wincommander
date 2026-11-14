@@ -2070,6 +2070,7 @@ pub(crate) fn check_previous_recovery_drained(fs:&dyn crate::policy_store::Polic
     protector:&dyn crate::fleet_credential::Protector,current:&crate::fleet_machine_policy::FleetTrust,
     old:&crate::fleet_machine_policy::FleetTrust,recovery:&str,decision:&str,archive:&str,fingerprint:&str,
     operator:&str,next:&VerifiedHandoff)->Result<(),&'static str> {
+    if !next.matches_trust(current) { return Err("recovery trust changed"); }
     let id=uuid::Uuid::parse_str(recovery).map_err(|_| "previous recovery unavailable")?;
     if id.is_nil() || id.to_string()!=recovery { return Err("previous recovery unavailable"); }
     let candidate=crate::fleet_recovery_candidate::CandidateStore::open(fs,dir.to_owned(),protector)?;
