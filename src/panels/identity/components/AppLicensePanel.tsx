@@ -40,13 +40,20 @@ export default function AppLicensePanel({ onStatusLoaded }: AppLicensePanelProps
   // Two-step confirm: null = idle, 'deactivate' = awaiting 2nd click
   const [confirmPending, setConfirmPending] = useState<'deactivate' | null>(null);
 
-  const refreshStatus = useCallback(async () => {
+  const refreshStatus = useCallback(async (reportResult = false) => {
     setLoading((prev) => ({ ...prev, status: true }));
+    if (reportResult) setFeedback(null);
     try {
       const nextStatus = await getLicenseStatus();
       setStatus(nextStatus);
       onStatusLoaded?.(nextStatus);
-      if (nextStatus.reason && !nextStatus.valid) {
+      if (reportResult) {
+        setFeedback(nextStatus.trial_active
+          ? { intent: "success", text: "License status checked. A trial is active on this device." }
+          : nextStatus.licensed && nextStatus.valid
+          ? { intent: "success", text: "License status checked. The license is valid on this device." }
+          : { intent: "warning", text: nextStatus.reason || "License status checked. No valid license is available on this device." });
+      } else if (nextStatus.reason && !nextStatus.valid) {
         setFeedback({ intent: "warning", text: nextStatus.reason });
       }
     } catch (err) {
@@ -56,7 +63,7 @@ export default function AppLicensePanel({ onStatusLoaded }: AppLicensePanelProps
     }
   }, [getLicenseStatus, onStatusLoaded]);
 
-  useEffect(() => { refreshStatus(); }, [refreshStatus]);
+  useEffect(() => { void refreshStatus(); }, [refreshStatus]);
 
   const runWithLoading = async (key: string, action: () => Promise<void>) => {
     setLoading((prev) => ({ ...prev, [key]: true }));
@@ -94,9 +101,11 @@ export default function AppLicensePanel({ onStatusLoaded }: AppLicensePanelProps
       let nextStatus: AppLicenseStatus;
       try {
         nextStatus = await refreshAppLicense();
-        if (!nextStatus.valid) {
-          setFeedback({ intent: "success", text: "License refreshed from server." });
-        }
+        setFeedback(nextStatus.trial_active
+          ? { intent: "success", text: "Status refreshed from the server. A trial is active on this device." }
+          : nextStatus.licensed && nextStatus.valid
+          ? { intent: "success", text: "License refreshed from the server and is valid." }
+          : { intent: "warning", text: nextStatus.reason || "The server returned no valid license for this device." });
       } catch (err) {
         nextStatus = await getLicenseStatus();
         const msg = err instanceof Error ? err.message : String(err);
@@ -148,7 +157,9 @@ export default function AppLicensePanel({ onStatusLoaded }: AppLicensePanelProps
 
   return (
     <div style={{ position: 'relative' }}>
-      {feedback && <UniversalCallout message={feedback.text} intent={feedback.intent} className="mb-3" />}
+      <div role="status" aria-live="polite">
+        {feedback && <UniversalCallout message={feedback.text} intent={feedback.intent} className="mb-3" />}
+      </div>
 
       <div className="license-row-layout">
         {/* Left: key input + metadata */}
@@ -181,11 +192,11 @@ export default function AppLicensePanel({ onStatusLoaded }: AppLicensePanelProps
         <div className="license-row-actions">
           <Button text="ACTIVATE" icon="key" onClick={activate} loading={!!loading.activate} className="compact-action-btn" />
           <Button text="REFRESH" icon="refresh" onClick={refresh} loading={!!loading.refresh} className="compact-action-btn secondary" />
-          <Button text="CHECK" icon="diagnosis" onClick={refreshStatus} loading={!!loading.status} className="compact-action-btn secondary" />
+          <Button text="CHECK" icon="shield-check" onClick={() => void refreshStatus(true)} loading={!!loading.status} className="compact-action-btn secondary" />
           {hasRemovableDeviceLicense && (
             <Button
               text={confirmPending === 'deactivate' ? "CONFIRM" : "REMOVE"}
-              icon={confirmPending === 'deactivate' ? "warning-sign" : "log-out"}
+              icon={confirmPending === 'deactivate' ? "warning-sign" : "unlock"}
               onClick={handleDeactivateClick}
               onBlur={() => setConfirmPending(null)}
               loading={!!loading.deactivate}

@@ -16,7 +16,7 @@ import {
 } from "../../lib/arpDiagnostics";
 import { ArpEntriesTable } from "./ArpEntriesTable";
 import { DangerConfirmDialog } from "./DangerConfirmDialog";
-import { InfoPopover, InfoTip } from "./InfoTip";
+import { InfoPopover } from "./InfoTip";
 import { MaintenanceNotice, TableSkeleton } from "./MaintenanceNotice";
 import type { useArpMaintenance } from "./useArpMaintenance";
 
@@ -54,15 +54,6 @@ export function ArpCacheCard({ arp }: { arp: ReturnType<typeof useArpMaintenance
           <div className="min-w-0">
             <CardTitle className="flex items-center gap-1.5">
               Neighbour cache (ARP)
-              <InfoTip
-                label="What the neighbour cache is"
-                content={
-                  <span>
-                    <strong>What it is:</strong> Windows' short-term map of which IP address
-                    belongs to which device on this network — not a setting you configure.
-                  </span>
-                }
-              />
             </CardTitle>
             <CardDescription className="mt-1">
               Read the IP-to-hardware map, then clear the entries Windows learned by itself. Static
@@ -96,7 +87,7 @@ export function ArpCacheCard({ arp }: { arp: ReturnType<typeof useArpMaintenance
                 </Button>
               </>
             ) : null}
-            <InfoPopover title="Neighbour cache (ARP)">
+            <InfoPopover iconOnly title="Neighbour cache (ARP)">
               <p>
                 <strong className="text-[var(--text)]">What it is:</strong> before this PC can talk
                 to another device on the network it asks for that device's hardware (MAC) address

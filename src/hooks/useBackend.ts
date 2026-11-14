@@ -100,6 +100,10 @@ export interface DuplicateFile {
   modified: string | null;
   /** Missing only while an already-running older backend is being replaced. */
   removable?: boolean;
+  /** A bounded reason code; absent on older backends. */
+  removalBlockReason?: string | null;
+  profileScope?: "current" | "other" | "outside" | "unavailable";
+  profileRoot?: string | null;
 }
 
 export interface DuplicateGroup {
@@ -131,6 +135,8 @@ export interface DuplicateScan {
   hasMoreGroups: boolean;
   minimumSizeBytes: number;
   skippedSmallFiles: number;
+  filterExcludedFiles?: number;
+  filterExcludedDirectories?: number;
 }
 
 export interface DuplicateProgress {
@@ -149,6 +155,8 @@ export interface DuplicateProgress {
   errors: string[];
   minimumSizeBytes: number;
   skippedSmallFiles: number;
+  filterExcludedFiles?: number;
+  filterExcludedDirectories?: number;
 }
 
 export interface DuplicateRemoveResult {
@@ -972,6 +980,7 @@ export interface AppLicenseStatus {
   trial_expires_at?: number | null;
   /** True when no trial has ever been started on this device. */
   trial_available?: boolean;
+  trial_recoverable?: boolean;
   /** True when a trial was started but has since expired. Features still work (soft expiry). */
   trial_expired?: boolean;
 }
@@ -1506,6 +1515,7 @@ export function useBackend(retainCleanupScanErrors = false) {
     getLiveMetrics: () => invoke<LiveMetricsResult>("get_live_metrics"),
     getDriveSmartHealth: () => invoke<DriveSmartHealthResult>("get_drive_smart_health"),
     getWipeDriveList: () => invoke<WipeDriveEntry[]>("get_wipe_drive_list"),
+    getScanDriveList: () => invoke<string[]>("get_scan_drive_list"),
     getStorageStats: () => execute<StorageStats>("Get-StorageStats"),
     getStartupStatus: () => execute<StartupStatus>("Get-StartupStatus"),
     getAIControlStatus: () => execute<AIControlStatus>("Get-AIControlStatus"),
@@ -2517,8 +2527,8 @@ export function useBackend(retainCleanupScanErrors = false) {
       invoke<DuplicateGroup>("duplicate_finder_group_page", { scanId, groupId, offset }),
     duplicateFinderOpen: (scanId: string, fileId: string) =>
       invoke<void>("duplicate_finder_open", { scanId, fileId }),
-    duplicateFinderRemove: (fileIds: string[]) =>
-      invoke<DuplicateRemoveResult>("duplicate_finder_remove", { fileIds }),
+    duplicateFinderRemove: (fileIds: string[], keeperIds?: string[]) =>
+      invoke<DuplicateRemoveResult>("duplicate_finder_remove", { fileIds, keeperIds }),
     duplicateFinderCancel: () => invoke<void>("duplicate_finder_cancel"),
     emptyFolderCleanerScan: (roots: string[]) =>
       invoke<EmptyFolderScan>("empty_folder_cleaner_scan", { roots }),
@@ -2587,6 +2597,12 @@ export function useBackend(retainCleanupScanErrors = false) {
     getLargeDiskItems: (minSizeBytes: number, limit: number = 5000, includeDirs: boolean = false) =>
       invoke<{ items: Array<{ entryId: number; name: string; fullPath: string; size: number; allocated: number | null; isDir: boolean; lastModified: string; fileCount: number; folderCount: number; itemType: string; cleanupHint: string; risk: string }>; matchedCount: number; matchedSize: number; resultLimit: number; limited: boolean; minimumSize: number; scanId: string }>("get_large_disk_items", { minSizeBytes, limit, includeDirs }),
     openDiskItem: (scanId: string, itemId: number) => invoke<void>("open_disk_item", { scanId, itemId }),
+    /** Availability only; the backend separately validates and confirms each target. */
+    diskFolderDeleteAvailable: () => invoke<boolean>("disk_folder_delete_available"),
+    confirmDiskFolderDelete: (scanId: string, itemId: number) =>
+      invoke<string | null>("disk_confirm_folder_delete", { scanId, itemId }),
+    deleteConfirmedDiskFolder: (scanId: string, itemId: number, capabilityToken: string) =>
+      invoke<{ status: "delete_requested" | "partial" | "failed"; processed: number; cacheInvalidated: boolean; message?: string | null }>("disk_delete_confirmed_folder", { scanId, itemId, capabilityToken }),
     /** Permanently delete a verified file and invalidate the scan cache. Folder deletion is refused. */
     diskDeleteItem: async (path: string) => {
       const capabilityToken = await requestDestructiveCapability(

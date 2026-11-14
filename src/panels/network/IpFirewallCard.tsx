@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Button, InputGroup } from "@/components/ui/bp";
+import { Button, HTMLSelect, InputGroup } from "@/components/ui/bp";
 import SectionCard from "../../components/shared/SectionCard";
 import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
 import { executeBackendCommand } from "../../hooks/useBackend";
@@ -31,7 +31,7 @@ export default function IpFirewallCard() {
     const result = await executeBackendCommand<IpRulesResult>("Get-IPFirewallRules");
     if (!result.success || !result.data?.readbackComplete || !Array.isArray(result.data.rules)) {
       setRules(null);
-      throw new Error(result.error || "Windows could not read IP firewall rules.");
+      throw new Error(result.error?.includes("not yet implemented") ? "IP firewall controls require the current Pro backend. Restart WinCommander after updating it." : result.error || "Windows could not read IP firewall rules.");
     }
     setRules(result.data.rules);
   }, []);
@@ -64,15 +64,15 @@ export default function IpFirewallCard() {
     await mutate("Add-IPFirewallRule", { Address: value, Direction: direction, Action: action });
   };
 
-  return <SectionCard title="IP firewall rules" icon="shield">
+  return <SectionCard title="IP firewall rules" icon="shield" className="port-guard-card ip-firewall-card">
     <div className="flex flex-col gap-3 text-sm">
       <p>Allow or block connections with a specific IP address or subnet.</p>
       {!hasPaid ? <p>{isLoading ? "Checking access…" : "Available with WinCommander Pro."}</p> : <>
         <p className="text-xs text-[var(--text-mute)]">Rules apply to all apps and all network profiles. A subnet covers a range of addresses. An allow rule does not override a Windows block rule. Firewall settings and other policies can affect the result.</p>
         <div className="port-guard-form">
           <InputGroup aria-label="IP address or subnet" placeholder="192.0.2.10 or 192.0.2.0/24" value={address} onChange={e => setAddress(e.target.value)} maxLength={64} />
-          <select aria-label="Connection direction" value={direction} onChange={e => setDirection(e.target.value)}><option value="Outbound">Outbound</option><option value="Inbound">Inbound</option></select>
-          <select aria-label="Firewall action" value={action} onChange={e => setAction(e.target.value)}><option value="Block">Block</option><option value="Allow">Allow</option></select>
+          <HTMLSelect aria-label="Connection direction" value={direction} onChange={e => setDirection(e.target.value)}><option value="Outbound">Outbound</option><option value="Inbound">Inbound</option></HTMLSelect>
+          <HTMLSelect aria-label="Firewall action" value={action} onChange={e => setAction(e.target.value)}><option value="Block">Block</option><option value="Allow">Allow</option></HTMLSelect>
           <Button intent="primary" disabled={busy || isInvestigator} onClick={() => void add()}>Add rule</Button>
           <Button minimal icon="refresh" disabled={busy} onClick={() => { setError(null); void refresh().catch((e: unknown) => setError(String(e))); }}>Refresh</Button>
         </div>

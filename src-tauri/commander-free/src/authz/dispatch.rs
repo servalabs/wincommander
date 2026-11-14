@@ -124,6 +124,8 @@ pub const DESTRUCTIVE_COMMANDS: &[(&str, DestructiveAction)] = &[
     ("run_destruct_step", DestructiveAction::SelfDestruct),
     ("fleet_connect", DestructiveAction::FleetReenroll),
     ("disk_delete_item", DestructiveAction::DiskDelete),
+    ("secure_shred", DestructiveAction::DiskDelete),
+    ("search_shred_direct", DestructiveAction::DiskDelete),
     ("delete_decoy", DestructiveAction::DecoyDelete),
     ("internet_kill_switch_set", DestructiveAction::KillSwitch),
     ("bluetooth_control_set", DestructiveAction::KillSwitch),

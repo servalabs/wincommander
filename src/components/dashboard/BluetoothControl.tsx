@@ -28,12 +28,13 @@ export default function BluetoothControl() {
       type="button"
       className={`killswitch-toggle bluetooth-control focus-visible:outline-2 focus-visible:outline-offset-2 ${status?.state === "blocked" ? "cut" : status?.state === "allowed" ? "live" : ""}`}
       disabled={busy || !canChange}
+      aria-label={label}
       aria-busy={busy || refreshing}
       title={canChange ? `${description} ${nextBlocked ? "Click to apply the Bluetooth block policy for all Windows accounts." : "Click to release WinCommander’s Bluetooth policy restriction."}` : description}
       onClick={() => void change(nextBlocked)}
     >
       {status?.state === "blocked" ? <BluetoothOff size={13} aria-hidden="true" /> : <Bluetooth size={13} aria-hidden="true" />}
-      {label}
+      {label.replace("Bluetooth", "BT")}
     </button>
   );
 }

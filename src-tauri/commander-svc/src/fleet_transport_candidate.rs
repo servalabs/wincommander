@@ -165,14 +165,14 @@ pub(super) async fn candidate_worker() {
                 candidate
             };
             let profile = &candidate.context.profile;
-            let pins = fleet_agent_core::SpkiPinSet::from_hex_list(&profile.spki_pins);
+            let pins = fleet_agent_core::SpkiPinSet::from_hex_list_strict(&profile.spki_pins);
             let valid_profile = crate::fleet_runtime_env::fingerprint().as_deref()
                 == Some(profile.environment_fingerprint.as_str())
                 && (profile.spki_pins.trim().is_empty() || pins.is_some());
             let store = crate::fleet_machine_policy::system_store().ok();
             let observed = if valid_profile {
                 match (
-                    fleet_agent_core::build_client_without_redirects(pins),
+                    fleet_agent_core::build_required_hybrid_client(pins),
                     store,
                 ) {
                     (Ok(client), Some(store)) => {

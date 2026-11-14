@@ -9,6 +9,7 @@ pub struct DiskFileType {
     pub category: String,
     pub file_count: u64,
     pub logical_size: u64,
+    pub sample_path: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -17,6 +18,7 @@ pub struct DiskFileTypes {
     pub scan_id: String,
     pub scope_path: String,
     pub categories: Vec<DiskFileType>,
+    pub extensions: Vec<DiskFileType>,
     pub complete: bool,
 }
 
@@ -58,6 +60,7 @@ fn summarize(children: &HashMap<String, Vec<DiskNode>>, path: &str) -> Vec<DiskF
             category: (*name).into(),
             file_count: 0,
             logical_size: 0,
+            sample_path: None,
         })
         .collect();
     let mut pending = vec![path];
@@ -68,6 +71,9 @@ fn summarize(children: &HashMap<String, Vec<DiskNode>>, path: &str) -> Vec<DiskF
                     pending.push(&item.full_path);
                 } else {
                     let total = &mut totals[category(&item.name)];
+                    if total.sample_path.is_none() {
+                        total.sample_path = Some(item.full_path.clone());
+                    }
                     total.file_count += 1;
                     total.logical_size = total.logical_size.saturating_add(item.size);
                 }
@@ -75,6 +81,53 @@ fn summarize(children: &HashMap<String, Vec<DiskNode>>, path: &str) -> Vec<DiskF
         }
     }
     totals
+}
+
+fn summarize_extensions(
+    children: &HashMap<String, Vec<DiskNode>>,
+    path: &str,
+) -> Vec<DiskFileType> {
+    let mut totals: HashMap<String, (u64, u64, Option<String>)> = HashMap::new();
+    let mut pending = vec![path];
+    while let Some(directory) = pending.pop() {
+        if let Some(items) = children.get(directory) {
+            for item in items {
+                if item.is_dir {
+                    pending.push(&item.full_path);
+                    continue;
+                }
+                let extension = std::path::Path::new(&item.name)
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .filter(|value| !value.is_empty())
+                    .map(|value| format!(".{}", value.to_lowercase()))
+                    .unwrap_or_else(|| "No extension".to_string());
+                let entry = totals.entry(extension).or_default();
+                if entry.2.is_none() {
+                    entry.2 = Some(item.full_path.clone());
+                }
+                entry.0 += 1;
+                entry.1 = entry.1.saturating_add(item.size);
+            }
+        }
+    }
+    let mut rows: Vec<_> = totals
+        .into_iter()
+        .map(
+            |(category, (file_count, logical_size, sample_path))| DiskFileType {
+                category,
+                file_count,
+                logical_size,
+                sample_path,
+            },
+        )
+        .collect();
+    rows.sort_by(|a, b| {
+        b.logical_size
+            .cmp(&a.logical_size)
+            .then_with(|| a.category.cmp(&b.category))
+    });
+    rows
 }
 
 pub async fn get_disk_file_types(scan_id: String, path: String) -> Result<DiskFileTypes, String> {
@@ -92,6 +145,7 @@ pub async fn get_disk_file_types(scan_id: String, path: String) -> Result<DiskFi
         }
         Ok(DiskFileTypes {
             categories: summarize(&guard.children, &path),
+            extensions: summarize_extensions(&guard.children, &path),
             scan_id,
             scope_path: path,
             complete: meta.complete,
@@ -140,10 +194,47 @@ mod tests {
         assert_eq!(root.iter().map(|row| row.file_count).sum::<u64>(), 4);
         assert_eq!(root.iter().map(|row| row.logical_size).sum::<u64>(), 60);
         assert_eq!((root[0].file_count, root[0].logical_size), (1, 10));
+        assert_eq!(root[0].sample_path.as_deref(), Some("root/photo.JPG"));
+        assert_eq!(root[1].sample_path, None);
         assert_eq!((root[6].file_count, root[6].logical_size), (1, 0));
         let nested = summarize(&data, "root/nested");
         assert_eq!(nested.iter().map(|row| row.file_count).sum::<u64>(), 2);
         assert_eq!(nested.iter().map(|row| row.logical_size).sum::<u64>(), 50);
+    }
+    #[test]
+    fn extension_totals_include_nested_and_extensionless_files() {
+        let data = HashMap::from([
+            (
+                "root".into(),
+                vec![
+                    item("nested", "root/nested", 0, true),
+                    item("a.JPG", "root/a.JPG", 10, false),
+                    item("readme", "root/readme", 2, false),
+                ],
+            ),
+            (
+                "root/nested".into(),
+                vec![item("b.jpg", "root/nested/b.jpg", 20, false)],
+            ),
+        ]);
+        let rows = summarize_extensions(&data, "root");
+        assert_eq!(rows[0].sample_path.as_deref(), Some("root/a.JPG"));
+        assert_eq!(
+            (
+                rows[0].category.as_str(),
+                rows[0].file_count,
+                rows[0].logical_size
+            ),
+            (".jpg", 2, 30)
+        );
+        assert_eq!(
+            (
+                rows[1].category.as_str(),
+                rows[1].file_count,
+                rows[1].logical_size
+            ),
+            ("No extension", 1, 2)
+        );
     }
     #[test]
     fn every_supported_type_and_unclassified_file_have_an_explicit_bucket() {

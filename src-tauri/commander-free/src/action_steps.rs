@@ -152,7 +152,7 @@ pub const DESTRUCT_STEPS: &[DestructStepDef] = &[
     },
     DestructStepDef {
         id: "srum",
-        label: "SRUM Database",
+        label: "Resource Usage History",
         group: DestructGroup::PrivacyTraces,
         default_enabled: true,
     },
@@ -475,7 +475,7 @@ pub const DESTRUCT_STEPS: &[DestructStepDef] = &[
     },
     DestructStepDef {
         id: "ntuser_traces",
-        label: "NTUSER Traces",
+        label: "User Activity Traces",
         group: DestructGroup::DeepDfir,
         default_enabled: false,
     },
@@ -735,7 +735,7 @@ pub const DESTRUCT_STEPS: &[DestructStepDef] = &[
     // ── Privacy Clean deep erasers (slow; default OFF) ────────────────
     DestructStepDef {
         id: "unallocated_erase",
-        label: "Unallocated Space Erase",
+        label: "Free Space Cleanup",
         group: DestructGroup::PrivacyClean,
         default_enabled: false,
     },
@@ -767,7 +767,7 @@ pub const DESTRUCT_STEPS: &[DestructStepDef] = &[
     },
     DestructStepDef {
         id: "veracrypt_header_destroy",
-        label: "VeraCrypt Header Destroy",
+        label: "Encrypted Container Header Destroy",
         group: DestructGroup::PrivacyClean,
         default_enabled: false,
     },

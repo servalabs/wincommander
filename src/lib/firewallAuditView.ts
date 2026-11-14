@@ -142,7 +142,7 @@ export function summarizeFirewallAudit(rules: FirewallRule[], cancelled: boolean
   return {
     intent: "warning",
     headline: `${noisy} of ${rules.length} rule${rules.length === 1 ? "" : "s"} need a decision`,
-    detail: `${parts.join(" and ")}. Select the ones you don't recognise, then disable them — disabling is reversible, removing is not. A full firewall backup is exported automatically before any change.`,
+    detail: `${parts.join(" and ")}. Review each rule: enable intended blocks or disable unrecognised allowances. Disabling is reversible; removing is not. A firewall backup is exported before any change.`,
   };
 }
 

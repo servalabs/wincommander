@@ -7,7 +7,8 @@ import StatusPill from "./StatusPill";
 import SystemRadar from "./SystemRadar";
 import TraceDetailDialog from "./TraceDetailDialog";
 import WCSwitch from "./WCSwitch";
-import type { CleanupCategory } from "../../panels/cleanup/cleanupCategories";
+import { ALL_CATEGORIES, type CleanupCategory } from "../../panels/cleanup/cleanupCategories";
+import { CleanupDisplayProvider } from "../../panels/cleanup/cleanupDisplay";
 import { AppProvider } from "../../context/AppContext";
 import { AuthModeProvider } from "../../context/AuthModeContext";
 import { LiveMetricsProvider } from "../../context/LiveMetricsContext";
@@ -109,6 +110,19 @@ describe("redesign shared primitives", () => {
     expect(html).toContain("artifact-99.dat");
     expect(html).not.toContain("artifact-100.dat");
     expect(html).toContain("Copy TSV");
+  });
+
+  test("the System Cleanup dialog shows Amcache record fields in both personas", () => {
+    const amcache = ALL_CATEGORIES.find(item => item.id === "amcache")!;
+    const rawData = { total: 1, entries: [{ category: "InventoryApplication", count: 1, sample: [{ id: "fixture-id", name: "Fixture App", path: "C:\\Apps\\fixture.exe", registryValues: { Publisher: "Fixture Publisher" } }] }] };
+    for (const persona of ["secure", "casual"] as const) {
+      const html = renderToStaticMarkup(<CleanupDisplayProvider persona={persona}><TraceDetailDialog category={amcache} isOpen count={1} items={[]} rawData={rawData} clearing={false} onClose={() => undefined} /></CleanupDisplayProvider>);
+      expect(html).toContain('<th scope="col">Record</th>');
+      expect(html).toContain('<th scope="col">Details</th>');
+      expect(html).toContain("Fixture App");
+      expect(html).toContain("C:\\Apps\\fixture.exe");
+      expect(html).toContain("Fixture Publisher");
+    }
   });
 
   test("system radar renders score and findings without panel-specific copy", () => {

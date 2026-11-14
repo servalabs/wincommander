@@ -281,7 +281,7 @@ export const PANEL_MANIFESTS: PanelManifest[] = [
     label: "Fleet",
     icon: "office",
     importFn: () => import("../panels/fleet"),
-    navTier: "capability",
+    navTier: "hidden",
     searchKeywords: [
       "fleet", "enroll", "join", "enterprise", "central", "management",
       "device", "mdm", "remote", "org", "server", "connect",

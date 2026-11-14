@@ -81,9 +81,9 @@ describe("Vault refresh boundaries", () => {
     const source = await Bun.file("src/panels/fleet/VaultAccessTab.tsx").text();
     const refresh = source.slice(source.indexOf("const refresh ="), source.indexOf("useEffect(() => { void refresh()"));
 
-    expect(refresh).toContain("if (capabilities.can_manage_policy)");
+    expect(refresh).toContain("if (isAdmin && capabilities.can_manage_policy)");
     expect(refresh).toContain("ownerDirectory = await listOwnerPrincipals()");
-    expect(refresh).toContain("setOwnerDirectoryUnavailable(capabilities.can_manage_policy && ownerDirectory === null)");
+    expect(refresh).toContain("setOwnerDirectoryUnavailable(isAdmin && capabilities.can_manage_policy && ownerDirectory === null)");
     expect(refresh).toContain("const loadedPolicy = await getOwnerPolicyFragment()");
     expect(source).toContain("Windows administrator accounts are unavailable");
     expect(source).toContain("disabled={saving || unconfirmedSave || !!error || ownerDirectoryUnavailable || (statusLoadUnavailable && hasSavedPolicy)}");

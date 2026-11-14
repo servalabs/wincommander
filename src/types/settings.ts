@@ -295,6 +295,8 @@ export interface AppPreferences {
   /** Right-sidebar quick actions the user has chosen to hide. Recognised keys:
    *  "dismount", "delete", "scrubMeta", "lockdown". Configured in Secret Settings. */
   hiddenSidebarActions?: string[];
+  /** Explicit opt-in for the Advisor quick action. */
+  showAdvisorAction?: boolean;
   /** Panel IDs hidden permanently (regardless of Borrowed-PC mode state).
    *  Distinct from lockedPanelIds which only hide while Borrowed-PC is active. */
   permanentlyHiddenPanels?: string[];
@@ -442,7 +444,7 @@ export interface FileSearchSettings {
 export interface FleetSettings {
   /** false = agent never starts */
   enabled: boolean;
-  /** e.g. "http://fleet.corp.ts.net:8787" */
+  /** e.g. "https://fleet.example.com" */
   serverUrl: string;
   /** enable command poll + verify */
   dispatch: boolean;

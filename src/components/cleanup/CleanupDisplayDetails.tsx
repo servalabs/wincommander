@@ -48,7 +48,11 @@ export default function CleanupDisplayDetails({ category, mode, count, items, ra
     ? rawData : { records: items }, [category.id, rawData, items]);
   const name = cleanupDisplayName(category, mode);
   const raw = rawData && typeof rawData === "object" && !Array.isArray(rawData) ? rawData as Record<string, unknown> : undefined;
-  const scanFacts = getCleanupScanFacts(rawData, summary.state === "error");
+  const partialDetail = error?.trim() || (typeof raw?.message === "string" ? raw.message.trim() : "");
+  const scanFacts = getCleanupScanFacts(rawData, summary.state === "error").filter(fact =>
+    !(fact.label === "Message" && summary.state === "partial") &&
+    !(fact.label === "Coverage Note" && ["walFiles", "searchIndex", "remoteAccessLogs", "gameLauncherLogs", "cellularHistory", "passwordManagerCaches", "credentialManager", "gitActivity", "wslData", "sshState", "amcache"].includes(category.id))
+  );
   const groupedLimited = groupedItems?.some(group => hasLimitedCleanupCoverage(category.id, group.rawData));
   const limitedScope = hasLimitedCleanupCoverage(category.id, raw) || groupedLimited ? (category.id === "walFiles"
     ? "Checks two app-data locations, up to five folder levels deep."
@@ -58,8 +62,9 @@ export default function CleanupDisplayDetails({ category, mode, count, items, ra
         : category.id === "searchIndex" ? "Checks selected Windows Search index and log files; other Search data is outside this scan."
           : category.id === "remoteAccessLogs" ? "Checks selected TeamViewer, AnyDesk, RealVNC and Chrome Remote Desktop locations, including machine-wide logs. Other products and custom locations are not included."
             : category.id === "gameLauncherLogs" ? "Checks default Steam, Epic Games Launcher and Battle.net log locations. Other launchers and custom installations are not included."
-              : category.id === "cellularHistory" && raw?.noHardware === true ? "Windows reports no mobile broadband adapter. Profiles for disconnected devices were not checked."
-                : ["credentialManager", "gitActivity", "wslData"].includes(category.id) && typeof raw?.coverageNote === "string" && raw.coverageNote.trim() ? raw.coverageNote.trim()
+              : category.id === "cellularHistory" && raw?.noHardware === true ? null
+                : category.id === "passwordManagerCaches" ? "Checks selected 1Password, Bitwarden and LastPass locations. Other managers and custom locations are not included."
+                : ["credentialManager", "gitActivity", "wslData", "sshState", "amcache"].includes(category.id) && typeof raw?.coverageNote === "string" && raw.coverageNote.trim() ? raw.coverageNote.trim()
                   : "Checks selected locations only.") : null;
   const coverage = summary.state === "partial" ? "Incomplete" : limitedScope ? "Limited to selected locations" : raw?.coverage === "complete" ? "Reported complete" : typeof raw?.coverage === "string" && raw.coverage.trim() ? raw.coverage : "Not reported";
   const receipt = cleanupVerificationText(verification);
@@ -98,7 +103,9 @@ export default function CleanupDisplayDetails({ category, mode, count, items, ra
         </div>
         <div className="cleanup-readable-detail__body">
           {summary.state === "inconsistent" ? <p>The total and category counts disagree. The result cannot be confirmed until a new scan succeeds.</p> : null}
-          {summary.state === "partial" ? <p>{error?.trim() || "Some sources were not checked. The result is incomplete."}</p> : null}
+          {summary.state === "partial" ? partialDetail.length > 240
+            ? <details><summary>Why the scan is incomplete</summary><p>{partialDetail}</p></details>
+            : <p>{partialDetail || "Some sources were not checked. The result is incomplete."}</p> : null}
           {["error", "unavailable"].includes(summary.state) && error?.trim() ? <p>{error}</p> : null}
           {limitedScope ? <p><strong>Scan scope:</strong> {limitedScope}</p> : null}
           {groupedItems?.length ? <p>Only profiles detected in the supported Windows user folders are shown. Other profiles may not appear.</p> : null}

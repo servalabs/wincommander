@@ -46,6 +46,6 @@ describe("Secret Settings Auto Start", () => {
 
         expect(autoStartTile).toContain("disabled={autostartPolicyLocked}");
         expect(autoStartTile).not.toContain("needsElevation");
-        expect(autoStartTile).toContain("Windows will ask for approval if needed.");
+        expect(autoStartTile).not.toContain("Windows will ask for approval if needed.");
     });
 });

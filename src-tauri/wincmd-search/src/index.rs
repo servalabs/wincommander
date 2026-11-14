@@ -72,31 +72,50 @@ impl ContentIndex {
     /// only — the dir itself keeps its hardened ACLs) and recreated empty; the
     /// caller's next crawl repopulates it.
     pub fn open_or_create(dir: &Path) -> Result<Self> {
-        Self::open_mode(dir, AccessMode::Writable)
+        Self::open_mode(dir, AccessMode::Writable, None)
     }
 
     /// Open without changing files, migrating schema, or acquiring on-disk locks.
     /// The caller must serialize all readers/writers using an external process guard
     /// and retain that guard until this object and all cloned readers are dropped.
     pub fn open_existing(dir: &Path) -> Result<Self> {
-        Self::open_mode(dir, AccessMode::GuardedReader)
+        Self::open_mode(dir, AccessMode::GuardedReader, None)
     }
 
     /// Open an existing ordinary index without creating or migrating it. Reader metadata
     /// locks coordinate with concurrent Tantivy writers and may create lockfiles.
     pub fn open_existing_shared(dir: &Path) -> Result<Self> {
-        Self::open_mode(dir, AccessMode::SharedReader)
+        Self::open_mode(dir, AccessMode::SharedReader, None)
     }
 
-    fn open_mode(dir: &Path, mode: AccessMode) -> Result<Self> {
+    /// Experimental only: caller must authorize a separate root and hold the
+    /// cross-process migration lease, including all old writers. No cutover or
+    /// migration happens here; this does not remove the existing index.
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    pub fn open_experimental_encrypted(dir: &Path, index_id: [u8; 16], existing: bool) -> Result<Self> {
+        Self::open_mode(dir, AccessMode::Writable, Some((index_id, existing)))
+    }
+
+    /// Open an already-created encrypted generation without permitting writes.
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    pub(crate) fn open_experimental_encrypted_readonly(dir: &Path, index_id: [u8; 16]) -> Result<Self> {
+        Self::open_mode(dir, AccessMode::GuardedReader, Some((index_id, true)))
+    }
+
+    fn open_mode(dir: &Path, mode: AccessMode, protected: Option<([u8; 16], bool)>) -> Result<Self> {
         let read_only = mode != AccessMode::Writable;
-        crate::read_only::validate_storage(dir)?;
-        if !read_only {
-            std::fs::create_dir_all(dir)?;
+        // The ordinary path retains its existing initialization behavior.
+        // An encrypted root must already exist and is validated only after
+        // TrialDirectory has pinned its ancestors; never create it here.
+        if protected.is_none() {
+            crate::read_only::validate_storage(dir)?;
+            if !read_only {
+                std::fs::create_dir_all(dir)?;
+            }
         }
 
         let version_file = dir.join(SCHEMA_VERSION_FILE);
-        if dir.join("meta.json").exists() {
+        if protected.is_none() && dir.join("meta.json").exists() {
             let on_disk = std::fs::read_to_string(&version_file).unwrap_or_default();
             if on_disk.trim() != SCHEMA_VERSION {
                 if read_only {
@@ -141,14 +160,45 @@ impl ContentIndex {
         let f_revision_ns = sb.add_u64_field("revision_ns", STORED);
         let schema = sb.build();
 
-        // Re-open if the index already exists (meta.json present), create otherwise.
-        let directory = crate::read_only::CheckedDirectory::open(dir, mode)?;
-        let index = if read_only || dir.join("meta.json").exists() {
-            Index::open(directory)?
-        } else {
-            let index = Index::create(directory, schema.clone(), Default::default())?;
-            std::fs::write(&version_file, SCHEMA_VERSION)?;
-            index
+        let open_plain = || -> Result<Index> {
+            let directory = crate::read_only::CheckedDirectory::open(dir, mode)?;
+            if read_only || dir.join("meta.json").exists() {
+                Ok(Index::open(directory)?)
+            } else {
+                let index = Index::create(directory, schema.clone(), Default::default())?;
+                std::fs::write(&version_file, SCHEMA_VERSION)?;
+                Ok(index)
+            }
+        };
+        #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+        let index = if let Some((index_id, existing)) = protected {
+            use tantivy::directory::Directory;
+            use crate::encrypted_index_prototype::tantivy_trial::TrialDirectory;
+            let directory = TrialDirectory::open_protected(dir, mode, &index_id, existing)?;
+            let meta = Path::new("meta.json");
+            let version = Path::new(SCHEMA_VERSION_FILE);
+            let exists = directory.exists(meta).map_err(|e| std::io::Error::other(e.to_string()))?;
+            if exists {
+                let bytes = directory.atomic_read(version).map_err(|e| std::io::Error::other(e.to_string()))?;
+                if bytes != SCHEMA_VERSION.as_bytes() {
+                    return Err(crate::error::SearchError::Config("encrypted index requires a separate rebuild".into()));
+                }
+                Index::open(directory)?
+            } else {
+                if existing || read_only {
+                    return Err(crate::error::SearchError::Config("encrypted index is incomplete or missing".into()));
+                }
+                let index = Index::create(directory.clone(), schema.clone(), Default::default())?;
+                directory.atomic_write(version, SCHEMA_VERSION.as_bytes())?;
+                index
+            }
+        } else { open_plain()? };
+        #[cfg(not(all(windows, feature = "experimental-encrypted-search")))]
+        let index = {
+            if protected.is_some() {
+                return Err(crate::error::SearchError::Config("encrypted index unavailable".into()));
+            }
+            open_plain()?
         };
         if index.schema() != schema {
             return Err(crate::error::SearchError::Config(

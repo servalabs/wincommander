@@ -53,7 +53,7 @@ export function IndexedFoldersManager({ privacyStatus, roots, reindexing, rescan
         </div>
       </div>
       <p className="sfp-folders-empty">
-        Folders on detected VeraCrypt drives keep their content index inside that encrypted drive.
+        Folders on detected encrypted drives keep their content index inside that encrypted drive.
         Mount the volume before adding a folder. Private file history is not saved.
       </p>
       <div role="status" aria-live="polite">

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { ManagerInventory } from "../../hooks/useBackend";
 import type { AppInventorySnapshot } from "../../types/settings";
-import { collectManagerUpdates, collectUnifiedPackageUpdates, filterCatalogDuplicates, managerUpdateStatus, refreshPackageAndAppInventories } from "./packageUpdateDisplay";
+import { collectManagerUpdates, collectUnifiedPackageUpdates, describePackageRefresh, filterCatalogDuplicates, managerUpdateStatus, refreshPackageAndAppInventories } from "./packageUpdateDisplay";
 
 const manager = (name: string, packages: string[]): ManagerInventory => ({
   manager: name,
@@ -108,6 +108,14 @@ describe("package update display", () => {
       async () => { calls.push("package managers"); return { managers: [], cancelled: false }; },
     ).then(() => "resolved", error => error.message)).toBe("inventory unavailable");
     expect(calls).toEqual(["apps"]);
+  });
+
+  test("refresh outcome distinguishes complete, cancelled, unavailable, and failed checks", () => {
+    expect(describePackageRefresh({ managers: [manager("winget", [])], cancelled: false })).toBe("Installed apps and package updates refreshed.");
+    expect(describePackageRefresh({ managers: [], cancelled: true })).toContain("cancelled");
+    expect(describePackageRefresh({ managers: [{ ...manager("scoop", []), available: false }], cancelled: false })).toContain("Unavailable: scoop");
+    expect(describePackageRefresh({ managers: [{ ...manager("winget", []), error: "failed" }], cancelled: false })).toContain("Failed: winget");
+    expect(describePackageRefresh({ managers: [], cancelled: false })).toContain("no package manager results");
   });
 
   test("gives a clear status for each package manager", () => {

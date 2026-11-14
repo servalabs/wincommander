@@ -33,6 +33,24 @@ fn apply_with(
 }
 
 fn prepare(current: &AppSettings, epoch: &Epoch) -> Result<AppSettings, String> {
+    prepare_inner(current, epoch, false)
+}
+
+/// Read back signed desired settings only; this does not verify Windows or
+/// monitor enforcement and must never be used as an applied attestation.
+pub(super) fn readback_equal(current: &AppSettings, epoch: &Epoch) -> Result<bool, String> {
+    if current.policy.master_config_version != Some(epoch.version) {
+        return Err("Config epoch does not match committed settings".into());
+    }
+    let projected = prepare_inner(current, epoch, true)?;
+    Ok(serde_json::to_value(&projected.ideal).map_err(|e| e.to_string())?
+        == serde_json::to_value(&current.ideal).map_err(|e| e.to_string())?
+        && projected.policy.locked_paths == current.policy.locked_paths
+        && projected.policy.managed == current.policy.managed
+        && current.policy.sync_mode == "managed")
+}
+
+fn prepare_inner(current: &AppSettings, epoch: &Epoch, allow_equal_readback: bool) -> Result<AppSettings, String> {
     let pinned = current
         .policy
         .fleet_signing_key
@@ -77,7 +95,8 @@ fn prepare(current: &AppSettings, epoch: &Epoch) -> Result<AppSettings, String> 
             return Err("Fleet look-away delay must be an integer from 0 to 300 seconds".into());
         }
     }
-    if epoch.version <= current.policy.master_config_version.unwrap_or(0) {
+    if epoch.version < current.policy.master_config_version.unwrap_or(0)
+        || (!allow_equal_readback && epoch.version == current.policy.master_config_version.unwrap_or(0)) {
         return Err("Config epoch is not newer than the committed policy".into());
     }
     // The signed config owns desired state, not local credentials, connection

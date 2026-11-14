@@ -41,10 +41,50 @@ struct InventoryEntry {
     size: u64,
 }
 
+#[derive(Clone, Copy, Default)]
+pub(super) enum DiscoveryMode {
+    #[default]
+    ExplicitFolders,
+    LocalDrives,
+}
+
+fn excluded_by_local_filter(path: &std::path::Path, directory: bool) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    if directory {
+        return name.starts_with('.');
+    }
+    name.eq_ignore_ascii_case(".DS_Store")
+        || path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| {
+                ["bin", "dll", "jar"]
+                    .iter()
+                    .any(|skip| ext.eq_ignore_ascii_case(skip))
+            })
+}
+
+#[cfg(test)]
 pub(super) fn scan_roots(
     roots: &[PathBuf],
     minimum_size_bytes: u64,
     cancelled: &AtomicBool,
+) -> Result<ScanIndex, String> {
+    scan_roots_mode(
+        roots,
+        minimum_size_bytes,
+        cancelled,
+        DiscoveryMode::ExplicitFolders,
+    )
+}
+
+pub(super) fn scan_roots_mode(
+    roots: &[PathBuf],
+    minimum_size_bytes: u64,
+    cancelled: &AtomicBool,
+    mode: DiscoveryMode,
 ) -> Result<ScanIndex, String> {
     let mut index = ScanIndex::new()?;
     for root in roots {
@@ -59,7 +99,7 @@ pub(super) fn scan_roots(
             )
             .map_err(|error| error.to_string())?;
     }
-    enumerate(&index, minimum_size_bytes, cancelled)?;
+    enumerate_mode(&index, minimum_size_bytes, cancelled, mode)?;
     if !cancelled.load(Ordering::Acquire) {
         hash_candidates(&index, cancelled)?;
     }
@@ -75,10 +115,25 @@ pub(super) fn scan_roots(
     Ok(index)
 }
 
+#[cfg(test)]
 pub(super) fn enumerate(
     index: &ScanIndex,
     minimum_size_bytes: u64,
     cancelled: &AtomicBool,
+) -> Result<(), String> {
+    enumerate_mode(
+        index,
+        minimum_size_bytes,
+        cancelled,
+        DiscoveryMode::ExplicitFolders,
+    )
+}
+
+fn enumerate_mode(
+    index: &ScanIndex,
+    minimum_size_bytes: u64,
+    cancelled: &AtomicBool,
+    mode: DiscoveryMode,
 ) -> Result<(), String> {
     let temporary = fs::canonicalize(index.directory.path()).map_err(|error| error.to_string())?;
     // The database is for file candidates and result paging. Keeping the
@@ -202,6 +257,21 @@ pub(super) fn enumerate(
                             scope::error(&directory, "An entry name cannot be decoded safely");
                             continue;
                         };
+                        if matches!(mode, DiscoveryMode::LocalDrives)
+                            && excluded_by_local_filter(
+                                &entry.path,
+                                matches!(entry.kind, InventoryKind::Directory),
+                            )
+                        {
+                            scope::update(|state| {
+                                if matches!(entry.kind, InventoryKind::Directory) {
+                                    state.filter_excluded_directories += 1;
+                                } else if matches!(entry.kind, InventoryKind::File) {
+                                    state.filter_excluded_files += 1;
+                                }
+                            });
+                            continue;
+                        }
                         if matches!(entry.kind, InventoryKind::Directory) {
                             if queued.insert(display_path.to_owned()) {
                                 pending.push_back((entry.path, root.clone()));

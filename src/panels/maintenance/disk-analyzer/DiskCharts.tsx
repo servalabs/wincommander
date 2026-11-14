@@ -73,7 +73,7 @@ export default function DiskCharts({ nodes, depth, mode, focused, onFocus, onNav
                 </g>;
             })}
             <text x="250" y="244" textAnchor="middle" className="da-sunburst-total">{formatDiskBytes(focused?.size ?? total)}</text>
-            <text x="250" y="266" textAnchor="middle" className="da-sunburst-caption">{focused ? focused.name.slice(0, 15) : "Logical size"}</text>
+            <text x="250" y="266" textAnchor="middle" className="da-sunburst-caption">{focused ? focused.name.slice(0, 15) : "Size"}</text>
         </svg>
     );
     return <div className="da-chart-display">{graph}<div className="da-chart-remainders" aria-label="Chart display coverage" role="status">

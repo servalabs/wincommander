@@ -6,6 +6,7 @@ import IndexControls from "./IndexControls";
 const defaults: ComponentProps<typeof IndexControls> = {
   expanded: false, onToggle: () => {}, indexStatus: null,
   indexDisplayError: null, foldersReindexing: false, managementError: null,
+  interruptedSearchCandidate: false, recoveringIndex: false, recoveryNotice: null, onRecoverIndex: () => {},
   privacyStatus: null, roots: ["C:\\Documents"], reindexing: false, rescanning: false,
   onReindex: () => {}, onRescan: () => {}, onAddFolders: () => {}, onRemoveFolder: () => {},
 };
@@ -13,6 +14,11 @@ const render = (props: Partial<typeof defaults> = {}) =>
   renderToStaticMarkup(createElement(IndexControls, { ...defaults, ...props }));
 
 describe("always available index controls", () => {
+  test("only offers recovery when an interrupted candidate is reported", () => {
+    expect(render()).not.toContain("Recover interrupted search");
+    expect(render({ interruptedSearchCandidate: true })).toContain("Recover interrupted search");
+    expect(render({ interruptedSearchCandidate: true, recoveringIndex: true })).toContain("Recovering search");
+  });
   test("existing folders keep an accessible settings button without a query or results", () => {
     const markup = render();
     expect(markup).toContain("Indexed folders");

@@ -33,14 +33,14 @@ export default function SilentStartSetting({ autostartEnabled }: { autostartEnab
     };
 
     return (
-        <div className="dgz-tile-row">
+        <div className={`dgz-tile ${silent ? "on" : ""}`}>
+          <div className="dgz-tile-row">
             <div className="dgz-tile-body">
-                <div className="dgz-tile-title" id="silent-start-label">Start silently in tray</div>
-                <div className="dgz-tile-desc" id="silent-start-description">
+                <div className="dgz-tile-title" id="silent-start-label">Silent start</div>
+                {(!appSettings?.app || !appSettings?.policy || policyLocked || saving) && <div className="dgz-tile-desc" id="silent-start-description">
                     {!appSettings?.app || !appSettings?.policy ? "Waiting for this PC’s startup settings…"
-                        : policyLocked ? "Set by your administrator." : saving ? "Saving…"
-                        : "For everyone on this PC. On: stay in the tray at sign-in. Off: open maximized with the taskbar visible. Applies at the next sign-in; your lock and hide settings still apply."}
-                </div>
+                        : policyLocked ? "Set by your administrator." : "Saving…"}
+                </div>}
                 {!policyLocked && privileges === "standard" && <div className="dgz-tile-desc">Open WinCommander as administrator to change this PC-wide setting.</div>}
                 {privileges === "checking" && <div className="dgz-tile-desc">Checking permission to change this PC-wide setting…</div>}
                 {privileges === "unknown" && <button type="button" className="dgz-autostart-retry" onClick={retryPrivileges}>Check permission again</button>}
@@ -51,8 +51,9 @@ export default function SilentStartSetting({ autostartEnabled }: { autostartEnab
                 disabled={disabled}
                 onCheckedChange={save}
                 aria-labelledby="silent-start-label"
-                aria-describedby="silent-start-description"
+                aria-describedby={(!appSettings?.app || !appSettings?.policy || policyLocked || saving) ? "silent-start-description" : undefined}
             />
+          </div>
         </div>
     );
 }

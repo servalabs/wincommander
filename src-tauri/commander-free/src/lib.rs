@@ -9,6 +9,29 @@ use tauri::{
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 mod action_steps;
+#[cfg(feature = "amcache-snapshot-experimental")]
+mod amcache_reader;
+#[cfg(feature = "amcache-snapshot-experimental")]
+mod amcache_snapshot;
+
+/// Internal fixed-purpose collector. The caller cannot supply a hive path.
+/// This remains opt-in until privileged end-to-end validation is complete.
+pub fn run_internal_amcache_scan() -> Result<serde_json::Value, String> {
+    #[cfg(feature = "amcache-snapshot-experimental")]
+    {
+        amcache_snapshot::with_amcache_snapshot(|path| {
+            let snapshot_at = chrono::Utc::now().to_rfc3339();
+            let mut result = amcache_reader::read_amcache_snapshot(path)?;
+            let object = result.as_object_mut().ok_or("Invalid snapshot result")?;
+            object.insert("snapshotAt".to_owned(), snapshot_at.into());
+            Ok(result)
+        })
+    }
+    #[cfg(not(feature = "amcache-snapshot-experimental"))]
+    {
+        Err("App Launch Cache snapshots are not enabled in this build.".into())
+    }
+}
 mod activity_watch_autostart;
 mod advisor;
 mod appearance;
@@ -49,10 +72,16 @@ mod context_scrub_failure;
 mod context_scrub_notification;
 mod context_scrub_outcome;
 mod datastore;
+#[cfg(all(windows, feature = "experimental-settings-generation"))]
+pub mod settings_generation_lab;
 mod datastore_io;
 mod devtools;
 mod diagnostics;
 mod disk_analyzer;
+#[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
+mod disk_backup_privilege;
+#[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
+mod disk_tree_delete;
 mod downloads_watcher;
 mod driver_health;
 mod driver_maintenance;
@@ -1595,9 +1624,41 @@ fn setup_tauri_cli_runtime(app: &mut tauri::App) -> Result<(), Box<dyn std::erro
     Ok(())
 }
 
+#[cfg(all(windows, feature = "experimental-encrypted-search"))]
+pub mod search_migration_cli;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(all(windows, feature = "experimental-settings-generation"))]
+    if let Err(message) = datastore::require_selected_settings_lab_startup() {
+        if cli::tauri_runtime_active() {
+            cli::report_cli_startup_failure("settings_setup_incomplete", message);
+            return;
+        }
+        use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+        let text: Vec<u16> = format!("{message}\0").encode_utf16().collect();
+        let title: Vec<u16> = "WinCommander\0".encode_utf16().collect();
+        unsafe { MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), MB_OK | MB_ICONERROR); }
+        return;
+    }
+    // Keep the cooperating user-profile launch fence for this process lifetime.
+    // The installer helper runs through a separate early CLI entrypoint.
+    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+    match file_search::install_runtime_fence() {
+        Ok(()) => {},
+        Err(message) => {
+            if cli::tauri_runtime_active() {
+                cli::report_cli_startup_failure("search_setup_incomplete", message);
+                return;
+            }
+            use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+            let text: Vec<u16> = format!("{message}\0").encode_utf16().collect();
+            let title: Vec<u16> = "WinCommander\0".encode_utf16().collect();
+            unsafe { MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), MB_OK | MB_ICONERROR); }
+            return;
+        }
+    };
     let cli_mode = cli::tauri_runtime_active();
+    if cli_mode { cli::acknowledge_terminal_after_startup_guards(); }
     startup_trace::init();
     startup_trace::pre_window_milestone("process_start");
     dev_startup_trace("process start");
@@ -3050,6 +3111,8 @@ pub fn run() {
             file_search::content_rescan,
             file_search::content_reindex,
             file_search::content_get_doc,
+            file_search::content_cleanup_old_cache,
+            file_search::content_recover_interrupted_cache,
             backend::get_file_icon_data,
             backend::open_path,
             backend::open_event_log,
@@ -3072,6 +3135,9 @@ pub fn run() {
             disk_analyzer::get_large_disk_items,
             disk_analyzer::open_disk_item,
             disk_analyzer::disk_delete_item,
+            disk_analyzer::disk_folder_delete_available,
+            disk_analyzer::disk_confirm_folder_delete,
+            disk_analyzer::disk_delete_confirmed_folder,
             // ── Preview-first routine cache/database cleaner ──
             routine_cleaner::routine_cleaner_scan,
             routine_cleaner::routine_cleaner_scan_projects,
@@ -3163,6 +3229,7 @@ pub fn run() {
             system_metrics::get_top_processes,
             system_metrics::get_drive_smart_health,
             system_metrics::get_wipe_drive_list,
+            system_metrics::get_scan_drive_list,
             // ── Storage capability probe (free, READ-ONLY secure-erase detection) ──
             storage_probe::probe_drive_capabilities,
             // ── Flow Engine ──
@@ -3195,6 +3262,7 @@ pub fn run() {
             print_log::get_print_audit_log,
             evidence::evidence_record,
             evidence::evidence_read,
+            evidence::evidence_status,
             evidence::evidence_clear,
             evidence_vault::export_evidence_vault,
             evidence_vault::verify_evidence_vault,
@@ -3220,6 +3288,11 @@ pub fn run() {
             runtime_visibility::actions::set_global_runtime_visibility,
             // ── Fleet agent onboarding (paid) ────────────────────────────
             fleet_agent::fleet_connect,
+            fleet_agent::fleet_recovery_stage,
+            fleet_agent::fleet_recovery_pin_operator_key,
+            fleet_agent::fleet_recovery_handoff,
+            fleet_agent::fleet_recovery_finish,
+            fleet_agent::fleet_recovery_resume,
             fleet_agent::fleet_repair_machine_trust,
             fleet_agent::fleet_machine_trust_status,
             fleet_agent::fleet_disconnect,

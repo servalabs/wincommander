@@ -20,6 +20,9 @@ pub struct VerifiedServicePeer {
     _process: OwnedHandle,
 }
 
+#[cfg(feature = "experimental-search-service-pin")]
+pub mod search_service_pin;
+
 fn denied() -> io::Error {
     io::Error::new(
         io::ErrorKind::PermissionDenied,

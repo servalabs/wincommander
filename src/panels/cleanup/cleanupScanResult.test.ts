@@ -159,6 +159,20 @@ describe("cleanup scan results", () => {
     expect(result.error).toBeUndefined();
   });
 
+  test("snapshot inventories reject missing records or record identities", () => {
+    for (const sample of [[], [{}], [{ id: "" }]]) {
+      const result = readCleanupScanResult(amcache, {
+        success: true, data: { source: "snapshot", entries: [{ category: "InventoryApplication", count: 1, sample }], total: 1 },
+      });
+      expect(result.count).toBe(-1);
+      expect(result.error).toContain("details are incomplete");
+    }
+    const valid = readCleanupScanResult(amcache, {
+      success: true, data: { source: "snapshot", entries: [{ category: "InventoryApplication", count: 1, sample: [{ id: "fixture" }] }], total: 1 },
+    });
+    expect(valid.count).toBe(1);
+  });
+
   test("full counts can coexist with an explicitly bounded empty preview", () => {
     const result = readCleanupScanResult(history, { success: true, data: { total: 15, entries: [], sampleCount: 0, previewLimit: 0 } });
     expect(result.count).toBe(15);

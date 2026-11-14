@@ -7,6 +7,7 @@ use rusqlite::{params, Connection, OpenFlags};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant, UNIX_EPOCH};
+use zeroize::Zeroizing;
 #[path = "scratch.rs"]
 mod scratch;
 
@@ -27,6 +28,17 @@ pub(super) fn count(row: &rusqlite::Row<'_>, column: usize) -> rusqlite::Result<
             rusqlite::types::Type::Integer,
             Box::new(error),
         )
+    })
+}
+
+// This is advisory display state. Deletion must repeat ownership checks on the
+// verified held handle because the path or its owner may change after this read.
+fn projection_reason(
+    protected: Option<&'static str>,
+    owner_verified: impl FnOnce() -> bool,
+) -> Option<&'static str> {
+    protected.or_else(|| {
+        (!owner_verified()).then_some("file ownership could not be verified as the current user")
     })
 }
 
@@ -52,7 +64,31 @@ impl ScanIndex {
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NOFOLLOW,
         )
         .map_err(|error| error.to_string())?;
-        connection.execute_batch("PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF; PRAGMA temp_store=FILE; PRAGMA cache_size=-65536;
+        // Scratch databases cannot be resumed after process exit, so their key
+        // lives only in memory. Never leave SQLite temporary stores on disk.
+        let mut key = Zeroizing::new([0u8; 32]);
+        rand::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, &mut *key)
+            .map_err(|_| "Cannot generate scan encryption key")?;
+        let key_hex = Zeroizing::new(hex::encode(key.as_slice()));
+        let raw_key = Zeroizing::new(format!("x'{}'", key_hex.as_str()));
+        // The SQLCipher C API avoids making an additional SQL string containing
+        // the key. The connection and key buffer stay valid throughout the call.
+        let result = unsafe {
+            rusqlite::ffi::sqlite3_key(
+                connection.handle(),
+                raw_key.as_ptr().cast(),
+                raw_key.len() as i32,
+            )
+        };
+        if result != rusqlite::ffi::SQLITE_OK {
+            return Err("Cannot protect scan database".into());
+        }
+        let version: String = connection.pragma_query_value(None, "cipher_version", |row| row.get(0))
+            .map_err(|_| "Encrypted scan database is unavailable")?;
+        if version.is_empty() {
+            return Err("Encrypted scan database is unavailable".into());
+        }
+        connection.execute_batch("PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF; PRAGMA temp_store=MEMORY; PRAGMA cache_size=-65536;
             CREATE TABLE directories(path TEXT PRIMARY KEY, root TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0);
             CREATE INDEX pending_directories ON directories(done);
             CREATE TABLE files(id TEXT PRIMARY KEY, path TEXT UNIQUE NOT NULL, root TEXT NOT NULL, size INTEGER NOT NULL,
@@ -89,8 +125,9 @@ impl ScanIndex {
                 row.get::<_, String>(0)
             })
             .map_err(|error| error.to_string())?;
+        let policy = super::safety::RemovalPolicy::load();
         let groups = ids
-            .map(|id| self.group(&id.map_err(|error| error.to_string())?, 0))
+            .map(|id| self.group_with_policy(&id.map_err(|error| error.to_string())?, 0, &policy))
             .collect::<Result<Vec<_>, _>>()?;
         let mut total_duplicate_bytes = 0u64;
         let mut sizes = self
@@ -124,6 +161,8 @@ impl ScanIndex {
             complete: state.phase == "ready"
                 && state.skipped_entries == 0
                 && state.skipped_links == 0
+                && state.filter_excluded_files == 0
+                && state.filter_excluded_directories == 0
                 && !state
                     .excluded_volumes
                     .iter()
@@ -131,10 +170,21 @@ impl ScanIndex {
             truncated: false,
             minimum_size_bytes: state.minimum_size_bytes,
             skipped_small_files: state.skipped_small_files,
+            filter_excluded_files: state.filter_excluded_files,
+            filter_excluded_directories: state.filter_excluded_directories,
         })
     }
 
     pub fn group(&self, group_id: &str, offset: usize) -> Result<DuplicateGroup, String> {
+        self.group_with_policy(group_id, offset, &super::safety::RemovalPolicy::load())
+    }
+
+    fn group_with_policy(
+        &self,
+        group_id: &str,
+        offset: usize,
+        policy: &super::safety::RemovalPolicy,
+    ) -> Result<DuplicateGroup, String> {
         let (size, count): (u64, usize) = self
             .connection
             .query_row(
@@ -161,7 +211,10 @@ impl ScanIndex {
             )
             .map_err(|error| error.to_string())?;
         let display = |(id, path, modified): (String, String, Option<String>)| {
-            let removable = !super::safety::is_removal_protected(&PathBuf::from(&path));
+            let reason = projection_reason(policy.protected_reason(&PathBuf::from(&path)), || {
+                super::verified_file::current_user_owns_path(std::path::Path::new(&path))
+            });
+            let (profile_scope, profile_root) = policy.profile(&PathBuf::from(&path));
             DuplicateFile {
                 name: PathBuf::from(&path)
                     .file_name()
@@ -172,7 +225,10 @@ impl ScanIndex {
                 path,
                 size,
                 modified,
-                removable,
+                removable: reason.is_none(),
+                removal_block_reason: reason.map(super::safety::removal_block_code),
+                profile_scope,
+                profile_root,
             }
         };
         files.push(display(keeper));
@@ -219,6 +275,7 @@ impl ScanIndex {
     pub fn removal_selection(
         &self,
         selected: &HashSet<String>,
+        requested_keepers: Option<&HashSet<String>>,
     ) -> Result<(Vec<CachedFile>, Vec<CachedFile>), String> {
         let mut candidates = Vec::new();
         let mut groups: HashMap<String, usize> = HashMap::new();
@@ -226,6 +283,17 @@ impl ScanIndex {
             let file = self.file(id)?;
             *groups.entry(file.group_id.clone()).or_default() += 1;
             candidates.push(file);
+        }
+        let mut explicit = HashMap::new();
+        if let Some(ids) = requested_keepers {
+            for id in ids {
+                if selected.contains(id) { return Err("The kept copy cannot also be removed".into()); }
+                let keeper = self.file(id)?;
+                if !groups.contains_key(&keeper.group_id) || explicit.insert(keeper.group_id.clone(), keeper).is_some() {
+                    return Err("Invalid kept copy for duplicate selection".into());
+                }
+            }
+            if explicit.len() != groups.len() { return Err("Choose one kept copy for each group".into()); }
         }
         let mut keepers = Vec::new();
         for (group, selected_count) in groups {
@@ -237,6 +305,12 @@ impl ScanIndex {
                 .map_err(|error| error.to_string())?;
             if selected_count >= count {
                 return Err("Every group must retain at least one verified copy".into());
+            }
+            if requested_keepers.is_some() {
+                let keeper = explicit.remove(&group).ok_or("Choose one kept copy for each group")?;
+                if super::safety::validated_file(&keeper).is_err() { return Err("The chosen kept copy changed; scan again".into()); }
+                keepers.push(keeper);
+                continue;
             }
             let mut statement = self
                 .connection
@@ -259,5 +333,23 @@ impl ScanIndex {
             keepers.push(keeper.ok_or("No unchanged copy remains; scan again")?);
         }
         Ok((candidates, keepers))
+    }
+}
+
+#[cfg(test)]
+mod owner_projection_tests {
+    use super::projection_reason;
+
+    #[test]
+    fn only_verified_current_owner_is_offered_and_protection_takes_precedence() {
+        assert_eq!(projection_reason(None, || true), None);
+        assert_eq!(
+            projection_reason(None, || false),
+            Some("file ownership could not be verified as the current user")
+        );
+        assert_eq!(
+            projection_reason(Some("protected"), || panic!("must not inspect protected path")),
+            Some("protected")
+        );
     }
 }

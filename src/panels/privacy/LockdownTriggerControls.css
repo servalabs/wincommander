@@ -1,0 +1,69 @@
+.lockdown-trigger-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--color-text-muted);
+  border-radius: 6px;
+  background: var(--color-bg-secondary);
+}
+
+.lockdown-trigger-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--color-text-primary);
+  font-size: 11px;
+}
+
+.lockdown-trigger-form .lockdown-trigger-input,
+.lockdown-trigger-form .lockdown-trigger-select {
+  min-width: 0;
+  min-height: 34px;
+  border-color: var(--color-text-muted);
+  background: var(--color-bg-elevated);
+}
+
+.lockdown-trigger-action,
+.lockdown-trigger-help {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 32px;
+  padding: 5px 10px;
+  border: 1px solid var(--color-text-muted);
+  border-radius: 5px;
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.lockdown-trigger-action--primary {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  color: #17110c;
+}
+
+.lockdown-trigger-help {
+  flex: none;
+  width: 28px;
+  min-height: 28px;
+  padding: 0;
+  font-size: 14px;
+}
+
+.lockdown-trigger-action:focus-visible,
+.lockdown-trigger-help:focus-visible,
+.lockdown-trigger-form .lockdown-trigger-input:focus-visible,
+.lockdown-trigger-form .lockdown-trigger-select:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.lockdown-trigger-action:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}

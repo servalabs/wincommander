@@ -1621,7 +1621,6 @@ html.light .doh-guide {
 }
 
 .adapter-row--inactive {
-    opacity: 0.45;
     padding: 8px 16px;
     background: var(--color-bg-tertiary);
 }
@@ -1941,7 +1940,7 @@ html.light .blocklist-count {
 .merged-segment__count {
     flex-shrink: 0;
     padding: 1px 6px;
-    border-radius: var(--radius-full, 999px);
+    border-radius: var(--radius-sm, 4px);
     background: color-mix(in srgb, var(--color-accent) 12%, transparent);
     border: 1px solid color-mix(in srgb, var(--color-accent) 35%, transparent);
     color: var(--color-accent);
@@ -2158,3 +2157,5 @@ html.light .blocklist-count {
         max-height: 300px;
     }
 }
+
+.merged-segment--adapters .merged-segment__title { font-size: 14px; letter-spacing: 0.4px; }

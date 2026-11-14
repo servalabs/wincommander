@@ -16,6 +16,8 @@ $script:toolAvailable = $true
 $script:knownHostsRemain = $false
 $script:knownHostsDenied = $false
 $script:attemptedClear = $false
+$script:serviceStatus = 'Running'
+function Get-Service { param([string]$Name, $ErrorAction) [pscustomobject]@{ Status = $script:serviceStatus } }
 function Invoke-WCSshAdd { param([string]$Option) if (-not $script:toolAvailable) { throw 'Synthetic missing Windows OpenSSH.' }; if ($script:agentDenied) { return 2 }; if ($Option -eq '-D') { return 0 }; return $script:agentStatus }
 function Get-Command { throw 'PATH-based command search is forbidden.' }
 function Test-Path { param([Alias('Path')][string]$LiteralPath, [string]$PathType, $ErrorAction) return $script:knownHostsRemain }
@@ -44,6 +46,16 @@ if ($result.sshState -ne 'cleaned' -or -not $script:attemptedClear) { throw 'Ver
 $script:agentDenied = $true; $script:attemptedClear = $false
 $scan = Get-SSHStateInfo
 if (-not $scan.partial -or $scan.status -ne 'partial') { throw 'Agent errors must not be reported as an empty scan.' }
+$script:serviceStatus = 'Stopped'
+$savedAgentSocket = $env:SSH_AUTH_SOCK
+try {
+    $env:SSH_AUTH_SOCK = ''
+    $scan = Get-SSHStateInfo
+    if ($scan.partial -or $scan.coverage -ne 'limited' -or $scan.coverageNote -notmatch 'stopped') { throw 'A stopped Windows agent must report its limited scope.' }
+    $env:SSH_AUTH_SOCK = 'fixture-socket'
+    $scan = Get-SSHStateInfo
+    if (-not $scan.partial) { throw 'An unreachable custom agent must remain incomplete.' }
+} finally { $env:SSH_AUTH_SOCK = $savedAgentSocket; $script:serviceStatus = 'Running' }
 $result = Invoke-CleanupClearForUser -UserProfilePath $profile -CategoryIds @('sshState') -AllowDefaultExcluded $true
 if ($result.sshState -ne 'failed' -or -not $script:attemptedClear) { throw 'Agent failure must leave a truthful partial result.' }
 

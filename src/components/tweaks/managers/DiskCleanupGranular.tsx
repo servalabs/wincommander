@@ -354,6 +354,7 @@ export default function DiskCleanupGranular() {
                     <span className="font-mono text-base font-bold text-[var(--accent)]">{totalSelectedMb.toFixed(0)} MB</span>
                     <span className="ml-1 text-xs text-[var(--text-mute)]">selected</span>
                 </span>
+                <div className="ml-auto flex w-full flex-wrap items-center justify-end gap-2">
                 <Button variant="danger" size="sm" disabled={cleaning || !selected.size} onClick={() => void clean()}>
                     <Icon icon="clean" />{cleaning ? "Cleaning…" : `Clean ${selected.size} selected`}
                 </Button>
@@ -361,7 +362,6 @@ export default function DiskCleanupGranular() {
                     title="Run the built-in Windows cleanup sweep (cleanmgr) across every system category">
                     <Icon icon="eraser" />{cleaningAll ? "Cleaning…" : "Clean all"}
                 </Button>
-                <div className="ml-auto flex items-center gap-2">
                     {schedulesEnabled ? (
                         <DropdownMenu>
                             <DropdownMenuTrigger asChild>

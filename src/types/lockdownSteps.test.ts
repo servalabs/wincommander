@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import {
   DESTRUCT_STEPS,
   DESTRUCT_STEP_DESCRIPTIONS,
@@ -17,6 +18,16 @@ const TRACE_CLEANUP_COMMANDS = {
   trace_windows_update_log: "WindowsUpdateLog",
   trace_push_notifications: "PushNotifications",
 } as const;
+
+test("lockdown progress labels match their native event labels", () => {
+  const native = readFileSync("src-tauri/commander-free/src/action_steps.rs", "utf8").replace(/\r\n/g, "\n");
+  for (const step of DESTRUCT_STEPS) {
+    if (step.id === "remove_schedules") continue; // This step is driven by the frontend.
+    const escapedId = step.id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const nativeStep = native.match(new RegExp(`id: "${escapedId}",\\s*label: "([^"]+)"`));
+    expect(nativeStep?.[1]).toBe(step.label);
+  }
+});
 
 describe("system hygiene full-scope advanced cleanup steps", () => {
   test("remain opt-in Deep Trace actions with an operator-facing impact explanation", () => {

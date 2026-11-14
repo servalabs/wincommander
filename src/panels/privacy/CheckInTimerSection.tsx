@@ -172,7 +172,7 @@ export default function CheckInTimerSection({ bare = false }: { bare?: boolean }
   const statusTag = <span className="lockdown-trigger-status">{status.label}</span>;
 
   const inner = (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <div className="lockdown-checkin-details" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       {config.lastFiredAt && (
         <div style={{ padding: '8px 10px', background: 'var(--color-danger-dim)', border: '1px solid color-mix(in srgb, var(--color-danger) 50%, transparent)', borderRadius: 4 }}>
           <div style={{ fontWeight: 700, color: 'var(--color-danger)', fontSize: 11 }}>
@@ -187,7 +187,7 @@ export default function CheckInTimerSection({ bare = false }: { bare?: boolean }
       <p role="status">{status.message}</p>
       {lastIterationCompletedAt && Number.isFinite(new Date(lastIterationCompletedAt).getTime()) && <p>Last completed iteration: <time dateTime={lastIterationCompletedAt}>{new Date(lastIterationCompletedAt).toLocaleString()}</time> (historical).</p>}
       {startupResetFailed && <p role="alert">The timer could not reset when WinCommander started. Check the activity time; the watchdog may still run.</p>}
-      <p>The timer runs only while WinCommander and personal automation are available. Starting WinCommander resets the activity time, including automatic startup; it does not prove that a person checked in.</p>
+      <p title="The timer runs only while WinCommander and personal automation are available. Starting WinCommander resets the activity time, including automatic startup; it does not prove that a person checked in.">Runs while WinCommander is available. Starting the app, including automatic startup, resets the timer; this does not prove a person checked in.</p>
 
       <div className="lockdown-trigger-row">
         <input

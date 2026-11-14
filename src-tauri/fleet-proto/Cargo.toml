@@ -13,9 +13,16 @@ edition = "2021"
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Independent lexical JSON AST; do not unify serde_json parsing features.
+json-syntax = { version = "0.13", default-features = false, optional = true }
+# RFC3339 validation for the Windows-only closed outcome summary.
+chrono = { version = "0.4", default-features = false, features = ["std"], optional = true }
 base64 = "0.22"
 ed25519-dalek = { version = "3", default-features = false, features = ["alloc", "signature", "rand_core"] }
 sha2 = "0.11"
+# Used only by the Windows v2 raw-byte check-in authentication contract.
+hmac = { version = "0.13", optional = true }
+wincmd-pq-experiment = { path = "../wincmd-pq-experiment", optional = true }
 
 # Clipboard-guard policy types (plan §4.1) — Severity/Action/Rule/MatchKind/
 # etc. are NOT redefined here (NON-GOALS.md forbids duplicating a shared wire
@@ -34,7 +41,11 @@ ts-rs = { version = "10", optional = true, features = ["serde-json-impl"] }
 # Also turns on wincmd-clip-rules' own ts-codegen so the re-exported policy
 # types (Rule, MatchKind, Severity, ...) emit TS bindings alongside this
 # crate's own types, into the same fleet.ts file.
-ts-codegen = ["dep:ts-rs", "wincmd-clip-rules/ts-codegen"]
+ts-codegen = ["dep:ts-rs", "wincmd-clip-rules/ts-codegen", "windows-v2"]
+# Neutral Windows protocol contracts. No transport or execution is enabled by
+# this feature; v1-only consumers retain their existing dependency closure.
+windows-v2 = ["dep:json-syntax", "dep:chrono", "dep:hmac"]
+windows-v2-hybrid = ["windows-v2", "dep:wincmd-pq-experiment"]
 # Pure cfg gate (no deps) for COMMAND_METADATA — keeps the catalog metadata
 # table out of the AV-scanned Free binary's dependency closure. Enable only in
 # consumers that need catalog discovery (fleet-server, commander-pro).
@@ -47,5 +58,7 @@ autonomous-test = []
 sensitive-finder = []
 
 [dev-dependencies]
+aws-lc-rs = { version = "1.19.0", default-features = false, features = ["alloc", "aws-lc-sys"] }
+wincmd-pq-experiment = { path = "../wincmd-pq-experiment", features = ["experimental-signer"] }
 # Test oracle for signatures produced by releases using dalek 2.
 ed25519-dalek-v2 = { package = "ed25519-dalek", version = "=2.2.0", default-features = false, features = ["alloc"] }

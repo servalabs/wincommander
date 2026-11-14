@@ -10,7 +10,7 @@ import { formatBytes, type CapacityPlan } from "../../lib/stegoBackup";
 import type { StegoFailure, StegoField, StegoIssue } from "../../lib/stegoBackupValidation";
 
 export const INFO = {
-  what: "Steganographic snapshot: WinCommander appends your existing encrypted VeraCrypt container to a normal video file. The result still plays in a player, but it is not invisible to forensic inspection. Do not re-encode it or send it through services that rewrite video files.",
+  what: "WinCommander appends your existing encrypted container to a video that still plays. The backup is not invisible to forensic inspection. Do not re-encode it or send it through services that rewrite video files.",
   size: "The usable space inside the hidden volume. It is fixed at creation — to store more later you have to build a new one.",
   carrier: "The payload rides along inside the file, so a large hidden volume in a tiny clip produces a video whose file size makes no sense for its length. Roughly three times the payload keeps the file size believable.",
   password: "This password is the only key. There is no reset, no recovery file and no support route back in — lose it and the backup is unreadable forever.",
@@ -20,7 +20,7 @@ export const INFO = {
 export function InfoDot({ content }: { content: string }) {
   return (
     <Tooltip content={content}>
-      <Icon icon="info-sign" size={11} className="stego-info-dot" />
+      <button type="button" className="stego-info-trigger" aria-label="More information"><Icon icon="info-sign" size={11} /></button>
     </Tooltip>
   );
 }
@@ -45,32 +45,28 @@ export function FilePick({
   onPick,
   onClear,
   disabled,
+  icon = "folder-open",
 }: {
   label: string;
   value: string;
   onPick: () => void;
   onClear: () => void;
   disabled?: boolean;
+  icon?: string;
 }) {
   const name = value.replace(/\//g, "\\").split("\\").pop() ?? "";
   return (
-    <div className="stego-pick">
-      <Button minimal small icon="folder-open" onClick={onPick} disabled={disabled}>
-        {label}
-      </Button>
-      {value ? (
-        <>
-          <span className="stego-pick__name" title={value}>
-            {name}
-          </span>
-          <span className="stego-pick__dir" title={value}>
-            {value.slice(0, Math.max(0, value.length - name.length))}
-          </span>
-          <Button minimal small icon="cross" aria-label={`Clear ${label}`} onClick={onClear} disabled={disabled} />
-        </>
-      ) : (
-        <span className="stego-pick__empty">Nothing chosen</span>
-      )}
+    <div className={`stego-pick${value ? " stego-pick--selected" : ""}`}>
+      <button type="button" className="stego-pick__choose" aria-label={label} onClick={onPick} disabled={disabled}>
+        <span className="stego-pick__icon"><Icon icon={icon} size={20} /></span>
+        <span className="stego-pick__content">
+          <strong>{label.replace(/…/g, "")}</strong>
+          {value ? <span className="stego-pick__name" title={value}>{name}</span> : <span className="stego-pick__empty">Choose a file or folder</span>}
+          {value && <span className="stego-pick__dir" title={value}>{value}</span>}
+        </span>
+        <span className="stego-pick__action">{value ? "Change" : "Choose"}</span>
+      </button>
+      {value && <Button minimal small icon="cross" aria-label={`Clear ${label}`} onClick={onClear} disabled={disabled} />}
     </div>
   );
 }
@@ -145,7 +141,7 @@ export function FailureCallout({ failure }: { failure: StegoFailure }) {
       <p className="stego-outcome__hint">{failure.hint}</p>
       <details className="stego-details">
         <summary>Engine message</summary>
-        <pre>{failure.raw}</pre>
+        <pre>{failure.raw.replace(/veracrypt/gi, "encrypted container software")}</pre>
       </details>
     </Callout>
   );

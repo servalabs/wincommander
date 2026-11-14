@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test";
-import { getDuplicateSelectedBytes, getRetainedFileId, selectDuplicateCopies } from "./maintenanceSelection";
+import { canRemoveDuplicateFile, getDuplicateSelectedBytes, getRetainedFileId, selectDuplicateCopies } from "./maintenanceSelection";
 import type { DuplicateGroup } from "../hooks/useBackend";
 
 const group: DuplicateGroup = { id: "group", size: 100, reclaimableBytes: 200, fileCount: 3, memberOffset: 0, hasMoreFiles: false, files: [
-  { id: "long", name: "a", path: "C:\\backups\\copy\\a", size: 100, modified: "100" },
-  { id: "short", name: "a", path: "C:\\a", size: 100, modified: "300" },
-  { id: "third", name: "a", path: "C:\\other\\a", size: 100, modified: "200" },
+  { id: "long", name: "a", path: "C:\\backups\\copy\\a", size: 100, modified: "100", removable: true },
+  { id: "short", name: "a", path: "C:\\a", size: 100, modified: "300", removable: true },
+  { id: "third", name: "a", path: "C:\\other\\a", size: 100, modified: "200", removable: true },
 ] };
 
 test("smart selection keeps one copy and counts only removable bytes", () => {
@@ -39,4 +39,18 @@ test("explicit keep choice overrides automatic preference and rejects stale IDs"
 
 test("single member and empty groups never select their last copy", () => {
   expect(selectDuplicateCopies([{ ...group, files: group.files.slice(0, 1) }, { ...group, id: "empty", files: [] }], "first").size).toBe(0);
+});
+
+test("smart selection never includes protected or unclassified copies", () => {
+  const protectedGroup = { ...group, files: [group.files[0], { ...group.files[1], removable: false }, { ...group.files[2], removable: undefined }] };
+  expect(selectDuplicateCopies([protectedGroup], "first").size).toBe(0);
+});
+
+test("individual removal rejects a keeper, protected copy, and stale id", () => {
+  const mixed = { ...group, files: [group.files[0], group.files[1], { ...group.files[2], removable: false }] };
+  expect(canRemoveDuplicateFile([mixed], "long", "first")).toBe(false);
+  expect(canRemoveDuplicateFile([mixed], "short", "first")).toBe(true);
+  expect(canRemoveDuplicateFile([mixed], "third", "first")).toBe(false);
+  expect(canRemoveDuplicateFile([mixed], "stale", "first")).toBe(false);
+  expect(canRemoveDuplicateFile([mixed], "short", "first", { group: "short" })).toBe(false);
 });

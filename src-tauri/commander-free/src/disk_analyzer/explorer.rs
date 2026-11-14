@@ -31,7 +31,7 @@ pub(super) fn reject_link_components(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn scanned_path(scan_id: &str, item_id: u64) -> Result<(PathBuf, PathBuf, bool), String> {
+pub(super) fn scanned_path(scan_id: &str, item_id: u64) -> Result<(PathBuf, PathBuf, bool), String> {
     let guard = cache().lock().map_err(|_| "Scan cache unavailable.")?;
     let meta = guard
         .meta

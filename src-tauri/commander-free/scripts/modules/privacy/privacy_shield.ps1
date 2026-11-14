@@ -716,11 +716,11 @@ def classify_gaze_with_reason(landmarks):
         yaw = abs((nose.x - (left.x + right.x) / 2.0) / width)
         if not np.isfinite(yaw):
             return "blackout", "invalid"
-        if yaw >= 0.46:
-            return "blackout", "full_turn"
         clipped = left.x <= 0.02 or right.x >= 0.98 or getattr(landmarks[10], "y", 0.5) <= 0.02 or getattr(landmarks[152], "y", 0.5) >= 0.98
         if clipped:
             return "blur", "frame_edge"
+        if yaw >= 0.46:
+            return "blackout", "full_turn"
         if yaw >= 0.12:
             return "blur", "yaw"
         return "clear", "clear"

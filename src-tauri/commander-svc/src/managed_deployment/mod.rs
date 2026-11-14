@@ -8,6 +8,6 @@ mod tests;
 #[cfg(windows)]
 mod live;
 #[cfg(windows)]
-mod registry;
+pub(crate) mod registry;
 #[cfg(windows)]
 pub(crate) use live::{apply, bind, status};

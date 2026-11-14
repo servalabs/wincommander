@@ -138,6 +138,12 @@ export function readCleanupScanResult(
     )) return failed("The category scan is incomplete.", data);
     const rowTotal = rows.reduce((sum, row) => sum + (row as { count: number }).count, 0);
     if (data.total !== count || rowTotal !== count) return failed("The scan total disagrees with its category counts. Scan again.", data);
+    if (category.id === "amcache" && data.source === "snapshot" && rows.some(row => {
+      const categoryRow = row as { count: number; sample?: unknown };
+      return !Array.isArray(categoryRow.sample) || categoryRow.sample.length !== categoryRow.count ||
+        categoryRow.sample.some(item => !item || typeof item !== "object" || Array.isArray(item) ||
+          typeof (item as { id?: unknown }).id !== "string" || !(item as { id: string }).id.trim());
+    })) return failed("App Launch Cache snapshot details are incomplete. Scan again.", data);
     if (category.id === "ntUserTraces" && rows.some(row => {
       const section = row as { count: number; entries?: unknown };
       return !Array.isArray(section.entries) || section.entries.length !== section.count;

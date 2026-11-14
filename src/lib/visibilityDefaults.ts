@@ -60,6 +60,11 @@ export const DEFAULT_BORROWED_EXTRAS: string[] = [
   "engines-section",
 ];
 
-// AI Advisor starts hidden everywhere. An explicit empty persisted list still
-// means the person using the PC chose to show it.
+// AI Advisor starts hidden until explicitly enabled in Secret Settings.
 export const DEFAULT_ALWAYS_HIDDEN_SIDEBAR_ACTIONS = ["ai-advisor"];
+
+export function sidebarHiddenActions(actions: readonly string[] | undefined, showAdvisor: boolean | undefined): string[] {
+  const hidden = new Set(actions ?? DEFAULT_ALWAYS_HIDDEN_SIDEBAR_ACTIONS);
+  if (!showAdvisor) hidden.add("ai-advisor");
+  return [...hidden];
+}

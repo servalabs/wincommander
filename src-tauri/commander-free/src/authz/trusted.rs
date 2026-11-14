@@ -44,7 +44,7 @@ impl TrustedLockdownGate {
 
 fn configured_lockdown_countdown() -> u64 {
     crate::settings::read_settings()
-        .map(|settings| u64::from(settings.app.lockdown_timer_sec.clamp(3, 30)))
+        .map(|settings| u64::from(settings.app.lockdown_timer_sec.clamp(3, 86400)))
         .unwrap_or(4)
 }
 

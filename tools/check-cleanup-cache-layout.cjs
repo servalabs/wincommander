@@ -29,17 +29,19 @@ async function main() {
     await page.route('**/__cache_layout_fixture__', route => route.fulfill({contentType:'text/html',body:html}));
     await page.goto(new URL('/__cache_layout_fixture__',origin).href);
     const body = page.locator('.cleanup-readable-detail__body');
-    const header = page.getByRole('columnheader',{name:'Name',exact:true});
-    const details = page.getByRole('columnheader',{name:'Location',exact:true});
+    const header = page.getByRole('columnheader',{name:'Record',exact:true});
+    const details = page.getByRole('columnheader',{name:'Details',exact:true});
     await header.waitFor();
     const frame = await body.boundingBox();
     for (const element of [header,details,page.getByRole('searchbox',{name:'Filter details'}),page.getByRole('button',{name:'Next',exact:true})]) {
       const box = await element.boundingBox();
       assert.ok(frame && box && box.x >= frame.x && box.x + box.width <= frame.x + frame.width + 1, 'Control must remain inside the scrollable details area');
     }
+    await page.locator('.cleanup-record-preview__table--amcache summary').first().click();
+    assert.ok(await page.getByText('Registry Values Long Value',{exact:true}).first().isVisible());
     await page.getByRole('button',{name:'Next',exact:true}).click();
     assert.ok(await page.getByText('Example 10',{exact:true}).first().isVisible());
-    console.log('Passed: long registry fields preserve visible cache columns, search, and paging.');
+    console.log('Passed: long registry fields preserve visible cache columns, search, details, and paging.');
   } finally { await browser.close(); }
 }
 main().catch(error => { console.error(error); process.exitCode=1; });

@@ -67,7 +67,7 @@ export function RoutineCleanerPreview({ cleaner }: { cleaner: RoutineCleaner }) 
   return <div className="maintenance-cache-workspace">
     <div className="maintenance-findings-summary" role="status" aria-live="polite">
       <span><strong>{scan.items.length}</strong> targets · <strong>{scan.totalFiles.toLocaleString()}</strong> file records in the scan</span>
-      <span>Logical file size <strong className="text-[var(--accent)]">{formatBytes(scanSizes.logicalBytes)}</strong></span>
+      <span>Size <strong className="text-[var(--accent)]">{formatBytes(scanSizes.logicalBytes)}</strong></span>
       {scanSizes.vacuumEstimateBytes > 0 && <span>Database optimization estimate <strong className="text-[var(--accent)]">{formatBytes(scanSizes.vacuumEstimateBytes)}</strong></span>}
       {scan.cancelled && <Badge tone="warning">Partial scan · cancelled</Badge>}
       {scan.skippedTargets > 0 && <Badge tone="warning">{scan.skippedTargets} unavailable targets</Badge>}
@@ -79,7 +79,7 @@ export function RoutineCleanerPreview({ cleaner }: { cleaner: RoutineCleaner }) 
           const sizes = summarizeItems(group.items);
           return <button key={group.id} type="button" onClick={() => { setActiveCategory(group.id); setFocusedId(undefined); setQuery(""); }} aria-current={group.id === visibleCategory?.id ? "true" : undefined}>
             <Icon icon={CATEGORY_ICONS[group.id] ?? "applications"} size={16} />
-            <span><strong>{group.label}</strong><small>{group.items.length} targets · {formatBytes(sizes.logicalBytes)} logical{sizes.vacuumEstimateBytes ? ` · ${formatBytes(sizes.vacuumEstimateBytes)} estimated` : ""}</small></span>
+            <span><strong>{group.label}</strong><small>{group.items.length} targets · {formatBytes(sizes.logicalBytes)}{sizes.vacuumEstimateBytes ? ` · ${formatBytes(sizes.vacuumEstimateBytes)} estimated` : ""}</small></span>
             {group.items.some((item) => selectedIds.has(item.id)) && <span className="maintenance-category-selected" aria-label="Contains selected targets" />}
           </button>;
         })}
@@ -87,7 +87,7 @@ export function RoutineCleanerPreview({ cleaner }: { cleaner: RoutineCleaner }) 
       <section className="maintenance-cache-results" aria-label={`${visibleCategory?.label ?? "Cache"} targets`}>
         <div className="maintenance-cache-results-header">
           <div><strong>{visibleCategory?.label}</strong><p>{visibleCategory?.description}</p></div>
-          <span>{formatBytes(summarizeItems((visibleCategory?.items ?? []).filter((item) => selectedIds.has(item.id))).logicalBytes)} logical selected</span>
+          <span>{formatBytes(summarizeItems((visibleCategory?.items ?? []).filter((item) => selectedIds.has(item.id))).logicalBytes)} selected</span>
           <Button size="sm" variant="ghost" aria-pressed={isCategorySelected} aria-label={`${isCategorySelected ? "Deselect" : "Select"} all ${visibleCategory?.label ?? "cache"} targets`} disabled={isBusy || !visibleCategory?.items.length} onClick={() => { if (visibleCategory) cleaner.toggleCategorySelection(visibleCategory.id); }}>{isCategorySelected ? "Deselect category" : "Select category"}</Button>
         </div>
         <label className="maintenance-cache-search"><Icon icon="search" size={14} /><input aria-label="Filter cache targets" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter by name or location" /></label>
@@ -103,7 +103,7 @@ export function RoutineCleanerPreview({ cleaner }: { cleaner: RoutineCleaner }) 
 function ItemRow({ item, selected, focused, disabled, onToggle, onDetails }: { item: RoutineCleanerItem; selected: boolean; focused: boolean; disabled: boolean; onToggle: (id: string) => void; onDetails: () => void }) {
   const categoryIcon = CATEGORY_ICONS[item.category] ?? "applications";
   const logo = browserLogoForLabel(item.label) ?? appLogoForLabel(item.label);
-  const amountLabel = item.operation === "vacuum" ? "estimated reclaim" : "logical size";
+  const amountLabel = item.operation === "vacuum" ? "estimated reclaim" : "size";
   return <div className="maintenance-cache-target" data-selected={selected || undefined}>
     <CheckboxControl checked={selected} disabled={disabled} ariaLabel={`${selected ? "Deselect" : "Select"} ${item.label}`} onChange={() => onToggle(item.id)} />
     {logo ? <img src={logo} alt="" width={16} height={16} className="shrink-0 object-contain" /> : <Icon icon={item.operation === "vacuum" ? "database" : categoryIcon} size={16} className="text-[var(--text-mute)]" />}

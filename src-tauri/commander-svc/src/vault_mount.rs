@@ -92,6 +92,40 @@ const SHARED_VAULT_DEVICE_READ_ONLY: bool = false;
 static NEXT_INTERNAL_OPERATION_ID: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(1 << 62);
 
+fn container_filename(path: &str) -> Result<Option<Vec<u16>>, VaultMountReason> {
+    if wincmd_shared::vault_access::is_supported_vault_device_path(path) {
+        return Ok(None);
+    }
+    let name = std::path::Path::new(path).file_name()
+        .and_then(|name| name.to_str())
+        .ok_or(VaultMountReason::MountStateUnknown)?
+        .trim_end_matches([' ', '.']);
+    if name.is_empty() || name.contains('\0') {
+        return Err(VaultMountReason::MountStateUnknown);
+    }
+    let encoded: Vec<u16> = name.encode_utf16().collect();
+    if encoded.len() > i32::MAX as usize {
+        return Err(VaultMountReason::MountStateUnknown);
+    }
+    Ok(Some(encoded))
+}
+
+fn ordinal_filename_eq(left: &[u16], right: &[u16]) -> Result<bool, VaultMountReason> {
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn CompareStringOrdinal(a: *const u16, a_len: i32, b: *const u16, b_len: i32, ignore_case: i32) -> i32;
+    }
+    let left_len = i32::try_from(left.len()).map_err(|_| VaultMountReason::MountStateUnknown)?;
+    let right_len = i32::try_from(right.len()).map_err(|_| VaultMountReason::MountStateUnknown)?;
+    // Both slices stay alive for the call; Windows reads only the supplied lengths.
+    let result = unsafe { CompareStringOrdinal(left.as_ptr(), left_len, right.as_ptr(), right_len, 1) };
+    match result {
+        2 => Ok(true),
+        1 | 3 => Ok(false),
+        _ => Err(VaultMountReason::MountStateUnknown),
+    }
+}
+
 fn next_internal_operation_id() -> u64 {
     NEXT_INTERNAL_OPERATION_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
@@ -1128,6 +1162,17 @@ impl VaultMountBroker {
             self.attest_existing_mount(&existing, caller_token)?;
             return Err(VaultMountReason::AlreadyMounted);
         }
+        match self.has_container_conflict(store, &record.container_identity, &record.container_path) {
+            Ok(false) => {}
+            Ok(true) => {
+                request.zeroize_secrets();
+                return Err(VaultMountReason::BrokerRejected);
+            }
+            Err(reason) => {
+                request.zeroize_secrets();
+                return Err(reason);
+            }
+        }
         request.preferred_letter = match self.select_mount_letter(
             store,
             request.preferred_letter.as_deref(),
@@ -1475,6 +1520,21 @@ impl VaultMountBroker {
                 reason: Some(VaultMountReason::AlreadyMounted),
                 sync_warning: None,
             };
+        }
+        let Some(container_path) = plan.container.to_str() else {
+            zeroize_mount_secrets(password, hidden_protection_password);
+            return failed(entry_id, Some(presentation), VaultMountReason::MountStateUnknown);
+        };
+        match self.has_container_conflict(store, &container_identity, container_path) {
+            Ok(false) => {}
+            Ok(true) => {
+                zeroize_mount_secrets(password, hidden_protection_password);
+                return failed(entry_id, Some(presentation), VaultMountReason::BrokerRejected);
+            }
+            Err(reason) => {
+                zeroize_mount_secrets(password, hidden_protection_password);
+                return failed(entry_id, Some(presentation), reason);
+            }
         }
         let preferred_letter =
             match self.select_mount_letter(store, preferred_letter.as_deref(), &container_identity)
@@ -2528,6 +2588,50 @@ impl VaultMountBroker {
                 (state, Some(mount.drive_letter))
             })
             .unwrap_or((VaultMountState::Unmounted, None))
+    }
+
+    /// The operation lock keeps this snapshot stable through the driver mount.
+    fn has_container_conflict(
+        &self,
+        store: &VaultAccessStore,
+        identity: &str,
+        path: &str,
+    ) -> Result<bool, VaultMountReason> {
+        if identity.is_empty() {
+            return Err(VaultMountReason::MountStateUnknown);
+        }
+        let incoming = container_filename(path)?;
+        let mounts: Vec<_> = self.active.lock()
+            .map_err(|_| VaultMountReason::MountStateUnknown)?
+            .iter().map(|(id, mount)| (id.clone(), mount.clone())).collect();
+        if mounts.len() >= MAX_DURABLE_MOUNTS {
+            return Err(VaultMountReason::BrokerRejected);
+        }
+        for (id, mount) in mounts {
+            if mount.container_identity.is_empty() {
+                return Err(VaultMountReason::MountStateUnknown);
+            }
+            if mount.container_identity.eq_ignore_ascii_case(identity) {
+                return Ok(true);
+            }
+            let Some(incoming) = incoming.as_deref() else { continue };
+            let existing = if mount.personal {
+                mount.canonical_container_path.ok_or(VaultMountReason::MountStateUnknown)?
+            } else {
+                let (plan, _, _, current_identity, _) = store.mount_plan(&id)
+                    .ok_or(VaultMountReason::MountStateUnknown)?;
+                if !current_identity.eq_ignore_ascii_case(&mount.container_identity) {
+                    return Err(VaultMountReason::MountStateUnknown);
+                }
+                plan.container.to_str().ok_or(VaultMountReason::MountStateUnknown)?.to_owned()
+            };
+            if let Some(existing) = container_filename(&existing)? {
+                if ordinal_filename_eq(incoming, &existing)? {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
     }
 
     fn select_mount_letter(
@@ -4053,6 +4157,113 @@ mod tests {
             created_by_session: 7,
             syncthing_opt_in: Some(false),
         }
+    }
+
+    #[test]
+    fn duplicate_vault_filename_does_not_disturb_an_existing_mount() {
+        let store = mount_store(
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let events = Arc::new(Mutex::new(BrokerEvents::default()));
+        let broker = VaultMountBroker::with_broker(Box::new(MountBroker(events.clone())));
+        let mut existing = active_mount_for_owner(8, "S-1-5-21-other");
+        existing.personal = true;
+        existing.container_identity = "different-existing-identity".into();
+        existing.canonical_container_path = Some(r"C:\other\SHARED.hc".into());
+        broker.active.lock().unwrap().insert("existing".into(), existing);
+        let mut record = personal_record();
+        record.container_path = r"D:\mine\shared.HC".into();
+        let mut request = personal_request();
+        request.container_path = record.container_path.clone();
+        let result = broker.mount_personal_authorized(
+            41, &store, &record, &mut request, std::ptr::null_mut(),
+            7, &record.owner_sid, (0, 0),
+        );
+        assert_eq!(result, Err(VaultMountReason::BrokerRejected));
+        assert!(request.password.is_empty());
+        let events = events.lock().unwrap();
+        assert_eq!(events.mounted, 0);
+        assert!(events.dismounted.is_empty());
+    }
+
+    #[test]
+    fn vault_collision_check_covers_aliases_unicode_devices_and_unknown_history() {
+        let store = mount_store(Arc::new(Mutex::new(HashMap::new())), Arc::new(AtomicBool::new(false)));
+        let broker = VaultMountBroker::with_broker(Box::new(MountBroker(Arc::new(Mutex::new(BrokerEvents::default())))));
+        let mut existing = active_mount_for_owner(7, "S-1-5-21-owner");
+        existing.personal = true;
+        existing.container_identity = "v:1:i:123".into();
+        existing.canonical_container_path = Some(r"C:\Vaults\Ärger.hc".into());
+        broker.active.lock().unwrap().insert("existing".into(), existing.clone());
+        assert_eq!(broker.has_container_conflict(&store, "v:1:i:123", r"D:\different.hc"), Ok(true));
+        assert_eq!(broker.has_container_conflict(&store, "v:1:i:456", r"D:\Other\ärger.HC."), Ok(true));
+        assert_eq!(broker.has_container_conflict(&store, "v:1:i:456", r"D:\Other\distinct.hc"), Ok(false));
+        assert_eq!(broker.has_container_conflict(&store, "device:2", r"\Device\Harddisk1\Partition1"), Ok(false));
+        existing.canonical_container_path = None;
+        broker.active.lock().unwrap().insert("existing".into(), existing);
+        assert_eq!(broker.has_container_conflict(&store, "v:1:i:456", r"D:\Other\distinct.hc"), Err(VaultMountReason::MountStateUnknown));
+    }
+
+    #[test]
+    fn vault_collision_check_uses_verified_managed_policy_path() {
+        struct FixtureResolver;
+        impl PrincipalResolver for FixtureResolver {
+            fn resolve_sid(&self, _: &str) -> Result<String, crate::vault_access::VaultError> {
+                Ok("S-1-5-21-1-2-3-1001".into())
+            }
+        }
+        let store = VaultAccessStore::open(
+            Box::new(MountFs { files: Arc::new(Mutex::new(HashMap::new())), fail_next_active_write: Arc::new(AtomicBool::new(false)) }),
+            Box::new(FixtureResolver), Box::new(MountAcl), PathBuf::from("/policy"),
+        );
+        dismount_policy_fixture(&store, VaultPresentation::PerUser);
+        let (_, _, _, identity, _) = store.mount_plan("managed").unwrap();
+        let broker = VaultMountBroker::with_broker(Box::new(MountBroker(Arc::new(Mutex::new(BrokerEvents::default())))));
+        let mut existing = active_mount_for_owner(7, "S-1-5-21-owner");
+        existing.container_identity = identity;
+        broker.active.lock().unwrap().insert("managed".into(), existing.clone());
+        assert_eq!(broker.has_container_conflict(&store, "different", r"D:\elsewhere\MANAGED.HC"), Ok(true));
+        existing.container_identity = "stale-identity".into();
+        broker.active.lock().unwrap().insert("managed".into(), existing);
+        assert_eq!(broker.has_container_conflict(&store, "different", r"D:\elsewhere\other.hc"), Err(VaultMountReason::MountStateUnknown));
+    }
+
+    #[test]
+    fn concurrent_same_named_personal_mounts_reach_the_engine_only_once() {
+        let store = Arc::new(mount_store(Arc::new(Mutex::new(HashMap::new())), Arc::new(AtomicBool::new(false))));
+        let events = Arc::new(Mutex::new(BrokerEvents::default()));
+        let broker = Arc::new(VaultMountBroker::with_broker(Box::new(MountBroker(events.clone()))));
+        let barrier = Arc::new(std::sync::Barrier::new(3));
+        let launch = |path: &'static str, identity: &'static str, letter: &'static str| {
+            let store = Arc::clone(&store);
+            let broker = Arc::clone(&broker);
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                let mut record = personal_record();
+                record.container_path = path.into();
+                record.container_identity = identity.into();
+                let mut request = personal_request();
+                request.container_path = path.into();
+                request.preferred_letter = Some(letter.into());
+                barrier.wait();
+                let result = broker.mount_personal_authorized(
+                    41, &store, &record, &mut request, std::ptr::null_mut(),
+                    7, &record.owner_sid, (0, 0),
+                );
+                assert!(request.password.is_empty());
+                result
+            })
+        };
+        let first = launch(r"C:\one\shared.hc", "identity-one", "P");
+        let second = launch(r"D:\two\SHARED.HC", "identity-two", "P");
+        barrier.wait();
+        let results = [first.join().unwrap(), second.join().unwrap()];
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(results.iter().filter(|result| matches!(result, Err(VaultMountReason::BrokerRejected))).count(), 1);
+        let events = events.lock().unwrap();
+        assert_eq!(events.mounted, 1);
+        assert!(events.dismounted.is_empty());
     }
 
     #[test]

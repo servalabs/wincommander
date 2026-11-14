@@ -130,7 +130,7 @@ export function validateAttachForm(input: AttachFormInput): SnapshotFormVerdict 
   const warnings: StegoIssue[] = [];
   if (!input.carrierPath.trim()) errors.push({ field: "carrier", message: "Choose the video that will carry the encrypted container." });
   else if (!isSupportedCarrier(input.carrierPath)) errors.push({ field: "carrier", message: `The carrier has to be a ${CARRIER_FORMATS} video.` });
-  if (!input.containerPath.trim()) errors.push({ field: "container", message: "Choose the existing VeraCrypt container to attach." });
+  if (!input.containerPath.trim()) errors.push({ field: "container", message: "Choose the existing encrypted container to attach." });
   else if (!isSupportedContainer(input.containerPath)) errors.push({ field: "container", message: "Choose a container file, including an extensionless NTFS container if that is how it was created." });
   if (!input.outputPath.trim() && !input.replacementConfirmed) errors.push({ field: "confirmation", message: "To update the selected backup video in place, confirm its verified replacement. Or choose a new backup-video path." });
   else if (!input.outputPath.trim()) {
@@ -171,7 +171,7 @@ export function validateRefreshForm(input: RefreshFormInput): SnapshotFormVerdic
   if (!input.backupVideoPath.trim()) errors.push({ field: "carrier", message: "Choose the existing backup video to refresh." });
   else if (!isSupportedCarrier(input.backupVideoPath)) errors.push({ field: "carrier", message: `The backup has to be a ${CARRIER_FORMATS} video.` });
   if (!input.containerPath.trim()) errors.push({ field: "container", message: "Choose the updated .hc or .tc container." });
-  else if (!isSupportedContainer(input.containerPath)) errors.push({ field: "container", message: "Choose a VeraCrypt .hc or .tc container." });
+  else if (!isSupportedContainer(input.containerPath)) errors.push({ field: "container", message: "Choose an encrypted .hc or .tc container." });
   else if (isSamePath(input.backupVideoPath, input.containerPath)) errors.push({ field: "container", message: "The video and container must be two different files." });
   if (!input.replacementConfirmed) errors.push({ field: "confirmation", message: "Confirm that the existing backup video will be replaced after verification." });
   warnings.push(...longPathWarnings([{ field: "carrier", path: input.backupVideoPath }, { field: "container", path: input.containerPath }]));
@@ -245,7 +245,7 @@ export function validateExtractForm(input: ExtractFormInput): ExtractFormVerdict
   } else if (normalizedOutputPath !== input.outputPath.trim()) {
     warnings.push({
       field: "output",
-      message: "Saving with a .hc ending so VeraCrypt offers to mount it.",
+      message: "Saving with a .hc ending so compatible software can mount it.",
     });
   }
 

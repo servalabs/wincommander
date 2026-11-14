@@ -172,7 +172,7 @@ pub(crate) async fn run() {
         crate::fleet_machine_policy::system_store,
         &crate::fleet_credential::MachineDpapi,
         crate::fleet_runtime_env::fingerprint,
-        fleet_agent_core::build_client_without_redirects,
+        fleet_agent_core::build_required_hybrid_client,
         &mut updates,
     )
     .await;
@@ -242,7 +242,7 @@ async fn run_with<'a>(
             .as_ref()
             .map_or(true, |(profile, _)| profile != &snapshot.profile)
         {
-            let pins = fleet_agent_core::SpkiPinSet::from_hex_list(&snapshot.profile.spki_pins);
+            let pins = fleet_agent_core::SpkiPinSet::from_hex_list_strict(&snapshot.profile.spki_pins);
             if !snapshot.profile.spki_pins.trim().is_empty() && pins.is_none() {
                 set_status("transport_security_invalid", None, fence);
                 wait_for_retry(updates, Duration::from_secs(10)).await;

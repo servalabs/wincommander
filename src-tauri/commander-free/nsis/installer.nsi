@@ -435,6 +435,9 @@ Var AppStartMenuFolder
 !insertmacro MUI_PAGE_FINISH
 
 Function RunMainBinary
+  !ifdef WC_EXPERIMENTAL_SEARCH_FENCE
+    !insertmacro WC_RELEASE_SEARCH_BEFORE_LAUNCH
+  !endif
   nsis_tauri_utils::RunAsUser "$INSTDIR\${MAINBINARYNAME}.exe" ""
 FunctionEnd
 
@@ -766,6 +769,9 @@ Function .onInstSuccess
     ${GetOptions} $CMDLINE "/R" $R0
     ${IfNot} ${Errors}
       ${GetOptions} $CMDLINE "/ARGS" $R0
+      !ifdef WC_EXPERIMENTAL_SEARCH_FENCE
+        !insertmacro WC_RELEASE_SEARCH_BEFORE_LAUNCH
+      !endif
       nsis_tauri_utils::RunAsUser "$INSTDIR\${MAINBINARYNAME}.exe" "$R0"
     ${EndIf}
   ${EndIf}

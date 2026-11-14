@@ -154,6 +154,11 @@ describe("Privacy Monitor control accessibility", () => {
     expect(decoy).toContain('disabled={fleetAlertLocked}');
     expect(auth).toContain('disabled={fleetReportingLocked}');
     expect(screenCapture).toContain('disabled={busy || reportToFleetLocked}');
-    expect(wifi).toContain('disabled={reportingLocked || busy || needsElevation}');
+    expect(wifi).not.toContain('Report coarse Wi-Fi alerts to Fleet');
+    expect(wifi).not.toContain('wifiGuard: { reportToFleet }');
+    expect(wifi).toContain('baseline.length > 0 && <details>');
+    expect(wifi).toContain('Forget approvals');
+    expect(wifi).toContain("invoke('clear_wifi_guard_known')");
+    expect(wifi).toContain('await recoverSavedTrust()');
   });
 });

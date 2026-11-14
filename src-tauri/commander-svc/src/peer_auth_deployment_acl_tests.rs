@@ -75,6 +75,44 @@ fn rejects_absent_or_empty_dacl() {
 }
 
 #[test]
+fn rejects_truncated_allow_ace() {
+    let text: Vec<u16> = "O:SYD:P(A;;FA;;;SY)"
+        .encode_utf16()
+        .chain(Some(0))
+        .collect();
+    unsafe {
+        let mut descriptor = std::ptr::null_mut();
+        assert_ne!(
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                text.as_ptr(),
+                1,
+                &mut descriptor,
+                std::ptr::null_mut()
+            ),
+            0
+        );
+        let _descriptor = Descriptor(descriptor);
+        let mut owner = std::ptr::null_mut();
+        let mut owner_defaulted = 0;
+        assert_ne!(
+            GetSecurityDescriptorOwner(descriptor, &mut owner, &mut owner_defaulted),
+            0
+        );
+        let mut present = 0;
+        let mut defaulted = 0;
+        let mut acl = std::ptr::null_mut();
+        assert_ne!(
+            GetSecurityDescriptorDacl(descriptor, &mut present, &mut acl, &mut defaulted),
+            0
+        );
+        let mut entry = std::ptr::null_mut();
+        assert_ne!(GetAce(acl, 0, &mut entry), 0);
+        (*entry.cast::<windows_sys::Win32::Security::ACE_HEADER>()).AceSize = 8;
+        assert_eq!(verify_acl(owner, acl), Err(PeerAuthError::PathNotAllowed));
+    }
+}
+
+#[test]
 fn rejects_a_reparse_component_before_inspecting_its_target_acl() {
     let root = std::env::temp_dir().join(format!(
         "wincmd-relay-reparse-{:016x}",

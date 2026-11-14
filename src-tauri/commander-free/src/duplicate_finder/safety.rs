@@ -14,10 +14,15 @@ pub(super) fn remove_files(
         cancelled: false,
         errors: Vec::new(),
     };
+    let policy = RemovalPolicy::load();
     for file in files {
         if cancelled.load(Ordering::Acquire) {
             result.cancelled = true;
             break;
+        }
+        if let Some(reason) = policy.protected_reason(&file.path) {
+            result.errors.push(format!("refused removal: {reason}"));
+            continue;
         }
         let keeper = keepers
             .iter()
@@ -102,10 +107,8 @@ pub(super) fn validated_file(file: &CachedFile) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-pub(super) fn ensure_mutation_allowed() -> Result<(), String> {
-    if crate::settings::is_decoy_mode() {
-        return Err("Refused: duplicate removal is unavailable in Decoy mode.".into());
-    }
+pub(crate) fn ensure_mutation_allowed() -> Result<(), String> {
+    ensure_decoy_mutation_allowed()?;
     if crate::license::is_advanced_mode() {
         return Err(
             "Refused: investigator mode forbids duplicate removal because it would taint evidence."
@@ -113,6 +116,46 @@ pub(super) fn ensure_mutation_allowed() -> Result<(), String> {
         );
     }
     Ok(())
+}
+
+pub(crate) fn ensure_decoy_mutation_allowed() -> Result<(), String> {
+    if crate::settings::is_decoy_mode() {
+        return Err("Refused: duplicate removal is unavailable in Decoy mode.".into());
+    }
+    Ok(())
+}
+
+/// Avoid repeated licence verification only when the committed toggle is off.
+pub(crate) fn ensure_per_item_mutation_allowed() -> Result<(), String> {
+    ensure_decoy_mutation_allowed()?;
+    ensure_advanced_with_cached_toggle(
+        crate::settings::cached_advanced_tools_enabled(),
+        crate::license::is_advanced_mode,
+    )
+}
+
+fn ensure_advanced_with_cached_toggle(
+    enabled: Option<bool>,
+    is_advanced: impl FnOnce() -> bool,
+) -> Result<(), String> {
+    if enabled != Some(false) && is_advanced() {
+        return Err("Refused: investigator mode forbids duplicate removal because it would taint evidence.".into());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod per_item_mode_tests {
+    use super::ensure_advanced_with_cached_toggle;
+
+    #[test]
+    fn disabled_toggle_skips_licence_probe_but_enabled_or_unknown_is_rechecked() {
+        assert!(ensure_advanced_with_cached_toggle(Some(false), || panic!("unnecessary licence probe")).is_ok());
+        assert!(ensure_advanced_with_cached_toggle(Some(true), || true).is_err());
+        assert!(ensure_advanced_with_cached_toggle(None, || true).is_err());
+        assert!(ensure_advanced_with_cached_toggle(Some(true), || false).is_ok());
+        assert!(ensure_advanced_with_cached_toggle(None, || false).is_ok());
+    }
 }
 
 // Literal Git metadata components remain reviewable but are not deletion targets.
@@ -125,6 +168,115 @@ pub(super) fn is_inside_system_root(path: &Path) -> bool {
     protected_system_roots()
         .iter()
         .any(|root| path == root || path.starts_with(root))
+}
+
+pub(crate) struct RemovalPolicy {
+    system_roots: Vec<PathBuf>,
+    #[cfg(windows)]
+    profiles: super::profile_policy::Snapshot,
+}
+
+pub(super) fn removal_block_code(reason: &str) -> &'static str {
+    match reason {
+        "Windows or application location is protected" => "protected_location",
+        "application, executable or codec file is protected" => "protected_type",
+        "application data is protected" => "application_data",
+        "Git metadata is protected" => "git_metadata",
+        "another user profile is protected" => "other_profile",
+        "user profile locations could not be verified" => "profiles_unavailable",
+        "file ownership could not be verified as the current user" => "owner_unavailable",
+        _ => "unknown",
+    }
+}
+
+impl RemovalPolicy {
+    pub(super) fn profile(&self, path: &Path) -> (&'static str, Option<String>) {
+        #[cfg(windows)]
+        {
+            let (scope, root) = self.profiles.describe(path);
+            (scope, root.and_then(super::scope::display_path))
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = path;
+            ("unavailable", None)
+        }
+    }
+    pub(crate) fn load() -> Self {
+        Self {
+            system_roots: protected_system_roots(),
+            #[cfg(windows)]
+            profiles: super::profile_policy::Snapshot::load(),
+        }
+    }
+
+    #[cfg(all(test, windows, feature = "experimental-disk-tree-delete"))]
+    pub(crate) fn fixture(current_root: PathBuf) -> Self {
+        Self { system_roots: Vec::new(), profiles: super::profile_policy::Snapshot::fixture(current_root) }
+    }
+
+    /// Paths remain reviewable even when removal is prohibited.
+    pub(crate) fn protected_reason(&self, path: &Path) -> Option<&'static str> {
+        // Protect literal .git directory components, including case variants.
+        // This does not identify bare repositories or external Git directories.
+        if super::git_metadata::contains_git_metadata_component(path) {
+            return Some("Git metadata is protected");
+        }
+        if self
+            .system_roots
+            .iter()
+            .any(|root| path == root || path.starts_with(root))
+        {
+            return Some("Windows or application location is protected");
+        }
+        let ext = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if matches!(
+            ext.as_str(),
+            "exe"
+                | "dll"
+                | "sys"
+                | "ocx"
+                | "ax"
+                | "acm"
+                | "drv"
+                | "cpl"
+                | "scr"
+                | "com"
+                | "msi"
+                | "msp"
+                | "msix"
+                | "appx"
+                | "bat"
+                | "cmd"
+                | "ps1"
+                | "vbs"
+                | "js"
+                | "jar"
+        ) {
+            return Some("application, executable or codec file is protected");
+        }
+        if path.components().any(|part| {
+            part.as_os_str()
+                .to_string_lossy()
+                .eq_ignore_ascii_case("AppData")
+        }) {
+            return Some("application data is protected");
+        }
+        #[cfg(windows)]
+        if let Err(reason) = self.profiles.check(path) {
+            return Some(reason);
+        }
+        None
+    }
+}
+
+#[cfg(test)]
+pub(super) fn protected_removal_reason(path: &Path) -> Option<&'static str> {
+    RemovalPolicy::load().protected_reason(path)
 }
 
 /// Validates a cached duplicate only for opening it in Explorer.  This is

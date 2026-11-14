@@ -16,7 +16,7 @@ describe("Secret Settings diagnostics", () => {
         expect(devPanel).not.toContain("fleet_status");
         expect(devPanel).toContain("Test Actions");
         expect(secretPanel.indexOf("<RuntimeStatusSection />")).toBeGreaterThan(-1);
-        expect(secretPanel.indexOf("<RuntimeStatusSection />") < secretPanel.indexOf('title="Diagnostic Center"')).toBe(true);
+        expect(secretPanel.indexOf("<RuntimeStatusSection />") < secretPanel.indexOf('title="Logs"')).toBe(true);
     });
 
     test("uses the Pro handshake ok field and never starts that smoke test on mount", async () => {
@@ -39,7 +39,7 @@ describe("Secret Settings diagnostics", () => {
 
         expect(secretStyles).toContain("grid-template-rows: auto minmax(260px, 1fr)");
         expect(secretStyles).toContain(".secret-diagnostics-log-card > .section-collapse");
-        expect(secretPanel).toContain('title="Diagnostic Center"');
+        expect(secretPanel).toContain('title="Logs"');
         expect(secretPanel).not.toContain('title="Error Center"');
         expect(secretPanel).not.toContain("LogViewer");
     });

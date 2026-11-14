@@ -78,3 +78,5 @@ pub use transport::{
 
 #[cfg(feature = "transport")]
 pub use pinning::{build_client, build_client_without_redirects, SpkiPin, SpkiPinSet};
+#[cfg(feature = "required-hybrid-tls")]
+pub use pinning::{build_required_hybrid_client, build_required_hybrid_client_with_config, required_hybrid_tls_config, RequiredHybridTlsConfig};

@@ -5,6 +5,9 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Refuse a new service-managed Vault mount when its container has the same
+  recorded filename or identity as another known mount, without disturbing it.
+
 - Show App Launch Cache names and paths only from matching name/path fields;
   version and hash values remain available in local raw details instead of being
   mislabeled.

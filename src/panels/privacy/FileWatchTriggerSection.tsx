@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Icon } from "../../components/ui/icon";
 import type { FileWatchRule, FileWatchTriggerSettings } from "../../types/settings";
+import "./LockdownTriggerControls.css";
 
 interface Props {
     settings: FileWatchTriggerSettings | null | undefined;
@@ -89,6 +90,7 @@ export default function FileWatchTriggerSection({ settings, onPatch, bare = fals
                     type="button"
                     role="switch"
                     aria-checked={enabled}
+                    aria-label="Enable file watch"
                     disabled={disabled}
                     className={`lockdown-trigger-toggle ${enabled ? 'is-on' : ''}`}
                     onClick={toggleEnabled}
@@ -151,11 +153,11 @@ export default function FileWatchTriggerSection({ settings, onPatch, bare = fals
             {/* Add rule form */}
             {showAdd ? (
                 <div
-                    className="flex flex-col gap-2 p-2 rounded"
-                    style={{ background: 'var(--color-bg-secondary)', border: '1px solid var(--color-border)' }}
+                    className="lockdown-trigger-form"
                 >
                     <input
                         type="text"
+                        aria-label="Directory path"
                         placeholder="Directory path (e.g. C:\Users\Admin\Desktop)"
                         value={form.path}
                         onChange={e => setForm(f => ({ ...f, path: e.target.value }))}
@@ -164,12 +166,14 @@ export default function FileWatchTriggerSection({ settings, onPatch, bare = fals
                     <div className="flex gap-2">
                         <input
                             type="text"
+                            aria-label="File name pattern"
                             placeholder="Name pattern (e.g. *.pdf, secret.txt)"
                             value={form.namePattern}
                             onChange={e => setForm(f => ({ ...f, namePattern: e.target.value }))}
                             className="lockdown-trigger-input flex-1"
                         />
                         <select
+                            aria-label="File watch event"
                             value={form.event}
                             onChange={e => setForm(f => ({ ...f, event: e.target.value as 'created' | 'deleted' }))}
                             className="lockdown-trigger-select"
@@ -183,31 +187,32 @@ export default function FileWatchTriggerSection({ settings, onPatch, bare = fals
                         <button
                             type="button"
                             onClick={addRule}
-                            className="text-[10px] font-bold px-3 py-1 rounded"
-                            style={{ background: 'var(--color-accent)', color: '#fff', border: 'none', cursor: 'pointer' }}
+                            disabled={disabled}
+                            className="lockdown-trigger-action lockdown-trigger-action--primary"
                         >
-                            Add Rule
+                            Add rule
                         </button>
                         <button
                             type="button"
                             onClick={() => { setShowAdd(false); setFormError(''); setForm({ ...EMPTY_FORM }); }}
-                            className="text-[10px] px-3 py-1 rounded"
-                            style={{ background: 'transparent', color: 'var(--color-text-muted)', border: '1px solid var(--color-border)', cursor: 'pointer' }}
+                            className="lockdown-trigger-action"
                         >
                             Cancel
                         </button>
                     </div>
                 </div>
             ) : (
+                <div className="flex justify-end">
                 <button
                     type="button"
                     onClick={() => setShowAdd(true)}
-                    className="text-[10px] font-semibold flex items-center gap-1"
-                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--color-accent)', padding: 0 }}
+                    disabled={disabled}
+                    className="lockdown-trigger-action lockdown-trigger-action--add"
                 >
                     <Icon icon="plus" size={10} />
                     Add rule
                 </button>
+                </div>
             )}
         </div>
     );

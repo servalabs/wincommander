@@ -2,7 +2,7 @@ import type { CleanupDisplayMode } from "../../panels/cleanup/cleanupDisplay";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useBackend } from "../../hooks/useBackend";
 import { readCleanupUserSummary } from "../../panels/cleanup/cleanupScanResult";
-import { cleanupPreviewColumns } from "./cleanupPreviewPresentation";
+import { cleanupFactValue, cleanupPreviewColumns } from "./cleanupPreviewPresentation";
 
 type RecordObject = Record<string, unknown>;
 type PreviewRow = { label: string; facts: string[] };
@@ -665,12 +665,14 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
       .sort((a, b) => (sortDescending ? -1 : 1) * (a.number - b.number));
   }, [all, query, sortDescending]);
   const columns = useMemo(() => {
+    if (categoryId === "amcache") return [];
     const labels = new Set(cleanupPreviewColumns(all));
-    if (categoryId === "amcache" || categoryId === "ntUserTraces") labels.add("Category");
+    if (categoryId === "ntUserTraces") labels.add("Category");
     if (categoryId === "wlanProfiles") labels.add("Password");
     if (categoryId === "clipboardHistory" && clipboardItems?.some(item => typeof item.id === "string" && item.detailAvailable === true)) labels.add("Clipboard content");
     if (categoryId === "clipboardHistory" && clipboardItems?.some(item => typeof item.id === "string" && item.formats?.includes("Bitmap"))) labels.add("Image");
     if (categoryId === "clipboardHistory" && clipboardItems?.some(item => clipboardStorageItems(item))) labels.add("Files and folders");
+    if (all.some(row => cleanupPreviewColumns([row]).length === 0)) labels.add("Details");
     if (!labels.size) labels.add("Details");
     return [...labels];
   }, [all, categoryId, clipboardItems]);
@@ -694,7 +696,18 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
     {expandedNotice ? <p role="status">{expandedNotice}</p> : null}
     {clipboardNotice ? <p role="status">{clipboardNotice}</p> : null}
     {secretError ? <p role="alert">{secretError}</p> : null}
-    <div className={`cleanup-readable-detail__table cleanup-record-preview__table${columns.length > 6 ? " cleanup-record-preview__table--wide" : ""}`}><table>
+    {categoryId === "amcache" ? <div className="cleanup-readable-detail__table cleanup-record-preview__table cleanup-record-preview__table--amcache"><table>
+      <thead><tr><th scope="col" aria-sort={sortDescending ? "descending" : "ascending"}><button type="button" onClick={() => setSortDescending(value => !value)} aria-label={`Sort items ${sortDescending ? "ascending" : "descending"}`}># {sortDescending ? "↓" : "↑"}</button></th><th scope="col">Category</th><th scope="col">Record</th><th scope="col">Details</th></tr></thead>
+      <tbody>{rows.map(row => {
+        const facts = row.facts.map(cleanupFactValue);
+        const field = (labels: string[]) => facts.find(fact => labels.some(label => fact.label.toLocaleLowerCase() === label.toLocaleLowerCase()) && fact.value.trim() && fact.value !== "(empty)" && fact.value !== "No value")?.value;
+        const name = field(["Name", "Registry Values Name", "Registry Values Product Name", "Registry Values File Name"]);
+        const location = field(["Location", "Registry Values Lower Case Long Path", "Registry Values Lowercase Long Path", "Registry Values Path"]);
+        const identifier = field(["Identifier"]);
+        const hasFields = facts.some(fact => fact.label !== "Category source" && fact.value !== "(empty)" && fact.value !== "No value" && fact.value.trim());
+        return <tr key={row.number}><td>{row.number}</td><td>{row.label.replace(/ \d+$/, "")}</td><td>{name ? <strong>{name}</strong> : null}{location && location !== name ? <div>{location}</div> : null}{!name && !location ? <span>{identifier || (hasFields ? "View fields for this record" : "No record fields returned")}</span> : null}</td><td><details><summary>View fields</summary><dl className="cleanup-readable-detail__facts">{facts.map((fact, index) => <div key={`${fact.label}-${index}`}><dt>{fact.label}</dt><dd>{fact.value}</dd></div>)}</dl></details></td></tr>;
+      })}</tbody>
+    </table></div> : <div className={`cleanup-readable-detail__table cleanup-record-preview__table${columns.length > 6 ? " cleanup-record-preview__table--wide" : ""}`}><table>
       <thead><tr><th scope="col" aria-sort={sortDescending ? "descending" : "ascending"}><button type="button" onClick={() => setSortDescending(value => !value)} aria-label={`Sort items ${sortDescending ? "ascending" : "descending"}`}># {sortDescending ? "↓" : "↑"}</button></th>{columns.map(label => <th scope="col" key={label}>{label}</th>)}</tr></thead>
       <tbody>{rows.map(row => {
         const cells = new Map<string, string[]>();
@@ -710,6 +723,7 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
           const value = separator < 0 ? fact : fact.slice(separator + 2);
           if (categoryId !== "wlanProfiles" || label !== "Password" || !cells.has(label)) cells.set(label, [...(cells.get(label) ?? []), value]);
         }
+        if (cleanupPreviewColumns([row]).length === 0) cells.set("Details", ["No record details returned"]);
         const clipboardItem = categoryId === "clipboardHistory" ? clipboardItems?.[row.number - 1] : undefined;
         const storageItems = clipboardItem ? clipboardStorageItems(clipboardItem) : null;
         return <tr key={row.number}><td data-label="Item">{row.number}</td>{columns.map(label => <td key={label} data-label={label}>{label === "Image" && clipboardItem?.id && clipboardItem.formats?.includes("Bitmap")
@@ -718,7 +732,7 @@ export default function CleanupRecordPreview({ categoryId, rawData, mode, accoun
           : label === "Files and folders" && storageItems ? <ClipboardStorageDetails items={storageItems} />
           : cells.get(label)?.join("; ") || "—"}</td>)}</tr>;
       })}</tbody>
-    </table></div>
+    </table></div>}
     {!rows.length ? <p role="status">{categoryId === "clipboardHistory" ? clipboardEmptyMessage(clipboardItems, clipboardNotice, query, clipboardIncomplete) : "No items match this filter."}</p> : null}
   </section>;
 }

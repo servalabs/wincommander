@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 mod git_metadata;
 mod index;
-mod safety;
+#[cfg(windows)]
+pub(crate) mod profile_policy;
+pub(crate) mod safety;
 mod scan;
 mod scope;
-mod verified_file;
+pub(crate) mod verified_file;
 
 use serde::Serialize;
 use std::collections::HashSet;
@@ -59,6 +61,10 @@ pub struct DuplicateFile {
     /// Protected system/application locations can be inspected but never
     /// selected for duplicate removal.
     pub removable: bool,
+    /// Stable, non-sensitive reason for a review-only copy, when available.
+    pub removal_block_reason: Option<&'static str>,
+    pub profile_scope: &'static str,
+    pub profile_root: Option<String>,
 }
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -92,6 +98,8 @@ pub struct DuplicateScan {
     pub has_more_groups: bool,
     pub minimum_size_bytes: u64,
     pub skipped_small_files: usize,
+    pub filter_excluded_files: usize,
+    pub filter_excluded_directories: usize,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -130,6 +138,7 @@ async fn start_scan(
     roots: Vec<PathBuf>,
     excluded: Vec<String>,
     minimum_size_bytes: u64,
+    mode: scan::DiscoveryMode,
 ) -> Result<DuplicateScan, String> {
     let running = RunningGuard::acquire()?;
     scope::begin(&roots, excluded, minimum_size_bytes);
@@ -138,7 +147,7 @@ async fn start_scan(
         .map_err(|_| "duplicate cache lock poisoned")? = None;
     tokio::task::spawn_blocking(move || {
         let _running = running;
-        let result = scan::scan_roots(&roots, minimum_size_bytes, &CANCELLED);
+        let result = scan::scan_roots_mode(&roots, minimum_size_bytes, &CANCELLED, mode);
         match result {
             Ok(index) => {
                 scope::finish(CANCELLED.load(Ordering::Acquire));
@@ -171,6 +180,7 @@ pub async fn duplicate_finder_scan(
         safety::validate_roots(roots)?,
         Vec::new(),
         validate_minimum_size(minimum_size_bytes)?,
+        scan::DiscoveryMode::ExplicitFolders,
     )
     .await
 }
@@ -179,7 +189,7 @@ pub async fn duplicate_finder_scan_local(
     minimum_size_bytes: Option<u64>,
 ) -> Result<DuplicateScan, String> {
     let (roots, excluded) = scope::local_fixed_roots()?;
-    start_scan(roots, excluded, validate_minimum_size(minimum_size_bytes)?).await
+    start_scan(roots, excluded, validate_minimum_size(minimum_size_bytes)?, scan::DiscoveryMode::LocalDrives).await
 }
 #[tauri::command]
 pub fn duplicate_finder_progress() -> scope::DuplicateProgress {
@@ -276,6 +286,7 @@ fn explorer_select_argument(path: &std::path::Path) -> Result<std::ffi::OsString
 #[tauri::command]
 pub async fn duplicate_finder_remove(
     file_ids: Vec<String>,
+    keeper_ids: Option<Vec<String>>,
 ) -> Result<DuplicateRemoveResult, String> {
     safety::ensure_mutation_allowed()?;
     if file_ids.is_empty()
@@ -284,8 +295,12 @@ pub async fn duplicate_finder_remove(
     {
         return Err("invalid duplicate selection".into());
     }
+    if keeper_ids.as_ref().is_some_and(|ids| ids.len() > MAX_SELECTION || ids.iter().any(|id| id.len() > 64)) {
+        return Err("invalid kept copy selection".into());
+    }
     let running = RunningGuard::acquire()?;
     let selected: HashSet<String> = file_ids.into_iter().collect();
+    let requested_keepers: Option<HashSet<String>> = keeper_ids.map(|ids| ids.into_iter().collect());
     let (candidates, keepers) = {
         let guard = cache()
             .lock()
@@ -296,7 +311,7 @@ pub async fn duplicate_finder_remove(
         if index.created_at.elapsed() > CACHE_TTL {
             return Err("duplicate scan expired; scan again".into());
         }
-        index.removal_selection(&selected)?
+        index.removal_selection(&selected, requested_keepers.as_ref())?
     };
     tokio::task::spawn_blocking(move || {
         let _running = running;

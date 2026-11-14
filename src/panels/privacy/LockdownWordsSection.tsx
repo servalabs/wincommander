@@ -4,12 +4,13 @@
 //
 // Stays minimal until expanded. Stored as SHA-256 only.
 
-import { Icon, Button, Dialog, DialogBody, DialogFooter, InputGroup, FormGroup } from "@/components/ui/bp";
+import { Icon, Button } from "@/components/ui/bp";
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
 import { showError, showSuccess } from "../../utils/toast";
 import type { CoercionPhraseEntry } from "../../types/settings";
 import { PanicKeywordIntro } from "./MonitorIntros";
+import "./LockdownTriggerControls.css";
 
 interface Props {
   isAdvanced: boolean;
@@ -111,6 +112,7 @@ export default function LockdownWordsSection({
         {enabled && running && (
           <span className="lockdown-trigger-status">Listening</span>
         )}
+        <button type="button" className="lockdown-trigger-help" onClick={() => setShowIntro(true)} aria-label="How typed lockdown words work" title="How typed lockdown words work">?</button>
         <button
           type="button"
           role="switch"
@@ -121,15 +123,7 @@ export default function LockdownWordsSection({
         />
       </div>
       <p className="lockdown-trigger-desc">
-        Trigger a silent lockdown by typing a secret phrase anywhere.{" "}
-        <button
-          type="button"
-          onClick={() => setShowIntro(true)}
-          aria-label="How typed lockdown words work"
-          style={{ background: 'none', border: 'none', padding: 0, color: 'var(--color-accent)', cursor: 'pointer', font: 'inherit', textDecoration: 'underline' }}
-        >
-          How it works?
-        </button>
+        Trigger a silent lockdown by typing a secret phrase anywhere.
       </p>
 
       {enabled && (
@@ -157,9 +151,7 @@ export default function LockdownWordsSection({
                 <span className="text-[10px] font-medium uppercase tracking-widest text-[var(--shield-text-muted)]">
                   Phrases
                 </span>
-                <Button small minimal icon="plus" onClick={() => setAdding(true)}>
-                  Add phrase
-                </Button>
+                {!adding && <button type="button" className="lockdown-trigger-action lockdown-trigger-action--add" onClick={() => setAdding(true)}><Icon icon="plus" size={10} /> Add phrase</button>}
               </div>
 
               {phrases.length === 0 ? (
@@ -214,41 +206,21 @@ export default function LockdownWordsSection({
         </div>
       )}
 
-      <Dialog
-        isOpen={adding}
-        title="Register lockdown word"
-        onClose={() => setAdding(false)}
-        canEscapeKeyClose
-      >
-        <DialogBody>
-          <FormGroup label="Label" labelInfo="(visible to you only)">
-            <InputGroup
-              aria-label="Lockdown word label"
-              value={newLabel}
-              onChange={(e) => setNewLabel(e.currentTarget.value)}
-              placeholder="e.g. Daily standup"
-              onKeyDown={handleRegisterEnter}
-            />
-          </FormGroup>
-          <FormGroup
-            label="Phrase"
-            labelInfo="(min 6 chars)"
-            helperText="Stored as SHA-256 only. Plaintext is discarded immediately."
-          >
-            <InputGroup
-              aria-label="Lockdown secret phrase"
-              value={newPhrase}
-              onChange={(e) => setNewPhrase(e.currentTarget.value)}
-              placeholder="e.g. she sells seashells"
-              onKeyDown={handleRegisterEnter}
-            />
-          </FormGroup>
-        </DialogBody>
-        <DialogFooter>
-          <Button onClick={() => setAdding(false)} disabled={submitting}>Cancel</Button>
-          <Button intent="primary" onClick={onAdd} loading={submitting}>Register</Button>
-        </DialogFooter>
-      </Dialog>
+      {adding && (
+        <div className="lockdown-trigger-form">
+          <label>Label (visible to you only)
+            <input className="lockdown-trigger-input" aria-label="Lockdown word label" value={newLabel} onChange={(e) => setNewLabel(e.currentTarget.value)} placeholder="e.g. Daily standup" onKeyDown={handleRegisterEnter} />
+          </label>
+          <label>Phrase (at least 6 characters)
+            <input className="lockdown-trigger-input" aria-label="Lockdown secret phrase" value={newPhrase} onChange={(e) => setNewPhrase(e.currentTarget.value)} placeholder="Enter a secret phrase" onKeyDown={handleRegisterEnter} />
+          </label>
+          <span className="lockdown-trigger-desc">Only a hash is stored; the phrase is discarded immediately.</span>
+          <div className="flex gap-2">
+            <button type="button" className="lockdown-trigger-action lockdown-trigger-action--primary" onClick={onAdd} disabled={submitting}>{submitting ? "Adding…" : "Add phrase"}</button>
+            <button type="button" className="lockdown-trigger-action" onClick={() => setAdding(false)} disabled={submitting}>Cancel</button>
+          </div>
+        </div>
+      )}
     </div>
     <PanicKeywordIntro isOpen={showIntro} onClose={() => setShowIntro(false)} />
     </>

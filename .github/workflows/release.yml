@@ -350,6 +350,42 @@ jobs:
         env:
           RUST_MIN_STACK: "16777216"
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          WINCMD_PQ_LIC_ED_KEY: ${{ vars.WINCMD_PQ_LIC_ED_KEY }}
+          WINCMD_PQ_LIC_MLDSA_KEY: ${{ vars.WINCMD_PQ_LIC_MLDSA_KEY }}
+          WINCMD_PQ_LIC_ED_ID: ${{ vars.WINCMD_PQ_LIC_ED_ID }}
+          WINCMD_PQ_LIC_MLDSA_ID: ${{ vars.WINCMD_PQ_LIC_MLDSA_ID }}
+          WINCMD_PQ_LIC_EPOCH: ${{ vars.WINCMD_PQ_LIC_EPOCH }}
+          WINCMD_PQ_LIC_ED_PROOF: ${{ vars.WINCMD_PQ_LIC_ED_PROOF }}
+          WINCMD_PQ_LIC_MLDSA_PROOF: ${{ vars.WINCMD_PQ_LIC_MLDSA_PROOF }}
+          WINCMD_PQ_LIC_OLD_ED_KEY: ${{ vars.WINCMD_PQ_LIC_OLD_ED_KEY }}
+          WINCMD_PQ_LIC_OLD_MLDSA_KEY: ${{ vars.WINCMD_PQ_LIC_OLD_MLDSA_KEY }}
+          WINCMD_PQ_LIC_OLD_ED_ID: ${{ vars.WINCMD_PQ_LIC_OLD_ED_ID }}
+          WINCMD_PQ_LIC_OLD_MLDSA_ID: ${{ vars.WINCMD_PQ_LIC_OLD_MLDSA_ID }}
+          WINCMD_PQ_LIC_OLD_MAX_EPOCH: ${{ vars.WINCMD_PQ_LIC_OLD_MAX_EPOCH }}
+          WINCMD_PQ_FREE_ED_KEY: ${{ vars.WINCMD_PQ_FREE_ED_KEY }}
+          WINCMD_PQ_FREE_MLDSA_KEY: ${{ vars.WINCMD_PQ_FREE_MLDSA_KEY }}
+          WINCMD_PQ_FREE_ED_ID: ${{ vars.WINCMD_PQ_FREE_ED_ID }}
+          WINCMD_PQ_FREE_MLDSA_ID: ${{ vars.WINCMD_PQ_FREE_MLDSA_ID }}
+          WINCMD_PQ_FREE_EPOCH: ${{ vars.WINCMD_PQ_FREE_EPOCH }}
+          WINCMD_PQ_FREE_ED_PROOF: ${{ vars.WINCMD_PQ_FREE_ED_PROOF }}
+          WINCMD_PQ_FREE_MLDSA_PROOF: ${{ vars.WINCMD_PQ_FREE_MLDSA_PROOF }}
+          WINCMD_PQ_FREE_OLD_ED_KEY: ${{ vars.WINCMD_PQ_FREE_OLD_ED_KEY }}
+          WINCMD_PQ_FREE_OLD_MLDSA_KEY: ${{ vars.WINCMD_PQ_FREE_OLD_MLDSA_KEY }}
+          WINCMD_PQ_FREE_OLD_ED_ID: ${{ vars.WINCMD_PQ_FREE_OLD_ED_ID }}
+          WINCMD_PQ_FREE_OLD_MLDSA_ID: ${{ vars.WINCMD_PQ_FREE_OLD_MLDSA_ID }}
+          WINCMD_PQ_FREE_OLD_MAX_EPOCH: ${{ vars.WINCMD_PQ_FREE_OLD_MAX_EPOCH }}
+          WINCMD_PQ_PRO_ED_KEY: ${{ vars.WINCMD_PQ_PRO_ED_KEY }}
+          WINCMD_PQ_PRO_MLDSA_KEY: ${{ vars.WINCMD_PQ_PRO_MLDSA_KEY }}
+          WINCMD_PQ_PRO_ED_ID: ${{ vars.WINCMD_PQ_PRO_ED_ID }}
+          WINCMD_PQ_PRO_MLDSA_ID: ${{ vars.WINCMD_PQ_PRO_MLDSA_ID }}
+          WINCMD_PQ_PRO_EPOCH: ${{ vars.WINCMD_PQ_PRO_EPOCH }}
+          WINCMD_PQ_PRO_ED_PROOF: ${{ vars.WINCMD_PQ_PRO_ED_PROOF }}
+          WINCMD_PQ_PRO_MLDSA_PROOF: ${{ vars.WINCMD_PQ_PRO_MLDSA_PROOF }}
+          WINCMD_PQ_PRO_OLD_ED_KEY: ${{ vars.WINCMD_PQ_PRO_OLD_ED_KEY }}
+          WINCMD_PQ_PRO_OLD_MLDSA_KEY: ${{ vars.WINCMD_PQ_PRO_OLD_MLDSA_KEY }}
+          WINCMD_PQ_PRO_OLD_ED_ID: ${{ vars.WINCMD_PQ_PRO_OLD_ED_ID }}
+          WINCMD_PQ_PRO_OLD_MLDSA_ID: ${{ vars.WINCMD_PQ_PRO_OLD_MLDSA_ID }}
+          WINCMD_PQ_PRO_OLD_MAX_EPOCH: ${{ vars.WINCMD_PQ_PRO_OLD_MAX_EPOCH }}
         run: bun run build:free:release-installer
 
       # This is an artifact-level gate, not a source-contract check. It proves
@@ -601,6 +637,12 @@ jobs:
             ${{ env.CHECKSUM_PATH }}
             wincommander-free.sbom.cdx.json
           if-no-files-found: error
+
+      # The app requires versioned hybrid metadata, which this workflow does
+      # not yet publish. Do not expose a pointer to an unusable update.
+      - name: Block incomplete hybrid Free publication
+        shell: pwsh
+        run: throw 'Free publication is disabled until verified hybrid metadata publication is integrated.'
 
       # Upload immutable artifacts before the mutable latest.json pointer. A
       # client that sees a new manifest can therefore always fetch its setup and

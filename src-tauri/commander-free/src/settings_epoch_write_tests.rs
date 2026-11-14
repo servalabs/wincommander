@@ -94,6 +94,22 @@ fn signed_merge_commits_configuration_locks_and_version_together() {
 }
 
 #[test]
+fn recovery_equal_epoch_readback_verifies_signed_desired_settings_only() {
+    let f=Fixture::new(); let epoch=f.epoch(11,"merge");
+    let current=SETTINGS_CACHE.lock().unwrap().as_ref().unwrap().clone();
+    let applied=prepare(&current,&epoch).unwrap();
+    assert!(readback_equal(&applied,&epoch).unwrap());
+    let mut altered=serde_json::to_value(&applied).unwrap();
+    altered["ideal"]["privacy"]["telemetry"]["windowsDisabled"]=json!(false);
+    let altered:AppSettings=serde_json::from_value(altered).unwrap();
+    assert!(!readback_equal(&altered,&epoch).unwrap());
+    let mut forged=f.epoch(11,"merge"); forged.config["privacy"]["telemetry"]["windowsDisabled"]=json!(false);
+    assert!(readback_equal(&applied,&forged).is_err());
+    assert!(readback_equal(&current,&epoch).is_err());
+    assert!(prepare(&applied,&epoch).is_err(), "ordinary equal-version writes stay blocked");
+}
+
+#[test]
 fn fleet_epoch_cannot_enable_or_disable_account_incident_media_delivery() {
     let f = Fixture::new();
     let signed = |version: u32, strategy: &str, remote: bool| {

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 // build overrides it at compile time via the WINCMD_APP_DIR env var. Changing it
 // relocates %LOCALAPPDATA%\<name>, %ProgramData%\<name>, the roaming fallback,
 // logs, settings.json and the icon cache. Build-time only.
-const APP_DIR_NAME: &str = match option_env!("WINCMD_APP_DIR") {
+pub(crate) const APP_DIR_NAME: &str = match option_env!("WINCMD_APP_DIR") {
     Some(v) => v,
     None => "WinCommander",
 };
@@ -140,6 +140,13 @@ pub fn user_data_dir() -> Result<PathBuf, String> {
         harden_dir_acl_result(&dir)
     });
     Ok(dir)
+}
+
+pub(crate) fn optional_user_data_location() -> Result<Option<PathBuf>, String> {
+    let Some(local) = std::env::var_os("LOCALAPPDATA") else { return Ok(None); };
+    let local = PathBuf::from(local);
+    if !local.is_absolute() { return Err("User data location is not absolute".into()); }
+    Ok(Some(local.join(APP_DIR_NAME)))
 }
 
 /// A current-user NSIS install lives directly below the caller's LocalAppData

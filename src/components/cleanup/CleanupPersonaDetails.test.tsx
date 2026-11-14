@@ -471,6 +471,29 @@ describe("System Cleanup persona details", () => {
     expect(html).toContain("Next");
   });
 
+  test("renders Amcache categories in compact rows while preserving every captured field", () => {
+    const source = { total: 3, entries: [
+      { category: "InventoryApplication", count: 1, sample: [{ id: "app-id", name: "Example App", path: "C:\\Apps\\example.exe", registryValues: { Publisher: "Example Publisher", UnusualField: "preserved-value" } }] },
+      { category: "InventoryApplicationFile", count: 1, sample: [{ id: "file-id", name: "", path: "C:\\Apps\\library.dll", registryValues: { FileVersion: "1.2.3" } }] },
+      { category: "InventoryDriverBinary", count: 1, sample: [{ id: "driver-id", name: "", path: "", registryValues: { DriverDate: "2026-01-01" } }] },
+    ] };
+    for (const mode of ["simple", "advanced"] as const) {
+      const html = renderToStaticMarkup(<CleanupDisplayDetails category={amcache} mode={mode} count={3} items={[]} rawData={source} clearing={false} clearLabel="Clear" onClose={() => {}} />);
+      expect(html).toContain("Example App");
+      expect(html).toContain("C:\\Apps\\library.dll");
+      expect(html).toContain("driver-id");
+      expect(html).toContain("preserved-value");
+      expect(html).toContain("View fields");
+      expect(html).not.toContain('<th scope="col">Registry Values Publisher</th>');
+    }
+  });
+
+  test("does not imply an Amcache record contains fields when none were returned", () => {
+    const raw = { total: 1, entries: [{ category: "InventoryApplication", count: 1, sample: [{}] }] };
+    const html = renderToStaticMarkup(<CleanupDisplayDetails category={amcache} mode="advanced" count={1} items={[]} rawData={raw} clearing={false} clearLabel="Clear" onClose={() => {}} />);
+    expect(html).toContain("No record fields returned");
+  });
+
   test("shows account-specific safe previews in both personas", () => {
     const groups = [{ title: "Account A", count: 1, items: [], rawData: { total: 1, entries: [{ category: "InventoryApplication", count: 1, sample: [{ name: "Example App", path: "C:\\private" }] }] } }, { title: "Account B", count: -1, items: [] }];
     for (const mode of ["simple", "advanced"] as const) {

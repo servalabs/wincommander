@@ -1,18 +1,21 @@
 import { useCallback, useMemo, useState } from "react";
-import { Button } from "@/components/ui/bp";
+import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
 import { safeLegacyDiagnosticSource, sanitizeLegacyDiagnosticMessage } from "../../lib/diagnosticSanitizer";
 import { useDiagnosticCenter, type DiagnosticEvent } from "../../hooks/useDiagnosticCenter";
 import { showError, showSuccess } from "../../utils/toast";
+import { Copy, Download, RefreshCw } from "lucide-react";
+import { useMaintenanceHistory } from "../../hooks/useMaintenanceHistory";
+import { maintenanceLogEvent } from "./maintenanceLogView";
 
 type LegacyRecord = { date: string; timestamp: string; level: string; source: string; message: string };
 
-type SourceFilter = "all" | "desktop" | "service" | "pro" | "legacy";
+type SourceFilter = "all" | "desktop" | "service" | "pro" | "legacy" | "maintenance";
 type SeverityFilter = "all" | "error" | "warn" | "info";
 
 type TimelineEvent = {
   id: string;
   occurredAt: string;
-  source: "desktop" | "service" | "pro" | "legacy";
+  source: "desktop" | "service" | "pro" | "legacy" | "maintenance";
   sourceDetail?: string;
   severity: "error" | "warn" | "info";
   summary: string;
@@ -20,6 +23,8 @@ type TimelineEvent = {
   detail?: string;
   errorCode?: string;
   nextAction?: string;
+  safeSummary?: string;
+  safeDetail?: string;
 };
 
 const SOURCE_FILTERS: Array<{ value: SourceFilter; label: string }> = [
@@ -28,6 +33,7 @@ const SOURCE_FILTERS: Array<{ value: SourceFilter; label: string }> = [
   { value: "service", label: "Service" },
   { value: "pro", label: "Pro" },
   { value: "legacy", label: "Legacy" },
+  { value: "maintenance", label: "Maintenance" },
 ];
 
 const SEVERITY_FILTERS: Array<{ value: SeverityFilter; label: string }> = [
@@ -88,10 +94,10 @@ function copyPlaintext(events: TimelineEvent[]): string {
     timestamp(event.occurredAt),
     `[${event.severity.toUpperCase()}]`,
     `[${event.sourceDetail ?? event.source.toUpperCase()}]`,
-    event.summary,
+    event.safeSummary ?? event.summary,
     event.operationId ? `operation=${event.operationId}` : "",
     event.errorCode ? `code=${event.errorCode}` : "",
-    event.detail ?? "",
+    event.source === "maintenance" ? event.safeDetail ?? "" : event.detail ?? "",
     event.nextAction ? `next=${event.nextAction}` : "",
   ].filter(Boolean).join(" ")).join("\n");
 }
@@ -100,11 +106,14 @@ export default function SupportConsole() {
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
   const [severityFilter, setSeverityFilter] = useState<SeverityFilter>("all");
   const { structuredEvents, legacyRecords, health, loading, unavailable, refresh } = useDiagnosticCenter();
+  const maintenanceHistory = useMaintenanceHistory();
+  const requestConfirm = useAppConfirm();
 
-  const timeline = useMemo(() => [
+  const timeline = useMemo<TimelineEvent[]>(() => [
     ...structuredEvents.map((event) => structuredTimelineEvent(event, event.source ?? "desktop")),
     ...legacyRecords.map(legacyTimelineEvent),
-  ].sort((left, right) => right.occurredAt.localeCompare(left.occurredAt)), [legacyRecords, structuredEvents]);
+    ...maintenanceHistory.operations.map(maintenanceLogEvent),
+  ].sort((left, right) => right.occurredAt.localeCompare(left.occurredAt)), [legacyRecords, maintenanceHistory.operations, structuredEvents]);
 
   const filteredTimeline = useMemo(() => timeline.filter((event) => (
     (sourceFilter === "all" || event.source === sourceFilter)
@@ -120,39 +129,45 @@ export default function SupportConsole() {
     }
   }, [filteredTimeline]);
 
-  if (unavailable) {
-    return (
-      <div className="text-[12px] leading-5 text-[var(--text-dim)]">
-        Diagnostic Center is unavailable in this installed build. Update WinCommander to view diagnostics.
-        <div className="mt-3"><Button text="Refresh" icon="refresh" className="compact-action-btn" loading={loading} onClick={refresh} /></div>
-      </div>
-    );
-  }
+  const handleSave = useCallback(() => {
+    const url = URL.createObjectURL(new Blob([copyPlaintext(filteredTimeline)], { type: "text/plain;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "wincommander-logs.txt";
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }, [filteredTimeline]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="m-0 max-w-2xl text-[12px] leading-5 text-[var(--text-dim)]">
-          One safe diagnostic history for the retained seven-day window. Legacy free-text details are intentionally hidden because they have no privacy classification.
+          Diagnostic logs cover the retained seven-day window. Maintenance keeps the latest 100 local results separately. Legacy free-text details are intentionally hidden because they have no privacy classification. Maintenance details stay on this device and are omitted from safe text exports.
         </p>
         <div className="flex gap-2">
-          <Button text="Refresh" icon="refresh" className="compact-action-btn" loading={loading} onClick={refresh} />
-          <Button text="Copy safe text" icon="duplicate" className="compact-action-btn" disabled={filteredTimeline.length === 0} onClick={handleCopy} />
+          <button type="button" className="compact-action-btn" title="Refresh logs" aria-label="Refresh logs" disabled={loading} onClick={refresh}><RefreshCw size={15} /></button>
+          <button type="button" className="compact-action-btn" title="Copy safe text" aria-label="Copy safe text" disabled={filteredTimeline.length === 0} onClick={handleCopy}><Copy size={15} /></button>
+          <button type="button" className="compact-action-btn" title="Save logs" aria-label="Save logs" disabled={filteredTimeline.length === 0} onClick={handleSave}><Download size={15} /></button>
         </div>
       </div>
 
-      {health && (
-        <div className="grid grid-cols-2 gap-2 md:grid-cols-4" aria-label="Diagnostics health">
-          <Metric label="Store" value={health.healthy ? "Healthy" : "Needs attention"} />
-          <Metric label="Stored" value={String(health.persistedEvents)} />
-          <Metric label="Dropped" value={String(health.droppedEvents)} />
-          <Metric label="Redacted" value={String(health.redactedFields)} />
+      {unavailable && <p role="status" className="text-xs text-[var(--warn)]">Diagnostic logs are unavailable in this build; local maintenance results remain available.</p>}
+      {!maintenanceHistory.isPersistent && <p role="status" className="text-xs text-[var(--warn)]">Local maintenance history is unavailable; new results remain for this session only.</p>}
+      {health && !health.healthy && <p role="status" className="text-xs text-[var(--warn)]">Log storage needs attention; some events may be unavailable.</p>}
+        <div className="grid grid-cols-2 gap-2 md:grid-cols-5" aria-label="Loaded log counts">
+          <Metric label="Warnings" value={String(timeline.filter((event) => event.severity === "warn").length)} />
+          <Metric label="Errors" value={String(timeline.filter((event) => event.severity === "error").length)} />
+          <Metric label="Desktop" value={String(timeline.filter((event) => event.source === "desktop").length)} />
+          <Metric label="Service" value={String(timeline.filter((event) => event.source === "service").length)} />
+          <Metric label="Pro" value={String(timeline.filter((event) => event.source === "pro").length)} />
         </div>
-      )}
 
       <div className="flex flex-wrap gap-3" aria-label="Diagnostic filters">
         <FilterGroup label="Source" options={SOURCE_FILTERS} selected={sourceFilter} onSelect={setSourceFilter} />
         <FilterGroup label="Severity" options={SEVERITY_FILTERS} selected={severityFilter} onSelect={setSeverityFilter} />
+        {maintenanceHistory.operations.length > 0 && <button type="button" className="compact-action-btn ml-auto" onClick={() => void (async () => {
+          if (await requestConfirm({ title: "Clear local maintenance history?", description: "This removes local display records; it does not undo operations or clear diagnostic logs.", confirmLabel: "Clear history" })) maintenanceHistory.clearHistory();
+        })()}>Clear maintenance history</button>}
       </div>
 
       {!loading && filteredTimeline.length === 0 && (

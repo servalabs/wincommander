@@ -2,6 +2,80 @@ use super::*;
 
 static SERIAL: Mutex<()> = Mutex::new(());
 
+// Each child is a new process so SQLite has not already been initialized by
+// unrelated tests. A passing stress run cannot prove the reported race absent.
+#[test]
+fn concurrent_sqlcipher_first_use_stress() {
+    const CHILD: &str = "WC_SQLCIPHER_FIRST_USE_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        let dir = tempfile::tempdir().unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(16));
+        let workers: Vec<_> = (0..16).map(|number| {
+            let barrier = barrier.clone();
+            let path = dir.path().join(format!("first-use-{number}.sqlite"));
+            std::thread::spawn(move || -> Result<(), String> {
+                barrier.wait();
+                let conn = rusqlite::Connection::open(path).map_err(|e| e.to_string())?;
+                let key = format!("x'{}'", "18".repeat(32));
+                let rc = unsafe { rusqlite::ffi::sqlite3_key(conn.handle(), key.as_ptr().cast(), key.len() as i32) };
+                if rc != rusqlite::ffi::SQLITE_OK { return Err(format!("sqlite3_key returned {rc}")); }
+                conn.execute_batch("CREATE TABLE probe (id INTEGER); INSERT INTO probe VALUES (1);")
+                    .map_err(|e| e.to_string())?;
+                Ok(())
+            })
+        }).collect();
+        for worker in workers { worker.join().unwrap().unwrap(); }
+        return;
+    }
+    for iteration in 0..30 {
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["duplicate_finder::tests::concurrent_sqlcipher_first_use_stress", "--exact", "--nocapture"])
+            .env(CHILD, "1").output().unwrap();
+        assert!(result.status.success(), "first-use iteration {iteration} failed: {}", String::from_utf8_lossy(&result.stderr));
+    }
+}
+
+#[test]
+fn encrypted_scan_database_remains_private_after_bulk_commit() {
+    let mut index = index::ScanIndex::new().unwrap();
+    let marker = "duplicate-sensitive-directory-378951";
+    let mode: String = index.connection.query_row("PRAGMA journal_mode", [], |row| row.get(0)).unwrap();
+    let temp_store: i64 = index.connection.query_row("PRAGMA temp_store", [], |row| row.get(0)).unwrap();
+    assert_eq!(mode.to_lowercase(), "off");
+    assert_eq!(temp_store, 2, "SQLite temporary stores must stay in memory");
+    let transaction = index.connection.transaction().unwrap();
+    for number in 0..1_000 {
+        let path = format!("{marker}/{number:04}");
+        transaction.execute("INSERT INTO directories(path,root) VALUES(?1,?2)", rusqlite::params![path, marker]).unwrap();
+    }
+    transaction.commit().unwrap();
+    let rows: i64 = index.connection.query_row("SELECT count(*) FROM directories", [], |row| row.get(0)).unwrap();
+    assert_eq!(rows, 1_000);
+    for entry in std::fs::read_dir(index.directory.path()).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_type().unwrap().is_file() {
+            let bytes = std::fs::read(entry.path()).unwrap();
+            assert!(!bytes.windows(marker.len()).any(|window| window == marker.as_bytes()));
+        }
+    }
+}
+
+#[test]
+fn scan_scratch_does_not_expose_paths_on_disk() {
+    let index = index::ScanIndex::new().unwrap();
+    let marker = "scratch-secret-path-94252";
+    index.connection.execute(
+        "INSERT INTO directories(path,root) VALUES(?1,?1)",
+        [marker],
+    ).unwrap();
+    let path = index.directory.path().join("scan.sqlite");
+    let bytes = std::fs::read(&path).unwrap();
+    assert!(!bytes.windows(marker.len()).any(|window| window == marker.as_bytes()));
+    assert!(!bytes.starts_with(b"SQLite format 3\0"));
+    let other = rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    assert!(other.query_row("SELECT count(*) FROM directories", [], |row| row.get::<_, i64>(0)).is_err());
+}
+
 #[test]
 fn inventory_excludes_its_own_database_inside_the_scanned_folder() {
     let _serial = SERIAL.lock().unwrap();
@@ -83,6 +157,67 @@ fn fixture_index(roots: &[PathBuf], cancelled: &AtomicBool) -> index::ScanIndex 
     let _serial = SERIAL.lock().unwrap();
     scope::begin(roots, Vec::new(), 0);
     scan::scan_roots(roots, 0, cancelled).unwrap()
+}
+
+#[test]
+fn local_filter_reports_exclusions_and_explicit_folder_scans_include_them() {
+    let _serial = SERIAL.lock().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let hidden = root.path().join(".hidden");
+    std::fs::create_dir(&hidden).unwrap();
+    for path in [
+        root.path().join("keep-a"),
+        root.path().join("keep-b"),
+        root.path().join("payload.DLL"),
+        root.path().join(".DS_Store"),
+        hidden.join("inside"),
+    ] {
+        std::fs::write(path, b"same").unwrap();
+    }
+    let roots = [std::fs::canonicalize(root.path()).unwrap()];
+    scope::begin(&roots, Vec::new(), 0);
+    let index = scan::scan_roots_mode(
+        &roots,
+        0,
+        &AtomicBool::new(false),
+        scan::DiscoveryMode::LocalDrives,
+    )
+    .unwrap();
+    let progress = scope::snapshot();
+    let page = index.page(0).unwrap();
+    assert_eq!(
+        (
+            progress.filter_excluded_files,
+            progress.filter_excluded_directories
+        ),
+        (2, 1)
+    );
+    assert_eq!(
+        (page.filter_excluded_files, page.filter_excluded_directories),
+        (2, 1)
+    );
+    assert_eq!(page.scanned_files, 2);
+    assert!(!page.complete);
+    drop(index);
+    scope::begin(&roots, Vec::new(), 0);
+    let explicit = scan::scan_roots_mode(
+        &roots,
+        0,
+        &AtomicBool::new(false),
+        scan::DiscoveryMode::ExplicitFolders,
+    )
+    .unwrap()
+    .page(0)
+    .unwrap();
+    assert_eq!(
+        (
+            explicit.filter_excluded_files,
+            explicit.filter_excluded_directories
+        ),
+        (0, 0)
+    );
+    assert_eq!(explicit.scanned_files, 5);
+    assert!(explicit.complete);
 }
 
 #[test]
@@ -344,9 +479,35 @@ fn native_inventory_skips_junctions_without_following_their_target() {
 
 #[test]
 fn verified_removal_deletes_selected_copy_and_retains_identical_copy() {
+    #[cfg(windows)]
+    let dir = tempfile::Builder::new()
+        .prefix("duplicate-test-")
+        .tempdir_in(std::env::var_os("USERPROFILE").unwrap())
+        .unwrap();
+    #[cfg(not(windows))]
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("a"), b"same").unwrap();
     std::fs::write(dir.path().join("b"), b"same").unwrap();
+    #[cfg(windows)]
+    {
+        let account = format!(
+            "{}\\{}",
+            std::env::var("USERDOMAIN").unwrap(),
+            std::env::var("USERNAME").unwrap()
+        );
+        for name in ["a", "b"] {
+            let status = std::process::Command::new("icacls.exe")
+                .arg(dir.path().join(name))
+                .arg("/setowner")
+                .arg(&account)
+                .status()
+                .unwrap();
+            assert!(
+                status.success(),
+                "test fixtures must be owned by the current user"
+            );
+        }
+    }
     let (_, files, _) = scan_fixture(
         &[std::fs::canonicalize(dir.path()).unwrap()],
         &AtomicBool::new(false),
@@ -424,15 +585,56 @@ fn selection_uses_whole_group_and_rejects_stale_ids() {
         .map(|file| file.id.clone())
         .collect();
     assert_eq!(all.len(), 205);
-    assert!(index.removal_selection(&all).is_err());
+    assert!(index.removal_selection(&all, None).is_err());
     let mut retained = all;
     retained.remove(&group.files[0].id);
-    assert_eq!(index.removal_selection(&retained).unwrap().0.len(), 204);
+    assert_eq!(index.removal_selection(&retained, None).unwrap().0.len(), 204);
     assert!(index
-        .removal_selection(&HashSet::from(["stale-id".to_string()]))
+        .removal_selection(&HashSet::from(["stale-id".to_string()]), None)
         .is_err());
     assert!(index.group("stale-group", 0).is_err());
     assert!(index.page(2).is_err());
+}
+
+#[test]
+fn explicit_keeper_must_match_group_and_remain_unchanged() {
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["a", "b", "c"] { std::fs::write(dir.path().join(name), b"same").unwrap(); }
+    let index = fixture_index(&[std::fs::canonicalize(dir.path()).unwrap()], &AtomicBool::new(false));
+    let group = index.page(0).unwrap().groups.remove(0);
+    let selected = HashSet::from([group.files[0].id.clone()]);
+    let requested = HashSet::from([group.files[1].id.clone()]);
+    assert!(index.removal_selection(&selected, Some(&HashSet::new())).is_err());
+    assert!(index.removal_selection(&selected, Some(&selected)).is_err());
+    assert!(index.removal_selection(&selected, Some(&HashSet::from(["stale".into()]))).is_err());
+    let (candidates, keepers) = index.removal_selection(&selected, Some(&requested)).unwrap();
+    assert_eq!(keepers[0].path, index.file(&group.files[1].id).unwrap().path);
+    std::fs::write(&keepers[0].path, b"different").unwrap();
+    let result = safety::remove_files(candidates.clone(), keepers, &AtomicBool::new(false));
+    assert_eq!(result.files_removed, 0);
+    assert!(candidates[0].path.exists());
+}
+
+#[test]
+fn explicit_keepers_must_cover_each_selected_group_once() {
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["a1", "a2", "a3"] { std::fs::write(dir.path().join(name), b"same").unwrap(); }
+    for name in ["b1", "b2"] { std::fs::write(dir.path().join(name), b"diff").unwrap(); }
+    let index = fixture_index(&[std::fs::canonicalize(dir.path()).unwrap()], &AtomicBool::new(false));
+    let groups = index.page(0).unwrap().groups;
+    assert_eq!(groups.len(), 2);
+    let a = groups.iter().find(|group| group.file_count == 3).unwrap();
+    let b = groups.iter().find(|group| group.file_count == 2).unwrap();
+    let selected = HashSet::from([a.files[0].id.clone(), b.files[0].id.clone()]);
+    let correct = HashSet::from([a.files[1].id.clone(), b.files[1].id.clone()]);
+    let (candidates, keepers) = index.removal_selection(&selected, Some(&correct)).unwrap();
+    assert_eq!(candidates.len(), 2);
+    assert_eq!(keepers.len(), 2);
+    assert!(index.removal_selection(&selected, Some(&HashSet::from([a.files[1].id.clone()]))).is_err());
+    let duplicate_group = HashSet::from([a.files[1].id.clone(), a.files[2].id.clone()]);
+    assert!(index.removal_selection(&selected, Some(&duplicate_group)).is_err());
+    let only_a = HashSet::from([a.files[0].id.clone()]);
+    assert!(index.removal_selection(&only_a, Some(&HashSet::from([b.files[1].id.clone()]))).is_err());
 }
 
 #[test]
@@ -450,21 +652,125 @@ fn result_paging_rejects_a_different_scan_capability() {
 }
 
 #[test]
-fn git_metadata_is_reviewable_but_never_a_removal_target() {
-    let root = tempfile::tempdir().unwrap();
-    let git = root.path().join(".GiT").join("objects");
-    std::fs::create_dir_all(&git).unwrap();
-    std::fs::write(git.join("blob"), b"synthetic duplicate").unwrap();
-    std::fs::write(root.path().join("ordinary-copy"), b"synthetic duplicate").unwrap();
-    let roots = [std::fs::canonicalize(root.path()).unwrap()];
-    let (scan, files, _) = scan_fixture(&roots, &AtomicBool::new(false));
-    let group = scan.groups.iter().find(|g| g.files.len() == 2).unwrap();
-    let protected = group.files.iter().find(|f| f.path.contains(".GiT")).unwrap();
-    let ordinary = group.files.iter().find(|f| f.name == "ordinary-copy").unwrap();
-    assert!(!protected.removable);
-    assert!(ordinary.removable);
-    let cached = files.get(&protected.id).unwrap();
-    assert!(safety::validated_file(cached).is_err());
-    assert!(safety::validated_review_file(cached).is_ok());
-    assert!(git.join("blob").exists());
+fn protected_application_and_codec_types_cannot_be_removed() {
+    for name in [
+        "installer.EXE",
+        "library.dll",
+        "decoder.ax",
+        "codec.acm",
+        "driver.sys",
+    ] {
+        assert!(
+            safety::protected_removal_reason(std::path::Path::new(name)).is_some(),
+            "{name}"
+        );
+    }
+    assert!(
+        safety::protected_removal_reason(std::path::Path::new("AppData/local/settings.json"))
+            .is_some()
+    );
+}
+
+#[test]
+fn blocked_copies_expose_only_stable_non_sensitive_reason_codes() {
+    assert_eq!(
+        safety::removal_block_code("file ownership could not be verified as the current user"),
+        "owner_unavailable"
+    );
+    assert_eq!(
+        safety::removal_block_code("user profile locations could not be verified"),
+        "profiles_unavailable"
+    );
+    assert_eq!(
+        safety::removal_block_code("another user profile is protected"),
+        "other_profile"
+    );
+    assert_eq!(
+        safety::removal_block_code("unexpected private path"),
+        "unknown"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+#[ignore = "requires an explicitly configured disposable test root"]
+fn duplicate_index_marks_vanished_copy_as_owner_unavailable() {
+    let test_root = std::env::var_os("WINCOMMANDER_OWNER_TEST_ROOT")
+        .expect("set WINCOMMANDER_OWNER_TEST_ROOT to a disposable, unprotected directory");
+    let directory = tempfile::tempdir_in(test_root).unwrap();
+    let first = directory.path().join("first.txt");
+    let second = directory.path().join("second.txt");
+    std::fs::write(&first, b"synthetic duplicate").unwrap();
+    std::fs::write(&second, b"synthetic duplicate").unwrap();
+    let roots = [std::fs::canonicalize(directory.path()).unwrap()];
+    let index = fixture_index(&roots, &AtomicBool::new(false));
+    // Remove only the task-owned fixture after enumeration to exercise a
+    // stale indexed path without changing any ACL or real user file.
+    std::fs::remove_file(&second).unwrap();
+    assert!(safety::protected_removal_reason(&second).is_none(), "fixture root must be unprotected");
+    let page = index.page(0).unwrap();
+    let group = page.groups.iter().find(|group| group.file_count == 2).unwrap();
+    let row = group.files.iter().find(|file| file.name == "second.txt").unwrap();
+    assert!(!row.removable);
+    assert_eq!(row.removal_block_reason, Some("owner_unavailable"));
+}
+
+#[test]
+fn literal_git_metadata_is_reviewable_but_not_removable() {
+    let dir = tempfile::tempdir().unwrap();
+    let object_dir = dir.path().join(".GiT").join("lfs").join("objects");
+    std::fs::create_dir_all(&object_dir).unwrap();
+    std::fs::write(object_dir.join("fixture-object"), b"synthetic duplicate").unwrap();
+    std::fs::write(dir.path().join("copy.bin"), b"synthetic duplicate").unwrap();
+    let (page, files, _) = scan_fixture(
+        &[std::fs::canonicalize(dir.path()).unwrap()],
+        &AtomicBool::new(false),
+    );
+    let group = page.groups.iter().find(|group| group.file_count == 2).unwrap();
+    let row = group.files.iter().find(|file| file.name == "fixture-object").unwrap();
+    assert!(!row.removable);
+    assert_eq!(row.removal_block_reason, Some("git_metadata"));
+    let object = files.values().find(|file| file.path.ends_with("fixture-object")).unwrap().clone();
+    let keeper = files.values().find(|file| file.path.ends_with("copy.bin")).unwrap().clone();
+    let result = safety::remove_files(vec![object.clone()], vec![keeper], &AtomicBool::new(false));
+    assert_eq!(result.files_removed, 0);
+    assert!(result.errors.iter().any(|error| error.contains("Git metadata is protected")));
+    assert!(object.path.exists());
+}
+
+#[test]
+fn backend_refuses_executable_removal_even_if_selection_is_forged() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("one.exe"), b"same").unwrap();
+    std::fs::write(dir.path().join("two.exe"), b"same").unwrap();
+    let (page, files, _) = scan_fixture(
+        &[std::fs::canonicalize(dir.path()).unwrap()],
+        &AtomicBool::new(false),
+    );
+    let row = &page.groups[0].files[0];
+    assert!(!row.removable);
+    assert_eq!(row.removal_block_reason, Some("protected_type"));
+    assert_eq!(
+        serde_json::to_value(row).unwrap()["removalBlockReason"],
+        "protected_type"
+    );
+    assert!(matches!(
+        row.profile_scope,
+        "current" | "other" | "outside" | "unavailable"
+    ));
+    assert_eq!(
+        serde_json::to_value(row).unwrap()["profileScope"],
+        row.profile_scope
+    );
+    let mut files = files.into_values();
+    let candidate = files.next().unwrap();
+    let keeper = files.next().unwrap();
+    let result = safety::remove_files(
+        vec![candidate.clone()],
+        vec![keeper],
+        &AtomicBool::new(false),
+    );
+    assert_eq!(result.files_removed, 0);
+    assert!(!result.errors.is_empty());
+    assert!(candidate.path.exists());
 }

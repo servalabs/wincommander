@@ -273,6 +273,9 @@ impl Envelope {
         if let Envelope::Request(request) = &mut self {
             zeroize_json(&mut request.args);
         }
+        if let Envelope::Notification(notification) = &mut self {
+            if notification.event == "fleet.journal.archive_transfer" { zeroize_json(&mut notification.payload); }
+        }
         Envelope::Signed(SignedEnvelope {
             tag,
             inner: inner_json,

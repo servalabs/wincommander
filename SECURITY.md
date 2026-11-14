@@ -365,6 +365,22 @@ matching key. Data in other Windows profiles or on disconnected storage may
 also depend on it; checking the current profile cannot establish that all
 such data is safe.
 
+Earlier local-key and desktop security drafts are retained in Git history for
+continued work. Their presence in branch ancestry does not mean every draft
+behavior is implemented or validated in the current source tree.
+The older Safe Paste handoff prototype is also retained in history only; it is
+not the current implementation or an established confinement boundary.
+Sanitized snapshots of older vault dismount and build drafts are likewise
+retained in history; they do not replace the current vault implementation.
+Incomplete DLP and Fleet reporting source snapshots are retained in history
+with sensitive fixture files omitted; they are not operational release trees.
+An incomplete Fleet authority source snapshot is also retained in history only:
+its test-only code, fixtures and integration wiring were omitted, and it does
+not implement or enable a recovery authorization boundary.
+A separate partial Fleet admission source snapshot is also retained in history
+only; files with secret or personal-data indicators and dependent integration
+files were omitted. It does not enable or complete Fleet recovery.
+
 ## Local maintenance
 
 Local maintenance scans do not establish that every byte on a volume was
@@ -381,3 +397,7 @@ Local operation history is a clearable display aid, not a trusted audit log.
 Use the normal public issue process for public Free bugs that do not disclose a
 security weakness, private implementation, customer data, credentials, or
 internal infrastructure. When unsure, email the security address.
+
+Two additional historical Fleet and Shield source variants are preserved in inactive history. Other snapshot files were omitted; this does not enable or complete Fleet recovery.
+
+An earlier Fleet DNS projection test is retained in inactive history. The current filtered Fleet DNS scope remains in effect.

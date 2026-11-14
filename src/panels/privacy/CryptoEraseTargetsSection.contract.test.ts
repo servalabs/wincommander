@@ -17,7 +17,7 @@ describe("VeraCrypt lockdown target safety contract", () => {
 
   it("explains the fail-closed empty state instead of suggesting ordinary disks", () => {
     expect(source).toContain(
-      "No VeraCrypt partitions enrolled — ordinary disks are intentionally not suggested.",
+      "No encrypted partitions enrolled — ordinary disks are intentionally not suggested.",
     );
   });
 });

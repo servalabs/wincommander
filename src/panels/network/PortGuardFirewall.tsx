@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useState } from 'react';
-import { Button, InputGroup, Switch } from '@/components/ui/bp';
+import { Button, HTMLSelect, InputGroup, Switch } from '@/components/ui/bp';
 import usePortGuardFirewall from '@/hooks/usePortGuardFirewall';
 import { firewallEnabled, parsePortSpec } from '@/lib/portGuard';
 import { InfoPopover } from './InfoTip';
@@ -17,7 +17,7 @@ export default function PortGuardFirewall() {
     await firewall.add(label.trim(), ports, protocol, direction);
     setPorts(''); setLabel('');
   }
-  return <details style={{ marginTop: 16 }}>
+  return <details className="port-guard-firewall">
     <summary>Firewall port blocks</summary>
     <div className="port-guard-heading" style={{ marginTop: 8 }}>
       <span>Port rules, not whole-app blocks</span>
@@ -37,10 +37,10 @@ export default function PortGuardFirewall() {
     <div className="port-guard-form">
       <InputGroup aria-label="Firewall ports" placeholder="Ports / ranges" value={ports} onChange={event => setPorts(event.target.value)} />
       <InputGroup aria-label="Firewall label" placeholder="Rule label" maxLength={64} value={label} onChange={event => setLabel(event.target.value)} />
-      <select aria-label="Firewall protocol" value={protocol} onChange={event => setProtocol(event.target.value)}><option>TCP</option><option>UDP</option></select>
-      <select aria-label="Firewall direction" value={direction} onChange={event => setDirection(event.target.value as typeof direction)}>
+      <HTMLSelect aria-label="Firewall protocol" value={protocol} onChange={event => setProtocol(event.target.value)}><option>TCP</option><option>UDP</option></HTMLSelect>
+      <HTMLSelect aria-label="Firewall direction" value={direction} onChange={event => setDirection(event.target.value as typeof direction)}>
         <option value="Inbound">Inbound · local port</option><option value="Outbound">Outbound · remote port</option><option value="Both">Both directions</option>
-      </select>
+      </HTMLSelect>
       <Button disabled={busy} intent="danger" onClick={() => { void run(add); }}>Block port</Button>
     </div>
     <div className="port-guard-table-scroll"><table className="bp5-html-table bp5-html-table-striped port-guard-table" aria-label="Firewall port blocks">

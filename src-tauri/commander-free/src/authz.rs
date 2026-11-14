@@ -7,6 +7,8 @@
 mod arguments;
 mod capability;
 mod dispatch;
+#[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
+mod folder_confirmation;
 mod request;
 mod trusted;
 
@@ -15,6 +17,22 @@ pub use arguments::{
     lockdown_args, secure_erase_args, LockdownPlanSnapshot,
 };
 pub use capability::{consume, consume_required, DestructiveAction};
+#[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
+pub(crate) use capability::consume_folder;
+#[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
+pub(crate) use folder_confirmation::Permit as FolderPreparationPermit;
+
+#[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
+pub(crate) async fn confirm_folder(
+    binding: String,
+    folder: crate::disk_tree_delete::PreparedTree,
+    permit: FolderPreparationPermit,
+) -> Result<Option<String>, String> {
+    match folder_confirmation::confirm(folder, permit).await? {
+        Some(folder) => capability::mint_folder(&binding, folder).map(Some),
+        None => Ok(None),
+    }
+}
 pub use dispatch::{
     action_for, authorize_backend_dispatch, backend_dispatch_policy, BackendDispatchPolicy,
 };

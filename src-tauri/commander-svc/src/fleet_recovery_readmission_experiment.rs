@@ -1,0 +1,365 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//! Service-owned readmission authority. The IPC entrypoint remains gated off.
+#![allow(dead_code)]
+use super::*;
+use base64::{engine::general_purpose::STANDARD, Engine};
+use rand::{rngs::SysRng, TryRng};
+use serde::Deserialize;
+use sha2::{Digest, Sha256};
+use std::time::{Duration, Instant};
+use zeroize::Zeroize;
+
+const INVALID: &str = "recovery readmission unavailable";
+const TTL: Duration = Duration::from_secs(30);
+
+// Until recovered readmission verifies the independently pinned hybrid proof
+// and commits its epoch floor, a classical reply must not downgrade any record
+// that requires or retains evidence of hybrid enrollment.
+fn classical_only(record: &Record) -> bool { classical_recovery_allowed(record) }
+
+mod sealed { pub trait Sealed {} }
+pub(crate) trait ReadmissionAuthorization: sealed::Sealed + Sync {
+    fn authorized(&self) -> bool;
+    fn binding(&self) -> Result<[u8;32], &'static str>;
+}
+#[cfg(windows)]
+impl sealed::Sealed for crate::pipe::fleet_handoff_confirmation::SessionWitness {}
+#[cfg(windows)]
+impl ReadmissionAuthorization for crate::pipe::fleet_handoff_confirmation::SessionWitness {
+    fn authorized(&self) -> bool { self.still_authorized() }
+    fn binding(&self) -> Result<[u8;32], &'static str> { self.readmission_binding() }
+}
+#[cfg(test)]
+pub(super) struct TestAuthorization<F: Fn() -> bool + Sync>(pub F);
+#[cfg(test)]
+impl<F: Fn() -> bool + Sync> sealed::Sealed for TestAuthorization<F> {}
+#[cfg(test)]
+impl<F: Fn() -> bool + Sync> ReadmissionAuthorization for TestAuthorization<F> {
+    fn authorized(&self) -> bool { (self.0)() }
+    fn binding(&self) -> Result<[u8;32], &'static str> { Ok([42;32]) }
+}
+
+pub(crate) struct Offer {
+    id: String,
+    owner: [u8;32],
+    snapshot: CredentialSnapshot,
+    challenge: String,
+    request: Vec<u8>,
+    expires: Instant,
+}
+
+pub(crate) struct Claim(Offer);
+impl Claim {
+    pub(super) fn request(&self) -> &[u8] { &self.0.request }
+}
+
+#[derive(Default)]
+pub(crate) struct Registry { pending: Option<Offer>, claimed: Option<String> }
+
+#[derive(Deserialize)]
+struct Reply {
+    org_id: String,
+    device_id: String,
+    shield_progress_generation: String,
+    shield_progress_generation_signature: String,
+    outcome_pubkey_b64: String,
+    server_signing_key_b64: String,
+    checkin_secret_b64: String,
+}
+impl Drop for Reply {
+    fn drop(&mut self) { self.checkin_secret_b64.zeroize(); }
+}
+
+impl FleetMachinePolicy {
+    /// Experiment only: the claim is bound to the protected active journal,
+    /// actual candidate key and the exact bytes that will be sent.
+    pub(crate) fn offer_readmission(&self, protector: &dyn crate::fleet_credential::Protector, now: i64, authorized: &impl ReadmissionAuthorization)
+        -> Result<String, &'static str> {
+        let mut snapshot = self.credential_snapshot(protector)?.ok_or(INVALID)?;
+        if !snapshot.is_recovered { return Err(INVALID); }
+        let guard = self.state.lock().map_err(|_| INVALID)?;
+        let record = guard.record.as_ref().ok_or(INVALID)?;
+        if !authorized.authorized() || !classical_only(record) || !Self::credential_matches(record, &snapshot) { return Err(INVALID); }
+        let commit = record.recovery_commit.as_ref().ok_or(INVALID)?;
+        let candidate = crate::fleet_recovery_candidate::CandidateStore::open(
+            self.fs.as_ref(), self.path.parent().ok_or(INVALID)?.to_path_buf(), protector)?;
+        let public = candidate.public_key(&commit.old_trust, &commit.recovery_id)?;
+        let fingerprint = Sha256::digest(public).iter().map(|b| format!("{b:02x}")).collect::<String>();
+        if fingerprint != commit.candidate_fingerprint { return Err(INVALID); }
+        let request = candidate.sign_readmission(&commit.old_trust, &record.trust, &commit.recovery_id, now)?;
+        let challenge = request.get("shield_progress_challenge").and_then(|v| v.as_str()).ok_or(INVALID)?.to_owned();
+        let bytes = serde_json::to_vec(&request).map_err(|_| INVALID)?;
+        let mut random = [0u8; 32];
+        SysRng.try_fill_bytes(&mut random).map_err(|_| INVALID)?;
+        let id = STANDARD.encode(random);
+        snapshot.secret.zeroize();
+        let offer = Offer { id: id.clone(), owner: authorized.binding()?, snapshot, challenge, request: bytes, expires: Instant::now() + TTL };
+        *self.recovery_readmission.lock().map_err(|_| INVALID)? = Registry { pending: Some(offer), claimed: None };
+        Ok(id)
+    }
+
+    /// Consumes before sending. A failed attempt cannot reuse the offer.
+    pub(crate) fn claim_readmission(&self, id: &str, authorized: &impl ReadmissionAuthorization) -> Result<Claim, &'static str> {
+        let guard = self.state.lock().map_err(|_| INVALID)?;
+        let mut offers = self.recovery_readmission.lock().map_err(|_| INVALID)?;
+        let owner=authorized.binding()?;
+        if !offers.pending.as_ref().is_some_and(|offer| offer.id == id && offer.owner == owner) { return Err(INVALID); }
+        let offer = offers.pending.take().ok_or(INVALID)?;
+        let record = guard.record.as_ref().ok_or(INVALID)?;
+        if !authorized.authorized() || authorized.binding()? != offer.owner || Instant::now() >= offer.expires || !classical_only(record) || !Self::credential_matches(record, &offer.snapshot) { return Err(INVALID); }
+        offers.claimed = Some(offer.id.clone());
+        Ok(Claim(offer))
+    }
+
+    /// Build only the protected origin/profile transport. This check does not
+    /// cancel an HTTP request already in flight after a concurrent revocation.
+    fn readmission_transport(&self, claim: &Claim, authorized: &impl ReadmissionAuthorization) -> Result<(String, reqwest::Client), &'static str> {
+        let offer=&claim.0;
+        let guard=self.state.lock().map_err(|_| INVALID)?;
+        let registry=self.recovery_readmission.lock().map_err(|_| INVALID)?;
+        let record=guard.record.as_ref().ok_or(INVALID)?;
+        if !authorized.authorized() || authorized.binding()?!=offer.owner || registry.claimed.as_deref()!=Some(&offer.id) || Instant::now()>=offer.expires
+            || !classical_only(record) || !Self::credential_matches(record,&offer.snapshot)
+            || crate::fleet_runtime_env::fingerprint().as_deref()!=Some(offer.snapshot.profile.environment_fingerprint.as_str()) {
+            return Err(INVALID);
+        }
+        let pins=fleet_agent_core::SpkiPinSet::from_hex_list(&offer.snapshot.profile.spki_pins);
+        if !offer.snapshot.profile.spki_pins.trim().is_empty() && pins.is_none() { return Err(INVALID); }
+        let client=fleet_agent_core::build_client_without_redirects(pins).map_err(|_| INVALID)?;
+        Ok((offer.snapshot.origin.clone(),client))
+    }
+
+    /// Test-only exchange: the caller cannot choose a destination, follow a
+    /// redirect, publish an unchecked response, or receive the secret.
+    pub(crate) async fn send_readmission(&self, claim: Claim, authorized: &impl ReadmissionAuthorization) -> Result<(), &'static str> {
+        let (origin,client)=self.readmission_transport(&claim, authorized)?;
+        let operation=async {
+            {
+                let guard=self.state.lock().map_err(|_| INVALID)?;
+                let registry=self.recovery_readmission.lock().map_err(|_| INVALID)?;
+                if !authorized.authorized() || authorized.binding()?!=claim.0.owner || registry.claimed.as_deref()!=Some(&claim.0.id)
+                    || Instant::now()>=claim.0.expires || !guard.record.as_ref().is_some_and(|record|classical_only(record) && Self::credential_matches(record,&claim.0.snapshot)) {
+                    return Err(INVALID);
+                }
+            }
+            let mut response=client.post(format!("{origin}/v1/windows/enroll-v2"))
+                .header(reqwest::header::CONTENT_TYPE,"application/json")
+                .body(claim.request().to_vec()).send().await.map_err(|_| INVALID)?;
+            let status=response.status().as_u16();
+            let header={
+                let values=response.headers().get_all("x-fleet-windows-v2-enrollment");
+                let mut iter=values.iter();
+                let header=iter.next().ok_or(INVALID)?.to_str().map_err(|_| INVALID)?.to_owned();
+                if iter.next().is_some() { return Err(INVALID); }
+                header
+            };
+            let mut body=zeroize::Zeroizing::new(Vec::new());
+            while let Some(chunk)=response.chunk().await.map_err(|_| INVALID)? {
+                if body.len().checked_add(chunk.len()).map_or(true, |size|size>65536) { return Err(INVALID); }
+                body.extend_from_slice(&chunk);
+            }
+            self.finish_readmission(claim,status,&body,&header,authorized,||())
+        };
+        tokio::time::timeout(TTL,operation).await.map_err(|_| INVALID)?
+    }
+
+    /// Verify exact transport bytes, then hold the policy lock through the
+    /// final snapshot check and publication. The test-only publisher must be
+    /// bounded and non-reentrant because both policy and registry locks are held.
+    /// No secret or proof is persisted.
+    fn finish_readmission<T>(&self, claim: Claim, status: u16, body: &[u8], header: &str,
+        authorized: &impl ReadmissionAuthorization, publish: impl FnOnce() -> T) -> Result<T, &'static str> {
+        let offer = claim.0;
+        if status != 200 || body.len() > 65536 || Instant::now() >= offer.expires { return Err(INVALID); }
+        let signature = header.strip_prefix("v2.").ok_or(INVALID)?;
+        let signature_bytes = STANDARD.decode(signature).map_err(|_| INVALID)?;
+        if signature_bytes.len() != 64 || STANDARD.encode(&signature_bytes) != signature { return Err(INVALID); }
+        let proof = fleet_proto::canonical_json_bytes(&serde_json::json!([
+            "fleet.windows.enrollment.v2", offer.challenge,
+            STANDARD.encode(Sha256::digest(&offer.request)), status, STANDARD.encode(Sha256::digest(body))
+        ]));
+        if !fleet_proto::verify_signature_b64(&offer.snapshot.trust.signer_key, &proof, signature) { return Err(INVALID); }
+        let reply: Reply = fleet_proto::windows_v2::decode_windows_enrollment_safe(body).map_err(|_| INVALID)?;
+        let mut secret = zeroize::Zeroizing::new(STANDARD.decode(&reply.checkin_secret_b64).map_err(|_| INVALID)?);
+        if secret.len() != 32 || STANDARD.encode(&*secret) != reply.checkin_secret_b64 { return Err(INVALID); }
+        let digest = Sha256::digest(&*secret).iter().map(|b| format!("{b:02x}")).collect::<String>();
+        secret.zeroize();
+        let commit = offer.snapshot.recovery_commit.as_ref().ok_or(INVALID)?;
+        let key = STANDARD.decode(&reply.outcome_pubkey_b64).map_err(|_| INVALID)?;
+        if key.len() != 32 || STANDARD.encode(&key) != reply.outcome_pubkey_b64
+            || Sha256::digest(&key).iter().map(|b| format!("{b:02x}")).collect::<String>() != commit.candidate_fingerprint
+            || reply.org_id != offer.snapshot.trust.org_id || reply.device_id != offer.snapshot.trust.device_id
+            || reply.shield_progress_generation != offer.snapshot.trust.enrollment_generation
+            || reply.server_signing_key_b64 != offer.snapshot.trust.signer_key || digest != commit.credential_sha256 { return Err(INVALID); }
+        let generation_signature=STANDARD.decode(&reply.shield_progress_generation_signature).map_err(|_| INVALID)?;
+        if generation_signature.len()!=64 || STANDARD.encode(&generation_signature)!=reply.shield_progress_generation_signature { return Err(INVALID); }
+        let generation_proof=serde_json::to_vec(&["wincommander:shield-progress:enrollment:v1", &reply.org_id,
+            &reply.device_id, &reply.shield_progress_generation, &offer.challenge]).map_err(|_| INVALID)?;
+        if !fleet_proto::verify_signature_b64(&offer.snapshot.trust.signer_key,&generation_proof,&reply.shield_progress_generation_signature) { return Err(INVALID); }
+        let guard = self.state.lock().map_err(|_| INVALID)?;
+        let record = guard.record.as_ref().ok_or(INVALID)?;
+        let mut registry = self.recovery_readmission.lock().map_err(|_| INVALID)?;
+        if registry.claimed.as_deref() != Some(&offer.id) { return Err(INVALID); }
+        registry.claimed = None;
+        if !authorized.authorized() || authorized.binding()? != offer.owner || Instant::now() >= offer.expires
+            || !classical_only(record) || !Self::credential_matches(record, &offer.snapshot) { return Err(INVALID); }
+        Ok(publish())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::{contact_test_support::{key, trust}, credential_integration_tests::{submit, TestProtector}};
+    use crate::policy_store::{PolicyFs, PolicyStoreError};
+    use ed25519_dalek::Signer;
+    use std::{collections::HashMap, io, path::{Path, PathBuf}, sync::{Arc, Mutex}};
+
+    struct OtherAuthorization;
+    impl sealed::Sealed for OtherAuthorization {}
+    impl ReadmissionAuthorization for OtherAuthorization {
+        fn authorized(&self)->bool { true }
+        fn binding(&self)->Result<[u8;32],&'static str> { Ok([43;32]) }
+    }
+
+    #[derive(Clone, Default)]
+    struct Fs(Arc<Mutex<HashMap<PathBuf, Vec<u8>>>>);
+    impl PolicyFs for Fs {
+        fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
+            self.0.lock().unwrap().get(path).cloned().ok_or(io::ErrorKind::NotFound.into())
+        }
+        fn atomic_write(&self, path: &Path, data: &[u8]) -> io::Result<()> {
+            self.0.lock().unwrap().insert(path.to_owned(), data.to_vec()); Ok(())
+        }
+        fn ensure_dir_secure(&self, _: &Path) -> Result<(), PolicyStoreError> { Ok(()) }
+    }
+    fn setup() -> FleetMachinePolicy {
+        let fs = Fs::default();
+        let store = FleetMachinePolicy::open(Box::new(fs), "readmission".into()).unwrap();
+        let binding = trust();
+        let profile = TransportProfile { spki_pins: String::new(), environment_fingerprint: STANDARD.encode([9; 32]) };
+        let challenge = store.begin_enrollment(binding.device_id.clone(), binding.signer_key.clone(),
+            vec!["https://fleet.test".into()], Some(profile)).unwrap();
+        let bytes = serde_json::to_vec(&["wincommander:shield-progress:enrollment:v1", &binding.org_id,
+            &binding.device_id, &binding.enrollment_generation, &challenge]).unwrap();
+        store.provision(binding.clone(), &STANDARD.encode(key().sign(&bytes).to_bytes()), "S-1-5-18").unwrap();
+        let retirement = "11111111-1111-4111-8111-111111111111";
+        let signed = serde_json::to_vec(&("fleet.windows.admin-retirement.v2", &binding.org_id, &binding.device_id,
+            &binding.enrollment_generation, retirement, "loopback", 1000i64, &binding.signer_key)).unwrap();
+        let receipt = serde_json::json!({"org_id":binding.org_id,"old_device_id":binding.device_id,
+            "old_generation":binding.enrollment_generation,"retirement_id":retirement,"issued_at":1000,
+            "version":2,"device_hash":"loopback","signer_key":binding.signer_key,"signature":STANDARD.encode(key().sign(&signed).to_bytes())});
+        let candidates = crate::fleet_recovery_candidate::CandidateStore::open(store.fs.as_ref(), "readmission".into(), &TestProtector).unwrap();
+        let public = candidates.stage(&binding, &serde_json::to_vec(&receipt).unwrap(), 1001).unwrap();
+        submit(&store, "https://fleet.test", &[4;32]).unwrap();
+        let mut state = store.state.lock().unwrap();
+        let record = state.record.as_mut().unwrap();
+        record.transport_profile.as_mut().unwrap().environment_fingerprint=crate::fleet_runtime_env::fingerprint().unwrap();
+        record.recovery_commit = Some(RecoveryCommit { recovery_id: retirement.into(), old_trust: binding.clone(),
+            new_generation: binding.enrollment_generation.clone(), decision_digest: "11".repeat(32), archive_sha256:"22".repeat(32),
+            credential_sha256:Sha256::digest([4;32]).iter().map(|b| format!("{b:02x}")).collect(),
+            candidate_fingerprint:Sha256::digest(STANDARD.decode(public).unwrap()).iter().map(|b| format!("{b:02x}")).collect(),
+            origin:"https://fleet.test".into(), local_commit_digest:"44".repeat(32), activation_pending:false, server_status:None, rollback_sha256:None });
+        drop(state); store
+    }
+    fn response(request: &[u8], secret: &[u8], invalid_generation_signature: bool) -> (Vec<u8>, String) {
+        let request_value: serde_json::Value = serde_json::from_slice(request).unwrap();
+        let binding = trust();
+        let challenge=request_value["shield_progress_challenge"].as_str().unwrap();
+        let signed=serde_json::to_vec(&["wincommander:shield-progress:enrollment:v1",&binding.org_id,
+            &binding.device_id,&binding.enrollment_generation,challenge]).unwrap();
+        let generation_signature=if invalid_generation_signature { STANDARD.encode([0;64]) } else { STANDARD.encode(key().sign(&signed).to_bytes()) };
+        let body = serde_json::to_vec(&serde_json::json!({"org_id":binding.org_id,"device_id":binding.device_id,
+            "shield_progress_generation":binding.enrollment_generation,"server_signing_key_b64":binding.signer_key,
+            "shield_progress_generation_signature":generation_signature,
+            "outcome_pubkey_b64":request_value["outcome_pubkey_b64"],"checkin_secret_b64":STANDARD.encode(secret)})).unwrap();
+        let proof = fleet_proto::canonical_json_bytes(&serde_json::json!(["fleet.windows.enrollment.v2",
+            request_value["shield_progress_challenge"],STANDARD.encode(Sha256::digest(request)),200,STANDARD.encode(Sha256::digest(&body))]));
+        let header = format!("v2.{}",STANDARD.encode(key().sign(&proof).to_bytes())); (body,header)
+    }
+    #[test]
+    fn signed_readmission_is_one_use_and_fenced() {
+        let store = setup();
+        let id = store.offer_readmission(&TestProtector, 1001, &TestAuthorization(||true)).unwrap();
+        assert!(store.claim_readmission("foreign offer", &TestAuthorization(||true)).is_err());
+        assert!(store.claim_readmission(&id, &OtherAuthorization).is_err());
+        let claim = store.claim_readmission(&id, &TestAuthorization(||true)).unwrap();
+        let request:serde_json::Value=serde_json::from_slice(claim.request()).unwrap();
+        assert_eq!(request["device_hash"],"loopback");
+        assert_eq!(request["previous_generation"],trust().enrollment_generation);
+        assert!(store.claim_readmission(&id, &TestAuthorization(||true)).is_err());
+        let (origin, _) = store.readmission_transport(&claim, &TestAuthorization(||true)).unwrap();
+        assert_eq!(origin,"https://fleet.test");
+        let (body, header) = response(claim.request(), &[4;32], false);
+        assert_eq!(store.finish_readmission(claim, 200, &body, &header, &TestAuthorization(||true), || 7).unwrap(), 7);
+        for scenario in 0..5 {
+            let id = store.offer_readmission(&TestProtector, 1001, &TestAuthorization(||true)).unwrap();
+            let claim = store.claim_readmission(&id, &TestAuthorization(||true)).unwrap();
+            let (mut body, header) = response(claim.request(), if scenario == 0 { &[5;32] } else { &[4;32] }, scenario == 4);
+            if scenario == 1 { body.push(b' '); }
+            if scenario == 2 { store.state.lock().unwrap().record.as_mut().unwrap().connection_revision += 1; }
+            if scenario == 3 { store.offer_readmission(&TestProtector, 1001, &TestAuthorization(||true)).unwrap(); }
+            if scenario == 2 || scenario == 3 { assert!(store.readmission_transport(&claim, &TestAuthorization(||true)).is_err()); }
+            assert!(store.finish_readmission(claim, 200, &body, &header, &TestAuthorization(||true), || ()).is_err());
+        }
+        let id=store.offer_readmission(&TestProtector, 1001, &TestAuthorization(||true)).unwrap();
+        store.recovery_readmission.lock().unwrap().pending.as_mut().unwrap().expires=Instant::now();
+        assert!(store.claim_readmission(&id, &TestAuthorization(||true)).is_err());
+        assert!(store.claim_readmission(&id, &TestAuthorization(||true)).is_err());
+    }
+    #[test]
+    fn revoked_session_cannot_sign_send_or_publish() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let store=setup();
+        let allowed=AtomicBool::new(false);
+        let authorized=TestAuthorization(||allowed.load(Ordering::SeqCst));
+        assert!(store.offer_readmission(&TestProtector,1001,&authorized).is_err());
+        allowed.store(true,Ordering::SeqCst);
+        let id=store.offer_readmission(&TestProtector,1001,&authorized).unwrap();
+        allowed.store(false,Ordering::SeqCst);
+        assert!(store.claim_readmission(&id,&authorized).is_err());
+        allowed.store(true,Ordering::SeqCst);
+        assert!(store.claim_readmission(&id,&authorized).is_err());
+        let id=store.offer_readmission(&TestProtector,1001,&authorized).unwrap();
+        let claim=store.claim_readmission(&id,&authorized).unwrap();
+        let (body,header)=response(claim.request(),&[4;32],false);
+        allowed.store(false,Ordering::SeqCst);
+        assert!(store.readmission_transport(&claim,&authorized).is_err());
+        let published=AtomicBool::new(false);
+        assert!(store.finish_readmission(claim,200,&body,&header,&authorized,||published.store(true,Ordering::SeqCst)).is_err());
+        assert!(!published.load(Ordering::SeqCst));
+    }
+    fn add_hybrid_state(store:&FleetMachinePolicy, variant:u8) {
+        let mut state=store.state.lock().unwrap();let record=state.record.as_mut().unwrap();
+        match variant {
+            0 => record.hybrid_trust=Some(FleetHybridTrust { minimum_epoch:1,ed_key_id:"ed".into(),pq_key_id:"pq".into(),
+                ml_dsa_65_public_b64:STANDARD.encode([1;1952]),outcome_key_b64:None }),
+            1 => record.hybrid_credential=Some(StoredHybridCredential { origin:"https://fleet.test".into(),ciphertext:"fixture".into(),epoch:1 }),
+            2 => record.hybrid_epoch_floor=1,
+            3 => record.hybrid_initial_pending=true,
+            _ => record.hybrid_unconfirmed=true,
+        }
+    }
+    #[test]
+    fn classical_readmission_refuses_hybrid_state_at_every_boundary() {
+        use std::sync::atomic::{AtomicBool,Ordering};
+        let authorized=TestAuthorization(||true);
+        for variant in 0..5 {
+            let store=setup();add_hybrid_state(&store,variant);
+            assert!(store.offer_readmission(&TestProtector,1001,&authorized).is_err());
+
+            let store=setup();let id=store.offer_readmission(&TestProtector,1001,&authorized).unwrap();
+            add_hybrid_state(&store,variant);
+            assert!(store.claim_readmission(&id,&authorized).is_err());
+
+            let store=setup();let id=store.offer_readmission(&TestProtector,1001,&authorized).unwrap();
+            let claim=store.claim_readmission(&id,&authorized).unwrap();
+            let (body,header)=response(claim.request(),&[4;32],false);
+            add_hybrid_state(&store,variant);
+            assert!(store.readmission_transport(&claim,&authorized).is_err());
+            let published=AtomicBool::new(false);
+            assert!(store.finish_readmission(claim,200,&body,&header,&authorized,||published.store(true,Ordering::SeqCst)).is_err());
+            assert!(!published.load(Ordering::SeqCst));
+        }
+    }
+}

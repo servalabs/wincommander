@@ -25,9 +25,11 @@ import PanelHeader from "../../components/shared/PanelHeader";
 import { useAppState } from "../../context/AppContext";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { useTweaksSessionState } from "./tweaksSessionState";
+import useProcessElevation from "../../hooks/useProcessElevation";
+import FleetManagementSection from "../fleet/FleetManagementSection";
 import './index.css';
 
-type TweaksTab = "appearance" | "performance" | "os-boot" | "security" | "exploit-protection" | "windows-server";
+type TweaksTab = "appearance" | "performance" | "os-boot" | "security" | "exploit-protection" | "windows-server" | "access-control";
 
 function detectGpuVendor(gpu: string | null | undefined): "amd" | "nvidia" | "intel" | null {
     const g = (gpu ?? "").toLowerCase();
@@ -58,6 +60,7 @@ export default function TweaksPanel() {
     const { searchQuery } = useSearchQuery();
     const visibility = useVisibility();
     const { systemInfo, appSettings } = useAppState();
+    const { state: processElevation } = useProcessElevation();
     const [activeTab, setActiveTab] = useTweaksSessionState<TweaksTab>("tweaks.active-tab", "appearance");
 
     const { restartExplorer, error } = useBackend();
@@ -91,8 +94,8 @@ export default function TweaksPanel() {
         // shows an empty screen instead.
         return TWEAKS_TOGGLES.some(
             (t) => (isServerSku || t.section !== "server") && toggleMatchesQuery(t, q),
-        ) || matchesContextMenu || shellVisibilityMatches(q) || contextItemMatches(q) || "windows update scheduled restart signed in".includes(q);
-    }, [searchQuery, isServerSku]);
+        ) || matchesContextMenu || shellVisibilityMatches(q) || contextItemMatches(q) || "windows update scheduled restart signed in".includes(q) || (processElevation === "administrator" && "access control windows users groups".includes(q));
+    }, [searchQuery, isServerSku, processElevation]);
 
     const isAdvanced = visibility.density === "expert";
     const showExpertSpeed = visibility.isVisible({ minDensity: "expert" });
@@ -104,8 +107,9 @@ export default function TweaksPanel() {
         order.push("security");
         if (showExpertSpeed) order.push("exploit-protection");
         if (isServerSku) order.push("windows-server");
+        if (processElevation === "administrator") order.push("access-control");
         return order;
-    }, [isServerSku, showExpertSpeed]);
+    }, [isServerSku, showExpertSpeed, processElevation]);
 
     // A tab whose TabsTrigger got hidden by a density downgrade (e.g. a
     // policy/entitlement change while the app is open) must not stay the
@@ -139,6 +143,8 @@ export default function TweaksPanel() {
                     return showExpertSpeed && sectionHasMatch("exploitProtection", q);
                 case "windows-server":
                     return isServerSku && (sectionHasMatch("server", q) || "rdp device redirection smart cards drives clipboard printers audio microphone camera passkeys plug and play".includes(q));
+                case "access-control":
+                    return processElevation === "administrator" && "access control windows users groups".includes(q);
             }
         };
         if (tabMatches(activeTab)) return;
@@ -163,6 +169,7 @@ export default function TweaksPanel() {
                     <TabsTrigger value="security">Security &amp; apps</TabsTrigger>
                     {showExpertSpeed && <TabsTrigger value="exploit-protection">Exploit protection</TabsTrigger>}
                     {isServerSku && <TabsTrigger value="windows-server">Windows Server</TabsTrigger>}
+                    {processElevation === "administrator" && <TabsTrigger value="access-control">Access control</TabsTrigger>}
                 </TabsList>
 
                 <TabsContent value="appearance">
@@ -197,6 +204,8 @@ export default function TweaksPanel() {
                 <TabsContent value="security">
                     <SecurityAppsTab
                         showExpertSpeed={showExpertSpeed}
+                        isServerSku={isServerSku}
+                        platformKnown={typeof appSettings?.current?.tweaks?.server?.isServerSku === "boolean" || /windows/i.test(systemInfo?.osName ?? "")}
                         noSearch={noSearch}
                         searchQuery={searchQuery}
                         handlePostToggle={handlePostToggle}
@@ -219,6 +228,7 @@ export default function TweaksPanel() {
                         />
                     </TabsContent>
                 )}
+                {processElevation === "administrator" && <TabsContent value="access-control"><FleetManagementSection section="access-control" /></TabsContent>}
             </Tabs>
 
             {(!hasResults && !noSearch) && (
@@ -376,18 +386,17 @@ function WindowsServerTab({ searchQuery, handlePostToggle }: {
 }
 
 // ── Tab 4: Security & apps ───────────────────────────────────────────────
-function SecurityAppsTab({ showExpertSpeed, noSearch, searchQuery, handlePostToggle }: {
+function SecurityAppsTab({ showExpertSpeed, isServerSku, platformKnown, noSearch, searchQuery, handlePostToggle }: {
     showExpertSpeed: boolean;
+    isServerSku: boolean;
+    platformKnown: boolean;
     noSearch: boolean;
     searchQuery: string;
     handlePostToggle: (t: ToggleDef) => Promise<void>;
 }) {
     return (
         <div className="flex flex-col gap-4">
-            {/* VmSandboxSection stays visible at every density (only hidden
-                during search, as before) — rendered ahead of the expert-gated
-                block below so it isn't swallowed by the showExpertSpeed gate. */}
-            {noSearch && <VmSandboxSection />}
+            {noSearch && platformKnown && !isServerSku && <VmSandboxSection />}
             {noSearch && <LocalPasswordExpiryCard />}
             {(noSearch || "windows update scheduled restart signed in".includes(searchQuery.toLowerCase().trim())) && <UpdateRestartCard />}
 

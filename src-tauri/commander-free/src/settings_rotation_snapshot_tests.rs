@@ -1,0 +1,207 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+use super::*;
+use super::super::{open, derive_section_key, encode_section};
+use serde_json::json;
+
+fn fixture(root: &Path) -> [u8; 32] {
+    let material = [42; 32];
+    fs::create_dir(root.join("store")).unwrap();
+    fs::write(root.join(".install.material"), material).unwrap();
+    let key = derive_section_key(&material, None).unwrap();
+    for (name, value) in [("settings", json!({"value":"private one"})), ("payments", json!({"value":"private two"}))] {
+        let encoded = encode_section(&key, &serde_json::to_vec(&value).unwrap(), &format!("machine:{name}")).unwrap();
+        fs::write(root.join("store").join(format!("{name}.dat")), encoded).unwrap();
+    }
+    material
+}
+
+#[test]
+fn maintenance_pin_allows_child_reads_and_rejects_directory_write_handles() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("settings.dat"), b"preserved").unwrap();
+    let open_writer = || OpenOptions::new().access_mode(0x116).share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT).open(dir.path());
+    let writer = open_writer().unwrap();
+    assert!(pin_one_directory(dir.path(), FILE_SHARE_READ).is_err());
+    drop(writer);
+    let pin = pin_one_directory(dir.path(), FILE_SHARE_READ).unwrap();
+    assert_eq!(fs::read(dir.path().join("settings.dat")).unwrap(), b"preserved");
+    assert!(open_writer().is_err());
+    drop(pin);
+    assert!(open_writer().is_ok());
+}
+
+#[test]
+fn newly_created_root_can_be_repinned_before_provisioning() {
+    let parent = tempfile::tempdir().unwrap();
+    let parent_pin = pin_one_directory(parent.path(), FILE_SHARE_READ).unwrap();
+    let root = parent.path().join("new-product-root");
+    fs::create_dir(&root).unwrap();
+    let root_pin = pin_one_directory(&root, FILE_SHARE_READ).unwrap();
+    let open_writer = || OpenOptions::new().access_mode(0x116).share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT).open(&root);
+    assert!(open_writer().is_err());
+    fs::write(root.join("settings.dat"), b"fixture").unwrap();
+    assert_eq!(fs::read(root.join("settings.dat")).unwrap(), b"fixture");
+    drop(root_pin); drop(parent_pin);
+    assert!(open_writer().is_ok());
+}
+
+#[test]
+fn maintenance_rejects_product_root_directly_under_volume_root() {
+    assert!(machine_maintenance_parent(Path::new(r"D:\WinCommander")).is_err());
+    assert_eq!(machine_maintenance_parent(Path::new(r"D:\ProgramData\WinCommander")).unwrap(), Path::new(r"D:\ProgramData"));
+}
+
+#[test]
+fn enumerates_all_sections_and_holds_the_key_and_files() {
+    let dir = tempfile::tempdir().unwrap();
+    fixture(dir.path());
+    let key_path = dir.path().join(".install.material");
+    let section = dir.path().join("store").join("settings.dat");
+    let mut snapshot = Snapshot::capture(dir.path()).unwrap();
+    assert_eq!(snapshot.sections.len(), 2);
+    assert!(fs::write(&key_path, b"replacement").is_err());
+    assert!(fs::write(&section, b"replacement").is_err());
+    let generation = snapshot.prepare().unwrap();
+    let values = open(&generation).unwrap();
+    assert_eq!(values["settings"]["value"], "private one");
+    assert_eq!(values["payments"]["value"], "private two");
+    drop(snapshot);
+    assert!(fs::write(&section, b"after release").is_ok());
+}
+
+#[test]
+fn newly_created_section_is_detected_or_denied_while_guard_is_held() {
+    let dir = tempfile::tempdir().unwrap();
+    fixture(dir.path());
+    let mut snapshot = Snapshot::capture(dir.path()).unwrap();
+    let later = dir.path().join("store").join("later.dat");
+    if fs::write(&later, b"new section").is_ok() {
+        assert!(snapshot.verify_unchanged().is_err());
+        assert!(snapshot.prepare().is_err());
+    } else {
+        snapshot.verify_unchanged().unwrap();
+    }
+}
+
+#[test]
+fn unreadable_or_invalid_section_aborts_without_publishing() {
+    let dir = tempfile::tempdir().unwrap();
+    fixture(dir.path());
+    let path = dir.path().join("store").join("settings.dat");
+    fs::write(&path, b"corrupt data").unwrap();
+    let mut snapshot = Snapshot::capture(dir.path()).unwrap();
+    assert!(snapshot.prepare().is_err());
+    assert_eq!(fs::read(&path).unwrap(), b"corrupt data");
+}
+
+#[test]
+fn staging_does_not_accept_new_section_created_during_publication() {
+    let dir = tempfile::tempdir().unwrap();
+    fixture(dir.path());
+    let original = fs::read(dir.path().join("store").join("settings.dat")).unwrap();
+    let mut snapshot = Snapshot::capture(dir.path()).unwrap();
+    let later = dir.path().join("store").join("later.dat");
+    let result = snapshot.stage_unactivated_with_hook(&|_, _| {
+        fs::write(&later, b"late old-writer data").map_err(|_| "old writer blocked".to_string())
+    });
+    assert!(result.is_err());
+    assert_eq!(fs::read(dir.path().join("store").join("settings.dat")).unwrap(), original);
+}
+
+#[test]
+fn failure_after_staging_does_not_authorize_cutover_or_modify_sources() {
+    let dir = tempfile::tempdir().unwrap();
+    fixture(dir.path());
+    let section = dir.path().join("store").join("settings.dat");
+    let original = fs::read(&section).unwrap();
+    let staged = dir.path().join(STAGED_NAME);
+    let mut snapshot = Snapshot::capture(dir.path()).unwrap();
+    let result = snapshot.stage_unactivated_with_hook(&|_, _| {
+        Err("publication outcome unknown".into())
+    });
+    assert!(result.is_err());
+    assert_eq!(fs::read(&section).unwrap(), original);
+    assert!(staged.exists());
+}
+
+#[test]
+fn empty_name_section_is_not_silently_omitted() {
+    let dir = tempfile::tempdir().unwrap();
+    fixture(dir.path());
+    fs::write(dir.path().join("store").join(".dat"), b"legacy empty-name data").unwrap();
+    assert!(Snapshot::capture(dir.path()).is_err());
+    assert_eq!(fs::read(dir.path().join("store").join(".dat")).unwrap(), b"legacy empty-name data");
+}
+
+#[test]
+fn hardlinked_source_file_is_not_accepted() {
+    let dir = tempfile::tempdir().unwrap();
+    fixture(dir.path());
+    let key = dir.path().join(".install.material");
+    let alias = dir.path().join("key-alias");
+    fs::hard_link(&key, &alias).unwrap();
+    assert!(Snapshot::capture(dir.path()).is_err());
+    assert_eq!(fs::read(&key).unwrap(), fs::read(&alias).unwrap());
+}
+
+#[test]
+fn successful_staging_does_not_fence_a_later_old_writer() {
+    let dir = tempfile::tempdir().unwrap();
+    fixture(dir.path());
+    let mut snapshot = Snapshot::capture(dir.path()).unwrap();
+    let mut stage = snapshot.stage_unactivated().unwrap();
+    let late = dir.path().join("store").join("late.dat");
+    if fs::write(&late, b"post-check old writer").is_ok() {
+        // The previous success did not authorize activation. The caller can
+        // still detect this change while it retains the snapshot guard.
+        assert!(stage.verify().is_err());
+    }
+    drop(stage);
+    drop(snapshot);
+    // Once the guard is dropped, old writers are no longer fenced at all.
+    assert!(fs::write(dir.path().join("store").join("settings.dat"), b"old writer resumed").is_ok());
+}
+
+#[test]
+fn fresh_snapshot_can_verify_reopened_generation_but_detects_new_section() {
+    let dir = tempfile::tempdir().unwrap();
+    fixture(dir.path());
+    let generation = {
+        let mut first = Snapshot::capture(dir.path()).unwrap();
+        first.prepare().unwrap()
+    };
+    {
+        let mut reopened = Snapshot::capture(dir.path()).unwrap();
+        reopened.verify_generation(&generation).unwrap();
+    }
+    fs::write(dir.path().join("store").join("later.dat"), b"later source").unwrap();
+    let mut changed = Snapshot::capture(dir.path()).unwrap();
+    assert!(changed.verify_generation(&generation).is_err());
+}
+
+#[test]
+fn staging_uses_only_reserved_name_under_guarded_root_without_overwrite() {
+    let dir = tempfile::tempdir().unwrap();
+    fixture(dir.path());
+    let stage = dir.path().join(STAGED_NAME);
+    fs::write(&stage, b"existing protected file").unwrap();
+    let mut snapshot = Snapshot::capture(dir.path()).unwrap();
+    assert!(snapshot.stage_unactivated().is_err());
+    assert_eq!(fs::read(stage).unwrap(), b"existing protected file");
+}
+
+#[test]
+fn stage_guard_revalidates_held_identity_and_source() {
+    let dir = tempfile::tempdir().unwrap();
+    fixture(dir.path());
+    let mut snapshot = Snapshot::capture(dir.path()).unwrap();
+    let mut stage = snapshot.stage_unactivated().unwrap();
+    stage.verify().unwrap();
+    let path = dir.path().join(STAGED_NAME);
+    assert!(path.is_file());
+    assert!(fs::remove_file(&path).is_err());
+    drop(stage);
+    assert!(fs::remove_file(path).is_ok());
+}

@@ -36,6 +36,20 @@ pub(crate) fn revision_ns(path: &Path) -> std::io::Result<u64> {
         .min(u64::MAX as u128) as u64)
 }
 
+// An unobservable existing path is not evidence that it was deleted.
+#[cfg(any(test, all(windows, feature = "experimental-encrypted-search")))]
+fn confirmed_missing(path: &Path) -> bool {
+    matches!(std::fs::symlink_metadata(path), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+}
+// These configuration rules are independent of filesystem accessibility.
+#[cfg(any(test, all(windows, feature = "experimental-encrypted-search")))]
+fn explicitly_out_of_scope(path: &Path, config: &crate::types::IndexConfig, exclusions: &globset::GlobSet) -> bool {
+    config.roots.is_empty()
+        || !crate::index::path_in_roots(&path.to_string_lossy(), &config.roots)
+        || crate::crawler::path_is_skipped(path, &config.skip_paths)
+        || crate::index::path_in_roots(&path.to_string_lossy(), std::slice::from_ref(&config.index_dir))
+        || path.components().any(|part| exclusions.is_match(part.as_os_str()))
+}
 struct StoredFile {
     id: DocId,
     path: PathBuf,
@@ -80,6 +94,12 @@ impl SearchEngine {
     /// unchanged entries and a single parser call may exceed that soft time budget.
     /// Deletions apply only after every root was fully scanned and remains accessible.
     pub fn reconcile_sync(&self, cancel: &AtomicBool, max_files: usize) -> Result<ReconcileReport> {
+        #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+        if self.experimental_fresh {
+            return Err(crate::error::SearchError::Config("strict candidate rebuild required".into()));
+        }
+        #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+        self.experimental_verified.store(false, Ordering::Release);
         let mut report = ReconcileReport::default();
         if max_files == 0 || cancel.load(Ordering::Relaxed) {
             report.indexed_docs = self.indexed_document_count()?;
@@ -99,6 +119,10 @@ impl SearchEngine {
         let mut writer = self.ci.writer()?;
         let mut complete = true;
         let started = std::time::Instant::now();
+        #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+        let unbounded_initial_scan = self.experimental_id.is_some() && max_files == usize::MAX;
+        #[cfg(not(all(windows, feature = "experimental-encrypted-search")))]
+        let unbounded_initial_scan = false;
         'scan: while let Some(directory) = directories.pop() {
             if cancel.load(Ordering::Relaxed) {
                 complete = false;
@@ -114,7 +138,7 @@ impl SearchEngine {
             };
             for entry in entries {
                 if cancel.load(Ordering::Relaxed)
-                    || (report.updated > 0
+                    || (!unbounded_initial_scan && report.updated > 0
                         && started.elapsed() >= std::time::Duration::from_millis(500))
                 {
                     complete = false;
@@ -223,8 +247,18 @@ impl SearchEngine {
             }
         }
         if complete {
+            #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+            let exclusions = crate::crawler::build_globset(&self.config.exclusions)?;
             for file in &existing {
                 if !seen.contains(&file.id) || !self.permits_path(&file.path) {
+                    // For encrypted-cache recovery, inability to observe or
+                    // authorize an existing path is not proof of deletion.
+                    #[cfg(all(windows, feature = "experimental-encrypted-search"))]
+                    if self.experimental_id.is_some() && !confirmed_missing(&file.path)
+                        && !explicitly_out_of_scope(&file.path, &self.config, &exclusions) {
+                        complete = false;
+                        continue;
+                    }
                     self.ci.delete(&mut writer, file.id);
                     report.removed += 1;
                 }
@@ -243,6 +277,27 @@ mod tests {
     use super::*;
     use crate::types::{ContentQuery, IndexConfig};
 
+    #[test]
+    fn configured_removed_root_and_exclusions_are_out_of_scope() {
+        let base = tempfile::tempdir().unwrap();
+        let allowed = base.path().join("included");
+        let removed = base.path().join("removed").join("a.txt");
+        let excluded = allowed.join("private").join("b.txt");
+        let config = IndexConfig { roots: vec![allowed.clone()], exclusions: vec!["private".into()], skip_paths: vec![], max_file_bytes: 100, index_dir: base.path().join("index") };
+        let glob = crate::crawler::build_globset(&config.exclusions).unwrap();
+        assert!(explicitly_out_of_scope(&removed, &config, &glob));
+        assert!(explicitly_out_of_scope(&excluded, &config, &glob));
+        assert!(!explicitly_out_of_scope(&allowed.join("normal.txt"), &config, &glob));
+    }
+    #[test]
+    fn missing_path_check_does_not_treat_existing_file_as_deleted() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("file.txt");
+        std::fs::write(&file, b"data").unwrap();
+        assert!(!confirmed_missing(&file));
+        std::fs::remove_file(&file).unwrap();
+        assert!(confirmed_missing(&file));
+    }
     #[test]
     fn file_edit_after_extraction_cannot_hide_behind_a_newer_revision_stamp() {
         let volume = tempfile::TempDir::new().unwrap();

@@ -97,7 +97,7 @@ describe("Maintenance multi-row control accessibility", () => {
 
     expect(diskAnalyzer).toContain('aria-label="Drive or folder to analyze"');
     expect(diskAnalyzer).toContain('aria-label="Selected item details"');
-    expect(diskAnalyzer).toContain('Sizes are logical file sizes');
+    expect(diskAnalyzer).toContain('Allocated disk size is unavailable.');
     expect(diskAnalyzer).toContain('className="da-scan-notice" role="status"');
   });
 });

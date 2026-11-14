@@ -11,6 +11,10 @@ import type { EraseReceipt } from "../hooks/useBackend";
 
 export type ReceiptTone = "success" | "warning" | "danger";
 
+export function displayEraseDetail(detail: string): string {
+  return detail.replace(/veracrypt/gi, "encrypted container");
+}
+
 export function receiptTone(status: EraseReceipt["status"]): ReceiptTone {
   if (status === "erased") return "success";
   if (status === "erased_with_caveat") return "warning";
@@ -32,7 +36,7 @@ export interface ReceiptFact {
 }
 
 const ACTION_LABEL: Record<string, string> = {
-  veracrypt_header_destroy: "VeraCrypt header destroy",
+  veracrypt_header_destroy: "Encrypted container header destroy",
   bitlocker_protectors_removed: "BitLocker protector removal",
 };
 
@@ -45,7 +49,7 @@ export function receiptFacts(receipt: EraseReceipt): ReceiptFact[] {
       value: ACTION_LABEL[receipt.action] ?? receipt.action,
       tone: "neutral",
       tooltip:
-        "Which destruction path ran. VeraCrypt overwrites the volume header; BitLocker strips the key protectors that unwrap the volume key.",
+        "Which destruction path ran. Container erasure overwrites the volume header; BitLocker strips the key protectors that unwrap the volume key.",
     },
     {
       label: "Verified",
@@ -96,7 +100,7 @@ export function formatReceiptForClipboard(receipt: EraseReceipt, at: number): st
     "WinCommander crypto-erase receipt",
     `Time: ${new Date(at).toISOString()}`,
     `Target: ${receipt.label}`,
-    `Kind: ${receipt.kind}`,
+    `Kind: ${receipt.kind === "veracrypt" ? "encrypted container" : receipt.kind}`,
     `Method: ${ACTION_LABEL[receipt.action] ?? receipt.action}`,
     `Status: ${receipt.status}`,
     `Independently verified: ${receipt.verified ? "yes" : "no"}`,
@@ -106,7 +110,7 @@ export function formatReceiptForClipboard(receipt: EraseReceipt, at: number): st
     lines.push(`Recovery protectors remaining: ${receipt.recoveryProtectorsRemaining}`);
   }
   if (receipt.escrowWarning) lines.push(`Escrow warning: ${receipt.escrowWarning}`);
-  lines.push(`Detail: ${receipt.detail}`);
+  lines.push(`Detail: ${displayEraseDetail(receipt.detail)}`);
   return lines.join("\n");
 }
 
@@ -123,7 +127,7 @@ export function classifyEraseError(raw: string): { title: string; hint: string }
   if (text.includes("typed confirmation matching")) {
     return {
       title: "Confirmation did not match",
-      hint: raw,
+      hint: displayEraseDetail(raw),
     };
   }
   if (text.includes("not confirmed")) {
@@ -144,5 +148,5 @@ export function classifyEraseError(raw: string): { title: string; hint: string }
       hint: "The destruction handlers ship with the Pro engine. Activate Pro to use this feature.",
     };
   }
-  return { title: "Crypto-erase failed", hint: raw };
+  return { title: "Crypto-erase failed", hint: displayEraseDetail(raw) };
 }

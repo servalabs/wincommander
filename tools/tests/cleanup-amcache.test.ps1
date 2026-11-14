@@ -12,6 +12,8 @@ $script:childCount = 3
 $script:recordMode = 'normal'
 $script:denyNativeRoot = $false; $script:emptyLegacy = $false
 $script:missingHive = $false; $script:denyHiveParent = $false
+$script:missingRecord = $false
+$script:recordMode = 'normal'
 function Get-Item {
     [CmdletBinding()] param([string]$LiteralPath, [string]$Path)
     if ($LiteralPath -like '*Amcache.hve') {
@@ -35,6 +37,7 @@ function Get-ChildItem {
 }
 function Get-ItemProperty {
     [CmdletBinding()] param([Parameter(Position=0)][string]$Path)
+    if ($script:missingRecord -and $Path -eq 'mock2') { throw [System.Management.Automation.ItemNotFoundException]::new('Record disappeared') }
     if ($script:recordMode -eq 'hash-only') { return [pscustomobject]@{ Name = ''; ProductName = ''; FileName = ''; BinFileVersion = '1.2.3'; LowerCaseLongPath = ''; LongPath = ''; LongPathHash = 'abc123' } }
     if ($script:recordMode -eq 'fallback') { return [pscustomobject]@{ Name = ''; ProductName = ''; FileName = 'example.exe'; BinFileVersion = ''; LowerCaseLongPath = ''; LongPath = 'C:\Mock\real.exe'; LongPathHash = '' } }
     [pscustomobject]@{ Name = ''; ProductName = 'Example'; BinFileVersion = ''; LowerCaseLongPath = 'C:\Mock\example.exe'; LongPathHash = ''; Publisher = 'Synthetic publisher' }
@@ -43,6 +46,7 @@ function Get-ItemProperty {
 $result = Get-AmcacheEntries
 if ($result.error -or $result.total -ne 15 -or @($result.entries).Count -ne 5) { throw 'The five category counts did not total 15.' }
 if ($result.inventoryRoot -ne 'HKLM:\Amcache\Root') { throw 'The already-mounted native hive root was not used.' }
+if ($result.coverage -ne 'limited' -or $result.coverageNote -notmatch 'offline Amcache file is not read') { throw 'The mounted-only scan must explain its limitations.' }
 if (-not $result.hveFileExists -or $result.hveFileSizeMb -ne 0) { throw 'A zero-byte existing hive was reported as absent.' }
 if ($result.entries[0].sample[0].name -ne 'Example' -or $result.entries[0].sample[0].path -ne 'C:\Mock\example.exe') { throw 'Sample names or paths were not preserved.' }
 if ($result.entries[0].sample[0].registryValues.Publisher -ne 'Synthetic publisher') { throw 'An additional captured Amcache field was discarded.' }
@@ -67,7 +71,7 @@ $fleet = Get-AmcacheEntries -FleetProjection
 if ($fleet.entries[0].sample[0].ContainsKey('registryValues')) { throw 'Local-only Amcache values reached the Fleet projection.' }
 $script:mountMissing = $true
 $unmounted = Get-AmcacheEntries
-if (-not $unmounted.partial -or $unmounted.status -ne 'unavailable' -or $null -ne $unmounted.total -or -not $unmounted.hveFileExists -or $unmounted.message -notmatch 'offline hive is not read') { throw 'An existing but unmounted hive was reported as complete.' }
+if (-not $unmounted.partial -or $unmounted.status -ne 'unavailable' -or $null -ne $unmounted.total -or -not $unmounted.hveFileExists -or $unmounted.message -notmatch 'cannot read the offline Amcache file') { throw 'An existing but unmounted hive was reported as complete.' }
 $script:missingHive = $true; $script:denyHiveParent = $true
 $hiddenHive = Get-AmcacheEntries
 if (-not $hiddenHive.partial -or $null -ne $hiddenHive.hveFileExists) { throw 'An inaccessible hive directory must not be treated as a missing hive.' }
@@ -94,4 +98,7 @@ if (-not $placeholder.partial -or $placeholder.status -ne 'unavailable' -or $pla
 $script:emptyLegacy = $false
 $recognizedFallback = Get-AmcacheEntries
 if ($recognizedFallback.partial -or $recognizedFallback.total -ne 15 -or $recognizedFallback.inventoryRoot -ne 'HKLM:\AppCompatCache\Amcache') { throw 'A fallback with real inventory categories was not accepted.' }
+$script:denyNativeRoot = $false; $script:missingRecord = $true
+$vanished = Get-AmcacheEntries
+if (-not $vanished.error) { throw 'A record disappearing while it was read was silently reported as a complete inventory.' }
 Write-Output 'Passed: totals, samples, zero-byte existence and denied-read behavior.'

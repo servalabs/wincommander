@@ -2,13 +2,14 @@
 //
 // Frontend bridge to the free-tier evidence.timeline ledger (Rust:
 // commander-free/src/evidence.rs). Records what WinCommander detected/did
-// to a local append-only JSONL feed and reads it back for the timeline UI.
+// to an encrypted local feed and reads it back for the timeline UI.
 //
-// Free tier = plain, unsigned, local. The paid evidence.vault upgrade adds
+// Free tier = encrypted, unsigned, local. The paid evidence.vault upgrade adds
 // the court-admissible signed layer Pro-side; the timeline UI consumes
 // whichever is present.
 
 import { invoke } from "@tauri-apps/api/core";
+import { pushNotification } from "./notificationStore";
 
 export type EvidenceSeverity = "info" | "warn" | "danger";
 
@@ -34,24 +35,24 @@ export function recordEvidence(
   detail?: string,
 ): void {
   invoke("evidence_record", { source, severity, summary, detail: detail ?? null }).catch(() => {
-    /* best-effort */
+    pushNotification("warn", "An activity could not be recorded. Check activity history before relying on it.", undefined, "alert", "evidence-record-failure");
   });
 }
 
-/** Read the most recent entries, newest first. Returns [] on any error. */
+/** Read the most recent entries, newest first. */
 export async function readEvidence(limit = 200): Promise<EvidenceEntry[]> {
-  try {
-    return await invoke<EvidenceEntry[]>("evidence_read", { limit });
-  } catch {
-    return [];
-  }
+  return invoke<EvidenceEntry[]>("evidence_read", { limit });
 }
 
 /** Clear the local ledger (user-initiated). */
 export async function clearEvidence(): Promise<void> {
-  try {
-    await invoke("evidence_clear");
-  } catch {
-    /* ignore */
+  await invoke("evidence_clear");
+}
+
+export async function getEvidenceStatus(): Promise<{ continuityUnverified: boolean }> {
+  const value = await invoke<unknown>("evidence_status");
+  if (!value || typeof value !== "object" || typeof (value as { continuityUnverified?: unknown }).continuityUnverified !== "boolean") {
+    throw new Error("Evidence status is unavailable.");
   }
+  return value as { continuityUnverified: boolean };
 }

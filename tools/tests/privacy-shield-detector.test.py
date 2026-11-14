@@ -53,7 +53,7 @@ class GazeTests(unittest.TestCase):
             self.assertEqual(classify(landmarks(sign * 0.4)), "blur")
             self.assertEqual(classify(landmarks(sign * 0.5)), "blackout")
         self.assertEqual(classify(landmarks(left=0.01)), "blur")
-        self.assertEqual(classify(landmarks(yaw=0.5, left=-0.1)), "blackout")
+        self.assertEqual(classify(landmarks(yaw=0.5, left=-0.1)), "blur")
         half_face = landmarks()
         half_face[10].y = -0.1
         self.assertEqual(classify(half_face), "blur")
@@ -65,6 +65,7 @@ class GazeTests(unittest.TestCase):
         self.assertEqual(classify(landmarks()), ("clear", "clear"))
         self.assertEqual(classify(landmarks(0.2)), ("blur", "yaw"))
         self.assertEqual(classify(landmarks(left=0.01)), ("blur", "frame_edge"))
+        self.assertEqual(classify(landmarks(yaw=0.5, left=-0.1)), ("blur", "frame_edge"))
         self.assertEqual(classify(landmarks(0.5)), ("blackout", "full_turn"))
 
     def test_short_noise_does_not_blur_and_full_turn_can_escalate(self):

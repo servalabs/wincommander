@@ -1,0 +1,16 @@
+[package]
+name = "fleet-v2-feature-matrix"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Keep each matrix invocation independent of workspace feature unification.
+[workspace]
+
+[dependencies]
+fleet-proto = { path = "../..", features = ["windows-v2"] }
+serde_json = "1"
+
+[features]
+precise = ["serde_json/arbitrary_precision"]
+raw = ["serde_json/raw_value"]

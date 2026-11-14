@@ -22,7 +22,7 @@ import { useAppState } from "../context/AppContext";
 import { useAuthMode } from "../context/AuthModeContext";
 import { cn } from "../lib/utils";
 import {
-  DEFAULT_ALWAYS_HIDDEN_SIDEBAR_ACTIONS,
+  sidebarHiddenActions,
   DEFAULT_ALWAYS_PANELS,
   DEFAULT_BORROWED_EXTRAS,
   DEFAULT_BORROWED_PANELS,
@@ -184,12 +184,13 @@ export default function GlobalCommandPalette() {
     // `lockedIds` already accounts for unlock mode and the borrowed-mode
     // first-run defaults, so it is the effective panel lock set for this view.
     lockedPanels: [...lockedIds],
-    alwaysHiddenActions: appSettings?.app?.hiddenSidebarActions ?? DEFAULT_ALWAYS_HIDDEN_SIDEBAR_ACTIONS,
+    alwaysHiddenActions: sidebarHiddenActions(appSettings?.app?.hiddenSidebarActions, appSettings?.app?.showAdvisorAction),
     borrowedHidden: appSettings?.app?.borrowedHidden ?? DEFAULT_BORROWED_EXTRAS,
     borrowedActive,
   }), [
     appSettings?.app?.permanentlyHiddenPanels,
     appSettings?.app?.hiddenSidebarActions,
+    appSettings?.app?.showAdvisorAction,
     appSettings?.app?.borrowedHidden,
     borrowedActive,
     lockedIds,

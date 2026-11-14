@@ -28,6 +28,10 @@ jobs:
       main_sha: ${{ steps.verify.outputs.main_sha }}
       beta_sha: ${{ steps.verify.outputs.beta_sha }}
     steps:
+      - name: Block incomplete hybrid Free promotion
+        run: |
+          echo 'Free beta promotion is disabled until hybrid metadata is verified and published.' >&2
+          exit 1
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0

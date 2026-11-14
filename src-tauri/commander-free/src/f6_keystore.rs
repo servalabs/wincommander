@@ -52,6 +52,18 @@ const SIGNING_SEED_FIELD: &str = "signing_seed_hex";
 /// Returns `Err(String)` if the datastore section cannot be read or written.
 /// Callers must not proceed with the F6 orchestration if this returns an error.
 pub fn get_or_create_device_signing_key() -> Result<SigningKey, String> {
+    #[cfg(all(windows, feature = "experimental-settings-generation"))]
+    if crate::datastore::experimental_generation_routing_enabled() {
+        let section = crate::datastore::guarded_f6_get_or_create(|| {
+            let (signing_key, _) = generate_provisioning_keypair();
+            Ok(json!({ SIGNING_SEED_FIELD: hex::encode(signing_key_to_bytes(&signing_key)) }))
+        })?;
+        let hex_val = section.get(SIGNING_SEED_FIELD).and_then(Value::as_str)
+            .ok_or("F6 keystore: committed device signing key is missing")?;
+        let seed = hex::decode(hex_val).map_err(|e| format!("F6 keystore: hex decode failed: {e}"))?;
+        let arr: [u8; 32] = seed.try_into().map_err(|_| "F6 keystore: invalid committed key length")?;
+        return Ok(signing_key_from_bytes(&arr));
+    }
     let section = crate::datastore::load(F6_KEYSTORE_SECTION)?;
 
     if let Some(hex_val) = section.get(SIGNING_SEED_FIELD).and_then(Value::as_str) {

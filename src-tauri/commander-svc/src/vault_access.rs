@@ -6,8 +6,10 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+#[path = "vault_access/access_directory_mutation.rs"]
 mod access_directory_mutation;
 #[cfg(windows)]
+#[path = "vault_access/local_principals.rs"]
 mod local_principals;
 #[cfg(windows)]
 pub use local_principals::local_user_principals;

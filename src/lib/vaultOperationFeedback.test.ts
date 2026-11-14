@@ -131,7 +131,7 @@ test("mounted-root access denial explains automatic ordinary-Vault recovery", ()
   expect(message).toContain("inside the mounted Vault");
   expect(message).toContain("automatically repairs");
   expect(message).toContain("Fleet-managed Vault");
-  expect(message).toContain("Fleet > Vault permissions");
+  expect(message).toContain("Secure Storage > My vaults");
   expect(message).not.toContain("take ownership");
   expect(vaultOperationError(new Error("vault_caller_access_denied"))).toBe(message);
 });
@@ -141,9 +141,9 @@ test("registered ownership and Fleet denial give policy recovery rather than fil
   expect(owner).toContain("owner's Windows account");
   expect(owner).toContain("dismount it first");
   expect(owner).toContain("authorized administrator");
-  expect(owner).toContain("Fleet > Vault permissions");
+  expect(owner).toContain("Secure Storage > Vault permissions");
   const fleet = vaultOperationError("vault_policy_access_denied");
-  expect(fleet).toContain("Fleet > Vault permissions");
+  expect(fleet).toContain("Secure Storage > My vaults");
   for (const message of [owner, fleet]) {
     expect(message).not.toContain("Properties > Security");
     expect(message).not.toContain("take ownership");

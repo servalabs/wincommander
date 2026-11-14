@@ -447,9 +447,9 @@ pub struct AppPreferences {
     /// Panic hotkey that triggers immediate lockdown (e.g. "Ctrl+Shift+Q")
     #[serde(default = "default_panic_hotkey")]
     pub panic_hotkey: String,
-    /// Seconds the sidebar Lockdown button counts down before firing (3–30).
-    /// Frontend reads/writes this (LockdownTimerRow); Rust doesn't consume it,
-    /// but the field MUST exist or patch_settings_cmd's serialize→merge→
+    /// Seconds the sidebar Lockdown button counts down before firing (3–86400).
+    /// Read by the frontend and trusted lockdown gate; the field must exist so
+    /// patch_settings_cmd's serialize→merge→
     /// deserialize round-trip silently drops it (same bug as ramdisk_autostart).
     #[serde(default = "default_lockdown_timer_sec")]
     pub lockdown_timer_sec: u32,
@@ -573,6 +573,9 @@ pub struct AppPreferences {
     /// Hidden actions remain reachable from their own panels.
     #[serde(default)]
     pub hidden_sidebar_actions: Vec<String>,
+    /// Advisor is hidden until explicitly enabled in Secret Settings.
+    #[serde(default)]
+    pub show_advisor_action: bool,
     /// When true, notifications are also suppressed while panels are locked
     /// (Borrowed-PC mode active). Requires hideNotificationBell=false to take
     /// effect independently.
@@ -1025,6 +1028,7 @@ impl Default for AppPreferences {
                 .iter()
                 .map(|action| action.to_string())
                 .collect(),
+            show_advisor_action: false,
             mute_notifications_when_locked: false,
             permanently_hidden_panels: Some(
                 DEFAULT_PERMANENTLY_HIDDEN_PANELS
@@ -2513,6 +2517,13 @@ pub(crate) fn cached_settings() -> Option<AppSettings> {
     SETTINGS_CACHE.lock().ok().and_then(|cache| cache.clone())
 }
 
+/// Inspect the committed toggle without hydrating or cloning the settings store.
+pub(crate) fn cached_advanced_tools_enabled() -> Option<bool> {
+    SETTINGS_CACHE.lock().ok().and_then(|cache| {
+        cache.as_ref().map(|settings| settings.ideal.identity.advanced_tools_enabled.unwrap_or(false))
+    })
+}
+
 pub(crate) fn context_notification_preferences() -> Result<(bool, bool, String), String> {
     let value = personal_settings::read_notification_overlay()?;
     context_notification_preferences_from_value(&value)
@@ -2614,6 +2625,36 @@ pub(crate) fn create_default_settings() -> AppSettings {
         current: SystemState::default(),
         policy: PolicySettings::default(),
     }
+}
+
+#[cfg(all(windows, any(test, feature = "experimental-settings-generation")))]
+pub(crate) fn fresh_machine_settings() -> Result<serde_json::Value, String> {
+    let value = serde_json::to_value(create_default_settings())
+        .map_err(|_| "Could not create fresh machine settings".to_string())?;
+    Ok(split_settings_value(value)?.0)
+}
+
+#[cfg(all(windows, feature = "experimental-settings-generation"))]
+pub(crate) fn valid_fresh_machine_settings(value: &serde_json::Value) -> bool {
+    value.get("deviceId").and_then(serde_json::Value::as_str)
+        .is_some_and(|id| Uuid::parse_str(id).is_ok())
+        && serde_json::from_value::<AppSettings>(value.clone()).is_ok()
+}
+
+#[cfg(all(test, windows, feature = "experimental-settings-generation"))]
+#[test]
+fn fresh_machine_readiness_rejects_missing_or_invalid_identity_and_schema() {
+    let valid = fresh_machine_settings().unwrap();
+    assert!(valid_fresh_machine_settings(&valid));
+    let mut missing = valid.clone();
+    missing.as_object_mut().unwrap().remove("deviceId");
+    assert!(!valid_fresh_machine_settings(&missing));
+    let mut invalid = valid.clone();
+    invalid["deviceId"] = serde_json::json!("invalid");
+    assert!(!valid_fresh_machine_settings(&invalid));
+    let mut malformed = valid;
+    malformed["policy"] = serde_json::json!("invalid");
+    assert!(!valid_fresh_machine_settings(&malformed));
 }
 
 fn apply_runtime_defaults(settings: &mut AppSettings) {
@@ -3691,6 +3732,23 @@ pub(crate) fn preview_verified_admin_config(
         managed,
     );
     epoch_write::preflight(&epoch)
+}
+
+/// Verify that persisted desired settings match a signed equal-version epoch.
+/// This does not establish that Windows or any monitor applied those settings.
+pub(crate) fn recovery_signed_settings_readback(settings: &AppSettings, config: &wincmd_shared::fleet::ConfigEpoch) -> Result<bool, String> {
+    let version=u32::try_from(config.version).map_err(|_| "Fleet policy version is outside the supported range")?;
+    let epoch=verified_admin_epoch(config.config_json.clone(),config.locked_paths.clone(),"merge".into(),version,Some(config.signature.clone()),Some(config.signer_key.clone()),Some(config.target_kind.clone()),config.target_id.clone(),Some(config.managed));
+    epoch_write::readback_equal(settings,&epoch)
+}
+
+pub(crate) fn read_settings_for_recovery_readback() -> Result<AppSettings, String> {
+    if is_decoy_mode() { return Err("Recovery settings readback is unavailable in decoy mode".into()); }
+    reload_verified_settings_with(|| {
+        let fresh=load_settings_from_store()?;
+        if !personal_settings::persisted_service_available() { return Err("Recovery settings readback is unavailable".into()); }
+        Ok(fresh)
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -5485,6 +5543,25 @@ mod tests {
     fn warm_cache_with_defaults() {
         let mut guard = SETTINGS_CACHE.lock().unwrap();
         *guard = Some(create_default_settings());
+    }
+
+    #[test]
+    fn cached_advanced_toggle_tracks_committed_changes_and_missing_cache() {
+        let _lock = GLOBAL_STATE_TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        struct RestoreCache(Option<AppSettings>);
+        impl Drop for RestoreCache {
+            fn drop(&mut self) { *SETTINGS_CACHE.lock().unwrap() = self.0.take(); }
+        }
+        let original = SETTINGS_CACHE.lock().unwrap().take();
+        let _restore = RestoreCache(original);
+        assert_eq!(cached_advanced_tools_enabled(), None);
+        let mut settings = create_default_settings();
+        settings.ideal.identity.advanced_tools_enabled = Some(false);
+        *SETTINGS_CACHE.lock().unwrap() = Some(settings.clone());
+        assert_eq!(cached_advanced_tools_enabled(), Some(false));
+        settings.ideal.identity.advanced_tools_enabled = Some(true);
+        *SETTINGS_CACHE.lock().unwrap() = Some(settings);
+        assert_eq!(cached_advanced_tools_enabled(), Some(true));
     }
 
     /// While decoy mode is active, set_settings — the direct full-object

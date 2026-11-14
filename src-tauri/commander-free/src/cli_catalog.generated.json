@@ -8612,6 +8612,16 @@
       ]
     },
     {
+      "id": "tauri:evidence_status",
+      "name": "evidence_status",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/lib/evidence.ts"
+      ]
+    },
+    {
       "id": "tauri:exit_app",
       "name": "exit_app",
       "transport": "tauri",
@@ -8863,6 +8873,56 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/panels/fleet/FleetConnectView.tsx"
+      ]
+    },
+    {
+      "id": "tauri:fleet_recovery_finish",
+      "name": "fleet_recovery_finish",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useFleetRecovery.ts"
+      ]
+    },
+    {
+      "id": "tauri:fleet_recovery_handoff",
+      "name": "fleet_recovery_handoff",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useFleetRecovery.ts"
+      ]
+    },
+    {
+      "id": "tauri:fleet_recovery_pin_operator_key",
+      "name": "fleet_recovery_pin_operator_key",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useFleetRecovery.ts"
+      ]
+    },
+    {
+      "id": "tauri:fleet_recovery_resume",
+      "name": "fleet_recovery_resume",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useFleetRecovery.ts"
+      ]
+    },
+    {
+      "id": "tauri:fleet_recovery_stage",
+      "name": "fleet_recovery_stage",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useFleetRecovery.ts"
       ]
     },
     {
@@ -9645,6 +9705,16 @@
     {
       "id": "tauri:get_safe_copy_context_menu_status",
       "name": "get_safe_copy_context_menu_status",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
+      ]
+    },
+    {
+      "id": "tauri:get_scan_drive_list",
+      "name": "get_scan_drive_list",
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,

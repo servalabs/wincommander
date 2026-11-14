@@ -168,6 +168,17 @@ jobs:
           bun-version: 1.4.3
       - run: bun install --frozen-lockfile
       - run: bun run gen:types:check
+      - name: Verify Fleet v2 JavaScript wire vectors
+        run: node --test src-tauri/fleet-proto/tests/fixtures/windows_v2.test.mjs
+      - name: Verify isolated Fleet JSON feature combinations
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/src-tauri/target
+        run: |
+          manifest=src-tauri/fleet-proto/tests/feature-matrix/Cargo.toml
+          cargo test --locked --manifest-path "$manifest"
+          cargo test --locked --manifest-path "$manifest" --features precise
+          cargo test --locked --manifest-path "$manifest" --features raw
+          cargo test --locked --manifest-path "$manifest" --features precise,raw
       - run: git diff --check && git diff --exit-code
 
   cargo-check:
@@ -260,6 +271,9 @@ jobs:
           if (($output -join "`n") -notmatch 'running 1 test') { throw 'The Fleet mutex acceptance test did not run.' }
       - name: Test experimental offline hybrid release verification
         run: cargo test --locked -p wincmd-pq-experiment --features experimental-offline-verifier,experimental-signer
+      - name: Test release trust proof verification across runtimes
+        working-directory: .
+        run: bun run tools/test-pq-trust-crosswire.ts
       - name: Test experimental Free hybrid release staging
         shell: pwsh
         run: |
@@ -286,6 +300,14 @@ jobs:
           if (($output -join "`n") -notmatch 'running 1 test') { throw 'The Free update registry ACL acceptance test did not run.' }
       - name: Test experimental service licence validation
         run: cargo test --locked -p commander-svc --features experimental-pq-licence license_cache
+      - name: Test classical service downgrade guard
+        shell: pwsh
+        run: |
+          $output = & cargo test --locked -p commander-svc license_cache::tests::classical_store_rejects_present_hybrid_security_record -- --exact 2>&1
+          $code = $LASTEXITCODE
+          $output | ForEach-Object { Write-Host $_ }
+          if ($code -ne 0) { exit $code }
+          if (($output -join "`n") -notmatch 'running 1 test') { throw 'The classical licence downgrade guard test did not run.' }
       - name: Test experimental device credential and transport
         run: cargo test --locked -p commander-svc --features experimental-pq-licence licence_device_credential
       - name: Test experimental cross-process licence coordination

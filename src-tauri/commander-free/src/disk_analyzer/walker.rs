@@ -12,6 +12,8 @@ const MAX_ENTRIES: u64 = 2_000_000;
 const MAX_DEPTH: usize = 128;
 
 pub(super) struct WalkAccum {
+    #[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
+    pub folder_identities: HashMap<u64, (u32, u64)>,
     pub children_by_dir: HashMap<String, Vec<DiskNode>>,
     pub large: Vec<LargeDiskItem>,
     pub skipped_entries: u64,
@@ -25,6 +27,8 @@ pub(super) struct WalkAccum {
 impl WalkAccum {
     pub fn new() -> Self {
         Self {
+            #[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
+            folder_identities: HashMap::new(),
             children_by_dir: HashMap::new(),
             large: Vec::new(),
             skipped_entries: 0,
@@ -305,6 +309,12 @@ fn walk_dir_windows(
         }
         Ok(metadata) if metadata.is_dir() => {
             node.last_modified = format_mtime(metadata.modified().ok());
+            #[cfg(feature = "experimental-disk-tree-delete")]
+            if dir.to_str().is_some() {
+                if let Some(identity) = crate::routine_cleaner::file_identity(dir).filter(|(_, index)| *index != 0) {
+                    acc.folder_identities.insert(entry_id, identity);
+                }
+            }
         }
         _ => {
             acc.skip(false);

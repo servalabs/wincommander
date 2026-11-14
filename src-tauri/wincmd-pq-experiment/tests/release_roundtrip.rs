@@ -6,9 +6,9 @@
 //! A disposable local release, through both shipped rehearsal commands.
 use aws_lc_rs::signature::{KeyPair, PqdsaKeyPair, ML_DSA_65_SIGNING};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use ed25519_dalek::{Signer, SigningKey};
+use ed25519_dalek::SigningKey;
 use sha2::{Digest, Sha256};
-use std::{path::Path, process::Command};
+use std::{io::Write, path::Path, process::{Command, Stdio}};
 
 fn invoke(program: &str, args: &[&Path], trailing: &[&str]) -> bool {
     Command::new(program)
@@ -18,6 +18,135 @@ fn invoke(program: &str, args: &[&Path], trailing: &[&str]) -> bool {
         .unwrap()
         .status
         .success()
+}
+
+#[test]
+fn free_prepared_messages_interoperate_with_offline_signer() {
+    let dir = std::env::temp_dir().join(format!(
+        "wincmd-free-offline-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir(&dir).unwrap();
+    let p = |name: &str| dir.join(name).to_string_lossy().into_owned();
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/free-tauri-disposable.json")).unwrap();
+    let ed = SigningKey::from_bytes(&[42; 32]);
+    let pq = PqdsaKeyPair::generate(&ML_DSA_65_SIGNING).unwrap();
+    let url = "https://winupdates.servalabs.com/free/v99.0.0/WinCommander_99.0.0_x64-setup.exe";
+    let manifest = serde_json::json!({"version":"99.0.0", "platforms":{"windows-x86_64":{"url":url,"signature":fixture["signature"]}}});
+    let tauri = serde_json::json!({"plugins":{"updater":{"pubkey":fixture["publicKey"]}}});
+    let trust = serde_json::json!({"ed_key_id":"ed", "ed_public":URL_SAFE_NO_PAD.encode(ed.verifying_key().to_bytes()), "pq_key_id":"pq", "pq_public":URL_SAFE_NO_PAD.encode(pq.public_key().as_ref()), "minimum_epoch":7});
+    for (name, bytes) in [
+        ("manifest", serde_json::to_vec(&manifest).unwrap()),
+        ("tauri", serde_json::to_vec(&tauri).unwrap()),
+        ("trust", serde_json::to_vec(&trust).unwrap()),
+        ("installer", b"MZ".to_vec()),
+        ("ed.key", ed.to_bytes().to_vec()),
+        ("pq.key", pq.to_pkcs8v1().unwrap().as_ref().to_vec()),
+    ] {
+        std::fs::write(p(name), bytes).unwrap();
+    }
+    let run = |program: &str, args: &[&str]| {
+        Command::new(program)
+            .args(args)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    };
+    let prep = env!("CARGO_BIN_EXE_wincmd-pq-free-release-prepare");
+    let signer = env!("CARGO_BIN_EXE_wincmd-pq-offline-sign");
+    let sign_from_stdin = |algorithm: &str, message: &str, output: &str, key: &[u8]| {
+        let mut child = Command::new(signer).args([algorithm, "-", &p(message), &p("installer"), &p("trust"),
+            "99.0.0", "stable", "7", &p(output)]).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        let _ = stdin.write_all(key);
+        drop(stdin);
+        child.wait().unwrap().success()
+    };
+    assert!(run(
+        prep,
+        &[
+            "stage",
+            &p("manifest"),
+            &p("installer"),
+            &p("tauri"),
+            "99.0.0",
+            "stable",
+            &p("payload")
+        ]
+    ));
+    assert!(run(
+        prep,
+        &[
+            "prepare",
+            &p("payload"),
+            &p("installer"),
+            &p("trust"),
+            "99.0.0",
+            "stable",
+            "7",
+            &p("ed.msg"),
+            &p("pq.msg")
+        ]
+    ));
+    assert!(!sign_from_stdin("ed25519", "ed.msg", "invalid.sig", &[0; 16 * 1024 + 1]));
+    assert!(!Path::new(&p("invalid.sig")).exists());
+    assert!(sign_from_stdin("ed25519", "ed.msg", "ed.sig", &ed.to_bytes()));
+    assert!(sign_from_stdin("mldsa65", "pq.msg", "pq.sig", pq.to_pkcs8v1().unwrap().as_ref()));
+    assert!(run(
+        prep,
+        &[
+            "finish",
+            &p("payload"),
+            &p("installer"),
+            &p("trust"),
+            "99.0.0",
+            "stable",
+            "7",
+            &p("ed.sig"),
+            &p("pq.sig"),
+            &p("signed")
+        ]
+    ));
+    let check = env!("CARGO_BIN_EXE_wincmd-pq-free-release-check");
+    assert!(run(
+        check,
+        &[
+            &p("signed"),
+            &p("installer"),
+            &p("trust"),
+            "99.0.0",
+            "stable"
+        ]
+    ));
+    assert!(!run(
+        check,
+        &[&p("signed"), &p("installer"), &p("trust"), "99.0.0", "beta"]
+    ));
+    let mut signature = std::fs::read(p("pq.sig")).unwrap();
+    signature[0] ^= 1;
+    std::fs::write(p("pq.bad"), signature).unwrap();
+    assert!(!run(
+        prep,
+        &[
+            "finish",
+            &p("payload"),
+            &p("installer"),
+            &p("trust"),
+            "99.0.0",
+            "stable",
+            "7",
+            &p("ed.sig"),
+            &p("pq.bad"),
+            &p("bad")
+        ]
+    ));
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
@@ -68,12 +197,74 @@ fn staged_manifest_to_signed_release_to_offline_check() {
         &p("ed.msg"),
         &p("pq.msg")
     ]));
-    let ed_sig = ed.sign(&std::fs::read(file("ed.msg")).unwrap()).to_bytes();
-    let mut pq_sig = vec![0; 3309];
-    pq.sign(&std::fs::read(file("pq.msg")).unwrap(), &mut pq_sig)
-        .unwrap();
-    std::fs::write(file("ed.sig"), ed_sig).unwrap();
-    std::fs::write(file("pq.sig"), pq_sig).unwrap();
+    std::fs::write(file("ed.key"), ed.to_bytes()).unwrap();
+    std::fs::write(file("pq.key"), pq.to_pkcs8v1().unwrap().as_ref()).unwrap();
+    std::fs::write(file("wrong.key"), [43; 32]).unwrap();
+    let signer = env!("CARGO_BIN_EXE_wincmd-pq-offline-sign");
+    let sign = |algorithm: &str, key: &str, message: &str, output: &str| {
+        Command::new(signer)
+            .args([
+                algorithm,
+                &p(key),
+                &p(message),
+                &p("pro.exe"),
+                &p("trust.json"),
+                "3.7.0",
+                "pro",
+                "7",
+                &p(output),
+            ])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    };
+    assert!(!sign("ed25519", "ed.key", "pq.msg", "wrong.sig"));
+    assert!(!sign("ed25519", "wrong.key", "ed.msg", "wrong.sig"));
+    std::fs::write(file("pro.exe"), b"wrong artifact").unwrap();
+    assert!(!sign("ed25519", "ed.key", "ed.msg", "wrong.sig"));
+    std::fs::write(file("pro.exe"), artifact).unwrap();
+    let message = std::fs::read_to_string(file("ed.msg")).unwrap();
+    let (header, payload) = message.split_once('.').unwrap();
+    let mut header: serde_json::Value =
+        serde_json::from_slice(&URL_SAFE_NO_PAD.decode(header).unwrap()).unwrap();
+    let mut wrong_kid = header.clone();
+    wrong_kid["kid"] = "unapproved".into();
+    std::fs::write(
+        file("wrong.msg"),
+        format!(
+            "{}.{}",
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&wrong_kid).unwrap()),
+            payload
+        ),
+    )
+    .unwrap();
+    assert!(!sign("ed25519", "ed.key", "wrong.msg", "wrong.sig"));
+    let incomplete = URL_SAFE_NO_PAD.encode(br#"{"format":"wincommander-pro-release-v1"}"#);
+    std::fs::write(
+        file("wrong.msg"),
+        format!(
+            "{}.{}",
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header).unwrap()),
+            incomplete
+        ),
+    )
+    .unwrap();
+    assert!(!sign("ed25519", "ed.key", "wrong.msg", "wrong.sig"));
+    header["purpose"] = "licence".into();
+    std::fs::write(
+        file("wrong.msg"),
+        format!(
+            "{}.{}",
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header).unwrap()),
+            payload
+        ),
+    )
+    .unwrap();
+    assert!(!sign("ed25519", "ed.key", "wrong.msg", "wrong.sig"));
+    assert!(sign("ed25519", "ed.key", "ed.msg", "ed.sig"));
+    assert!(sign("mldsa65", "pq.key", "pq.msg", "pq.sig"));
+    assert!(!sign("ed25519", "ed.key", "ed.msg", "ed.sig"));
     assert!(run(&[
         "finish",
         &p("payload.json"),
@@ -97,6 +288,10 @@ fn staged_manifest_to_signed_release_to_offline_check() {
         &["3.7.0"]
     ));
     for name in [
+        "ed.key",
+        "wrong.key",
+        "pq.key",
+        "wrong.msg",
         "latest.json",
         "trust.json",
         "pro.exe",

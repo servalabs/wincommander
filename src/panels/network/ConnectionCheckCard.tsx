@@ -20,7 +20,7 @@ export function ConnectionCheckCard() {
         {check.error && <div role="alert"><MaintenanceNotice tone="danger" headline="Could not complete the action">{check.error}</MaintenanceNotice></div>}
         {check.result && <div role="status" className="flex flex-col gap-2">
           <p className="text-xs text-[var(--text-mute)]">Checked {new Date(check.result.checkedAt).toLocaleTimeString()}</p>
-          {check.result.checks.map(item => (
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">{check.result.checks.map(item => (
             <MaintenanceNotice key={item.name} tone={item.state === "ok" ? "success" : "warning"} headline={item.name}>
               {item.detail}
               {!!item.affectedDomains?.length && <details className="mt-1">
@@ -30,7 +30,7 @@ export function ConnectionCheckCard() {
                 </ul>
               </details>}
             </MaintenanceNotice>
-          ))}
+          ))}</div>
           <p className="text-xs text-[var(--text-mute)]">These checks do not test every app, Windows Update or Defender end to end. A failed check alone does not identify WinCom as the cause.</p>
         </div>}
         {check.undo?.available && <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--text-dim)]">
