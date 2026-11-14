@@ -13,7 +13,21 @@ const serviceStartup = readFileSync("tools/dev-service-startup.ts", "utf8");
 const protectedRunner = readFileSync("tools/protected-dev-runner.ps1", "utf8");
 const protectedRunnerCommand = readFileSync("tools/protected-dev-runner.cmd", "utf8");
 
+function powershellStderrIsInformational(stderr: string): boolean {
+  const text = stderr.trim();
+  if (!text) return true;
+  if (!text.startsWith("#< CLIXML")) return false;
+  return !/\bS\s*=\s*["'](?:Error|Warning)["']|<(?:ErrorRecord|Exception)\b/i.test(text);
+}
+
 describe("desktop development launchers", () => {
+  test("distinguishes PowerShell host/progress records from errors", () => {
+    expect(powershellStderrIsInformational("")).toBe(true);
+    expect(powershellStderrIsInformational('#< CLIXML\n<Objs><S S="information">message</S><PR /></Objs>')).toBe(true);
+    expect(powershellStderrIsInformational('#< CLIXML\n<Objs><S S="Error">failure</S></Objs>')).toBe(false);
+    expect(powershellStderrIsInformational('#< CLIXML\n<Objs><S S="Warning">warning</S></Objs>')).toBe(false);
+    expect(powershellStderrIsInformational("plain error")).toBe(false);
+  });
   test("excludes locked runtime files from the frontend watcher", () => {
     const viteConfig = readFileSync("vite.config.ts", "utf8");
     expect(viteConfig).toMatch(/watch:\s*\{\s*ignored:\s*\[[\s\S]*?"\*\*\/\.dev\/\*\*"/);
@@ -116,7 +130,7 @@ function netstat { throw 'unexpected listener inspection' }
       Buffer.from(script, "utf16le").toString("base64")], { encoding: "utf8" });
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("processes and frontend listener were preserved");
-    expect(result.stderr).toBe("");
+    expect(powershellStderrIsInformational(result.stderr)).toBe(true);
   });
 
   test.skipIf(process.platform !== "win32")("preserve service mode refuses an unstaged or changed service before mutation", () => {
@@ -155,7 +169,7 @@ Write-Output 'preserved'
       Buffer.from(script, "utf16le").toString("base64")], { encoding: "utf8" });
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("preserved");
-    expect(result.stderr).toBe("");
+    expect(powershellStderrIsInformational(result.stderr)).toBe(true);
   });
 
   test("offers an explicit elevated launcher for privileged development checks", () => {
