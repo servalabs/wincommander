@@ -32,6 +32,7 @@ struct Reply {
     org_id: String,
     device_id: String,
     shield_progress_generation: String,
+    shield_progress_generation_signature: String,
     outcome_pubkey_b64: String,
     server_signing_key_b64: String,
     checkin_secret_b64: String,
@@ -108,6 +109,11 @@ impl FleetMachinePolicy {
             || reply.org_id != offer.snapshot.trust.org_id || reply.device_id != offer.snapshot.trust.device_id
             || reply.shield_progress_generation != offer.snapshot.trust.enrollment_generation
             || reply.server_signing_key_b64 != offer.snapshot.trust.signer_key || digest != commit.credential_sha256 { return Err(INVALID); }
+        let generation_signature=STANDARD.decode(&reply.shield_progress_generation_signature).map_err(|_| INVALID)?;
+        if generation_signature.len()!=64 || STANDARD.encode(&generation_signature)!=reply.shield_progress_generation_signature { return Err(INVALID); }
+        let generation_proof=serde_json::to_vec(&["wincommander:shield-progress:enrollment:v1", &reply.org_id,
+            &reply.device_id, &reply.shield_progress_generation, &offer.challenge]).map_err(|_| INVALID)?;
+        if !fleet_proto::verify_signature_b64(&offer.snapshot.trust.signer_key,&generation_proof,&reply.shield_progress_generation_signature) { return Err(INVALID); }
         let guard = self.state.lock().map_err(|_| INVALID)?;
         let record = guard.record.as_ref().ok_or(INVALID)?;
         let mut registry = self.recovery_readmission.lock().map_err(|_| INVALID)?;
@@ -166,11 +172,16 @@ mod tests {
             origin:"https://fleet.test".into(), local_commit_digest:"44".repeat(32), activation_pending:false, server_status:None, rollback_sha256:None });
         drop(state); store
     }
-    fn response(request: &[u8], secret: &[u8]) -> (Vec<u8>, String) {
+    fn response(request: &[u8], secret: &[u8], invalid_generation_signature: bool) -> (Vec<u8>, String) {
         let request_value: serde_json::Value = serde_json::from_slice(request).unwrap();
         let binding = trust();
+        let challenge=request_value["shield_progress_challenge"].as_str().unwrap();
+        let signed=serde_json::to_vec(&["wincommander:shield-progress:enrollment:v1",&binding.org_id,
+            &binding.device_id,&binding.enrollment_generation,challenge]).unwrap();
+        let generation_signature=if invalid_generation_signature { STANDARD.encode([0;64]) } else { STANDARD.encode(key().sign(&signed).to_bytes()) };
         let body = serde_json::to_vec(&serde_json::json!({"org_id":binding.org_id,"device_id":binding.device_id,
             "shield_progress_generation":binding.enrollment_generation,"server_signing_key_b64":binding.signer_key,
+            "shield_progress_generation_signature":generation_signature,
             "outcome_pubkey_b64":request_value["outcome_pubkey_b64"],"checkin_secret_b64":STANDARD.encode(secret)})).unwrap();
         let proof = fleet_proto::canonical_json_bytes(&serde_json::json!(["fleet.windows.enrollment.v2",
             request_value["shield_progress_challenge"],STANDARD.encode(Sha256::digest(request)),200,STANDARD.encode(Sha256::digest(&body))]));
@@ -182,12 +193,12 @@ mod tests {
         let id = store.offer_readmission(&TestProtector, 1001).unwrap();
         let claim = store.claim_readmission(&id).unwrap();
         assert!(store.claim_readmission(&id).is_err());
-        let (body, header) = response(claim.request(), &[4;32]);
+        let (body, header) = response(claim.request(), &[4;32], false);
         assert_eq!(store.finish_readmission(claim, 200, &body, &header, || 7).unwrap(), 7);
-        for scenario in 0..4 {
+        for scenario in 0..5 {
             let id = store.offer_readmission(&TestProtector, 1001).unwrap();
             let claim = store.claim_readmission(&id).unwrap();
-            let (mut body, header) = response(claim.request(), if scenario == 0 { &[5;32] } else { &[4;32] });
+            let (mut body, header) = response(claim.request(), if scenario == 0 { &[5;32] } else { &[4;32] }, scenario == 4);
             if scenario == 1 { body.push(b' '); }
             if scenario == 2 { store.state.lock().unwrap().record.as_mut().unwrap().connection_revision += 1; }
             if scenario == 3 { store.offer_readmission(&TestProtector, 1001).unwrap(); }
