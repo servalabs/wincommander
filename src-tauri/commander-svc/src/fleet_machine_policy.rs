@@ -3327,6 +3327,10 @@ mod recovery_commit_tests {
         assert!(store.credential_snapshot(&Protector).unwrap().is_none());
         let reopened=FleetMachinePolicy::open(Box::new(fs.clone()),dir.clone()).unwrap();
         let expected=reopened.pending_recovery().unwrap().unwrap(); assert_eq!(expected.local_commit_digest(),digest);
+        let (pending_trust,_,pending_origins,pending_profile,_)=reopened.trust_with_origins().unwrap().unwrap();
+        let pending_connection=reopened.contact_state().unwrap().unwrap().3;
+        assert!(matches!(reopened.prepare_candidate((&pending_trust,&pending_connection),&pending_origins,
+            &pending_profile.unwrap(),"https://fleet.example",&secret,&Protector),Err("service_disabled")));
         assert!(reopened.begin_enrollment(trust.device_id.clone(),trust.signer_key.clone(),vec!["https://fleet.example".into()],None).is_err());
         let clear_token=reopened.credential_clear_token().unwrap().unwrap();
         let connection_token=reopened.contact_state().unwrap().unwrap().3;
@@ -3427,6 +3431,10 @@ mod recovery_commit_tests {
         assert!(matches!(recovery_store.prepare_candidate((&bound,&connection),&origins,&profile,"https://fleet.example",&[9u8;32],&ResealProtector),Err("recovery_credential_changed")));
         assert_eq!(isolated.read(&path).unwrap(),before);
         let context=recovery_store.prepare_candidate((&bound,&connection),&origins,&profile,"https://fleet.example",&secret,&ResealProtector).unwrap().unwrap();
+        let mut stale=context.clone(); stale.connection_revision+=1;
+        assert!(matches!(recovery_store.commit_candidate(&stale,&secret,&ResealProtector),Err("binding_changed")));
+        stale=context.clone(); stale.trust.enrollment_generation=trust.enrollment_generation.clone();
+        assert!(matches!(recovery_store.commit_candidate(&stale,&secret,&ResealProtector),Err("binding_changed")));
         assert!(matches!(recovery_store.commit_candidate(&context,&[9u8;32],&ResealProtector),Err("recovery_credential_changed")));
         assert_eq!(isolated.read(&path).unwrap(),before);
         recovery_store.commit_candidate(&context,&secret,&ResealProtector).unwrap();
