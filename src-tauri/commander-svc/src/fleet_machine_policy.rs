@@ -3317,17 +3317,39 @@ mod recovery_commit_tests {
         let activation=crate::fleet_recovery_credential::verify_commit_response(&serde_json::to_vec(&commit).unwrap(),&expected,nonce,1001).unwrap();
         let unchanged=reopened.state.lock().unwrap().clone();
         let persisted=fs.read(&path).unwrap();
+        for malformed in ["invalid!", "AQ"] {
+            reopened.state.lock().unwrap().record.as_mut().unwrap().credential.as_mut().unwrap().ciphertext=malformed.into();
+            assert!(reopened.pending_recovery().is_err());
+            assert_eq!(fs.read(&path).unwrap(),persisted);
+            *reopened.state.lock().unwrap()=unchanged.clone();
+        }
+        struct ResealProtector;
+        impl crate::fleet_credential::Protector for ResealProtector {
+            fn protect(&self,plain:&[u8],entropy:&[u8])->Result<Vec<u8>,&'static str> {
+                let mut result=crate::fleet_credential::Protector::protect(&Protector,plain,entropy)?;
+                result.push(1); Ok(result)
+            }
+            fn unprotect(&self,sealed:&[u8],entropy:&[u8])->Result<zeroize::Zeroizing<Vec<u8>>,&'static str> {
+                let original=if sealed.len()==65 && sealed.last()==Some(&1) { &sealed[..64] } else { sealed };
+                crate::fleet_credential::Protector::unprotect(&Protector,original,entropy)
+            }
+        }
+        let binding=crate::fleet_credential::CredentialBinding { org_id:&trust.org_id,device_id:&trust.device_id,
+            enrollment_generation:verified.new_generation(),origin:"https://fleet.example" };
+        let resealed=crate::fleet_credential::seal(&ResealProtector,&binding,&secret).unwrap();
+        assert_eq!(crate::fleet_credential::unseal(&ResealProtector,&binding,&resealed).unwrap().as_slice(),&secret);
+        assert!(reopened.validate_pending_recovery_credential(&expected,&ResealProtector).is_ok());
         for variant in 0..3 {
             {
                 let mut state=reopened.state.lock().unwrap();
                 let record=state.record.as_mut().unwrap();
                 match variant {
                     0 => record.credential.as_mut().unwrap().origin="https://other.example".into(),
-                    1 => record.credential.as_mut().unwrap().ciphertext=STANDARD.encode([7u8;64]),
+                    1 => record.credential.as_mut().unwrap().ciphertext=STANDARD.encode(&resealed),
                     _ => record.credential_revision+=1,
                 }
             }
-            assert!(reopened.validate_pending_recovery_credential(&expected,&Protector).is_err());
+            assert!(reopened.validate_pending_recovery_credential(&expected,&ResealProtector).is_err());
             assert_eq!(reopened.activate_recovery(&expected,&activation,1001),Err("recovery commit changed"));
             assert!(!reopened.state.lock().unwrap().record.as_ref().unwrap().service_enabled);
             assert_eq!(fs.read(&path).unwrap(),persisted);
