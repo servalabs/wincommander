@@ -255,6 +255,19 @@ struct RecoveryCommit {
     #[serde(default)] server_status:Option<String>,
     #[serde(default)] rollback_sha256:Option<String>,
 }
+
+fn verify_recovered_credential(record:&Record, origin:&str, secret:&[u8]) -> Result<(),&'static str> {
+    use sha2::{Digest,Sha256};
+    let Some(commit)=record.recovery_commit.as_ref() else { return Ok(()) };
+    let digest:String=Sha256::digest(secret).iter().map(|byte|format!("{byte:02x}")).collect();
+    if commit.activation_pending || !record.service_enabled || commit.origin!=origin
+        || record.trust.org_id!=commit.old_trust.org_id || record.trust.device_id!=commit.old_trust.device_id
+        || record.trust.signer_key!=commit.old_trust.signer_key || record.trust.enrollment_generation!=commit.new_generation
+        || digest!=commit.credential_sha256 {
+        return Err("recovery_credential_changed");
+    }
+    Ok(())
+}
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Record {
@@ -1336,6 +1349,7 @@ impl FleetMachinePolicy {
             enrollment_generation: &record.trust.enrollment_generation, origin: &credential.origin,
         };
         let secret = crate::fleet_credential::unseal(protector, &binding, &ciphertext)?;
+        verify_recovered_credential(record,&credential.origin,&secret)?;
         Ok(Some(CredentialSnapshot {
             trust: record.trust.clone(), origins: record.origins.clone(), origin:credential.origin.clone(), profile: profile.clone(),
             revision: record.credential_revision, secret, operator_key:record.operator_key.clone(),
@@ -1461,6 +1475,7 @@ impl FleetMachinePolicy {
             return Err("transport_not_authorized");
         }
         validate_transport_profile(profile)?;
+        verify_recovered_credential(record,origin,secret)?;
         if !record.runtime_profile_changed {
             if let Some(old) = record.credential.as_ref().filter(|old| old.origin == origin) {
                 let binding = crate::fleet_credential::CredentialBinding { org_id:&trust.org_id, device_id:&trust.device_id,
@@ -1489,6 +1504,7 @@ impl FleetMachinePolicy {
             || !current.origins.contains(&context.origin) {
             return Err("binding_changed");
         }
+        verify_recovered_credential(current,&context.origin,secret)?;
         let binding = crate::fleet_credential::CredentialBinding { org_id:&context.trust.org_id,
             device_id:&context.trust.device_id, enrollment_generation:&context.trust.enrollment_generation, origin:&context.origin };
         let ciphertext = crate::fleet_credential::seal(protector, &binding, secret)?;
@@ -3397,6 +3413,27 @@ mod recovery_commit_tests {
         let mut snapshot=reopened.credential_snapshot(&Protector).unwrap().unwrap();
         assert_eq!(snapshot.secret.as_slice(),&secret);
         assert!(reopened.pending_recovery().unwrap().is_none());
+        // A recovered generation may reseal its committed credential, but a
+        // normal enrollment response must never silently replace that secret.
+        let isolated=Fs::default();
+        let mut state=reopened.state.lock().unwrap().clone();
+        state.record.as_mut().unwrap().runtime_profile_changed=true;
+        isolated.atomic_write(&path,&serde_json::to_vec(&state).unwrap()).unwrap();
+        let recovery_store=FleetMachinePolicy::open(Box::new(isolated.clone()),dir.clone()).unwrap();
+        let (bound,_,origins,profile,_)=recovery_store.trust_with_origins().unwrap().unwrap();
+        let profile=profile.unwrap();
+        let connection=recovery_store.contact_state().unwrap().unwrap().3;
+        let before=isolated.read(&path).unwrap();
+        assert!(matches!(recovery_store.prepare_candidate((&bound,&connection),&origins,&profile,"https://fleet.example",&[9u8;32],&ResealProtector),Err("recovery_credential_changed")));
+        assert_eq!(isolated.read(&path).unwrap(),before);
+        let context=recovery_store.prepare_candidate((&bound,&connection),&origins,&profile,"https://fleet.example",&secret,&ResealProtector).unwrap().unwrap();
+        assert!(matches!(recovery_store.commit_candidate(&context,&[9u8;32],&ResealProtector),Err("recovery_credential_changed")));
+        assert_eq!(isolated.read(&path).unwrap(),before);
+        recovery_store.commit_candidate(&context,&secret,&ResealProtector).unwrap();
+        assert_eq!(recovery_store.credential_snapshot(&ResealProtector).unwrap().unwrap().secret.as_slice(),&secret);
+        let other=crate::fleet_credential::seal(&ResealProtector,&binding,&[9u8;32]).unwrap();
+        recovery_store.state.lock().unwrap().record.as_mut().unwrap().credential.as_mut().unwrap().ciphertext=STANDARD.encode(other);
+        assert!(matches!(recovery_store.credential_snapshot(&ResealProtector),Err("recovery_credential_changed")));
         let signer=SigningKey::from_bytes(&[11;32]);
         let mut config=fleet_proto::ConfigEpoch { org_id:fleet_proto::OrgId(trust.org_id.clone()),version:7,
             config_json:serde_json::json!({}),target_kind:"org".into(),target_id:None,locked_paths:vec![],managed:true,
