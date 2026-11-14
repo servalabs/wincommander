@@ -2,10 +2,9 @@
 //!
 //! Classic `.doc`, `.xls`, and `.ppt` files use the Compound File Binary
 //! Format.  This deliberately does not try to interpret every application
-//! record: it validates the container marker, refuses encryption markers, and
-//! returns only bounded printable ANSI/UTF-16 runs.  That is enough for
-//! discovery without pretending an encrypted or malformed legacy file was
-//! indexed completely.
+//! record: it checks the container marker and some encryption markers, then
+//! returns bounded printable ANSI/UTF-16 runs. The marker check is incomplete:
+//! a successful result does not prove that the file is valid or unencrypted.
 
 use std::io::Read;
 use std::path::Path;
@@ -17,7 +16,7 @@ const MAX_LEGACY_FILE_BYTES: usize = 32 * 1024 * 1024;
 const MIN_RUN_CHARS: usize = 4;
 
 /// Extract searchable text from a classic OLE Office file without executing or
-/// expanding embedded objects.  Encrypted input remains explicit and skipped.
+/// expanding embedded objects. Some encrypted formats are not detected.
 pub fn extract_legacy_office(path: &Path) -> Result<String> {
     let mut file = std::fs::File::open(path)?;
     let mut bytes = Vec::with_capacity(1024 * 1024);
