@@ -24,10 +24,10 @@ static LOCK: Mutex<()> = Mutex::new(());
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Receipt {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "present_version", skip_serializing_if = "Option::is_none")]
     version: Option<u8>,
     org_id: String, old_device_id: String, old_generation: String, retirement_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "present_hash", skip_serializing_if = "Option::is_none")]
     device_hash: Option<String>,
     issued_at: i64, signer_key: String, signature: String,
 }
@@ -40,6 +40,12 @@ struct Candidate {
 }
 fn uuid(value: &str) -> bool {
     uuid::Uuid::parse_str(value).ok().is_some_and(|v| !v.is_nil() && v.to_string() == value)
+}
+fn present_version<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<u8>, D::Error> {
+    u8::deserialize(deserializer).map(Some)
+}
+fn present_hash<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
+    String::deserialize(deserializer).map(Some)
 }
 fn decode<const N: usize>(s: &str) -> Result<[u8; N], &'static str> {
     let b = B64.decode(s).map_err(|_| INVALID)?;
@@ -393,6 +399,10 @@ mod tests {
         let store=CandidateStore::open(&fs,"protected".into(),&protector).unwrap();
         let public=store.stage(&trust,&serde_json::to_vec(&receipt).unwrap(),1001).unwrap();
         assert!(store.verified_device_hash(&trust,retirement).is_err());
+        let mut null_version=receipt.clone();null_version["version"]=serde_json::Value::Null;
+        assert!(store.stage(&trust,&serde_json::to_vec(&null_version).unwrap(),1001).is_err());
+        let mut null_hash=receipt.clone();null_hash["device_hash"]=serde_json::Value::Null;
+        assert!(store.stage(&trust,&serde_json::to_vec(&null_hash).unwrap(),1001).is_err());
         let v2=serde_json::to_vec(&("fleet.windows.admin-retirement.v2",&trust.org_id,&trust.device_id,&trust.enrollment_generation,retirement,"loopback",1000i64,&trust.signer_key)).unwrap();
         receipt["version"]=2.into(); receipt["device_hash"]="loopback".into();
         receipt["signature"]=B64.encode(signer.sign(&v2).to_bytes()).into();
