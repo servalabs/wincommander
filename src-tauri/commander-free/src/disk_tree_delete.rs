@@ -438,11 +438,16 @@ fn open_child(parent: &File, name: &OsStr, is_dir: bool, for_delete: bool, backu
     Ok(unsafe { File::from_raw_handle(handle) })
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct ListedEntry {
     name: OsString,
     is_dir: bool,
     index: u64,
+}
+
+fn same_directory_contents(expected: &[ListedEntry], mut current: Vec<ListedEntry>) -> bool {
+    current.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+    current == expected
 }
 
 fn u32_at(buf: &[u8], offset: usize) -> io::Result<u32> {
@@ -746,6 +751,7 @@ fn other_profile_and_descendants_are_protected() {
 
 pub(crate) struct PreparedTree {
     entries: Vec<Pinned>,
+    directory_snapshots: Vec<(usize, Vec<ListedEntry>)>,
     protected: ProtectedRoots,
     authorization_path: PathBuf,
     authorization_identity: Identity,
@@ -898,11 +904,14 @@ fn prepare_opened_with_policy(root: File, opened_path: PathBuf, actual: Identity
         owner: root_owner,
     }];
     let mut pending = vec![(0usize, 0usize, opened_path.clone())];
+    let mut directory_snapshots = Vec::new();
     while let Some((index, depth, parent_path)) = pending.pop() {
         if depth >= MAX_DEPTH {
             return Err(io::Error::other("folder exceeds the safe depth limit"));
         }
-        let children = list_directory(&pinned[index].file)?;
+        let mut children = list_directory(&pinned[index].file)?;
+        children.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+        directory_snapshots.push((index, children.clone()));
         for child in children {
             if pinned.len() >= MAX_ENTRIES {
                 return Err(io::Error::other("folder exceeds the safe deletion limit"));
@@ -937,6 +946,7 @@ fn prepare_opened_with_policy(root: File, opened_path: PathBuf, actual: Identity
     }
     Ok(PreparedTree {
         entries: pinned,
+        directory_snapshots,
         protected,
         authorization_path: opened_path,
         authorization_identity: actual,
@@ -985,6 +995,15 @@ pub(crate) struct DeleteFailure {
 pub(crate) fn delete_prepared(mut tree: PreparedTree) -> Result<usize, DeleteFailure> {
     // Keep protected handles alive until every deletion has finished.
     let _protected_count = tree.protected.handles.len();
+    // Recheck the held directory handles before any unlink. This catches
+    // changes since confirmation, but cannot prevent later concurrent writes.
+    for (index, expected) in &tree.directory_snapshots {
+        let current = list_directory(&tree.entries[*index].file)
+            .map_err(|error| DeleteFailure { processed: 0, error })?;
+        if !same_directory_contents(expected, current) {
+            return Err(DeleteFailure { processed: 0, error: io::Error::new(io::ErrorKind::PermissionDenied, "folder contents changed after confirmation") });
+        }
+    }
     for entry in &tree.entries {
         if !entry.is_dir {
             require_single_file_link(&entry.file).map_err(|error| DeleteFailure { processed: 0, error })?;
@@ -1527,7 +1546,7 @@ mod tests {
     }
 
     #[test]
-    fn new_unreviewed_child_causes_partial_failure_and_remains() {
+    fn new_unreviewed_child_is_rejected_before_any_deletion() {
         let f = Fixture::new();
         let target = f.target();
         std::fs::create_dir(&target).unwrap();
@@ -1540,8 +1559,51 @@ mod tests {
         .unwrap();
         std::fs::write(target.join("added.txt"), b"preserve").unwrap();
         let failure = delete_prepared(handles).unwrap_err();
-        assert!(failure.processed >= 1);
-        assert_eq!(failure.error.raw_os_error(), Some(145));
+        assert_eq!(failure.processed, 0);
+        assert_eq!(failure.error.to_string(), "folder contents changed after confirmation");
+        assert_eq!(std::fs::read(target.join("initial.txt")).unwrap(), b"initial");
         assert!(target.join("added.txt").exists());
+    }
+
+    #[test]
+    fn new_nested_child_is_rejected_before_any_deletion() {
+        let f = Fixture::new();
+        let target = f.target();
+        let nested = target.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(target.join("initial.txt"), b"initial").unwrap();
+        let handles = prepare(&target, selected_identity(&target), ProtectedRoots::pin(&[]).unwrap()).unwrap();
+        std::fs::write(nested.join("added.txt"), b"preserve").unwrap();
+        let failure = delete_prepared(handles).unwrap_err();
+        assert_eq!(failure.processed, 0);
+        assert_eq!(failure.error.to_string(), "folder contents changed after confirmation");
+        assert_eq!(std::fs::read(target.join("initial.txt")).unwrap(), b"initial");
+        assert_eq!(std::fs::read(nested.join("added.txt")).unwrap(), b"preserve");
+    }
+
+    #[test]
+    fn directory_snapshot_comparison_detects_removed_replaced_and_renamed_entries() {
+        let original = ListedEntry { name: OsString::from("item"), is_dir: false, index: 42 };
+        let expected = vec![original.clone()];
+        assert!(same_directory_contents(&expected, vec![original.clone()]));
+        assert!(!same_directory_contents(&expected, vec![]));
+        assert!(!same_directory_contents(&expected, vec![ListedEntry { index: 43, ..original.clone() }]));
+        assert!(!same_directory_contents(&expected, vec![ListedEntry { name: OsString::from("renamed"), ..original.clone() }]));
+        assert!(!same_directory_contents(&expected, vec![ListedEntry { is_dir: true, ..original }]));
+    }
+
+    #[test]
+    fn held_file_blocks_rename_and_removal_after_preparation() {
+        let f = Fixture::new();
+        let target = f.target();
+        std::fs::create_dir(&target).unwrap();
+        let original = target.join("item.txt");
+        std::fs::write(&original, b"preserve").unwrap();
+        let tree = prepare(&target, selected_identity(&target), ProtectedRoots::pin(&[]).unwrap()).unwrap();
+        for error in [std::fs::rename(&original, target.join("renamed.txt")).unwrap_err(), std::fs::remove_file(&original).unwrap_err()] {
+            assert!(matches!(error.raw_os_error(), Some(5 | 32 | 33)), "unexpected namespace failure: {error}");
+        }
+        drop(tree);
+        assert_eq!(std::fs::read(&original).unwrap(), b"preserve");
     }
 }
