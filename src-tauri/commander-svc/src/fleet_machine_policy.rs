@@ -24,6 +24,9 @@ mod hybrid_reply;
 mod hybrid_store;
 #[path = "fleet_hybrid_bootstrap.rs"]
 mod hybrid_bootstrap;
+#[cfg(test)]
+#[path = "fleet_recovery_readmission_experiment.rs"]
+mod recovery_readmission_experiment;
 
 #[cfg(windows)]
 use crate::peer_auth_deployment_acl as protected_acl;
@@ -442,6 +445,8 @@ pub struct FleetMachinePolicy {
     fs: Box<dyn PolicyFs>,
     path: PathBuf,
     state: Mutex<State>,
+    #[cfg(test)]
+    recovery_readmission: Mutex<recovery_readmission_experiment::Registry>,
     #[cfg(windows)]
     _owner: Option<machine_owner::OwnerLease>,
 }
@@ -617,6 +622,8 @@ impl FleetMachinePolicy {
             fs,
             path,
             state: Mutex::new(state),
+            #[cfg(test)]
+            recovery_readmission: Mutex::new(recovery_readmission_experiment::Registry::default()),
             #[cfg(windows)]
             _owner: None,
         })
