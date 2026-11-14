@@ -13,7 +13,8 @@ use super::{EvidenceEntry, MAX_ENTRIES};
 const PREFIX: &str = "enc:v2:";
 const SCOPE: &str = "machine:evidence-ledger";
 const MAX_IMPORTED_PROFILES: usize = 256;
-const MAX_MACHINE_SOURCE_BYTES: u64 = 16 * 1024 * 1024;
+// Bound reads from either old ledger; oversized originals stay available for review.
+const MAX_LEGACY_SOURCE_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Serialize, Deserialize)]
 struct KeyState {
@@ -289,7 +290,24 @@ pub(super) fn read(
         if ledger.imported_profiles.len() >= MAX_IMPORTED_PROFILES {
             return Err("Too many evidence profile imports".into());
         }
-        let raw = fs::read_to_string(&identity).map_err(|_| "Cannot read old evidence ledger")?;
+        use std::io::Read;
+        let file = fs::File::open(&identity).map_err(|_| "Cannot read old evidence ledger")?;
+        if file
+            .metadata()
+            .map_err(|_| "Cannot inspect old evidence ledger")?
+            .len()
+            > MAX_LEGACY_SOURCE_BYTES
+        {
+            return Err("Old evidence ledger is too large; original preserved".into());
+        }
+        let mut bytes = Vec::new();
+        file.take(MAX_LEGACY_SOURCE_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| "Cannot read old evidence ledger")?;
+        if bytes.len() as u64 > MAX_LEGACY_SOURCE_BYTES {
+            return Err("Old evidence ledger is too large; original preserved".into());
+        }
+        let raw = String::from_utf8(bytes).map_err(|_| "Old evidence ledger is malformed")?;
         let prior = parse_legacy(&raw)?;
         let mut existing = std::collections::HashSet::<Vec<u8>>::new();
         for entry in &ledger.entries {
@@ -368,10 +386,10 @@ fn machine_snapshot(path: &Path) -> Result<Option<String>, String> {
         }
     };
     let mut bytes = Vec::new();
-    file.take(MAX_MACHINE_SOURCE_BYTES + 1)
+    file.take(MAX_LEGACY_SOURCE_BYTES + 1)
         .read_to_end(&mut bytes)
         .map_err(|_| "Cannot read old machine evidence; original preserved")?;
-    if bytes.len() as u64 > MAX_MACHINE_SOURCE_BYTES {
+    if bytes.len() as u64 > MAX_LEGACY_SOURCE_BYTES {
         return Err("Old machine evidence is too large; original preserved".into());
     }
     String::from_utf8(bytes)
@@ -1254,6 +1272,45 @@ mod tests {
     }
 
     #[test]
+    fn oversized_profile_is_preserved_and_does_not_replace_machine_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger");
+        let key_path = dir.path().join("key");
+        let legacy = dir.path().join("profile-ledger");
+        let mut current = entry();
+        current.summary = "current event".into();
+        write(
+            &path,
+            &key_path,
+            &Ledger {
+                entries: vec![current],
+                ..Ledger::default()
+            },
+            &crate::datastore_io::atomic_write,
+        )
+        .unwrap();
+        let protected_before = fs::read(&path).unwrap();
+        let mut large = entry();
+        large.summary = "x".repeat(MAX_LEGACY_SOURCE_BYTES as usize);
+        let original = format!("{}\n", serde_json::to_string(&large).unwrap());
+        fs::write(&legacy, &original).unwrap();
+
+        let ledger = read(
+            &path,
+            &|| Ok(Some(legacy.clone())),
+            &key_path,
+            &crate::datastore_io::atomic_write,
+        )
+        .unwrap();
+        assert!(ledger.profile_import_pending);
+        assert!(ledger.imported_profiles.is_empty());
+        assert_eq!(ledger.entries.len(), 1);
+        assert_eq!(ledger.entries[0].summary, "current event");
+        assert_eq!(fs::read(&path).unwrap(), protected_before);
+        assert_eq!(fs::read_to_string(&legacy).unwrap(), original);
+    }
+
+    #[test]
     fn status_reports_retained_profile_and_never_writes_or_imports_it() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("protected");
@@ -1716,7 +1773,7 @@ mod tests {
         let key = dir.path().join("key");
         fs::File::create(&old)
             .unwrap()
-            .set_len(MAX_MACHINE_SOURCE_BYTES + 1)
+            .set_len(MAX_LEGACY_SOURCE_BYTES + 1)
             .unwrap();
         let error = read_with_machine_source(
             &path,
@@ -1730,7 +1787,7 @@ mod tests {
         assert!(error.contains("too large"));
         assert_eq!(
             fs::metadata(old).unwrap().len(),
-            MAX_MACHINE_SOURCE_BYTES + 1
+            MAX_LEGACY_SOURCE_BYTES + 1
         );
         assert!(!path.exists() && !key.exists());
     }
