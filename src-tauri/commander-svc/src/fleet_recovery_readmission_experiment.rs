@@ -33,6 +33,9 @@ struct Reply {
     server_signing_key_b64: String,
     checkin_secret_b64: String,
 }
+impl Drop for Reply {
+    fn drop(&mut self) { self.checkin_secret_b64.zeroize(); }
+}
 
 impl FleetMachinePolicy {
     /// Experiment only: the claim is bound to the protected active journal,
@@ -75,7 +78,9 @@ impl FleetMachinePolicy {
     }
 
     /// Verify exact transport bytes, then hold the policy lock through the
-    /// final snapshot check and publication. No secret or proof is persisted.
+    /// final snapshot check and publication. The test-only publisher must be
+    /// bounded and non-reentrant because both policy and registry locks are held.
+    /// No secret or proof is persisted.
     pub(super) fn finish_readmission<T>(&self, claim: Claim, status: u16, body: &[u8], header: &str,
         publish: impl FnOnce() -> T) -> Result<T, &'static str> {
         let offer = claim.0;
