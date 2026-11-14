@@ -138,6 +138,7 @@ pub fn provision_generation_lock(parent:&std::path::Path,generation:[u8;16])->io
     }
     // SAFETY: CreateFileW returned one uniquely owned open handle.
     let file=unsafe { File::from_raw_handle(handle) };
+    if !file.metadata()?.is_file() { return Err(denied()); }
     verify_current_user_handle(&file)?;
     verify_current_user_handle(pins.last().ok_or_else(denied)?)
 }
@@ -210,5 +211,9 @@ mod tests {
         use std::io::Write;file.write_all(b"preserve").unwrap();drop(file);
         assert!(provision_generation_lock(&parent,[2;16]).is_err());
         assert_eq!(std::fs::read(foreign).unwrap(),b"preserve");
+        let directory_lock=parent.join(format!(".ordinary-search-generation-{}.lock",hex::encode([3;16])));
+        std::fs::create_dir(&directory_lock).unwrap();
+        assert!(provision_generation_lock(&parent,[3;16]).is_err());
+        assert!(directory_lock.is_dir());
     }
 }
