@@ -2879,13 +2879,15 @@ impl FleetMachinePolicy {
 pub(crate) struct RecoveryExpected {
     old_trust:FleetTrust, recovery_id:String, new_generation:String, decision_digest:String,
     archive_sha256:String, credential_sha256:String, local_commit_digest:String, candidate_fingerprint:String,
-    origin:String, profile:TransportProfile, credential_revision:u64, sealed_credential_sha256:[u8;32],
+    origin:String, profile:TransportProfile, connection_revision:u64, credential_revision:u64, sealed_credential_sha256:[u8;32],
 }
 #[cfg(windows)]
 fn pending_credential_matches(record:&Record, expected:&RecoveryExpected) -> bool {
     use sha2::{Digest,Sha256};
     record.credential.as_ref().is_some_and(|credential| {
-        credential.origin==expected.origin && record.credential_revision==expected.credential_revision
+        credential.origin==expected.origin && record.origins.iter().any(|origin|origin==&expected.origin)
+            && record.transport_profile.as_ref()==Some(&expected.profile)
+            && record.connection_revision==expected.connection_revision && record.credential_revision==expected.credential_revision
             && <[u8;32]>::from(Sha256::digest(credential.ciphertext.as_bytes()))==expected.sealed_credential_sha256
     })
 }
@@ -2913,7 +2915,7 @@ impl FleetMachinePolicy {
         let credential=record.credential.as_ref().ok_or("invalid_store")?;
         let sealed=STANDARD.decode(&credential.ciphertext).map_err(|_| "invalid_store")?;
         if STANDARD.encode(&sealed)!=credential.ciphertext { return Err("invalid_store"); }
-        if record.service_enabled || credential.origin!=commit.origin || record.trust.org_id!=commit.old_trust.org_id
+        if record.service_enabled || credential.origin!=commit.origin || !record.origins.iter().any(|origin|origin==&commit.origin) || record.trust.org_id!=commit.old_trust.org_id
             || record.trust.device_id!=commit.old_trust.device_id || record.trust.signer_key!=commit.old_trust.signer_key
             || record.trust.enrollment_generation!=commit.new_generation { return Err("invalid_store"); }
         Ok(Some(RecoveryExpected { old_trust:commit.old_trust.clone(),recovery_id:commit.recovery_id.clone(),
@@ -2921,7 +2923,7 @@ impl FleetMachinePolicy {
             archive_sha256:commit.archive_sha256.clone(),credential_sha256:commit.credential_sha256.clone(),
             local_commit_digest:commit.local_commit_digest.clone(),candidate_fingerprint:commit.candidate_fingerprint.clone(),
             origin:commit.origin.clone(),profile:record.transport_profile.clone().ok_or("invalid_store")?,
-            credential_revision:record.credential_revision,
+            connection_revision:record.connection_revision,credential_revision:record.credential_revision,
             sealed_credential_sha256:{ use sha2::{Digest,Sha256}; Sha256::digest(credential.ciphertext.as_bytes()).into() } }))
     }
 }
@@ -3339,14 +3341,18 @@ mod recovery_commit_tests {
         let resealed=crate::fleet_credential::seal(&ResealProtector,&binding,&secret).unwrap();
         assert_eq!(crate::fleet_credential::unseal(&ResealProtector,&binding,&resealed).unwrap().as_slice(),&secret);
         assert!(reopened.validate_pending_recovery_credential(&expected,&ResealProtector).is_ok());
-        for variant in 0..3 {
+        for variant in 0..7 {
             {
                 let mut state=reopened.state.lock().unwrap();
                 let record=state.record.as_mut().unwrap();
                 match variant {
                     0 => record.credential.as_mut().unwrap().origin="https://other.example".into(),
                     1 => record.credential.as_mut().unwrap().ciphertext=STANDARD.encode(&resealed),
-                    _ => record.credential_revision+=1,
+                    2 => record.credential_revision+=1,
+                    3 => record.origins.clear(),
+                    4 => record.connection_revision+=1,
+                    5 => record.transport_profile.as_mut().unwrap().spki_pins="changed".into(),
+                    _ => { record.origins.clear(); record.connection_revision+=1; record.origins.push("https://fleet.example".into()); record.connection_revision+=1; },
                 }
             }
             assert!(reopened.validate_pending_recovery_credential(&expected,&ResealProtector).is_err());
