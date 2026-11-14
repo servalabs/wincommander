@@ -3239,17 +3239,7 @@ mod recovery_commit_tests {
             let id=store.offer_readmission(&protector,now()).unwrap();
             let claim=store.claim_readmission(&id).unwrap();
             let request=claim.request().to_vec();
-            let (origin,readmission_http)=store.readmission_transport(&claim).unwrap();
-            assert_eq!(origin,base);
-            let reply=readmission_http.post(format!("{origin}/v1/windows/enroll-v2"))
-                .header(reqwest::header::CONTENT_TYPE,"application/json").body(request.clone()).send().await.unwrap();
-            let status=reply.status().as_u16();
-            let values=reply.headers().get_all("x-fleet-windows-v2-enrollment");
-            let mut headers=values.iter();
-            let header=headers.next().unwrap().to_str().unwrap().to_owned();
-            assert!(headers.next().is_none());
-            let body=reply.bytes().await.unwrap();
-            store.finish_readmission(claim,status,&body,&header,||()).unwrap();
+            store.send_readmission(claim).await.unwrap();
             let replay=http.post(format!("{base}/v1/windows/enroll-v2"))
                 .header(reqwest::header::CONTENT_TYPE,"application/json").body(request).send().await.unwrap();
             assert!(!replay.status().is_success(),"a replay must not be admitted");

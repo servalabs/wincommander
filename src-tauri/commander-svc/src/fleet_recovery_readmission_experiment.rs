@@ -99,6 +99,32 @@ impl FleetMachinePolicy {
         Ok((offer.snapshot.origin.clone(),client))
     }
 
+    /// Test-only exchange: the caller cannot choose a destination, follow a
+    /// redirect, publish an unchecked response, or receive the secret.
+    pub(super) async fn send_readmission(&self, claim: Claim) -> Result<(), &'static str> {
+        let (origin,client)=self.readmission_transport(&claim)?;
+        let operation=async {
+            let mut response=client.post(format!("{origin}/v1/windows/enroll-v2"))
+                .header(reqwest::header::CONTENT_TYPE,"application/json")
+                .body(claim.request().to_vec()).send().await.map_err(|_| INVALID)?;
+            let status=response.status().as_u16();
+            let header={
+                let values=response.headers().get_all("x-fleet-windows-v2-enrollment");
+                let mut iter=values.iter();
+                let header=iter.next().ok_or(INVALID)?.to_str().map_err(|_| INVALID)?.to_owned();
+                if iter.next().is_some() { return Err(INVALID); }
+                header
+            };
+            let mut body=zeroize::Zeroizing::new(Vec::new());
+            while let Some(chunk)=response.chunk().await.map_err(|_| INVALID)? {
+                if body.len().checked_add(chunk.len()).is_none_or(|size|size>65536) { return Err(INVALID); }
+                body.extend_from_slice(&chunk);
+            }
+            self.finish_readmission(claim,status,&body,&header,||())
+        };
+        tokio::time::timeout(TTL,operation).await.map_err(|_| INVALID)?
+    }
+
     /// Verify exact transport bytes, then hold the policy lock through the
     /// final snapshot check and publication. The test-only publisher must be
     /// bounded and non-reentrant because both policy and registry locks are held.
