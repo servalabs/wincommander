@@ -3323,6 +3323,11 @@ mod recovery_commit_tests {
             assert!(crate::fleet_recovery_credential::verify_commit_response(&serde_json::to_vec(&changed).unwrap(),&expected,nonce,1001).is_err(),"{field}");
         }
         let bytes=serde_json::to_vec(&commit).unwrap();
+        let mut changed_time=commit.clone(); changed_time["issued_at"]=999.into();
+        assert!(crate::fleet_recovery_credential::verify_commit_response(&serde_json::to_vec(&changed_time).unwrap(),&expected,nonce,1001).is_err());
+        let encoded=std::str::from_utf8(&bytes).unwrap();
+        let duplicate=format!("{{\"issued_at\":1000,{}",&encoded[1..]);
+        assert!(crate::fleet_recovery_credential::verify_commit_response(duplicate.as_bytes(),&expected,nonce,1001).is_err());
         assert!(crate::fleet_recovery_credential::verify_commit_response(&bytes,&expected,"55555555-5555-4555-8555-555555555555",1001).is_err());
         assert!(crate::fleet_recovery_credential::verify_commit_response(&bytes,&expected,nonce,1301).is_err());
         assert!(crate::fleet_recovery_credential::verify_commit_response(&bytes,&expected,nonce,994).is_err());
