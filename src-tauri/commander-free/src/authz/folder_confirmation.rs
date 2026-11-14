@@ -48,7 +48,9 @@ fn expire_retained<T: Send + 'static>(retained: Arc<Mutex<Option<T>>>, timeout: 
 
 fn safe_target(value: &str) -> String {
     value.chars().flat_map(|c| {
-        if c.is_control() || matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{200e}' | '\u{200f}' | '\u{061c}') {
+        if c == '\\' {
+            vec!['\\', '\\']
+        } else if c.is_control() || matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{200e}' | '\u{200f}' | '\u{061c}') {
             format!("\\u{{{:04X}}}", c as u32).chars().collect::<Vec<_>>()
         } else { vec![c] }
     }).collect()
@@ -62,20 +64,25 @@ fn shared_ownership_warning(has_shared_items: bool) -> &'static str {
     } else { "" }
 }
 
+fn confirmation_detail(path: &str, files: usize, folders: usize, shared_warning: &str) -> String {
+    format!("Permanently delete this folder?\n\nTarget: {}\nBackslashes in the target are displayed twice; control characters are escaped.\nFreshly verified current tree: {} files · {} folders (including the selected folder). These counts are independent of the earlier scan.{}\n\nNew items are not included and may cause partial deletion. This confirmation expires after 30 seconds.", safe_target(path), files, folders, shared_warning)
+}
+
 pub(super) async fn confirm(folder: PreparedTree, permit: Permit) -> Result<Option<PreparedTree>, String> {
     if crate::cli::tauri_runtime_active() { return Ok(None); }
     tokio::task::spawn_blocking(move || {
         let _permit = permit;
         let state = DialogState { started: Instant::now(), dismiss_failed: AtomicBool::new(false) };
-        let target = safe_target(folder.authorization_target().0.to_str().ok_or("Folder path cannot be displayed accurately.")?);
+        let target = folder.authorization_target().0.to_str().ok_or("Folder path cannot be displayed accurately.")?;
         let (files, folders) = folder.item_counts();
         let shared_warning = shared_ownership_warning(folder.has_shared_administrator_owned_items());
+        let detail_text = confirmation_detail(target, files, folders, shared_warning);
         // Release the retained directory handles even if the dialog's message
         // loop stalls and cannot process the automatic cancel message.
         let retained = Arc::new(Mutex::new(Some(folder)));
         let finished_tx = expire_retained(Arc::clone(&retained), DIALOG_TTL)?;
         let title = wide("WinCommander — confirm folder deletion");
-        let detail = wide(&format!("Permanently delete this folder?\n\nTarget: {}\nFreshly verified current tree: {} files · {} folders (including the selected folder). These counts are independent of the earlier scan.{}\n\nNew items are not included and may cause partial deletion. This confirmation expires after 30 seconds.", target, files, folders, shared_warning));
+        let detail = wide(&detail_text);
         let config = TASKDIALOGCONFIG {
             cbSize: std::mem::size_of::<TASKDIALOGCONFIG>() as u32,
             dwFlags: TDF_ALLOW_DIALOG_CANCELLATION | TDF_CALLBACK_TIMER,
@@ -97,12 +104,28 @@ pub(super) async fn confirm(folder: PreparedTree, permit: Permit) -> Result<Opti
 
 #[cfg(test)]
 mod tests {
-    use super::{expire_retained, safe_target, shared_ownership_warning};
+    use super::{confirmation_detail, expire_retained, safe_target, shared_ownership_warning};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
     #[test]
     fn confirmation_escapes_direction_controls_and_newlines() {
         assert_eq!(safe_target("a\u{202e}b\nc"), "a\\u{202E}b\\u{000A}c");
+    }
+
+    #[test]
+    fn confirmation_distinguishes_controls_from_literal_escape_text() {
+        let control = "C:\\vault\\foo\u{202e}bar";
+        let literal = "C:\\vault\\foo\\u{202E}bar";
+        assert_ne!(safe_target(control), safe_target(literal));
+        assert_eq!(safe_target("C:\\vault\\file"), "C:\\\\vault\\\\file");
+    }
+
+    #[test]
+    fn confirmation_detail_explains_the_rendered_path() {
+        let detail = confirmation_detail("C:\\vault\\foo\u{202e}bar", 2, 1, "");
+        assert!(detail.contains("Target: C:\\\\vault\\\\foo\\u{202E}bar"));
+        assert!(detail.contains("Backslashes in the target are displayed twice; control characters are escaped."));
+        assert!(detail.contains("2 files · 1 folders"));
     }
 
     #[test]
