@@ -83,6 +83,9 @@
 .da-details-actions { display: flex; flex-wrap: wrap; gap: 5px; flex-shrink: 0; }
 .da-selection-bar { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; gap: 12px; border-top: 1px solid var(--color-border); background: var(--color-bg-card); }
 .da-selection-summary, .da-selection-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.da-folder-unavailable { margin: 0; padding: 6px 12px; color: var(--color-text-secondary); font-size: 11px; border-bottom: 1px solid var(--color-border); }
+.da-folder-select-unavailable { display: inline-flex; cursor: not-allowed; }
+.da-workspace .da-folder-select-unavailable button:disabled { opacity: .3; filter: grayscale(1); }
 .da-selection-summary > span { display: flex; flex-direction: column; gap: 4px; }
 .da-selection-bar strong { font-size: 12px; font-weight: 500; }
 .da-selection-bar small { font-size: 10px; color: var(--color-text-muted); }

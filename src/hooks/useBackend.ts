@@ -2597,6 +2597,12 @@ export function useBackend(retainCleanupScanErrors = false) {
     getLargeDiskItems: (minSizeBytes: number, limit: number = 5000, includeDirs: boolean = false) =>
       invoke<{ items: Array<{ entryId: number; name: string; fullPath: string; size: number; allocated: number | null; isDir: boolean; lastModified: string; fileCount: number; folderCount: number; itemType: string; cleanupHint: string; risk: string }>; matchedCount: number; matchedSize: number; resultLimit: number; limited: boolean; minimumSize: number; scanId: string }>("get_large_disk_items", { minSizeBytes, limit, includeDirs }),
     openDiskItem: (scanId: string, itemId: number) => invoke<void>("open_disk_item", { scanId, itemId }),
+    /** Availability only; the backend separately validates and confirms each target. */
+    diskFolderDeleteAvailable: () => invoke<boolean>("disk_folder_delete_available"),
+    confirmDiskFolderDelete: (scanId: string, itemId: number) =>
+      invoke<string | null>("disk_confirm_folder_delete", { scanId, itemId }),
+    deleteConfirmedDiskFolder: (scanId: string, itemId: number, capabilityToken: string) =>
+      invoke<{ status: "delete_requested" | "partial" | "failed"; processed: number; cacheInvalidated: boolean; message?: string | null }>("disk_delete_confirmed_folder", { scanId, itemId, capabilityToken }),
     /** Permanently delete a verified file and invalidate the scan cache. Folder deletion is refused. */
     diskDeleteItem: async (path: string) => {
       const capabilityToken = await requestDestructiveCapability(

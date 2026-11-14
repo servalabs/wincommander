@@ -28,6 +28,8 @@ path = "src/main.rs"
 test = false
 
 [features]
+# Disabled until native folder-deletion acceptance is complete.
+experimental-disk-tree-delete = []
 # Both experiments remain independently opt-in.
 experimental-settings-generation = []
 experimental-encrypted-search = ["wincmd-search/experimental-encrypted-search", "wincmd-service-auth/experimental-search-service-pin"]

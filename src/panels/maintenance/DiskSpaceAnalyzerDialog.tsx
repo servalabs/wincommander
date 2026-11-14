@@ -50,7 +50,7 @@ export default function DiskSpaceAnalyzerDialog({ isOpen, onClose, initialMode =
 
     function selectMatchingFiles() {
         analyzer.setSelected(previous => {
-            const next = new Set(previous);
+            const next = new Set([...previous].filter(path => !analyzer.rows.some(item => item.isDir && item.fullPath === path)));
             selectableItems.forEach(item => { if (allMatchingSelected) next.delete(item.fullPath); else next.add(item.fullPath); });
             return next;
         });
@@ -58,11 +58,12 @@ export default function DiskSpaceAnalyzerDialog({ isOpen, onClose, initialMode =
     const content = <div className="da-workspace">
         <DiskAnalyzerHeader analyzer={analyzer} mode={mode}><DiskAnalyzerTabs mode={mode} disabled={analyzer.deleting} onChange={setMode} /></DiskAnalyzerHeader>
         <footer className="da-selection-bar"><div className="da-selection-summary"><Layers3 size={17} /><span><strong>{selectedItems.length} selected</strong><small>{formatDiskBytes(selectedBytes)} · Space recovered may differ</small></span></div>
-            {analyzer.meta && !analyzer.stale && !analyzer.scanning && mode !== "types" && <DiskItemDetails item={analyzer.focused} disabled={busy} onOpen={item => void analyzer.openInExplorer(item)} onNavigate={path => void analyzer.navigate(path)} onDelete={item => analyzer.setConfirmItems([item])} />}
         <div className="da-selection-actions">
             {analyzer.selected.size > 0 && <Button minimal disabled={busy} onClick={() => analyzer.setSelected(new Set())}>Clear</Button>}
-            <Button intent="danger" icon="trash" title="Review deletion" aria-label={`Review deletion of ${selectedItems.length} selected file${selectedItems.length === 1 ? "" : "s"}`} disabled={busy || !selectedItems.length || analyzer.stale} onClick={() => analyzer.setConfirmItems(selectedItems)} />
-        </div></footer>
+            <Button intent="danger" icon="trash" title="Review deletion" aria-label={`Review deletion of ${selectedItems.length} selected item${selectedItems.length === 1 ? "" : "s"}`} disabled={busy || !selectedItems.length || analyzer.stale} onClick={() => analyzer.setConfirmItems(selectedItems)} />
+        </div>
+            {analyzer.meta && !analyzer.stale && !analyzer.scanning && mode !== "types" && <DiskItemDetails item={analyzer.focused} disabled={busy} folderDeleteAvailable={analyzer.folderDeleteAvailable} onOpen={item => void analyzer.openInExplorer(item)} onNavigate={path => void analyzer.navigate(path)} onDelete={item => analyzer.setConfirmItems([item])} />}
+        </footer>
         <div id="disk-analyzer-view" role="tabpanel" aria-labelledby={`disk-tab-${mode}`} className="da-analyzer-content">
         {analyzer.scanning ? <div className="da-workspace-empty" role="status"><Spinner size={38} /><h3>Analyzing your storage</h3>
             <p>{analyzer.progress ? `${analyzer.progress.filesScanned.toLocaleString()} files · ${analyzer.progress.foldersScanned.toLocaleString()} folders · ${formatDiskBytes(analyzer.progress.bytesScanned)} found` : "Reading files and folders. Scan time depends on the selected location."}</p>
@@ -82,7 +83,8 @@ export default function DiskSpaceAnalyzerDialog({ isOpen, onClose, initialMode =
                         <section className="da-folders" aria-label={mode === "space" ? "Folder breakdown" : "Large file results"}>
                             {mode === "space" && <div className="da-file-pane-tabs" role="tablist" aria-label="Folder detail"><button type="button" role="tab" aria-selected={filePane === "files"} onClick={() => setFilePane("files")}>All files</button><button type="button" role="tab" aria-selected={filePane === "types"} onClick={() => setFilePane("types")}>File types</button></div>}
                             {mode === "space" && filePane === "types" ? <DiskFileStatistics scanId={analyzer.meta.scanId} path={analyzer.currentPath} /> : <><div className="da-pane-toolbar"><span>{items.length.toLocaleString()} {mode === "large" ? "matching files shown" : "items"}{mode === "space" ? ` · ${formatDiskBytes(totalSize)}` : ""}</span><button type="button" disabled={busy || !selectableItems.length} onClick={selectMatchingFiles}>{allMatchingSelected ? "Deselect" : "Select"} all {selectableItems.length.toLocaleString()} matching files</button></div>
-                            {analyzer.largeLoading && mode === "large" ? <div className="da-chart-empty" role="status"><Spinner size={22} />Finding threshold matches…</div> : <DiskItemList items={items} total={totalSize} selected={analyzer.selected} focused={analyzer.focused} large={mode === "large"} disabled={busy} onFocus={analyzer.setFocused} onSelect={analyzer.toggleSelection} onNavigate={path => void analyzer.navigate(path)} />}</>}
+                            {mode === "space" && !analyzer.folderDeleteAvailable && items.some(item => item.isDir) && <p className="da-folder-unavailable" role="status">Folder deletion is unavailable in this session. You can still open folders and select individual files.</p>}
+                            {analyzer.largeLoading && mode === "large" ? <div className="da-chart-empty" role="status"><Spinner size={22} />Finding threshold matches…</div> : <DiskItemList items={items} total={totalSize} selected={analyzer.selected} focused={analyzer.focused} large={mode === "large"} disabled={busy} folderDeleteAvailable={analyzer.folderDeleteAvailable} onFocus={analyzer.setFocused} onSelect={analyzer.toggleSelection} onNavigate={path => void analyzer.navigate(path)} />}</>}
                         </section>
                         {mode === "space" && <section className="da-visualization" aria-label="Storage visualization"><div className="da-pane-toolbar"><span>{formatDiskBytes(totalSize)} in this folder</span><div className="da-chart-controls">
                             <label><span className="sr-only">Chart depth</span><select value={depth} disabled={busy} onChange={event => setDepth(Number(event.target.value))}>{[1, 2, 3].map(value => <option key={value} value={value}>Depth {value}</option>)}</select></label>
@@ -98,7 +100,7 @@ export default function DiskSpaceAnalyzerDialog({ isOpen, onClose, initialMode =
     return <>
         {inline ? <div className="disk-analyzer-inline">{content}</div> : <Dialog isOpen={isOpen} onClose={onClose} title="Disk Space Analyzer" icon="search-around" className="disk-analyzer-dialog">{content}</Dialog>}
         <Alert isOpen={analyzer.confirmItems.length > 0} cancelButtonText="Cancel" confirmButtonText={`Delete ${analyzer.confirmItems.length} item${analyzer.confirmItems.length === 1 ? "" : "s"}`} intent="danger" icon="trash" loading={analyzer.deleting} onCancel={() => { if (!analyzer.deleting) analyzer.setConfirmItems([]); }} onConfirm={() => void analyzer.deleteConfirmed()}>
-            <p>Permanently delete <strong>{analyzer.confirmItems.length} file{analyzer.confirmItems.length === 1 ? "" : "s"}</strong> ({formatDiskBytes(analyzer.confirmItems.reduce((sum, item) => sum + item.size, 0))})? This cannot be undone.</p>
+            <p>Permanently delete <strong>{analyzer.confirmItems.length} {analyzer.confirmItems.some(item => item.isDir) ? "folder and its contents" : `file${analyzer.confirmItems.length === 1 ? "" : "s"}`}</strong> ({formatDiskBytes(analyzer.confirmItems.reduce((sum, item) => sum + item.size, 0))})? This cannot be undone.{analyzer.confirmItems.some(item => item.isDir) ? " Windows will ask you to confirm the folder separately." : ""}</p>
             <ul className="da-confirm-list">{analyzer.confirmItems.map(item => <li key={item.fullPath}>{toExplorerDisplayPath(item.fullPath) ?? "Location unavailable"}</li>)}</ul>
         </Alert>
     </>;

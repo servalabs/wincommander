@@ -78,6 +78,10 @@ mod datastore_io;
 mod devtools;
 mod diagnostics;
 mod disk_analyzer;
+#[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
+mod disk_backup_privilege;
+#[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
+mod disk_tree_delete;
 mod downloads_watcher;
 mod driver_health;
 mod driver_maintenance;
@@ -3131,6 +3135,9 @@ pub fn run() {
             disk_analyzer::get_large_disk_items,
             disk_analyzer::open_disk_item,
             disk_analyzer::disk_delete_item,
+            disk_analyzer::disk_folder_delete_available,
+            disk_analyzer::disk_confirm_folder_delete,
+            disk_analyzer::disk_delete_confirmed_folder,
             // ── Preview-first routine cache/database cleaner ──
             routine_cleaner::routine_cleaner_scan,
             routine_cleaner::routine_cleaner_scan_projects,

@@ -157,6 +157,45 @@ fn path_capability_detects_directory_identity_replacement() {
     assert_ne!(confirmed, replaced);
 }
 
+#[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
+#[test]
+fn folder_capability_holds_confirmed_root_and_expires_without_another_mint() {
+    use super::capability::{consume_folder, mint_folder, STORE, TTL};
+    let base = tempfile::Builder::new().prefix("wincommander-folder-capability-test-").tempdir().unwrap();
+    let target = base.path().join("selected");
+    let renamed = base.path().join("renamed");
+    std::fs::create_dir(&target).unwrap();
+    let root = crate::disk_tree_delete::AuthorizedRoot::open(
+        &target, crate::disk_tree_delete::ProtectedRoots::fixture(base.path()).unwrap()
+    ).unwrap();
+    let path = target.to_string_lossy().into_owned();
+    let token = mint_folder(&path, crate::disk_tree_delete::prepare_fixture_authorized(root).unwrap()).unwrap();
+    assert!(std::fs::rename(&target, &renamed).is_err());
+    { let mut store = STORE.lock().unwrap(); store.get_mut(&token).unwrap().at = Instant::now() - TTL; }
+    let deadline = Instant::now() + std::time::Duration::from_secs(4);
+    while Instant::now() < deadline && STORE.lock().unwrap().contains_key(&token) {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(consume_folder(Some(&token), &path).is_err());
+    std::fs::rename(&target, &renamed).unwrap();
+}
+
+#[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
+#[test]
+fn folder_capability_is_single_use_and_bound_to_raw_request() {
+    use super::capability::{consume_folder, mint_folder};
+    let base = tempfile::Builder::new().prefix("wincommander-folder-capability-test-").tempdir().unwrap();
+    let target = base.path().join("selected");
+    std::fs::create_dir(&target).unwrap();
+    let path = target.to_string_lossy().into_owned();
+    let roots = crate::disk_tree_delete::ProtectedRoots::fixture(base.path()).unwrap();
+    let root = crate::disk_tree_delete::AuthorizedRoot::open(&target, roots).unwrap();
+    let token = mint_folder(&path, crate::disk_tree_delete::prepare_fixture_authorized(root).unwrap()).unwrap();
+    assert!(consume_folder(Some(&token), "C:\\different").is_err());
+    assert!(consume_folder(Some(&token), &path).is_err());
+    assert!(consume_folder(None, &path).is_err());
+}
+
 #[test]
 fn required_capability_is_single_use() {
     let args = kill_switch_args(true);
@@ -174,6 +213,8 @@ fn expired_capability_is_refused_and_removed() {
             action: DestructiveAction::DiskDelete,
             args_hash: hash_args("target"),
             at: Instant::now() - TTL,
+            #[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
+            folder: None,
         },
     );
     assert!(consume(&token, DestructiveAction::DiskDelete, "target").is_err());

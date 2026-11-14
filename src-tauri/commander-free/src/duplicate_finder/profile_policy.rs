@@ -62,6 +62,128 @@ fn current_sid() -> Result<String, &'static str> {
     unsafe {
         LocalFree(value.cast());
     }
+    let sid = result?;
+    #[cfg(feature = "experimental-disk-tree-delete")]
+    ensure_session_identity(&sid, &session_user_sid()?)?;
+    Ok(sid)
+}
+
+#[cfg(feature = "experimental-disk-tree-delete")]
+fn ensure_session_identity(process_sid: &str, session_sid: &str) -> Result<(), &'static str> {
+    if process_sid.is_empty() || session_sid.is_empty() {
+        return Err(UNAVAILABLE);
+    }
+    if !process_sid.eq_ignore_ascii_case(session_sid) {
+        return Err("the app runs as a different Windows user than the signed-in session");
+    }
+    Ok(())
+}
+
+// Resolve the account for this process's Windows logon session through WTS,
+// rather than trusting environment variables inherited through elevation.
+// An unavailable or ambiguous account fails closed.
+#[cfg(feature = "experimental-disk-tree-delete")]
+fn session_user_sid() -> Result<String, &'static str> {
+    use windows_sys::Win32::{
+        Security::{LookupAccountNameW, SID_NAME_USE},
+        System::{
+            RemoteDesktop::{
+                ProcessIdToSessionId, WTSDomainName, WTSFreeMemory, WTSQuerySessionInformationW,
+                WTSUserName, WTS_CURRENT_SERVER_HANDLE,
+            },
+            Threading::GetCurrentProcessId,
+        },
+    };
+    fn query(session: u32, class: i32) -> Result<String, &'static str> {
+        let mut value = ptr::null_mut();
+        let mut bytes = 0;
+        let ok = unsafe {
+            WTSQuerySessionInformationW(
+                WTS_CURRENT_SERVER_HANDLE,
+                session,
+                class,
+                &mut value,
+                &mut bytes,
+            )
+        };
+        if ok == 0 || value.is_null() || bytes < 2 || bytes % 2 != 0 || bytes > 65536 {
+            if !value.is_null() {
+                unsafe { WTSFreeMemory(value.cast()) };
+            }
+            return Err(UNAVAILABLE);
+        }
+        let units = unsafe { std::slice::from_raw_parts(value, (bytes / 2) as usize) };
+        let result = units
+            .iter()
+            .position(|unit| *unit == 0)
+            .and_then(|end| String::from_utf16(&units[..end]).ok())
+            .ok_or(UNAVAILABLE);
+        unsafe { WTSFreeMemory(value.cast()) };
+        result
+    }
+    let mut session = 0;
+    if unsafe { ProcessIdToSessionId(GetCurrentProcessId(), &mut session) } == 0 {
+        return Err(UNAVAILABLE);
+    }
+    let username = query(session, WTSUserName)?;
+    let domain = query(session, WTSDomainName)?;
+    if username.is_empty() || domain.is_empty() || username.contains('\\') || domain.contains('\\')
+    {
+        return Err(UNAVAILABLE);
+    }
+    let account: Vec<u16> = format!("{domain}\\{username}")
+        .encode_utf16()
+        .chain(Some(0))
+        .collect();
+    let mut sid_len = 0;
+    let mut domain_len = 0;
+    let mut kind: SID_NAME_USE = 0;
+    unsafe {
+        LookupAccountNameW(
+            ptr::null(),
+            account.as_ptr(),
+            ptr::null_mut(),
+            &mut sid_len,
+            ptr::null_mut(),
+            &mut domain_len,
+            &mut kind,
+        );
+    }
+    if sid_len == 0 || sid_len > 65536 || domain_len > 32768 {
+        return Err(UNAVAILABLE);
+    }
+    let mut sid = vec![0usize; (sid_len as usize).div_ceil(std::mem::size_of::<usize>())];
+    let mut resolved_domain = vec![0u16; domain_len as usize];
+    if unsafe {
+        LookupAccountNameW(
+            ptr::null(),
+            account.as_ptr(),
+            sid.as_mut_ptr().cast(),
+            &mut sid_len,
+            resolved_domain.as_mut_ptr(),
+            &mut domain_len,
+            &mut kind,
+        )
+    } == 0
+    {
+        return Err(UNAVAILABLE);
+    }
+    let mut text = ptr::null_mut();
+    if unsafe { ConvertSidToStringSidW(sid.as_mut_ptr().cast(), &mut text) } == 0 || text.is_null()
+    {
+        return Err(UNAVAILABLE);
+    }
+    let mut len = 0;
+    unsafe {
+        while *text.add(len) != 0 {
+            len += 1;
+        }
+    }
+    let result = String::from_utf16(unsafe { std::slice::from_raw_parts(text, len) })
+        .map_err(|_| UNAVAILABLE);
+    unsafe {
+        LocalFree(text.cast());
+    }
     result
 }
 
@@ -92,7 +214,7 @@ fn expand_path(value: &str) -> Result<PathBuf, &'static str> {
     fs::canonicalize(path).map_err(|_| UNAVAILABLE)
 }
 
-fn profiles() -> Result<(String, Vec<(String, PathBuf)>), &'static str> {
+fn collect_profiles(resolve: impl Fn(&str) -> Result<PathBuf, &'static str>) -> Result<(String, Vec<(String, PathBuf)>), &'static str> {
     let sid = current_sid()?;
     let key = RegKey::predef(HKEY_LOCAL_MACHINE)
         .open_subkey("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList")
@@ -107,7 +229,7 @@ fn profiles() -> Result<(String, Vec<(String, PathBuf)>), &'static str> {
         let path: String = subkey
             .get_value("ProfileImagePath")
             .map_err(|_| UNAVAILABLE)?;
-        paths.push((name, expand_path(&path)?));
+        paths.push((name, resolve(&path)?));
     }
     if !paths
         .iter()
@@ -116,6 +238,19 @@ fn profiles() -> Result<(String, Vec<(String, PathBuf)>), &'static str> {
         return Err(UNAVAILABLE);
     }
     Ok((sid, paths))
+}
+
+pub(crate) fn profiles() -> Result<(String, Vec<(String, PathBuf)>), &'static str> {
+    collect_profiles(expand_path)
+}
+
+#[cfg(feature = "experimental-disk-tree-delete")]
+pub(crate) fn profiles_unresolved() -> Result<(String, Vec<(String, PathBuf)>), &'static str> {
+    let mut buffer = vec![0u16; 32768];
+    let length = unsafe { GetWindowsDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) } as usize;
+    if length == 0 || length >= buffer.len() { return Err(UNAVAILABLE); }
+    let windows_dir = String::from_utf16(&buffer[..length]).map_err(|_| UNAVAILABLE)?;
+    collect_profiles(|value| resolve_profile_string(value, Path::new(&windows_dir)))
 }
 
 fn contains(path: &Path, root: &Path) -> bool {
@@ -184,6 +319,11 @@ pub(super) struct Snapshot(Result<(String, Vec<(String, PathBuf)>), &'static str
 impl Snapshot {
     pub(super) fn load() -> Self {
         Self(profiles())
+    }
+
+    #[cfg(test)]
+    pub(super) fn fixture(current_root: PathBuf) -> Self {
+        Self(Ok(("fixture-user".into(), vec![("fixture-user".into(), current_root)])))
     }
 
     pub(super) fn check(&self, path: &Path) -> Result<(), &'static str> {
