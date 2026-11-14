@@ -2517,6 +2517,13 @@ pub(crate) fn cached_settings() -> Option<AppSettings> {
     SETTINGS_CACHE.lock().ok().and_then(|cache| cache.clone())
 }
 
+/// Inspect the committed toggle without hydrating or cloning the settings store.
+pub(crate) fn cached_advanced_tools_enabled() -> Option<bool> {
+    SETTINGS_CACHE.lock().ok().and_then(|cache| {
+        cache.as_ref().map(|settings| settings.ideal.identity.advanced_tools_enabled.unwrap_or(false))
+    })
+}
+
 pub(crate) fn context_notification_preferences() -> Result<(bool, bool, String), String> {
     let value = personal_settings::read_notification_overlay()?;
     context_notification_preferences_from_value(&value)
@@ -5536,6 +5543,25 @@ mod tests {
     fn warm_cache_with_defaults() {
         let mut guard = SETTINGS_CACHE.lock().unwrap();
         *guard = Some(create_default_settings());
+    }
+
+    #[test]
+    fn cached_advanced_toggle_tracks_committed_changes_and_missing_cache() {
+        let _lock = GLOBAL_STATE_TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        struct RestoreCache(Option<AppSettings>);
+        impl Drop for RestoreCache {
+            fn drop(&mut self) { *SETTINGS_CACHE.lock().unwrap() = self.0.take(); }
+        }
+        let original = SETTINGS_CACHE.lock().unwrap().take();
+        let _restore = RestoreCache(original);
+        assert_eq!(cached_advanced_tools_enabled(), None);
+        let mut settings = create_default_settings();
+        settings.ideal.identity.advanced_tools_enabled = Some(false);
+        *SETTINGS_CACHE.lock().unwrap() = Some(settings.clone());
+        assert_eq!(cached_advanced_tools_enabled(), Some(false));
+        settings.ideal.identity.advanced_tools_enabled = Some(true);
+        *SETTINGS_CACHE.lock().unwrap() = Some(settings);
+        assert_eq!(cached_advanced_tools_enabled(), Some(true));
     }
 
     /// While decoy mode is active, set_settings — the direct full-object

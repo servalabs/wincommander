@@ -125,6 +125,39 @@ pub(crate) fn ensure_decoy_mutation_allowed() -> Result<(), String> {
     Ok(())
 }
 
+/// Avoid repeated licence verification only when the committed toggle is off.
+pub(crate) fn ensure_per_item_mutation_allowed() -> Result<(), String> {
+    ensure_decoy_mutation_allowed()?;
+    ensure_advanced_with_cached_toggle(
+        crate::settings::cached_advanced_tools_enabled(),
+        crate::license::is_advanced_mode,
+    )
+}
+
+fn ensure_advanced_with_cached_toggle(
+    enabled: Option<bool>,
+    is_advanced: impl FnOnce() -> bool,
+) -> Result<(), String> {
+    if enabled != Some(false) && is_advanced() {
+        return Err("Refused: investigator mode forbids duplicate removal because it would taint evidence.".into());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod per_item_mode_tests {
+    use super::ensure_advanced_with_cached_toggle;
+
+    #[test]
+    fn disabled_toggle_skips_licence_probe_but_enabled_or_unknown_is_rechecked() {
+        assert!(ensure_advanced_with_cached_toggle(Some(false), || panic!("unnecessary licence probe")).is_ok());
+        assert!(ensure_advanced_with_cached_toggle(Some(true), || true).is_err());
+        assert!(ensure_advanced_with_cached_toggle(None, || true).is_err());
+        assert!(ensure_advanced_with_cached_toggle(Some(true), || false).is_ok());
+        assert!(ensure_advanced_with_cached_toggle(None, || false).is_ok());
+    }
+}
+
 // Literal Git metadata components remain reviewable but are not deletion targets.
 // This does not identify bare repositories or external Git directories.
 pub(super) fn is_removal_protected(path: &Path) -> bool {

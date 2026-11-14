@@ -996,9 +996,9 @@ pub(crate) struct DeleteFailure {
 /// may follow earlier requests; callers must report partial results and invalidate
 /// any displayed scan cache even when an error is returned.
 pub(crate) fn delete_prepared(tree: PreparedTree) -> Result<usize, DeleteFailure> {
-    // The caller checks the full mutation policy; this fast gate checks decoy mode per request.
+    // The caller checks the full policy; the per-item gate skips only unnecessary licence probes.
     delete_prepared_with_gate(tree, |_| {
-        crate::duplicate_finder::safety::ensure_decoy_mutation_allowed()
+        crate::duplicate_finder::safety::ensure_per_item_mutation_allowed()
             .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error))
     })
 }
