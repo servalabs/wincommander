@@ -155,7 +155,7 @@ impl FleetMachinePolicy {
             };
             let mut body=zeroize::Zeroizing::new(Vec::new());
             while let Some(chunk)=response.chunk().await.map_err(|_| INVALID)? {
-                if body.len().checked_add(chunk.len()).is_none_or(|size|size>65536) { return Err(INVALID); }
+                if body.len().checked_add(chunk.len()).map_or(true, |size|size>65536) { return Err(INVALID); }
                 body.extend_from_slice(&chunk);
             }
             self.finish_readmission(claim,status,&body,&header,authorized,||())

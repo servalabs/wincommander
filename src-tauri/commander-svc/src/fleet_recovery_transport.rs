@@ -95,7 +95,7 @@ pub(crate) async fn request_handoff(store:&FleetMachinePolicy, candidate:&Candid
         if response.status()!=reqwest::StatusCode::OK { return Err("recovery transport rejected"); }
         let mut bytes=Vec::new();
         while let Some(chunk)=response.chunk().await.map_err(|_| "recovery transport unavailable")? {
-            if bytes.len().checked_add(chunk.len()).is_none_or(|size|size>16384) { return Err("invalid recovery response"); }
+            if bytes.len().checked_add(chunk.len()).map_or(true, |size|size>16384) { return Err("invalid recovery response"); }
             bytes.extend_from_slice(&chunk);
         }
         Ok(bytes)
@@ -134,7 +134,7 @@ async fn resume_prepared_with(store:&FleetMachinePolicy, candidate:&CandidateSto
         if response.status()!=reqwest::StatusCode::OK { return Err("recovery transport rejected"); }
         let mut bytes=Vec::new();
         while let Some(chunk)=response.chunk().await.map_err(|_| "recovery transport unavailable")? {
-            if bytes.len().checked_add(chunk.len()).is_none_or(|size| size>16384) { return Err("invalid recovery response"); }
+            if bytes.len().checked_add(chunk.len()).map_or(true, |size| size>16384) { return Err("invalid recovery response"); }
             bytes.extend_from_slice(&chunk);
         }
         Ok(bytes)
@@ -220,7 +220,7 @@ pub(crate) async fn prepare_and_resume(store:&FleetMachinePolicy, candidate:&Can
         if response.status()!=reqwest::StatusCode::OK { return Err("recovery transport rejected"); }
         let mut bytes=zeroize::Zeroizing::new(Vec::new());
         while let Some(chunk)=response.chunk().await.map_err(|_| "recovery transport unavailable")? {
-            if bytes.len().checked_add(chunk.len()).is_none_or(|size|size>16384) { return Err("invalid recovery response"); }
+            if bytes.len().checked_add(chunk.len()).map_or(true, |size|size>16384) { return Err("invalid recovery response"); }
             bytes.extend_from_slice(&chunk);
         }
         Ok(bytes)

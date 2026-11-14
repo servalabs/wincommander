@@ -54,7 +54,7 @@ pub(crate) async fn terminal_status(store:&FleetMachinePolicy,snapshot:&crate::f
     let op=async {
         let mut response=client.post(format!("{}/v1/windows/unenroll-status",snapshot.origin)).header(reqwest::header::CONTENT_TYPE,"application/json").body(bytes.clone()).send().await.map_err(|_|"terminal status unavailable")?;
         if response.status()!=reqwest::StatusCode::OK {return Err("terminal status unavailable")}
-        let mut body=Vec::new();while let Some(chunk)=response.chunk().await.map_err(|_|"terminal status unavailable")? {if body.len().checked_add(chunk.len()).is_none_or(|n|n>16384){return Err("invalid terminal proof")}body.extend_from_slice(&chunk);}
+        let mut body=Vec::new();while let Some(chunk)=response.chunk().await.map_err(|_|"terminal status unavailable")? {if body.len().checked_add(chunk.len()).map_or(true, |n|n>16384){return Err("invalid terminal proof")}body.extend_from_slice(&chunk);}
         let proof=verify_terminal(&snapshot.trust,&bytes,nonce,&body)?;
         Ok((proof,body))
     };
@@ -66,7 +66,7 @@ pub(crate) async fn terminal_status(store:&FleetMachinePolicy,snapshot:&crate::f
 #[cfg(windows)]
 fn pending_response(value:serde_json::Value)->Result<serde_json::Value,&'static str> {
     let id=value.get("command_id").and_then(serde_json::Value::as_str).ok_or("leave request unavailable")?;
-    if uuid::Uuid::parse_str(id).ok().is_none_or(|v|v.is_nil() || v.to_string()!=id) {return Err("leave request unavailable")}
+    if uuid::Uuid::parse_str(id).ok().map_or(true, |v|v.is_nil() || v.to_string()!=id) {return Err("leave request unavailable")}
     let approvals=value.get("approvals").and_then(serde_json::Value::as_u64).ok_or("leave request unavailable")?;
     let required=value.get("required_approvals").and_then(serde_json::Value::as_u64).ok_or("leave request unavailable")?;
     if !(1..=2).contains(&required) || approvals>2 {return Err("leave request unavailable")}
@@ -91,7 +91,7 @@ pub(crate) async fn request(store:&FleetMachinePolicy,protector:&dyn crate::flee
         let mut response=client.post(format!("{}{PATH}",snapshot.origin)).json(&body).send().await.map_err(|_|"leave request unavailable")?;
         if !response.status().is_success() {return Err("leave request unavailable")}
         let mut bytes=Vec::new();while let Some(chunk)=response.chunk().await.map_err(|_|"leave request unavailable")? {
-            if bytes.len().checked_add(chunk.len()).is_none_or(|n|n>16384) {return Err("leave request unavailable")} bytes.extend_from_slice(&chunk);
+            if bytes.len().checked_add(chunk.len()).map_or(true, |n|n>16384) {return Err("leave request unavailable")} bytes.extend_from_slice(&chunk);
         }
         pending_response(serde_json::from_slice(&bytes).map_err(|_|"leave request unavailable")?)
     };

@@ -369,7 +369,7 @@ fn archive_previous_stop(fs:&dyn crate::policy_store::PolicyFs,dir:&std::path::P
         || previous.recovery_id!=recovery || previous.decision_digest!=decision
         || previous.org_id!=trust.org_id || previous.device_id!=trust.device_id
         || previous.org_id!=old.org_id || previous.device_id!=old.device_id || previous.old_generation!=old.enrollment_generation
-        || uuid::Uuid::parse_str(recovery).ok().is_none_or(|id|id.is_nil() || id.to_string()!=recovery)
+        || uuid::Uuid::parse_str(recovery).ok().map_or(true, |id|id.is_nil() || id.to_string()!=recovery)
         || !valid_hash(decision) || !valid_hash(fingerprint) { return Err("stop request changed"); }
     if previous.state!="joined" {
         let review_bytes=fs.read(&dir.join(format!("unknown-stop-review-{recovery}.json"))).map_err(|_| "stop review unavailable")?;
@@ -398,7 +398,7 @@ fn read_stop(fs:&dyn crate::policy_store::PolicyFs,dir:&std::path::Path,trust:&c
         Err(e) if e.kind()==std::io::ErrorKind::NotFound=>Ok(None),
         Ok(bytes) if bytes.len()<=16384=> { let request:StopRequest=serde_json::from_slice(&bytes).map_err(|_| "stop request unavailable")?;
             if request.org_id!=trust.org_id || request.device_id!=trust.device_id || request.old_generation!=trust.enrollment_generation
-                || uuid::Uuid::parse_str(&request.recovery_id).ok().is_none_or(|id|id.is_nil() || id.to_string()!=request.recovery_id)
+                || uuid::Uuid::parse_str(&request.recovery_id).ok().map_or(true, |id|id.is_nil() || id.to_string()!=request.recovery_id)
                 || !valid_hash(&request.decision_digest) || !matches!(request.state.as_str(),"requested"|"unknown"|"joined")
                 || ((request.state=="joined" || request.state=="unknown") && request.owner.is_none()) { return Err("stop request unavailable"); }
             Ok(Some(request)) },
@@ -1751,8 +1751,8 @@ struct DrainCancellation { org_id:String,device_id:String,current_generation:Str
 struct CancelApproval { sid:String,session:u32,logon:(u32,i32),device_id:String,recovery_id:String,decision_digest:String,expires:Instant }
 fn confirm_cancellation(peer:&AuthenticatedPipePeer,device:&str,recovery:&str,decision:&str)->Result<(CancelApproval,SessionWitness),&'static str> {
     if !READY || !session_matches(peer) { return Err("cancellation confirmation unavailable"); }
-    if uuid::Uuid::parse_str(device).ok().is_none_or(|id|id.is_nil() || id.to_string()!=device)
-        || uuid::Uuid::parse_str(recovery).ok().is_none_or(|id|id.is_nil() || id.to_string()!=recovery)
+    if uuid::Uuid::parse_str(device).ok().map_or(true, |id|id.is_nil() || id.to_string()!=device)
+        || uuid::Uuid::parse_str(recovery).ok().map_or(true, |id|id.is_nil() || id.to_string()!=recovery)
         || !valid_hash(decision) { return Err("cancellation confirmation unavailable"); }
     let witness=SessionWitness::capture(peer).ok_or("interactive administrator required")?;
     let title:Vec<u16>="Cancel Fleet reconnection".encode_utf16().chain(std::iter::once(0)).collect();
@@ -1772,7 +1772,7 @@ fn verify_drain_cancellation(receipt:&DrainCancellation,current:&crate::fleet_ma
         || receipt.previous_recovery_id!=previous || receipt.next_recovery_id!=freeze.next_recovery_id || receipt.next_generation!=freeze.next_generation
         || receipt.decision_digest!=freeze.decision_digest || receipt.server_key!=current.signer_key || receipt.request_nonce!=nonce
         || receipt.status!="cancelled" || !crate::fleet_identity_handoff::recovery_timestamp_valid(receipt.issued_at,now)
-        || uuid::Uuid::parse_str(nonce).ok().is_none_or(|id|id.is_nil() || id.to_string()!=nonce) { return Err("cancellation unavailable"); }
+        || uuid::Uuid::parse_str(nonce).ok().map_or(true, |id|id.is_nil() || id.to_string()!=nonce) { return Err("cancellation unavailable"); }
     let key=STANDARD.decode(&receipt.server_key).map_err(|_| "cancellation unavailable")?;
     let signature=STANDARD.decode(&receipt.signature).map_err(|_| "cancellation unavailable")?;
     if STANDARD.encode(&key)!=receipt.server_key || STANDARD.encode(&signature)!=receipt.signature { return Err("cancellation unavailable"); }
@@ -2246,7 +2246,7 @@ fn valid_late_receipt(receipt:&LateEvidenceReceipt,current:&crate::fleet_machine
     if receipt.org_id!=current.org_id || receipt.device_id!=current.device_id || receipt.recovery_id!=verified.retirement_id()
         || receipt.command_id!=command || receipt.evidence_id!=late.evidence_id || receipt.unknown_receipt_id!=review.receipt_id
         || receipt.unknown_record_hash!=review.record_hash || receipt.result_sha256!=late.result_sha256 || receipt.server_key!=current.signer_key
-        || receipt.request_nonce.strip_prefix("ci-").is_none_or(|value|value.len()!=32 || !value.bytes().all(|byte|byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+        || receipt.request_nonce.strip_prefix("ci-").map_or(true, |value|value.len()!=32 || !value.bytes().all(|byte|byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
         || receipt.issued_at<=0 || nonce.is_some_and(|value|value!=receipt.request_nonce)
         || now.is_some_and(|value|!crate::fleet_identity_handoff::recovery_timestamp_valid(receipt.issued_at,value)) { return false; }
     let Ok(raw)=STANDARD.decode(&receipt.signature) else { return false; };
@@ -2263,7 +2263,7 @@ fn valid_late_evidence(entry:&InboxCommand,journal:&ReplacementJournal,current:&
     let Some(review)=entry.unknown_review.as_ref() else { return false; };
     let Some(grant)=entry.grant.as_ref() else { return false; };
     if entry.state!="unknown" || grant.started_at.is_none() || !valid_hash(&late.result_sha256)
-        || uuid::Uuid::parse_str(&late.evidence_id).ok().is_none_or(|id|id.is_nil() || id.to_string()!=late.evidence_id)
+        || uuid::Uuid::parse_str(&late.evidence_id).ok().map_or(true, |id|id.is_nil() || id.to_string()!=late.evidence_id)
         || !journal.history.iter().any(|item|item.command_id==entry.command.command_id && item.receipt_id==review.receipt_id && item.record_hash==review.record_hash)
         || !late.outcome.signature.is_empty() || !late.outcome.record_hash.is_empty()
         || execution_hash(&late.outcome,&late.ack).ok().as_deref()!=Some(late.result_sha256.as_str())
@@ -2271,7 +2271,7 @@ fn valid_late_evidence(entry:&InboxCommand,journal:&ReplacementJournal,current:&
     let Ok(bytes)=serde_json::to_vec(&("wincommander:fleet:late-execution-evidence:v1",&current.org_id,&current.device_id,
         verified.retirement_id(),&entry.command.command_id,&late.evidence_id,&review.receipt_id,&review.record_hash,&late.result_sha256)) else { return false; };
     fleet_proto::verify_signature_b64(&STANDARD.encode(verified.public_key()),&bytes,&late.signature)
-        && late.receipt.as_ref().is_none_or(|receipt|valid_late_receipt(receipt,current,verified,&entry.command.command_id,review,late,None,None))
+        && late.receipt.as_ref().map_or(true, |receipt|valid_late_receipt(receipt,current,verified,&entry.command.command_id,review,late,None,None))
 }
 
 fn record_late_receipt(fs:&dyn crate::policy_store::PolicyFs,dir:&std::path::Path,
@@ -2310,7 +2310,7 @@ async fn upload_late_evidence(store:&crate::fleet_machine_policy::FleetMachinePo
     })?;
     let (review,late,recovery)=pending;
     if late.receipt.is_some() { return Ok(()); }
-    if uuid::Uuid::parse_str(command_id).ok().is_none_or(|id|id.is_nil() || id.to_string()!=command_id)
+    if uuid::Uuid::parse_str(command_id).ok().map_or(true, |id|id.is_nil() || id.to_string()!=command_id)
         || matches!(late.outcome.outcome,fleet_proto::ActionOutcomeState::Unknown) { return Err("late evidence upload unavailable"); }
     let now=i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_| "clock unavailable")?.as_secs()).map_err(|_| "clock unavailable")?;
     let mut random=[0u8;16];SysRng.try_fill_bytes(&mut random).map_err(|_| "randomness unavailable")?;
@@ -2331,7 +2331,7 @@ async fn upload_late_evidence(store:&crate::fleet_machine_policy::FleetMachinePo
             .header(reqwest::header::CONTENT_TYPE,"application/json").body(body.to_vec()).send().await.map_err(|_| "recovery transport unavailable")?;
         if response.status()!=reqwest::StatusCode::OK { return Err("recovery transport rejected"); }
         let mut bytes=Vec::new();while let Some(chunk)=response.chunk().await.map_err(|_| "recovery transport unavailable")? {
-            if bytes.len().checked_add(chunk.len()).is_none_or(|size|size>16384) { return Err("invalid late evidence receipt"); } bytes.extend_from_slice(&chunk);
+            if bytes.len().checked_add(chunk.len()).map_or(true, |size|size>16384) { return Err("invalid late evidence receipt"); } bytes.extend_from_slice(&chunk);
         }
         serde_json::from_slice::<LateEvidenceReceipt>(&bytes).map_err(|_| "invalid late evidence receipt")
     };
@@ -2861,7 +2861,7 @@ async fn recovery_contact_with(store:&crate::fleet_machine_policy::FleetMachineP
         let receipt=response.headers().get("x-wc-windows-recovery-contact").and_then(|v|v.to_str().ok()).ok_or("invalid recovery response")?.to_owned();
         let mut bytes=Vec::new();
         while let Some(chunk)=response.chunk().await.map_err(|_| "recovery transport unavailable")? {
-            if bytes.len().checked_add(chunk.len()).is_none_or(|size|size>2*1024*1024) { return Err("invalid recovery response"); }
+            if bytes.len().checked_add(chunk.len()).map_or(true, |size|size>2*1024*1024) { return Err("invalid recovery response"); }
             bytes.extend_from_slice(&chunk);
         }
         Ok((bytes,receipt))
@@ -3038,7 +3038,7 @@ async fn recovery_work_contact(store:&crate::fleet_machine_policy::FleetMachineP
         if response.status()!=reqwest::StatusCode::OK { return Err("recovery transport rejected"); }
         let receipt=response.headers().get("x-wc-windows-recovery-contact").and_then(|value|value.to_str().ok()).ok_or("invalid recovery response")?.to_owned();
         let mut bytes=Vec::new();while let Some(chunk)=response.chunk().await.map_err(|_| "recovery transport unavailable")? {
-            if bytes.len().checked_add(chunk.len()).is_none_or(|size|size>2*1024*1024) { return Err("invalid recovery response"); } bytes.extend_from_slice(&chunk);
+            if bytes.len().checked_add(chunk.len()).map_or(true, |size|size>2*1024*1024) { return Err("invalid recovery response"); } bytes.extend_from_slice(&chunk);
         }
         Ok((bytes,receipt))
     };
@@ -3074,7 +3074,7 @@ async fn recovery_result_contact(store:&crate::fleet_machine_policy::FleetMachin
         if response.status()!=reqwest::StatusCode::OK { return Err("recovery transport rejected"); }
         let receipt=response.headers().get("x-wc-windows-recovery-contact").and_then(|v|v.to_str().ok()).ok_or("invalid recovery response")?.to_owned();
         let mut bytes=Vec::new();while let Some(chunk)=response.chunk().await.map_err(|_| "recovery transport unavailable")? {
-            if bytes.len().checked_add(chunk.len()).is_none_or(|size|size>2*1024*1024) { return Err("invalid recovery response"); } bytes.extend_from_slice(&chunk);
+            if bytes.len().checked_add(chunk.len()).map_or(true, |size|size>2*1024*1024) { return Err("invalid recovery response"); } bytes.extend_from_slice(&chunk);
         } Ok((bytes,receipt))
     };
     let (bytes,receipt)=tokio::time::timeout(Duration::from_secs(30),operation).await.map_err(|_| "recovery transport unavailable")??;
