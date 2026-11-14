@@ -3122,7 +3122,7 @@ mod recovery_contact_tests {
             trust:crate::fleet_machine_policy::FleetTrust { org_id:"org".into(),device_id:"device".into(),
                 enrollment_generation:"generation".into(),signer_key:STANDARD.encode(signer.verifying_key().as_bytes()) },
             origins:vec![],origin:"https://fleet.example".into(),profile:crate::fleet_machine_policy::TransportProfile { spki_pins:String::new(),environment_fingerprint:String::new() },
-            revision:1,connection_revision:1,sealed_credential_sha256:[0;32],secret:zeroize::Zeroizing::new(vec![7;32]),
+            revision:1,connection_revision:1,sealed_credential_sha256:[0;32],recovery_commit:None,secret:zeroize::Zeroizing::new(vec![7;32]),
             operator_key:Some(STANDARD.encode(SigningKey::from_bytes(&[33;32]).verifying_key().as_bytes())),is_recovered:true,
         };
         let prepared=prepare_recovery_decoy(&snapshot,1234).unwrap();

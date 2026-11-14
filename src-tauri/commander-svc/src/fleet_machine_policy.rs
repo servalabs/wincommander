@@ -224,6 +224,7 @@ pub(crate) struct CredentialSnapshot {
     pub revision: u64,
     pub connection_revision: u64,
     pub sealed_credential_sha256: [u8; 32],
+    pub recovery_commit: Option<RecoveryCommit>,
     pub secret: zeroize::Zeroizing<Vec<u8>>,
     pub operator_key: Option<String>,
     pub is_recovered: bool,
@@ -248,9 +249,9 @@ fn validate_transport_profile(profile: &TransportProfile) -> Result<(), &'static
     Ok(())
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RecoveryCommit {
+pub(crate) struct RecoveryCommit {
     recovery_id:String, old_trust:FleetTrust, new_generation:String, decision_digest:String,
     archive_sha256:String, credential_sha256:String, candidate_fingerprint:String,
     origin:String, local_commit_digest:String, activation_pending:bool,
@@ -1356,6 +1357,7 @@ impl FleetMachinePolicy {
             trust: record.trust.clone(), origins: record.origins.clone(), origin:credential.origin.clone(), profile: profile.clone(),
             revision: record.credential_revision, connection_revision: record.connection_revision,
             sealed_credential_sha256: { use sha2::{Digest,Sha256}; Sha256::digest(credential.ciphertext.as_bytes()).into() },
+            recovery_commit: record.recovery_commit.clone(),
             secret, operator_key:record.operator_key.clone(),
             is_recovered:record.recovery_commit.as_ref().is_some_and(|commit|!commit.activation_pending),
         }))
@@ -1375,6 +1377,7 @@ impl FleetMachinePolicy {
                 && record.connection_revision == snapshot.connection_revision
                 && record.origins == snapshot.origins && record.transport_profile.as_ref() == Some(&snapshot.profile)
                 && record.operator_key == snapshot.operator_key
+                && record.recovery_commit == snapshot.recovery_commit
                 && record.recovery_commit.as_ref().is_some_and(|commit|!commit.activation_pending)==snapshot.is_recovered
     }
 
@@ -1410,10 +1413,7 @@ impl FleetMachinePolicy {
             return Err("recovery_not_active");
         }
         if let Some(snapshot)=expected {
-            if !snapshot.is_recovered || record.trust!=snapshot.trust || record.credential_revision!=snapshot.revision
-                || record.origins!=snapshot.origins || record.transport_profile.as_ref()!=Some(&snapshot.profile)
-                || record.operator_key!=snapshot.operator_key
-                || !record.credential.as_ref().is_some_and(|credential|credential.origin==snapshot.origin) { return Err("recovery_credential_changed"); }
+            if !snapshot.is_recovered || !Self::credential_matches(record, snapshot) { return Err("recovery_credential_changed"); }
         }
         let operator=record.operator_key.as_deref().ok_or("operator_key_not_pinned")?;
         validate_operator_key(&record.trust,operator)?;

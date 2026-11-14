@@ -163,6 +163,42 @@ fn current_snapshot_rejects_connection_and_sealed_credential_changes() {
 }
 
 #[test]
+fn active_recovery_rejects_stale_snapshot_before_policy_use() {
+    use sha2::{Digest, Sha256};
+    let (store, _) = setup();
+    let secret = [4; 32];
+    submit(&store, "https://fleet.test", &secret).unwrap();
+    {
+        let mut state = store.state.lock().unwrap();
+        let record = state.record.as_mut().unwrap();
+        record.recovery_commit = Some(RecoveryCommit {
+            recovery_id: "11111111-1111-4111-8111-111111111111".into(), old_trust: record.trust.clone(),
+            new_generation: record.trust.enrollment_generation.clone(), decision_digest: "11".repeat(32),
+            archive_sha256: "22".repeat(32), credential_sha256: Sha256::digest(secret).iter().map(|b| format!("{b:02x}")).collect(),
+            candidate_fingerprint: "33".repeat(32), origin: "https://fleet.test".into(), local_commit_digest: "44".repeat(32),
+            activation_pending: false, server_status: None, rollback_sha256: None,
+        });
+    }
+    let snapshot = store.credential_snapshot(&TestProtector).unwrap().unwrap();
+    let original = store.state.lock().unwrap().record.clone().unwrap();
+    for mutation in 0..4 {
+        {
+            let mut state = store.state.lock().unwrap();
+            let record = state.record.as_mut().unwrap();
+            *record = original.clone();
+            match mutation {
+                0 => record.connection_revision += 1,
+                1 => record.credential.as_mut().unwrap().ciphertext.push('A'),
+                2 => record.runtime_profile_changed = true,
+                _ => record.recovery_commit.as_mut().unwrap().local_commit_digest = "55".repeat(32),
+            }
+        }
+        let result = store.with_active_recovery(Some(&snapshot), |_,_,_,_,_,_,_,_,_| Ok(()));
+        assert_eq!(result, Err("recovery_credential_changed"));
+    }
+}
+
+#[test]
 fn changed_runtime_origin_or_proxy_profile_can_only_suspend_service_transport() {
     let (store, _) = setup();
     let key = [4u8; 32];
