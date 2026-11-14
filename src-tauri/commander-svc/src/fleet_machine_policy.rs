@@ -2879,7 +2879,15 @@ impl FleetMachinePolicy {
 pub(crate) struct RecoveryExpected {
     old_trust:FleetTrust, recovery_id:String, new_generation:String, decision_digest:String,
     archive_sha256:String, credential_sha256:String, local_commit_digest:String, candidate_fingerprint:String,
-    origin:String, profile:TransportProfile,
+    origin:String, profile:TransportProfile, credential_revision:u64, sealed_credential_sha256:[u8;32],
+}
+#[cfg(windows)]
+fn pending_credential_matches(record:&Record, expected:&RecoveryExpected) -> bool {
+    use sha2::{Digest,Sha256};
+    record.credential.as_ref().is_some_and(|credential| {
+        credential.origin==expected.origin && record.credential_revision==expected.credential_revision
+            && <[u8;32]>::from(Sha256::digest(credential.ciphertext.as_bytes()))==expected.sealed_credential_sha256
+    })
 }
 #[cfg(windows)]
 impl RecoveryExpected {
@@ -2902,14 +2910,19 @@ impl FleetMachinePolicy {
         let Some(commit)=record.recovery_commit.as_ref() else { return Ok(None) };
         validate_operator_key(&record.trust,record.operator_key.as_deref().ok_or("operator_key_not_pinned")?)?;
         if !commit.activation_pending { return Ok(None); }
-        if record.service_enabled || record.credential.is_none() || record.trust.org_id!=commit.old_trust.org_id
+        let credential=record.credential.as_ref().ok_or("invalid_store")?;
+        let sealed=STANDARD.decode(&credential.ciphertext).map_err(|_| "invalid_store")?;
+        if STANDARD.encode(&sealed)!=credential.ciphertext { return Err("invalid_store"); }
+        if record.service_enabled || credential.origin!=commit.origin || record.trust.org_id!=commit.old_trust.org_id
             || record.trust.device_id!=commit.old_trust.device_id || record.trust.signer_key!=commit.old_trust.signer_key
             || record.trust.enrollment_generation!=commit.new_generation { return Err("invalid_store"); }
         Ok(Some(RecoveryExpected { old_trust:commit.old_trust.clone(),recovery_id:commit.recovery_id.clone(),
             new_generation:commit.new_generation.clone(),decision_digest:commit.decision_digest.clone(),
             archive_sha256:commit.archive_sha256.clone(),credential_sha256:commit.credential_sha256.clone(),
             local_commit_digest:commit.local_commit_digest.clone(),candidate_fingerprint:commit.candidate_fingerprint.clone(),
-            origin:commit.origin.clone(),profile:record.transport_profile.clone().ok_or("invalid_store")? }))
+            origin:commit.origin.clone(),profile:record.transport_profile.clone().ok_or("invalid_store")?,
+            credential_revision:record.credential_revision,
+            sealed_credential_sha256:{ use sha2::{Digest,Sha256}; Sha256::digest(credential.ciphertext.as_bytes()).into() } }))
     }
 }
 
@@ -2931,7 +2944,7 @@ impl FleetMachinePolicy {
             || commit.origin!=expected.origin || record.transport_profile.as_ref()!=Some(&expected.profile)
             || record.trust.org_id!=commit.old_trust.org_id || record.trust.device_id!=commit.old_trust.device_id
             || record.trust.signer_key!=commit.old_trust.signer_key || record.trust.enrollment_generation!=commit.new_generation
-            || record.credential.is_none() { return Err("recovery commit changed"); }
+            || !pending_credential_matches(record,expected) { return Err("recovery commit changed"); }
         if !commit.activation_pending {
             return if record.service_enabled { Ok(()) } else { Err("invalid_store") };
         }
@@ -3302,6 +3315,25 @@ mod recovery_commit_tests {
             "decision_digest":decision,"archive_sha256":archive,"local_commit_digest":digest,"credential_sha256":secret_hash,"server_key":trust.signer_key,
             "request_nonce":nonce,"issued_at":1000,"status":status,"signature":STANDARD.encode(SigningKey::from_bytes(&[11;32]).sign(&commit_preimage).to_bytes())});
         let activation=crate::fleet_recovery_credential::verify_commit_response(&serde_json::to_vec(&commit).unwrap(),&expected,nonce,1001).unwrap();
+        let unchanged=reopened.state.lock().unwrap().clone();
+        let persisted=fs.read(&path).unwrap();
+        for variant in 0..3 {
+            {
+                let mut state=reopened.state.lock().unwrap();
+                let record=state.record.as_mut().unwrap();
+                match variant {
+                    0 => record.credential.as_mut().unwrap().origin="https://other.example".into(),
+                    1 => record.credential.as_mut().unwrap().ciphertext=STANDARD.encode([7u8;64]),
+                    _ => record.credential_revision+=1,
+                }
+            }
+            assert!(reopened.validate_pending_recovery_credential(&expected,&Protector).is_err());
+            assert_eq!(reopened.activate_recovery(&expected,&activation,1001),Err("recovery commit changed"));
+            assert!(!reopened.state.lock().unwrap().record.as_ref().unwrap().service_enabled);
+            assert_eq!(fs.read(&path).unwrap(),persisted);
+            *reopened.state.lock().unwrap()=unchanged.clone();
+        }
+        reopened.activate_recovery(&expected,&activation,1001).unwrap();
         reopened.activate_recovery(&expected,&activation,1001).unwrap();
         assert_eq!(reopened.recovery_execution_mode().unwrap(),(trust.device_id.clone(),"recovered"));
         let mut snapshot=reopened.credential_snapshot(&Protector).unwrap().unwrap();
@@ -3372,7 +3404,7 @@ impl FleetMachinePolicy {
         let guard=self.state.lock().map_err(|_| "store_unavailable")?;
         let record=guard.record.as_ref().ok_or("not_provisioned")?;
         let commit=record.recovery_commit.as_ref().ok_or("recovery_not_prepared")?;
-        if !commit.activation_pending || record.service_enabled || commit.recovery_id!=expected.recovery_id
+        if !commit.activation_pending || record.service_enabled || !pending_credential_matches(record,expected) || commit.recovery_id!=expected.recovery_id
             || commit.local_commit_digest!=expected.local_commit_digest || commit.credential_sha256!=expected.credential_sha256
             || commit.origin!=expected.origin || record.trust.org_id!=expected.old_trust.org_id
             || record.trust.device_id!=expected.old_trust.device_id || record.trust.signer_key!=expected.old_trust.signer_key
