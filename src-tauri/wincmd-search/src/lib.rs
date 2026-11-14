@@ -1141,12 +1141,13 @@ impl SearchEngine {
                 status.pending_docs = status.pending_docs.saturating_sub(1);
                 continue;
             }
-            if let Err(e) = index_file(&self.ci, &mut writer, meta, &self.path_policy) {
-                self.status.lock().unwrap().last_error = Some(e.to_string());
-            }
+            let result = index_file(&self.ci, &mut writer, meta, &self.path_policy);
             let mut s = self.status.lock().unwrap();
             s.pending_docs = s.pending_docs.saturating_sub(1);
-            s.indexed_docs += 1;
+            match result {
+                Ok(()) => s.indexed_docs += 1,
+                Err(error) => s.last_error = Some(error.to_string()),
+            }
         }
         self.ci.commit(&mut writer)?;
         self.status.lock().unwrap().is_indexing = false;
@@ -1291,12 +1292,13 @@ impl SearchEngine {
                     s.pending_docs = s.pending_docs.saturating_sub(1);
                     continue;
                 }
-                if let Err(e) = index_file(&ci, &mut writer, meta, &path_policy) {
-                    status.lock().unwrap().last_error = Some(e.to_string());
-                }
+                let result = index_file(&ci, &mut writer, meta, &path_policy);
                 let mut s = status.lock().unwrap();
                 s.pending_docs = s.pending_docs.saturating_sub(1);
-                s.indexed_docs += 1;
+                match result {
+                    Ok(()) => s.indexed_docs += 1,
+                    Err(error) => s.last_error = Some(error.to_string()),
+                }
             }
             if let Err(e) = ci.commit(&mut writer) {
                 status.lock().unwrap().last_error = Some(e.to_string());
