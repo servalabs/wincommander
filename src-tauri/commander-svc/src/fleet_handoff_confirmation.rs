@@ -692,6 +692,18 @@ mod tests {
         assert!(text.contains("does not stop old processes"));
         assert!(text.contains("unknown result"));
     }
+    #[test]
+    fn readmission_witness_binds_sid_session_and_logon() {
+        let witness=SessionWitness { sid:"S-1-5-21-1".into(),session:1,logon:(2,3) };
+        let binding=witness.readmission_binding().unwrap();
+        for changed in [
+            SessionWitness { sid:"S-1-5-21-2".into(),session:1,logon:(2,3) },
+            SessionWitness { sid:"S-1-5-21-1".into(),session:2,logon:(2,3) },
+            SessionWitness { sid:"S-1-5-21-1".into(),session:1,logon:(2,4) },
+        ] { assert_ne!(binding,changed.readmission_binding().unwrap()); }
+        let noninteractive=SessionWitness { sid:"S-1-5-21-1".into(),session:0,logon:(2,3) };
+        assert!(!noninteractive.still_authorized());
+    }
 }
 
 #[derive(serde::Serialize,serde::Deserialize,PartialEq,Eq)]
