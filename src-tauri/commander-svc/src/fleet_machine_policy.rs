@@ -3316,6 +3316,26 @@ mod recovery_commit_tests {
         let commit=serde_json::json!({"org_id":trust.org_id,"device_id":trust.device_id,"recovery_id":verified.retirement_id(),"new_generation":verified.new_generation(),
             "decision_digest":decision,"archive_sha256":archive,"local_commit_digest":digest,"credential_sha256":secret_hash,"server_key":trust.signer_key,
             "request_nonce":nonce,"issued_at":1000,"status":status,"signature":STANDARD.encode(SigningKey::from_bytes(&[11;32]).sign(&commit_preimage).to_bytes())});
+        let before_receipts=fs.read(&path).unwrap();
+        for field in ["org_id","device_id","recovery_id","new_generation","decision_digest","archive_sha256",
+            "local_commit_digest","credential_sha256","server_key","request_nonce","status","signature"] {
+            let mut changed=commit.clone(); changed[field]="changed".into();
+            assert!(crate::fleet_recovery_credential::verify_commit_response(&serde_json::to_vec(&changed).unwrap(),&expected,nonce,1001).is_err(),"{field}");
+        }
+        let bytes=serde_json::to_vec(&commit).unwrap();
+        assert!(crate::fleet_recovery_credential::verify_commit_response(&bytes,&expected,"55555555-5555-4555-8555-555555555555",1001).is_err());
+        assert!(crate::fleet_recovery_credential::verify_commit_response(&bytes,&expected,nonce,1301).is_err());
+        assert!(crate::fleet_recovery_credential::verify_commit_response(&bytes,&expected,nonce,994).is_err());
+        let mut extra=commit.clone(); extra["unexpected"]=true.into();
+        assert!(crate::fleet_recovery_credential::verify_commit_response(&serde_json::to_vec(&extra).unwrap(),&expected,nonce,1001).is_err());
+        let active_status="credential_committed_active";
+        let active_preimage=serde_json::to_vec(&("wincommander:fleet:identity-handoff-commit-response:v1","POST","/v1/agents/identity-handoff/commit",
+            &trust.org_id,&trust.device_id,verified.retirement_id(),verified.new_generation(),&decision,&archive,&digest,&secret_hash,&trust.signer_key,nonce,1000i64,active_status)).unwrap();
+        let mut active=commit.clone(); active["status"]=active_status.into();
+        active["signature"]=STANDARD.encode(SigningKey::from_bytes(&[11;32]).sign(&active_preimage).to_bytes()).into();
+        assert_eq!(crate::fleet_recovery_credential::verify_commit_response(&serde_json::to_vec(&active).unwrap(),&expected,nonce,1001).unwrap().status(),active_status);
+        assert_eq!(fs.read(&path).unwrap(),before_receipts);
+        assert!(reopened.credential_snapshot(&Protector).unwrap().is_none());
         let activation=crate::fleet_recovery_credential::verify_commit_response(&serde_json::to_vec(&commit).unwrap(),&expected,nonce,1001).unwrap();
         let unchanged=reopened.state.lock().unwrap().clone();
         let persisted=fs.read(&path).unwrap();
