@@ -169,3 +169,71 @@ fn missing_sync_binding_acknowledgement_does_not_dismount_a_previously_managed_v
         assert!(broker.recovery_allows_entry("another-vault", &store));
     }
 }
+
+#[test]
+fn failed_dismount_does_not_resume_sync_when_driver_slot_is_already_gone() {
+    let store = mount_store(Arc::new(Mutex::new(HashMap::new())), Arc::new(AtomicBool::new(false)));
+    let events = Arc::new(Mutex::new(BrokerEvents { cleanup_fails: true, ..Default::default() }));
+    let broker = VaultMountBroker::with_broker(Box::new(MountBroker(events.clone())));
+    let mut mount = active_mount_for_owner(7, "S-1-5-21-owner");
+    mount.presentation = VaultPresentation::PerUser;
+    mount.syncthing_managed = true;
+    broker.active.lock().unwrap().insert("managed".into(), mount);
+    let mut calls = Vec::new();
+    let result = broker.dismount_entry_locked_for_client_inner(
+        42, &store, "managed", Some(std::ptr::null_mut()), |feature, _| {
+            calls.push(feature);
+            Ok(SyncthingLifecycleResult { managed: true, pause_guaranteed: true, warning: None })
+        },
+    );
+    assert_eq!(result.reason, Some(VaultMountReason::DismountFailed));
+    assert!(broker.snapshot().unwrap().is_empty());
+    assert_eq!(calls, vec!["vault.syncthing.pause"], "sync must stay paused after the driver slot is gone");
+}
+
+#[test]
+fn failed_dismount_resumes_only_when_the_same_slot_and_caller_drive_are_verified() {
+    struct FailedDismount { after: &'static str, attempted: Mutex<bool> }
+    impl AuthenticatedVaultBroker for FailedDismount {
+        fn observed_slots(&self) -> Result<HashMap<u8, String>, String> {
+            if !*self.attempted.lock().unwrap() { return Ok(HashMap::from([(12, "test-mount:12".into())])); }
+            match self.after {
+                "same" => Ok(HashMap::from([(12, "test-mount:12".into())])),
+                "replaced" => Ok(HashMap::from([(12, "other-volume".into())])),
+                "missing" => Ok(HashMap::new()),
+                _ => Err("unavailable".into()),
+            }
+        }
+        fn mount(&self, _: &mut InternalMountRequest) -> Result<InternalMountReply, VaultMountReason> { unreachable!() }
+        fn dismount(&self, _: BrokerDismountRequest<'_>) -> Result<(), VaultMountReason> {
+            *self.attempted.lock().unwrap() = true;
+            Err(VaultMountReason::DismountFailed)
+        }
+        fn cleanup_orphans(&self) -> Result<(), VaultMountReason> { Ok(()) }
+        fn recover_dismount(&self, _: BrokerDismountRequest<'_>) -> Result<(), VaultMountReason> { unreachable!() }
+    }
+    for (slot, presentation, expected_resume) in [
+        ("same", true, true), ("same", false, false),
+        ("missing", true, false), ("replaced", true, false), ("unknown", true, false),
+    ] {
+        let store = mount_store(Arc::new(Mutex::new(HashMap::new())), Arc::new(AtomicBool::new(false)));
+        let attestor: CallerMountAttestor = if presentation { caller_can_list_root } else { caller_cannot_resolve_drive };
+        let broker = VaultMountBroker::with_broker_and_attestor(
+            Box::new(FailedDismount { after: slot, attempted: Mutex::new(false) }), attestor,
+        );
+        let mut mount = active_mount_for_owner(7, "S-1-5-21-owner");
+        mount.presentation = VaultPresentation::PerUser;
+        mount.syncthing_managed = true;
+        broker.active.lock().unwrap().insert("managed".into(), mount);
+        let mut calls = Vec::new();
+        let result = broker.dismount_entry_locked_for_client_inner(
+            42, &store, "managed", Some(1usize as _), |feature, _| {
+                calls.push(feature);
+                Ok(SyncthingLifecycleResult { managed: true, pause_guaranteed: true, warning: None })
+            },
+        );
+        assert_eq!(result.reason, Some(VaultMountReason::DismountFailed));
+        assert_eq!(calls.contains(&"vault.syncthing.resume"), expected_resume, "slot={slot}, presentation={presentation}");
+        assert!(broker.active.lock().unwrap()["managed"].cleanup_required);
+    }
+}

@@ -1892,7 +1892,18 @@ impl VaultMountBroker {
                 .snapshot()
                 .map_or(true, |slots| slots.contains_key(&active.internal_drive))
         {
-            if active.syncthing_managed {
+            if active.syncthing_managed
+                && self.live_mount_matches(&active) == Ok(true)
+                && caller_token.is_some_and(|token| {
+                    !token.is_null()
+                        && (self.caller_mount_attestor)(
+                            token,
+                            &active.drive_letter,
+                            active.internal_drive,
+                            false,
+                        ) == CallerPresentationAttestation::Available
+                })
+            {
                 let resumed = sync_call("vault.syncthing.resume", &active);
                 mounted_syncthing_result(&mut active, resumed);
             }
