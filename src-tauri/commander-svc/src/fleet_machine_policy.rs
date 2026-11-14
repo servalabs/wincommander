@@ -24,7 +24,7 @@ mod hybrid_reply;
 mod hybrid_store;
 #[path = "fleet_hybrid_bootstrap.rs"]
 mod hybrid_bootstrap;
-#[cfg(test)]
+#[cfg(any(windows,test))]
 #[path = "fleet_recovery_readmission_experiment.rs"]
 mod recovery_readmission_experiment;
 
@@ -445,7 +445,7 @@ pub struct FleetMachinePolicy {
     fs: Box<dyn PolicyFs>,
     path: PathBuf,
     state: Mutex<State>,
-    #[cfg(test)]
+    #[cfg(any(windows,test))]
     recovery_readmission: Mutex<recovery_readmission_experiment::Registry>,
     #[cfg(windows)]
     _owner: Option<machine_owner::OwnerLease>,
@@ -622,7 +622,7 @@ impl FleetMachinePolicy {
             fs,
             path,
             state: Mutex::new(state),
-            #[cfg(test)]
+            #[cfg(any(windows,test))]
             recovery_readmission: Mutex::new(recovery_readmission_experiment::Registry::default()),
             #[cfg(windows)]
             _owner: None,
@@ -3236,10 +3236,10 @@ mod recovery_commit_tests {
         if std::env::var("FLEET_FINAL_READMISSION_LOOPBACK").ok().as_deref()==Some("1") {
             // Test-only server gate and disposable DB; these exact bytes are
             // available only after the local one-use authority is consumed.
-            let id=store.offer_readmission(&protector,now()).unwrap();
-            let claim=store.claim_readmission(&id).unwrap();
+            let id=store.offer_readmission(&protector,now(),&||true).unwrap();
+            let claim=store.claim_readmission(&id,&||true).unwrap();
             let request=claim.request().to_vec();
-            store.send_readmission(claim).await.unwrap();
+            store.send_readmission(claim,&||true).await.unwrap();
             let replay=http.post(format!("{base}/v1/windows/enroll-v2"))
                 .header(reqwest::header::CONTENT_TYPE,"application/json").body(request).send().await.unwrap();
             assert!(!replay.status().is_success(),"a replay must not be admitted");

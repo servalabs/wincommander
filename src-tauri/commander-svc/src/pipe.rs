@@ -757,6 +757,7 @@ async fn dispatch_verb(
         "svc.fleet.operator_key.pin" => handle_operator_key_pin(args, peer),
         "svc.fleet.recovery.stage" => handle_recovery_stage(args, peer).await,
         "svc.fleet.recovery.handoff" => handle_recovery_handoff(args, peer).await,
+        "svc.fleet.recovery.readmission" => handle_recovery_readmission(args, peer).await,
         "svc.fleet.recovery.finish" => handle_recovery_finish(args, peer).await,
         "svc.fleet.recovery.contact" => handle_recovery_contact(args,trust_origin.is_some()).await,
         "svc.fleet.recovery.leave_request" => {
@@ -3850,6 +3851,8 @@ const RECOVERY_V2_ADMISSION_READY: bool = false;
 const OPERATOR_PIN_READY: bool = RECOVERY_V2_ADMISSION_READY && cfg!(feature="fleet-recovery-lab");
 const RECOVERY_RESUME_READY: bool = RECOVERY_V2_ADMISSION_READY && cfg!(feature="fleet-recovery-lab");
 const RECOVERY_STAGE_READY: bool = RECOVERY_V2_ADMISSION_READY && cfg!(feature="fleet-recovery-lab");
+// The real server route and paired session/revocation acceptance are not ready.
+const RECOVERY_READMISSION_READY: bool = false;
 const RECOVERY_HANDOFF_READY: bool = RECOVERY_V2_ADMISSION_READY && cfg!(feature="fleet-recovery-lab");
 const RECOVERY_FINISH_READY: bool = RECOVERY_V2_ADMISSION_READY && cfg!(feature="fleet-recovery-lab");
 const RECOVERY_CONTACT_READY: bool = RECOVERY_V2_ADMISSION_READY && cfg!(feature="fleet-recovery-lab");
@@ -4051,6 +4054,24 @@ async fn handle_recovery_finish(args:serde_json::Value, peer:Option<&Authenticat
     let status=crate::fleet_recovery_transport::prepare_and_resume(store,&candidate,&receipt,&request.handoff,&retirement,
         verified.new_generation(),&archive,&protector,||witness.still_authorized()).await.map_err(|_|unavailable())?;
     Ok(serde_json::json!({"status":status}))
+}
+async fn handle_recovery_readmission(args:serde_json::Value, peer:Option<&AuthenticatedPipePeer>) -> Result<serde_json::Value,VerbError> {
+    if !RECOVERY_READMISSION_READY { return Err(VerbError::new("recovery_unavailable","Fleet recovery is unavailable")); }
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Request {}
+    let _:Request=serde_json::from_value(args).map_err(|_|VerbError::new("bad_request","invalid recovery request"))?;
+    let witness=peer.and_then(fleet_handoff_confirmation::SessionWitness::capture)
+        .ok_or_else(||VerbError::new("forbidden","active local administrator required"))?;
+    let authorized=||witness.still_authorized();
+    let unavailable=||VerbError::new("recovery_unavailable","Fleet recovery is unavailable");
+    let store=fleet_machine_policy_store()?;
+    let now=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()
+        .and_then(|duration|i64::try_from(duration.as_secs()).ok()).ok_or_else(unavailable)?;
+    let id=store.offer_readmission(&crate::fleet_credential::MachineDpapi,now,&authorized).map_err(|_|unavailable())?;
+    let claim=store.claim_readmission(&id,&authorized).map_err(|_|unavailable())?;
+    store.send_readmission(claim,&authorized).await.map_err(|_|unavailable())?;
+    Ok(serde_json::json!({"status":"verified"}))
 }
 async fn handle_recovery_handoff(args:serde_json::Value, peer:Option<&AuthenticatedPipePeer>) -> Result<serde_json::Value,VerbError> {
     if !RECOVERY_HANDOFF_READY { return Err(VerbError::new("recovery_unavailable","Fleet recovery is unavailable")); }
@@ -5011,6 +5032,11 @@ mod tests {
     async fn recovery_stage_ipc_stays_unavailable_until_recovery_is_ready() {
         assert!(!super::RECOVERY_STAGE_READY);
         assert!(super::handle_recovery_stage(serde_json::json!({}), None).await.is_err());
+    }
+    #[tokio::test]
+    async fn recovery_readmission_ipc_stays_unavailable() {
+        assert!(!super::RECOVERY_READMISSION_READY);
+        assert!(super::handle_recovery_readmission(serde_json::json!({}),None).await.is_err());
     }
     #[cfg(not(feature="fleet-recovery-lab"))]
     #[tokio::test]

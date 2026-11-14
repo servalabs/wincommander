@@ -316,10 +316,9 @@ impl<'a> CandidateStore<'a> {
         now: i64) -> Result<serde_json::Value, &'static str> {
         self.sign_enrollment_body(trust, retirement, now, "recovery-candidate", &trust.enrollment_generation)
     }
-    /// Disposable paired fixture only. The hash must be authenticated by a
-    /// protected v2 retirement receipt; no caller-provided hash is accepted.
-    #[cfg(test)]
-    pub(crate) fn sign_fixture_readmission(&self, old: &FleetTrust, current: &FleetTrust, retirement: &str,
+    /// Caller holds the policy lock and checks the committed candidate
+    /// fingerprint. No caller-provided device hash is accepted.
+    pub(crate) fn sign_readmission(&self, old: &FleetTrust, current: &FleetTrust, retirement: &str,
         now: i64) -> Result<serde_json::Value, &'static str> {
         if old.org_id != current.org_id || old.device_id != current.device_id || old.signer_key != current.signer_key
             || !uuid(&current.enrollment_generation) { return Err(INVALID); }
@@ -410,7 +409,7 @@ mod tests {
         assert_eq!(store.verified_device_hash(&trust,retirement).unwrap(),"loopback");
         let mut current=trust.clone();
         current.enrollment_generation="cccccccc-cccc-4ccc-8ccc-cccccccccccc".into();
-        let request=store.sign_fixture_readmission(&trust,&current,retirement,1001).unwrap();
+        let request=store.sign_readmission(&trust,&current,retirement,1001).unwrap();
         assert_eq!(request["previous_generation"],current.enrollment_generation);
         assert_eq!(request["device_hash"],"loopback");
         assert!(fleet_proto::verify_signature_b64(&public,&enrollment_v2_preimage(&request).unwrap(),request["enrollment_signature_b64"].as_str().unwrap()));
