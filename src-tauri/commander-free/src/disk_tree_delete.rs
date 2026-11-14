@@ -420,7 +420,10 @@ fn open_child(parent: &File, name: &OsStr, is_dir: bool, for_delete: bool, backu
             &mut status,
             std::ptr::null_mut(),
             0,
-            SHARE_READ_WRITE,
+            // A file may be read while it is pinned, but a writer must not
+            // change its contents between confirmation and deletion. Keep
+            // directory sharing unchanged so enumeration and traversal work.
+            if for_delete && !is_dir { 0x1 } else { SHARE_READ_WRITE },
             FILE_OPEN,
             options,
             std::ptr::null_mut(),
@@ -1605,5 +1608,31 @@ mod tests {
         }
         drop(tree);
         assert_eq!(std::fs::read(&original).unwrap(), b"preserve");
+    }
+
+    #[test]
+    fn prepared_file_excludes_existing_and_new_writers() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let f = Fixture::new();
+        let target = f.target();
+        std::fs::create_dir(&target).unwrap();
+        let path = target.join("item.txt");
+        std::fs::write(&path, b"preserve").unwrap();
+
+        // Permit delete sharing so failure is specifically due to the held
+        // writer, not the existing no-delete-sharing protection.
+        let writer = OpenOptions::new().write(true).share_mode(0x7).open(&path).unwrap();
+        let error = match prepare(&target, selected_identity(&target), ProtectedRoots::pin(&[]).unwrap()) {
+            Ok(_) => panic!("a file with an existing writer was accepted"),
+            Err(error) => error,
+        };
+        assert_eq!(error.raw_os_error(), Some(32), "unexpected writer denial: {error}");
+        drop(writer);
+
+        let tree = prepare(&target, selected_identity(&target), ProtectedRoots::pin(&[]).unwrap()).unwrap();
+        let error = OpenOptions::new().write(true).share_mode(0x7).open(&path).unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(32), "unexpected writer denial: {error}");
+        drop(tree);
+        assert_eq!(std::fs::read(&path).unwrap(), b"preserve");
     }
 }
