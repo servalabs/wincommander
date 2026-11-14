@@ -108,7 +108,7 @@ impl FleetMachinePolicy {
 
     /// Build only the protected origin/profile transport. This check does not
     /// cancel an HTTP request already in flight after a concurrent revocation.
-    pub(crate) fn readmission_transport(&self, claim: &Claim, authorized: &impl ReadmissionAuthorization) -> Result<(String, reqwest::Client), &'static str> {
+    fn readmission_transport(&self, claim: &Claim, authorized: &impl ReadmissionAuthorization) -> Result<(String, reqwest::Client), &'static str> {
         let offer=&claim.0;
         let guard=self.state.lock().map_err(|_| INVALID)?;
         let registry=self.recovery_readmission.lock().map_err(|_| INVALID)?;
@@ -162,7 +162,7 @@ impl FleetMachinePolicy {
     /// final snapshot check and publication. The test-only publisher must be
     /// bounded and non-reentrant because both policy and registry locks are held.
     /// No secret or proof is persisted.
-    pub(crate) fn finish_readmission<T>(&self, claim: Claim, status: u16, body: &[u8], header: &str,
+    fn finish_readmission<T>(&self, claim: Claim, status: u16, body: &[u8], header: &str,
         authorized: &impl ReadmissionAuthorization, publish: impl FnOnce() -> T) -> Result<T, &'static str> {
         let offer = claim.0;
         if status != 200 || body.len() > 65536 || Instant::now() >= offer.expires { return Err(INVALID); }
