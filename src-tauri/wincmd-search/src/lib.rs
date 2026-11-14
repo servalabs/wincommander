@@ -16,6 +16,8 @@ mod encrypted_migration_transaction;
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
 pub mod encrypted_search_fence;
 pub mod backend;
+#[cfg(any(test, feature = "experimental-ordinary-search-generation"))]
+pub mod generation_admission;
 #[cfg(any(test, all(windows, feature = "experimental-encrypted-search")))]
 mod encrypted_index_prototype;
 #[cfg(test)]
