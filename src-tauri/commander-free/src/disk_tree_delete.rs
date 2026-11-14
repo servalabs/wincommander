@@ -203,6 +203,19 @@ fn identity(file: &File) -> io::Result<(Identity, u32)> {
     ))
 }
 
+/// A differently named hard link can make path-based protection incomplete.
+/// Fail closed when link information is unavailable or an additional link exists.
+fn require_single_file_link(file: &File) -> io::Result<()> {
+    let mut info = ByHandleFileInformation::default();
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if info.number_of_links != 1 {
+        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "multiply linked files cannot be deleted"));
+    }
+    Ok(())
+}
+
 fn open_root(path: &Path) -> io::Result<File> {
     OpenOptions::new()
         .access_mode(DELETE | READ_ATTRIBUTES | LIST_DIRECTORY | SYNCHRONIZE)
@@ -909,6 +922,7 @@ fn prepare_opened_with_policy(root: File, opened_path: PathBuf, actual: Identity
                     "folder contents changed or contain a protected item",
                 ));
             }
+            if !child.is_dir { require_single_file_link(&file)?; }
             let owner = policy.as_ref().map(|policy| check_owned_target(policy, &child_path, &file)).transpose()?;
             let child_index = pinned.len();
             pinned.push(Pinned {
@@ -971,6 +985,11 @@ pub(crate) struct DeleteFailure {
 pub(crate) fn delete_prepared(mut tree: PreparedTree) -> Result<usize, DeleteFailure> {
     // Keep protected handles alive until every deletion has finished.
     let _protected_count = tree.protected.handles.len();
+    for entry in &tree.entries {
+        if !entry.is_dir {
+            require_single_file_link(&entry.file).map_err(|error| DeleteFailure { processed: 0, error })?;
+        }
+    }
     if tree.enforce_user_policy {
         for entry in &tree.entries {
             let owner = crate::duplicate_finder::verified_file::classify_owner(&entry.file)
@@ -982,6 +1001,9 @@ pub(crate) fn delete_prepared(mut tree: PreparedTree) -> Result<usize, DeleteFai
     }
     let mut processed = 0usize;
     while let Some(Pinned { file, is_dir, owner }) = tree.entries.pop() {
+        if !is_dir {
+            require_single_file_link(&file).map_err(|error| DeleteFailure { processed, error })?;
+        }
         if tree.enforce_user_policy {
             let current = crate::duplicate_finder::verified_file::classify_owner(&file)
                 .map_err(|message| DeleteFailure { processed, error: io::Error::new(io::ErrorKind::PermissionDenied, message) })?;
@@ -1325,6 +1347,48 @@ mod tests {
         std::fs::write(target.join("replacement.txt"), b"keep").unwrap();
         assert!(prepare(&target, expected, ProtectedRoots::pin(&[]).unwrap()).is_err());
         assert!(target.join("replacement.txt").exists());
+    }
+
+    #[test]
+    fn rejects_hard_link_before_deleting_anything() {
+        let f = Fixture::new();
+        let target = f.target();
+        std::fs::create_dir(&target).unwrap();
+        let original = f.root.join("outside.txt");
+        std::fs::write(&original, b"preserve").unwrap();
+        std::fs::hard_link(&original, target.join("alias.txt")).unwrap();
+        std::fs::write(target.join("safe.txt"), b"keep").unwrap();
+        let error = match prepare(&target, selected_identity(&target), ProtectedRoots::pin(&[]).unwrap()) {
+            Ok(_) => panic!("hard link accepted"), Err(error) => error,
+        };
+        assert_eq!(error.to_string(), "multiply linked files cannot be deleted");
+        assert_eq!(std::fs::read(&original).unwrap(), b"preserve");
+        assert_eq!(std::fs::read(target.join("safe.txt")).unwrap(), b"keep");
+    }
+
+    #[test]
+    fn hard_link_after_preparation_cannot_lead_to_deletion() {
+        let f = Fixture::new();
+        let target = f.target();
+        std::fs::create_dir(&target).unwrap();
+        let original = target.join("item.txt");
+        let alias = f.root.join("late-alias.txt");
+        std::fs::write(&original, b"preserve").unwrap();
+        let tree = prepare(&target, selected_identity(&target), ProtectedRoots::pin(&[]).unwrap()).unwrap();
+        match std::fs::hard_link(&original, &alias) {
+            Ok(()) => {
+                let failure = delete_prepared(tree).unwrap_err();
+                assert_eq!(failure.processed, 0);
+                assert_eq!(failure.error.to_string(), "multiply linked files cannot be deleted");
+                assert_eq!(std::fs::read(&alias).unwrap(), b"preserve");
+            }
+            Err(error) => {
+                // These Windows errors mean access or sharing blocked the change.
+                assert!(matches!(error.raw_os_error(), Some(5 | 32 | 33)), "unexpected hard-link failure: {error}");
+                drop(tree);
+            }
+        }
+        assert_eq!(std::fs::read(&original).unwrap(), b"preserve");
     }
 
     #[test]
