@@ -20,6 +20,9 @@ pub(super) struct Offer {
 }
 
 pub(super) struct Claim(Offer);
+impl Claim {
+    pub(super) fn request(&self) -> &[u8] { &self.0.request }
+}
 
 #[derive(Default)]
 pub(super) struct Registry { pending: Option<Offer>, claimed: Option<String> }
@@ -41,7 +44,7 @@ impl FleetMachinePolicy {
     /// Experiment only: the claim is bound to the protected active journal,
     /// actual candidate key and the exact bytes that will be sent.
     pub(super) fn offer_readmission(&self, protector: &dyn crate::fleet_credential::Protector, now: i64)
-        -> Result<(String, Vec<u8>), &'static str> {
+        -> Result<String, &'static str> {
         let mut snapshot = self.credential_snapshot(protector)?.ok_or(INVALID)?;
         if !snapshot.is_recovered { return Err(INVALID); }
         let guard = self.state.lock().map_err(|_| INVALID)?;
@@ -60,9 +63,9 @@ impl FleetMachinePolicy {
         SysRng.try_fill_bytes(&mut random).map_err(|_| INVALID)?;
         let id = STANDARD.encode(random);
         snapshot.secret.zeroize();
-        let offer = Offer { id: id.clone(), snapshot, challenge, request: bytes.clone(), expires: Instant::now() + TTL };
+        let offer = Offer { id: id.clone(), snapshot, challenge, request: bytes, expires: Instant::now() + TTL };
         *self.recovery_readmission.lock().map_err(|_| INVALID)? = Registry { pending: Some(offer), claimed: None };
-        Ok((id, bytes))
+        Ok(id)
     }
 
     /// Consumes before sending. A failed attempt cannot reuse the offer.
@@ -176,15 +179,15 @@ mod tests {
     #[test]
     fn signed_readmission_is_one_use_and_fenced() {
         let store = setup();
-        let (id, request) = store.offer_readmission(&TestProtector, 1001).unwrap();
+        let id = store.offer_readmission(&TestProtector, 1001).unwrap();
         let claim = store.claim_readmission(&id).unwrap();
         assert!(store.claim_readmission(&id).is_err());
-        let (body, header) = response(&request, &[4;32]);
+        let (body, header) = response(claim.request(), &[4;32]);
         assert_eq!(store.finish_readmission(claim, 200, &body, &header, || 7).unwrap(), 7);
         for scenario in 0..4 {
-            let (id, request) = store.offer_readmission(&TestProtector, 1001).unwrap();
+            let id = store.offer_readmission(&TestProtector, 1001).unwrap();
             let claim = store.claim_readmission(&id).unwrap();
-            let (mut body, header) = response(&request, if scenario == 0 { &[5;32] } else { &[4;32] });
+            let (mut body, header) = response(claim.request(), if scenario == 0 { &[5;32] } else { &[4;32] });
             if scenario == 1 { body.push(b' '); }
             if scenario == 2 { store.state.lock().unwrap().record.as_mut().unwrap().connection_revision += 1; }
             if scenario == 3 { store.offer_readmission(&TestProtector, 1001).unwrap(); }
