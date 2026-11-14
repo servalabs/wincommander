@@ -278,15 +278,28 @@ impl<'a> CandidateStore<'a> {
     /// Signs only an enrollment bound to the already verified retirement and pinned server.
     pub(crate) fn sign_enrollment(&self, trust: &FleetTrust, retirement: &str,
         now: i64) -> Result<serde_json::Value, &'static str> {
+        self.sign_enrollment_body(trust, retirement, now, "recovery-candidate", &trust.enrollment_generation)
+    }
+    /// Disposable paired fixture only. Production has not established a
+    /// protected source for the server's existing device hash.
+    #[cfg(test)]
+    pub(crate) fn sign_fixture_readmission(&self, old: &FleetTrust, current: &FleetTrust, retirement: &str,
+        now: i64) -> Result<serde_json::Value, &'static str> {
+        if old.org_id != current.org_id || old.device_id != current.device_id || old.signer_key != current.signer_key
+            || !uuid(&current.enrollment_generation) { return Err(INVALID); }
+        self.sign_enrollment_body(old, retirement, now, "loopback", &current.enrollment_generation)
+    }
+    fn sign_enrollment_body(&self, trust: &FleetTrust, retirement: &str,
+        now: i64, device_hash: &str, generation: &str) -> Result<serde_json::Value, &'static str> {
         let _guard = LOCK.lock().map_err(|_| INVALID)?;
         if now <= 0 || !uuid(retirement) { return Err(INVALID); }
         let candidate = self.read_for(trust,retirement)?;
         let key = self.signing_key(&candidate, trust, retirement)?;
-        let mut body = serde_json::json!({"device_id":trust.device_id,"device_hash":"recovery-candidate",
+        let mut body = serde_json::json!({"device_id":trust.device_id,"device_hash":device_hash,
             "agent_version":env!("CARGO_PKG_VERSION"),"device_kind":"wincommander",
             "capabilities":[fleet_agent_core::HMAC_BODY_V2_CAPABILITY],
             "outcome_pubkey_b64":candidate.public_key,"enrollment_intent":"explicit_connect",
-            "previous_generation":trust.enrollment_generation,"recovery_retirement_id":retirement});
+            "previous_generation":generation,"recovery_retirement_id":retirement});
         let obj = body.as_object_mut().ok_or(INVALID)?;
         obj.insert("enrollment_proof_version".into(), 2.into());
         obj.insert("enrollment_server_key_b64".into(), trust.signer_key.clone().into());

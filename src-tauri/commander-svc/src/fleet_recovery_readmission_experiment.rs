@@ -50,7 +50,7 @@ impl FleetMachinePolicy {
         let public = candidate.public_key(&commit.old_trust, &commit.recovery_id)?;
         let fingerprint = Sha256::digest(public).iter().map(|b| format!("{b:02x}")).collect::<String>();
         if fingerprint != commit.candidate_fingerprint { return Err(INVALID); }
-        let request = candidate.sign_enrollment(&commit.old_trust, &commit.recovery_id, now)?;
+        let request = candidate.sign_fixture_readmission(&commit.old_trust, &record.trust, &commit.recovery_id, now)?;
         let challenge = request.get("shield_progress_challenge").and_then(|v| v.as_str()).ok_or(INVALID)?.to_owned();
         let bytes = serde_json::to_vec(&request).map_err(|_| INVALID)?;
         let mut random = [0u8; 32];
