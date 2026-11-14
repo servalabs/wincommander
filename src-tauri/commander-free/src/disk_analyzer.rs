@@ -470,14 +470,19 @@ fn folder_delete_receipt(result: Result<usize, crate::disk_tree_delete::DeleteFa
 
 #[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
 async fn delete_confirmed_folder(binding: String, capability_token: Option<String>) -> Result<FolderDeleteReceipt, String> {
-    // Consume before enumeration so a forged request cannot lock/traverse a tree.
+    // Consume the single-use permission before queuing the deletion worker.
     let tree = crate::authz::consume_folder(capability_token.as_deref(), &binding)?;
-    tokio::task::spawn_blocking(move || {
-        let invalidator = FolderCacheInvalidator;
-        let result = crate::disk_tree_delete::delete_prepared(tree);
-        invalidator.invalidate();
-        Ok(folder_delete_receipt(result))
-    }).await.map_err(|_| "Folder deletion worker failed; rescan to determine what remains".to_string())?
+    tokio::task::spawn_blocking(move || execute_confirmed_folder(tree))
+        .await.map_err(|_| "Folder deletion worker failed; rescan to determine what remains".to_string())?
+}
+
+#[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
+fn execute_confirmed_folder(tree: crate::disk_tree_delete::PreparedTree) -> Result<FolderDeleteReceipt, String> {
+    crate::duplicate_finder::safety::ensure_mutation_allowed()?;
+    let invalidator = FolderCacheInvalidator;
+    let result = crate::disk_tree_delete::delete_prepared(tree);
+    invalidator.invalidate();
+    Ok(folder_delete_receipt(result))
 }
 
 // The same capability guard applies to the UI and direct IPC requests.
@@ -658,6 +663,39 @@ pub async fn get_disk_file_types(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
+    #[test]
+    #[ignore = "requires a disposable, non-protected WINCOMMANDER_DISK_TREE_TEST_BASE"]
+    fn queued_folder_deletion_rechecks_decoy_mode_before_removal() {
+        let _lock = crate::settings::GLOBAL_STATE_TEST_LOCK.lock().unwrap();
+        struct ResetMode(bool);
+        impl Drop for ResetMode { fn drop(&mut self) { crate::settings::set_decoy_mode(self.0); } }
+        let _reset = ResetMode(crate::settings::is_decoy_mode());
+        crate::settings::set_decoy_mode(false);
+        let base = std::env::var_os("WINCOMMANDER_DISK_TREE_TEST_BASE").expect("a disposable test base is required");
+        let fixture = tempfile::Builder::new().prefix("folder-mode-").tempdir_in(base).unwrap();
+        let target = fixture.path().join("selected");
+        std::fs::create_dir(&target).unwrap();
+        let item = target.join("item.txt");
+        std::fs::write(&item, b"preserve").unwrap();
+        let protected = crate::disk_tree_delete::ProtectedRoots::fixture(fixture.path()).unwrap();
+        let authorized = crate::disk_tree_delete::AuthorizedRoot::open(&target, protected).unwrap();
+        let tree = crate::disk_tree_delete::prepare_fixture_authorized(authorized).unwrap();
+        crate::settings::set_decoy_mode(true);
+        match super::execute_confirmed_folder(tree) {
+            Err(error) => assert_eq!(error, "Refused: duplicate removal is unavailable in Decoy mode."),
+            Ok(_) => panic!("the worker must refuse after decoy mode starts"),
+        }
+        assert_eq!(std::fs::read(&item).unwrap(), b"preserve");
+        crate::settings::set_decoy_mode(false);
+        let protected = crate::disk_tree_delete::ProtectedRoots::fixture(fixture.path()).unwrap();
+        let authorized = crate::disk_tree_delete::AuthorizedRoot::open(&target, protected).unwrap();
+        let tree = crate::disk_tree_delete::prepare_fixture_authorized(authorized).unwrap();
+        let receipt = super::execute_confirmed_folder(tree).expect("normal mode should allow the verified fixture");
+        assert_eq!(receipt.status, "delete_requested");
+        assert!(!target.exists());
+    }
+
     #[cfg(all(windows, feature = "experimental-disk-tree-delete"))]
     #[test]
     fn folder_receipt_distinguishes_partial_mutation_from_failure() {
