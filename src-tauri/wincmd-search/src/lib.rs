@@ -20,6 +20,8 @@ pub mod backend;
 pub mod generation_admission;
 #[cfg(all(windows, feature = "experimental-ordinary-search-generation"))]
 pub mod generation_lease;
+#[cfg(all(windows, feature = "experimental-ordinary-search-generation"))]
+pub mod generation_security;
 #[cfg(any(test, all(windows, feature = "experimental-encrypted-search")))]
 mod encrypted_index_prototype;
 #[cfg(test)]

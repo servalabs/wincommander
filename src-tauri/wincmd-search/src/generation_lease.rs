@@ -28,7 +28,9 @@ impl GenerationLease {
         let pins=crate::read_only::CheckedDirectory::pin_root_path(parent)?;
         verify(pins.last().ok_or_else(denied)?)?;
         let path=parent.join(format!(".ordinary-search-generation-{}.lock",hex::encode(generation)));
-        let file=std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false)
+        // The lock must be securely provisioned beforehand; never create or
+        // modify an unknown lock or its access-control list during acquisition.
+        let file=std::fs::OpenOptions::new().read(true).write(true)
             .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT).open(path)?;
         let meta=file.metadata()?;
         let mut info=BY_HANDLE_FILE_INFORMATION::default();
@@ -56,6 +58,7 @@ mod tests {
         let dir=tempfile::tempdir().unwrap();
         assert!(GenerationLease::shared(dir.path(),[0;16],synthetic).is_err());
         assert!(GenerationLease::shared(dir.path(),[1;16],|_|Err(io::ErrorKind::PermissionDenied.into())).is_err());
+        std::fs::write(dir.path().join(format!(".ordinary-search-generation-{}.lock",hex::encode([1;16]))),b"").unwrap();
         let calls=std::cell::Cell::new(0);
         assert!(GenerationLease::shared(dir.path(),[1;16],|_| {
             calls.set(calls.get()+1);
@@ -76,6 +79,7 @@ mod tests {
         struct Child(std::process::Child);
         impl Drop for Child { fn drop(&mut self) { let _=self.0.kill();let _=self.0.wait(); } }
         let dir=tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(format!(".ordinary-search-generation-{}.lock",hex::encode([1;16]))),b"").unwrap();
         let first=GenerationLease::shared(dir.path(),[1;16],synthetic).unwrap();
         let mut child=Child(std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact","generation_lease::tests::shared_leases_block_exclusive_until_crashed_child_exits"])
