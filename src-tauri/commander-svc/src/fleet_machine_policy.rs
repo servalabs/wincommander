@@ -3236,10 +3236,10 @@ mod recovery_commit_tests {
         if std::env::var("FLEET_FINAL_READMISSION_LOOPBACK").ok().as_deref()==Some("1") {
             // Test-only server gate and disposable DB; these exact bytes are
             // available only after the local one-use authority is consumed.
-            let id=store.offer_readmission(&protector,now(),&||true).unwrap();
-            let claim=store.claim_readmission(&id,&||true).unwrap();
+            let id=store.offer_readmission(&protector,now(),&recovery_readmission_experiment::TestAuthorization(||true)).unwrap();
+            let claim=store.claim_readmission(&id,&recovery_readmission_experiment::TestAuthorization(||true)).unwrap();
             let request=claim.request().to_vec();
-            store.send_readmission(claim,&||true).await.unwrap();
+            store.send_readmission(claim,&recovery_readmission_experiment::TestAuthorization(||true)).await.unwrap();
             let replay=http.post(format!("{base}/v1/windows/enroll-v2"))
                 .header(reqwest::header::CONTENT_TYPE,"application/json").body(request).send().await.unwrap();
             assert!(!replay.status().is_success(),"a replay must not be admitted");

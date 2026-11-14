@@ -636,12 +636,17 @@ pub(super) fn session_matches(peer: &AuthenticatedPipePeer) -> bool {
     valid
 }
 
-pub(super) struct SessionWitness { sid:String, session:u32, logon:(u32,i32) }
+pub(crate) struct SessionWitness { sid:String, session:u32, logon:(u32,i32) }
 impl SessionWitness {
+    pub(crate) fn readmission_binding(&self)->Result<[u8;32],&'static str> {
+        use sha2::{Digest,Sha256};
+        let bytes=serde_json::to_vec(&("wincommander:readmission-session:v1",&self.sid,self.session,self.logon)).map_err(|_|"session unavailable")?;
+        Ok(Sha256::digest(bytes).into())
+    }
     pub(super) fn capture(peer:&AuthenticatedPipePeer)->Option<Self> {
         session_matches(peer).then(||Self { sid:peer.caller_sid().into(), session:peer.session_id(), logon:peer.authentication_id() })
     }
-    pub(super) fn still_authorized(&self)->bool {
+    pub(crate) fn still_authorized(&self)->bool {
         if !super::session_is_active(self.session,super::wts_connect_state(self.session)) { return false; }
         let mut token=std::ptr::null_mut();
         if unsafe { WTSQueryUserToken(self.session,&mut token) }==0 || token.is_null() { return false; }

@@ -4063,14 +4063,13 @@ async fn handle_recovery_readmission(args:serde_json::Value, peer:Option<&Authen
     let _:Request=serde_json::from_value(args).map_err(|_|VerbError::new("bad_request","invalid recovery request"))?;
     let witness=peer.and_then(fleet_handoff_confirmation::SessionWitness::capture)
         .ok_or_else(||VerbError::new("forbidden","active local administrator required"))?;
-    let authorized=||witness.still_authorized();
     let unavailable=||VerbError::new("recovery_unavailable","Fleet recovery is unavailable");
     let store=fleet_machine_policy_store()?;
     let now=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()
         .and_then(|duration|i64::try_from(duration.as_secs()).ok()).ok_or_else(unavailable)?;
-    let id=store.offer_readmission(&crate::fleet_credential::MachineDpapi,now,&authorized).map_err(|_|unavailable())?;
-    let claim=store.claim_readmission(&id,&authorized).map_err(|_|unavailable())?;
-    store.send_readmission(claim,&authorized).await.map_err(|_|unavailable())?;
+    let id=store.offer_readmission(&crate::fleet_credential::MachineDpapi,now,&witness).map_err(|_|unavailable())?;
+    let claim=store.claim_readmission(&id,&witness).map_err(|_|unavailable())?;
+    store.send_readmission(claim,&witness).await.map_err(|_|unavailable())?;
     Ok(serde_json::json!({"status":"verified"}))
 }
 async fn handle_recovery_handoff(args:serde_json::Value, peer:Option<&AuthenticatedPipePeer>) -> Result<serde_json::Value,VerbError> {

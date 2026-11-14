@@ -12,8 +12,31 @@ use zeroize::Zeroize;
 const INVALID: &str = "recovery readmission unavailable";
 const TTL: Duration = Duration::from_secs(30);
 
+mod sealed { pub trait Sealed {} }
+pub(crate) trait ReadmissionAuthorization: sealed::Sealed + Sync {
+    fn authorized(&self) -> bool;
+    fn binding(&self) -> Result<[u8;32], &'static str>;
+}
+#[cfg(windows)]
+impl sealed::Sealed for crate::pipe::fleet_handoff_confirmation::SessionWitness {}
+#[cfg(windows)]
+impl ReadmissionAuthorization for crate::pipe::fleet_handoff_confirmation::SessionWitness {
+    fn authorized(&self) -> bool { self.still_authorized() }
+    fn binding(&self) -> Result<[u8;32], &'static str> { self.readmission_binding() }
+}
+#[cfg(test)]
+pub(super) struct TestAuthorization<F: Fn() -> bool + Sync>(pub F);
+#[cfg(test)]
+impl<F: Fn() -> bool + Sync> sealed::Sealed for TestAuthorization<F> {}
+#[cfg(test)]
+impl<F: Fn() -> bool + Sync> ReadmissionAuthorization for TestAuthorization<F> {
+    fn authorized(&self) -> bool { (self.0)() }
+    fn binding(&self) -> Result<[u8;32], &'static str> { Ok([42;32]) }
+}
+
 pub(crate) struct Offer {
     id: String,
+    owner: [u8;32],
     snapshot: CredentialSnapshot,
     challenge: String,
     request: Vec<u8>,
@@ -45,13 +68,13 @@ impl Drop for Reply {
 impl FleetMachinePolicy {
     /// Experiment only: the claim is bound to the protected active journal,
     /// actual candidate key and the exact bytes that will be sent.
-    pub(crate) fn offer_readmission(&self, protector: &dyn crate::fleet_credential::Protector, now: i64, authorized: &(impl Fn() -> bool + Sync))
+    pub(crate) fn offer_readmission(&self, protector: &dyn crate::fleet_credential::Protector, now: i64, authorized: &impl ReadmissionAuthorization)
         -> Result<String, &'static str> {
         let mut snapshot = self.credential_snapshot(protector)?.ok_or(INVALID)?;
         if !snapshot.is_recovered { return Err(INVALID); }
         let guard = self.state.lock().map_err(|_| INVALID)?;
         let record = guard.record.as_ref().ok_or(INVALID)?;
-        if !authorized() || !Self::credential_matches(record, &snapshot) { return Err(INVALID); }
+        if !authorized.authorized() || !Self::credential_matches(record, &snapshot) { return Err(INVALID); }
         let commit = record.recovery_commit.as_ref().ok_or(INVALID)?;
         let candidate = crate::fleet_recovery_candidate::CandidateStore::open(
             self.fs.as_ref(), self.path.parent().ok_or(INVALID)?.to_path_buf(), protector)?;
@@ -65,31 +88,32 @@ impl FleetMachinePolicy {
         SysRng.try_fill_bytes(&mut random).map_err(|_| INVALID)?;
         let id = STANDARD.encode(random);
         snapshot.secret.zeroize();
-        let offer = Offer { id: id.clone(), snapshot, challenge, request: bytes, expires: Instant::now() + TTL };
+        let offer = Offer { id: id.clone(), owner: authorized.binding()?, snapshot, challenge, request: bytes, expires: Instant::now() + TTL };
         *self.recovery_readmission.lock().map_err(|_| INVALID)? = Registry { pending: Some(offer), claimed: None };
         Ok(id)
     }
 
     /// Consumes before sending. A failed attempt cannot reuse the offer.
-    pub(crate) fn claim_readmission(&self, id: &str, authorized: &(impl Fn() -> bool + Sync)) -> Result<Claim, &'static str> {
+    pub(crate) fn claim_readmission(&self, id: &str, authorized: &impl ReadmissionAuthorization) -> Result<Claim, &'static str> {
         let guard = self.state.lock().map_err(|_| INVALID)?;
         let mut offers = self.recovery_readmission.lock().map_err(|_| INVALID)?;
-        if !offers.pending.as_ref().is_some_and(|offer| offer.id == id) { return Err(INVALID); }
+        let owner=authorized.binding()?;
+        if !offers.pending.as_ref().is_some_and(|offer| offer.id == id && offer.owner == owner) { return Err(INVALID); }
         let offer = offers.pending.take().ok_or(INVALID)?;
         let record = guard.record.as_ref().ok_or(INVALID)?;
-        if !authorized() || Instant::now() >= offer.expires || !Self::credential_matches(record, &offer.snapshot) { return Err(INVALID); }
+        if !authorized.authorized() || authorized.binding()? != offer.owner || Instant::now() >= offer.expires || !Self::credential_matches(record, &offer.snapshot) { return Err(INVALID); }
         offers.claimed = Some(offer.id.clone());
         Ok(Claim(offer))
     }
 
     /// Build only the protected origin/profile transport. This check does not
     /// cancel an HTTP request already in flight after a concurrent revocation.
-    pub(crate) fn readmission_transport(&self, claim: &Claim, authorized: &(impl Fn() -> bool + Sync)) -> Result<(String, reqwest::Client), &'static str> {
+    pub(crate) fn readmission_transport(&self, claim: &Claim, authorized: &impl ReadmissionAuthorization) -> Result<(String, reqwest::Client), &'static str> {
         let offer=&claim.0;
         let guard=self.state.lock().map_err(|_| INVALID)?;
         let registry=self.recovery_readmission.lock().map_err(|_| INVALID)?;
         let record=guard.record.as_ref().ok_or(INVALID)?;
-        if !authorized() || registry.claimed.as_deref()!=Some(&offer.id) || Instant::now()>=offer.expires
+        if !authorized.authorized() || authorized.binding()?!=offer.owner || registry.claimed.as_deref()!=Some(&offer.id) || Instant::now()>=offer.expires
             || !Self::credential_matches(record,&offer.snapshot)
             || crate::fleet_runtime_env::fingerprint().as_deref()!=Some(offer.snapshot.profile.environment_fingerprint.as_str()) {
             return Err(INVALID);
@@ -102,13 +126,13 @@ impl FleetMachinePolicy {
 
     /// Test-only exchange: the caller cannot choose a destination, follow a
     /// redirect, publish an unchecked response, or receive the secret.
-    pub(crate) async fn send_readmission(&self, claim: Claim, authorized: &(impl Fn() -> bool + Sync)) -> Result<(), &'static str> {
+    pub(crate) async fn send_readmission(&self, claim: Claim, authorized: &impl ReadmissionAuthorization) -> Result<(), &'static str> {
         let (origin,client)=self.readmission_transport(&claim, authorized)?;
         let operation=async {
             {
                 let guard=self.state.lock().map_err(|_| INVALID)?;
                 let registry=self.recovery_readmission.lock().map_err(|_| INVALID)?;
-                if !authorized() || registry.claimed.as_deref()!=Some(&claim.0.id)
+                if !authorized.authorized() || authorized.binding()?!=claim.0.owner || registry.claimed.as_deref()!=Some(&claim.0.id)
                     || Instant::now()>=claim.0.expires || !guard.record.as_ref().is_some_and(|record|Self::credential_matches(record,&claim.0.snapshot)) {
                     return Err(INVALID);
                 }
@@ -139,7 +163,7 @@ impl FleetMachinePolicy {
     /// bounded and non-reentrant because both policy and registry locks are held.
     /// No secret or proof is persisted.
     pub(crate) fn finish_readmission<T>(&self, claim: Claim, status: u16, body: &[u8], header: &str,
-        authorized: &(impl Fn() -> bool + Sync), publish: impl FnOnce() -> T) -> Result<T, &'static str> {
+        authorized: &impl ReadmissionAuthorization, publish: impl FnOnce() -> T) -> Result<T, &'static str> {
         let offer = claim.0;
         if status != 200 || body.len() > 65536 || Instant::now() >= offer.expires { return Err(INVALID); }
         let signature = header.strip_prefix("v2.").ok_or(INVALID)?;
@@ -172,7 +196,7 @@ impl FleetMachinePolicy {
         let mut registry = self.recovery_readmission.lock().map_err(|_| INVALID)?;
         if registry.claimed.as_deref() != Some(&offer.id) { return Err(INVALID); }
         registry.claimed = None;
-        if !authorized() || Instant::now() >= offer.expires
+        if !authorized.authorized() || authorized.binding()? != offer.owner || Instant::now() >= offer.expires
             || !Self::credential_matches(record, &offer.snapshot) { return Err(INVALID); }
         Ok(publish())
     }
@@ -185,6 +209,13 @@ mod tests {
     use crate::policy_store::{PolicyFs, PolicyStoreError};
     use ed25519_dalek::Signer;
     use std::{collections::HashMap, io, path::{Path, PathBuf}, sync::{Arc, Mutex}};
+
+    struct OtherAuthorization;
+    impl sealed::Sealed for OtherAuthorization {}
+    impl ReadmissionAuthorization for OtherAuthorization {
+        fn authorized(&self)->bool { true }
+        fn binding(&self)->Result<[u8;32],&'static str> { Ok([43;32]) }
+    }
 
     #[derive(Clone, Default)]
     struct Fs(Arc<Mutex<HashMap<PathBuf, Vec<u8>>>>);
@@ -244,38 +275,39 @@ mod tests {
     #[test]
     fn signed_readmission_is_one_use_and_fenced() {
         let store = setup();
-        let id = store.offer_readmission(&TestProtector, 1001, &||true).unwrap();
-        assert!(store.claim_readmission("foreign offer", &||true).is_err());
-        let claim = store.claim_readmission(&id, &||true).unwrap();
+        let id = store.offer_readmission(&TestProtector, 1001, &TestAuthorization(||true)).unwrap();
+        assert!(store.claim_readmission("foreign offer", &TestAuthorization(||true)).is_err());
+        assert!(store.claim_readmission(&id, &OtherAuthorization).is_err());
+        let claim = store.claim_readmission(&id, &TestAuthorization(||true)).unwrap();
         let request:serde_json::Value=serde_json::from_slice(claim.request()).unwrap();
         assert_eq!(request["device_hash"],"loopback");
         assert_eq!(request["previous_generation"],trust().enrollment_generation);
-        assert!(store.claim_readmission(&id, &||true).is_err());
-        let (origin, _) = store.readmission_transport(&claim, &||true).unwrap();
+        assert!(store.claim_readmission(&id, &TestAuthorization(||true)).is_err());
+        let (origin, _) = store.readmission_transport(&claim, &TestAuthorization(||true)).unwrap();
         assert_eq!(origin,"https://fleet.test");
         let (body, header) = response(claim.request(), &[4;32], false);
-        assert_eq!(store.finish_readmission(claim, 200, &body, &header, &||true, || 7).unwrap(), 7);
+        assert_eq!(store.finish_readmission(claim, 200, &body, &header, &TestAuthorization(||true), || 7).unwrap(), 7);
         for scenario in 0..5 {
-            let id = store.offer_readmission(&TestProtector, 1001, &||true).unwrap();
-            let claim = store.claim_readmission(&id, &||true).unwrap();
+            let id = store.offer_readmission(&TestProtector, 1001, &TestAuthorization(||true)).unwrap();
+            let claim = store.claim_readmission(&id, &TestAuthorization(||true)).unwrap();
             let (mut body, header) = response(claim.request(), if scenario == 0 { &[5;32] } else { &[4;32] }, scenario == 4);
             if scenario == 1 { body.push(b' '); }
             if scenario == 2 { store.state.lock().unwrap().record.as_mut().unwrap().connection_revision += 1; }
-            if scenario == 3 { store.offer_readmission(&TestProtector, 1001, &||true).unwrap(); }
-            if scenario == 2 || scenario == 3 { assert!(store.readmission_transport(&claim, &||true).is_err()); }
-            assert!(store.finish_readmission(claim, 200, &body, &header, &||true, || ()).is_err());
+            if scenario == 3 { store.offer_readmission(&TestProtector, 1001, &TestAuthorization(||true)).unwrap(); }
+            if scenario == 2 || scenario == 3 { assert!(store.readmission_transport(&claim, &TestAuthorization(||true)).is_err()); }
+            assert!(store.finish_readmission(claim, 200, &body, &header, &TestAuthorization(||true), || ()).is_err());
         }
-        let id=store.offer_readmission(&TestProtector, 1001, &||true).unwrap();
+        let id=store.offer_readmission(&TestProtector, 1001, &TestAuthorization(||true)).unwrap();
         store.recovery_readmission.lock().unwrap().pending.as_mut().unwrap().expires=Instant::now();
-        assert!(store.claim_readmission(&id, &||true).is_err());
-        assert!(store.claim_readmission(&id, &||true).is_err());
+        assert!(store.claim_readmission(&id, &TestAuthorization(||true)).is_err());
+        assert!(store.claim_readmission(&id, &TestAuthorization(||true)).is_err());
     }
     #[test]
     fn revoked_session_cannot_sign_send_or_publish() {
         use std::sync::atomic::{AtomicBool, Ordering};
         let store=setup();
         let allowed=AtomicBool::new(false);
-        let authorized=||allowed.load(Ordering::SeqCst);
+        let authorized=TestAuthorization(||allowed.load(Ordering::SeqCst));
         assert!(store.offer_readmission(&TestProtector,1001,&authorized).is_err());
         allowed.store(true,Ordering::SeqCst);
         let id=store.offer_readmission(&TestProtector,1001,&authorized).unwrap();
