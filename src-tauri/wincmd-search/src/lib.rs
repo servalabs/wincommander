@@ -51,6 +51,7 @@ pub mod query;
 mod read_only;
 pub mod reconcile;
 mod restricted;
+#[cfg(any(test, feature = "experimental-space-guard"))]
 mod space_guard;
 #[cfg(feature = "experimental-space-guard")]
 mod space_guard_crawl;
