@@ -2963,6 +2963,10 @@ mod recovery_commit_tests {
             Ok(zeroize::Zeroizing::new(p[32..].iter().zip(e).map(|(a,b)|a^b).collect()))
         }
     }
+    mod candidate_loopback_tests {
+        use super::*;
+        include!("fleet_recovery_candidate_loopback_tests.rs");
+    }
     fn hex(bytes:&[u8])->String { bytes.iter().map(|b|format!("{b:02x}")).collect() }
     #[test]
     fn repeated_recovery_preserves_prior_commit_and_retries_after_failed_write() {
