@@ -26,11 +26,6 @@ pub(crate) fn index_file(
             }
         }
         Err(error) => {
-            // A bounded extraction must not leave a previous revision searchable.
-            if matches!(&error, SearchError::ExtractionLimit(_)) {
-                index.delete(writer, meta.doc_id);
-                return Err(error);
-            }
             // A queued crawl/watch entry can disappear before its extractor opens it.
             let missing = matches!(&error, SearchError::Io(io) if io.kind() == std::io::ErrorKind::NotFound)
                 || (error.is_per_file_skip()
@@ -194,43 +189,5 @@ mod tests {
         engine.index_files_sync(vec![meta]).unwrap();
         assert!(engine.status().last_error.is_none());
         assert!(engine.search(&query("stalepdftoken")).unwrap().is_empty());
-    }
-
-    #[test]
-    fn legacy_extraction_limit_removes_stale_hit_and_reports_incomplete_index() {
-        let data = TempDir::new().unwrap();
-        let index = TempDir::new().unwrap();
-        let path = data.path().join("large.doc");
-        let mut bytes = vec![0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1];
-        for value in 0..100_001 {
-            bytes.extend_from_slice(format!("term{value:06}\0").as_bytes());
-        }
-        fs::write(&path, bytes).unwrap();
-        let meta = FileMeta {
-            doc_id: 1,
-            path,
-            name: "large.doc".into(),
-            ext: "doc".into(),
-            mtime: 1,
-            size: 1,
-        };
-        let engine = open(index.path());
-        let mut writer = engine.ci.writer().unwrap();
-        engine
-            .ci
-            .upsert(&mut writer, &meta, "large", "stalelegacysentinel", &Default::default())
-            .unwrap();
-        engine.ci.commit(&mut writer).unwrap();
-        drop(writer);
-        assert_eq!(engine.search(&query("stalelegacysentinel")).unwrap().len(), 1);
-
-        engine.index_files_sync(vec![meta]).unwrap();
-        assert!(engine.search(&query("stalelegacysentinel")).unwrap().is_empty());
-        let status = engine.status();
-        assert_eq!(status.indexed_docs, 0);
-        assert!(status
-            .last_error
-            .unwrap()
-            .contains("legacy Office text exceeds extraction limit"));
     }
 }

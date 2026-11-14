@@ -11,9 +11,6 @@ pub enum SearchError {
     #[error("Extraction error: {0}")]
     Extract(String),
 
-    #[error("Extraction limit: {0}")]
-    ExtractionLimit(String),
-
     /// A file whose extension has no content extractor (.db, .exe, images, …).
     /// The indexer treats this as a SILENT SKIP, never a surfaced error.
     #[error("unsupported extension: {0}")]
