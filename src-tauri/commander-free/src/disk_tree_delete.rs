@@ -995,7 +995,18 @@ pub(crate) struct DeleteFailure {
 /// Counts mean handles processed, not bytes or physical space reclaimed. A failure
 /// may follow earlier requests; callers must report partial results and invalidate
 /// any displayed scan cache even when an error is returned.
-pub(crate) fn delete_prepared(mut tree: PreparedTree) -> Result<usize, DeleteFailure> {
+pub(crate) fn delete_prepared(tree: PreparedTree) -> Result<usize, DeleteFailure> {
+    // The caller checks the full mutation policy; this fast gate checks decoy mode per request.
+    delete_prepared_with_gate(tree, |_| {
+        crate::duplicate_finder::safety::ensure_decoy_mutation_allowed()
+            .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error))
+    })
+}
+
+fn delete_prepared_with_gate(
+    mut tree: PreparedTree,
+    mut gate: impl FnMut(usize) -> io::Result<()>,
+) -> Result<usize, DeleteFailure> {
     // Keep protected handles alive until every deletion has finished.
     let _protected_count = tree.protected.handles.len();
     // Recheck the held directory handles before any unlink. This catches
@@ -1039,26 +1050,31 @@ pub(crate) fn delete_prepared(mut tree: PreparedTree) -> Result<usize, DeleteFai
         let extended_disposition: u32 = 0x1 | 0x2 | 0x4;
         let mut retries = 0;
         loop {
+            gate(processed).map_err(|error| DeleteFailure { processed, error })?;
             let extended = unsafe {
                 SetFileInformationByHandle(
                     file.as_raw_handle(), FILE_DISPOSITION_INFO_EX_CLASS,
                     (&extended_disposition as *const u32).cast(), 4,
                 )
             };
-            let extended_error = if extended == 0 { Some(io::Error::last_os_error()) } else { None };
-            let legacy = extended_error.as_ref().is_some_and(|error| matches!(error.raw_os_error(), Some(1 | 50 | 87)));
-            if extended != 0 || (legacy && unsafe {
-                SetFileInformationByHandle(
-                    file.as_raw_handle(),
-                    FILE_DISPOSITION_INFO_CLASS,
-                    (&disposition as *const u8).cast(),
-                    1,
-                )
-            } != 0)
-            {
+            if extended != 0 {
                 break;
             }
-            let error = if legacy { io::Error::last_os_error() } else { extended_error.unwrap() };
+            let mut error = io::Error::last_os_error();
+            if matches!(error.raw_os_error(), Some(1 | 50 | 87)) {
+                gate(processed).map_err(|error| DeleteFailure { processed, error })?;
+                if unsafe {
+                    SetFileInformationByHandle(
+                        file.as_raw_handle(),
+                        FILE_DISPOSITION_INFO_CLASS,
+                        (&disposition as *const u8).cast(),
+                        1,
+                    )
+                } != 0 {
+                    break;
+                }
+                error = io::Error::last_os_error();
+            }
             // A child marked for deletion can remain pending briefly after its
             // handle closes. Never retry indefinitely when a new child exists.
             if !is_dir || error.raw_os_error() != Some(145) || retries >= 20 {
@@ -1079,7 +1095,35 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    fn delete_prepared(tree: PreparedTree) -> Result<usize, DeleteFailure> {
+        super::delete_prepared_with_gate(tree, |_| Ok(()))
+    }
+
     static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+    #[cfg(feature = "experimental-disk-tree-delete")]
+    #[test]
+    fn entering_decoy_mode_stops_remaining_deletion_requests() {
+        let _lock = crate::settings::GLOBAL_STATE_TEST_LOCK.lock().unwrap();
+        struct ResetMode(bool);
+        impl Drop for ResetMode { fn drop(&mut self) { crate::settings::set_decoy_mode(self.0); } }
+        let _reset = ResetMode(crate::settings::is_decoy_mode());
+        crate::settings::set_decoy_mode(false);
+        let fixture = Fixture::new();
+        let target = fixture.target();
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(target.join("first.txt"), b"first").unwrap();
+        std::fs::write(target.join("second.txt"), b"second").unwrap();
+        let tree = prepare(&target, selected_identity(&target), ProtectedRoots::pin(&[]).unwrap()).unwrap();
+        let failure = delete_prepared_with_gate(tree, |processed| {
+            if processed == 1 { crate::settings::set_decoy_mode(true); }
+            crate::duplicate_finder::safety::ensure_decoy_mutation_allowed()
+                .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error))
+        }).unwrap_err();
+        assert_eq!(failure.processed, 1);
+        assert_eq!(failure.error.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(std::fs::read_dir(&target).unwrap().count(), 1);
+    }
     struct Fixture {
         base: PathBuf,
         root: PathBuf,
@@ -1275,7 +1319,7 @@ mod tests {
         let authorized = AuthorizedRoot::open(&target, ProtectedRoots::fixture(&fixture.root).unwrap()).unwrap();
         let prepared = prepare_authorized(authorized).expect("safe owned folder should pass real policy");
         assert_eq!(prepared.item_counts(), (1, 2));
-        assert_eq!(delete_prepared(prepared).unwrap(), 3);
+        assert_eq!(super::delete_prepared(prepared).unwrap(), 3);
         assert!(!target.exists());
     }
 

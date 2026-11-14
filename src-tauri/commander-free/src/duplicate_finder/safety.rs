@@ -108,14 +108,19 @@ pub(super) fn validated_file(file: &CachedFile) -> Result<PathBuf, String> {
 }
 
 pub(crate) fn ensure_mutation_allowed() -> Result<(), String> {
-    if crate::settings::is_decoy_mode() {
-        return Err("Refused: duplicate removal is unavailable in Decoy mode.".into());
-    }
+    ensure_decoy_mutation_allowed()?;
     if crate::license::is_advanced_mode() {
         return Err(
             "Refused: investigator mode forbids duplicate removal because it would taint evidence."
                 .into(),
         );
+    }
+    Ok(())
+}
+
+pub(crate) fn ensure_decoy_mutation_allowed() -> Result<(), String> {
+    if crate::settings::is_decoy_mode() {
+        return Err("Refused: duplicate removal is unavailable in Decoy mode.".into());
     }
     Ok(())
 }
