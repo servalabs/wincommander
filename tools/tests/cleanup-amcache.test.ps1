@@ -9,6 +9,7 @@ if (-not $definition) { throw 'App Launch Cache reader is missing.' }
 
 $script:denyCategory = $false; $script:mountMissing = $false; $script:availableMount = 'HKLM:\Amcache\Root'; $script:denyHiveFile = $false
 $script:childCount = 3
+$script:recordMode = 'normal'
 $script:denyNativeRoot = $false; $script:emptyLegacy = $false
 $script:missingHive = $false; $script:denyHiveParent = $false
 $script:missingRecord = $false

@@ -5,6 +5,10 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Show App Launch Cache names and paths only from matching name/path fields;
+  version and hash values remain available in local raw details instead of being
+  mislabeled.
+
 - Let the connected Fleet agent read the owning desktop session's current local
   arming setting through authenticated IPC, without retaining an armed snapshot.
 

@@ -1,4 +1,5 @@
 import { createCountdownSaver } from "./countdownSaver";
+import { isImeComposing } from "@/lib/keyboard";
 // src/panels/secret/index.tsx
 //
 // Secret Settings — rebuilt 2026-06-13, retabbed 2026-07-27.
@@ -648,7 +649,7 @@ function LockDisguiseSection() {
                                             value={coverName}
                                             disabled={coverBusy}
                                             onChange={e => setCoverName(e.target.value)}
-                                            onKeyDown={e => { if (e.key === "Enter") commitCover(); }}
+                                            onKeyDown={e => { if (e.key === "Enter" && !isImeComposing(e.nativeEvent)) commitCover(); }}
                                         />
                                         <button className="sec-btn" disabled={coverBusy} onClick={commitCover}>
                                             Apply

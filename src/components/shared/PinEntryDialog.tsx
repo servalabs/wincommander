@@ -1,3 +1,4 @@
+import { isImeComposing } from "@/lib/keyboard";
 // src/components/shared/PinEntryDialog.tsx
 //
 // Generic PIN-collection dialog for toggles flagged `requiresPinOnEnable`
@@ -103,7 +104,7 @@ export function PinEntryDialogBody({
           aria-describedby={validationError ? errorId : undefined}
           onChange={(e) => onPinChange(e.target.value.replace(/\D/g, "").slice(0, 20))}
           onBlur={onBlur}
-          onKeyDown={(e) => { if (e.key === "Enter") onEnter(); }}
+          onKeyDown={(e) => { if (e.key === "Enter" && !isImeComposing(e.nativeEvent)) onEnter(); }}
           disabled={busy}
           autoFocus
         />

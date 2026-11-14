@@ -87,7 +87,10 @@ pub(super) fn validated_file(file: &CachedFile) -> Result<PathBuf, String> {
         return Err("refused linked or changed duplicate file".into());
     }
     let path = fs::canonicalize(&file.path).map_err(|error| error.to_string())?;
-    if !path.starts_with(&file.root) || is_inside_system_root(&path) {
+    if !path.starts_with(&file.root)
+        || is_removal_protected(&file.path)
+        || is_removal_protected(&path)
+    {
         return Err("refused file outside its scanned safe root".into());
     }
     let mut ancestor = file.path.parent();
@@ -115,6 +118,12 @@ pub(super) fn ensure_mutation_allowed() -> Result<(), String> {
         );
     }
     Ok(())
+}
+
+// Literal Git metadata components remain reviewable but are not deletion targets.
+// This does not identify bare repositories or external Git directories.
+pub(super) fn is_removal_protected(path: &Path) -> bool {
+    super::git_metadata::contains_git_metadata_component(path) || is_inside_system_root(path)
 }
 
 pub(super) fn is_inside_system_root(path: &Path) -> bool {

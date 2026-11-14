@@ -103,12 +103,16 @@
   overflow-x: hidden;
 }
 
+@supports not (scrollbar-color: auto) {
 .esb-field::-webkit-scrollbar {
   width: 3px;
 }
+}
+@supports not (scrollbar-color: auto) {
 .esb-field::-webkit-scrollbar-thumb {
   background: var(--accent-soft);
   border-radius: var(--radius-sm);
+}
 }
 
 .esb-input {
@@ -783,12 +787,16 @@
 .esb-preview-actions .esb-icon-action { width: 28px; padding: 4px; }
 .esb-preview-empty { margin: auto; color: var(--text-mute); font-size: 11px; text-align: center; }
 
+@supports not (scrollbar-color: auto) {
 .esb-results::-webkit-scrollbar {
   width: 3px;
 }
+}
+@supports not (scrollbar-color: auto) {
 .esb-results::-webkit-scrollbar-thumb {
   background: var(--accent-soft);
   border-radius: 2px;
+}
 }
 
 .esb-result-item {
@@ -1103,8 +1111,10 @@
 /* Chips / ghost — the accent-derived fills and borders resolve per theme via
    color-mix, so light mode only has to restate what is hardcoded to a surface:
    the scrollbar, the strict chip's knocked-out text, and the Tab cap. */
+@supports not (scrollbar-color: auto) {
 .light .esb-field::-webkit-scrollbar-thumb {
   background: var(--accent-soft);
+}
 }
 
 .light .esb-chip {
@@ -1175,8 +1185,10 @@
   border-bottom-color: rgba(200, 66, 58, 0.18);
 }
 
+@supports not (scrollbar-color: auto) {
 .light .esb-results::-webkit-scrollbar-thumb {
   background: var(--accent-soft);
+}
 }
 
 .light .esb-result-item:not(:last-child) {
@@ -1223,12 +1235,16 @@
   overflow-x: hidden;
 }
 
+@supports not (scrollbar-color: auto) {
 .esb-content-section::-webkit-scrollbar {
   width: 3px;
 }
+}
+@supports not (scrollbar-color: auto) {
 .esb-content-section::-webkit-scrollbar-thumb {
   background: var(--accent-soft);
   border-radius: 2px;
+}
 }
 
 .esb-content-divider {
@@ -1347,3 +1363,9 @@
   .esb-filter-control strong { font-size: 10px; }
   .esb-result-area-preview { grid-template-columns: minmax(120px, 40%) minmax(0, 60%); }
 }
+
+.esb-field { scrollbar-color: var(--color-text-secondary) var(--color-bg-secondary); scrollbar-width: thin; }
+
+.esb-results { scrollbar-color: var(--color-text-secondary) var(--color-bg-secondary); scrollbar-width: thin; }
+
+.esb-content-section { scrollbar-color: var(--color-text-secondary) var(--color-bg-secondary); scrollbar-width: thin; }

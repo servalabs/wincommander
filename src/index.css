@@ -176,7 +176,7 @@ html.wc-no-motion *::after {
   --shield-text-subtle: rgba(255, 255, 255, 0.6);
   --shield-text-muted: rgba(255, 255, 255, 0.4);
 
-  color-scheme: dark;
+  color-scheme: light dark;
 }
 
 @theme {
@@ -531,7 +531,12 @@ a,
   border-bottom: 1px solid var(--color-border);
 }
 
+html.light { color-scheme: light; }
+html.dark { color-scheme: dark; }
+
 /* Custom scrollbar */
+* { scrollbar-color: var(--color-border) var(--color-bg-secondary); scrollbar-width: thin; }
+@supports not (scrollbar-color: auto) {
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -548,6 +553,8 @@ a,
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-border-light);
+}
+
 }
 
 /* BlueprintJS v6 Dark Theme Overrides - INDUSTRIAL */
@@ -1287,8 +1294,9 @@ html.light body {
   outline: none !important;
 }
 
-.bp6-focus-disabled *:focus {
-  outline: none !important;
+:focus-visible, .bp6-focus-disabled *:focus-visible {
+  outline: 2px solid var(--color-accent) !important;
+  outline-offset: 2px;
 }
 
 /* ════════════════════════════════════════════════════════════════

@@ -3,10 +3,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { DuplicateScanStatus, duplicateDiscoveryGuidance } from "./DuplicateScanStatus";
 import type { DuplicateProgress, DuplicateScan } from "../../hooks/useBackend";
 
-const common = { scopeRoots: ["C:\\"], excludedVolumes: [], errors: [], skippedEntries: 0, skippedLinks: 0, minimumSizeBytes: 0, skippedSmallFiles: 0, filterExcludedFiles: 2, filterExcludedDirectories: 1 };
+const common = { scanId: "fixture-scan", scopeRoots: ["C:\\"], excludedVolumes: [], errors: [], skippedEntries: 0, skippedLinks: 0, minimumSizeBytes: 0, skippedSmallFiles: 0, filterExcludedFiles: 2, filterExcludedDirectories: 1 };
 test("reports filtered files and uncounted folder contents in live and final status", () => {
   const progress = { ...common, running: true, phase: "enumerating", scannedFiles: 3, hashedFiles: 0, candidateFiles: 0, bytesHashed: 0, currentPath: "" } as DuplicateProgress;
-  const scan = { ...common, cancelled: false, complete: false } as DuplicateScan;
+  const scan: DuplicateScan = { ...common, cancelled: false, complete: false, groups: [], scannedFiles: 3, truncated: false, hashedFiles: 0, totalGroups: 0, totalDuplicateBytes: 0, groupOffset: 0, hasMoreGroups: false };
   for (const html of [renderToStaticMarkup(<DuplicateScanStatus progress={progress} scanning local />), renderToStaticMarkup(<DuplicateScanStatus scan={scan} scanning={false} local />)]) {
     expect(html).toContain("2 files excluded by local scan filters");
     expect(html).toContain("1 dot-named folder excluded (contents not counted)");

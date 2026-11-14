@@ -15,5 +15,6 @@ export function applyStartupTheme(theme: AppTheme): void {
     root.classList.remove('light', 'dark');
     root.classList.add(theme);
     root.setAttribute('data-theme', theme === 'light' ? 'daylight' : 'anduril');
+    document.querySelector('meta[name="color-scheme"]')?.setAttribute('content', theme);
     try { localStorage.setItem('wc-theme', theme); } catch { /* Optional cache. */ }
 }

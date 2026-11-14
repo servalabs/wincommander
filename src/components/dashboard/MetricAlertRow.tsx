@@ -1,3 +1,4 @@
+import { isImeComposing } from "@/lib/keyboard";
 import { useEffect, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Bell, BellOff, Lock } from "lucide-react";
 import { useMetricAlerts, type MetricKey } from "../../hooks/useMetricAlerts";
@@ -192,7 +193,7 @@ export default function MetricAlertRow({
           disabled={busy || !m.enabled || needsElevation}
           onChange={(e) => setDraft(e.target.value)}
           onBlur={commitThreshold}
-          onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+          onKeyDown={(e) => { if (e.key === "Enter" && !isImeComposing(e.nativeEvent)) (e.target as HTMLInputElement).blur(); }}
         />
         <span className="metric-alert-unit">{unit}</span>
       </div>
@@ -208,7 +209,7 @@ export default function MetricAlertRow({
           disabled={busy || !m.enabled || needsElevation}
           onChange={(e) => setSecDraft(e.target.value)}
           onBlur={commitSeconds}
-          onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+          onKeyDown={(e) => { if (e.key === "Enter" && !isImeComposing(e.nativeEvent)) (e.target as HTMLInputElement).blur(); }}
           title="Only alert after the value stays over the limit for this many seconds"
         />
         <span className="metric-alert-unit">s</span>

@@ -23,6 +23,7 @@ function applyThemeClass(theme: Theme) {
     root.classList.remove('light', 'dark');
     root.classList.add(theme);
     root.setAttribute('data-theme', theme === 'light' ? 'daylight' : 'anduril');
+    document.querySelector('meta[name="color-scheme"]')?.setAttribute('content', theme);
 }
 
 // Read the cached theme synchronously so initial render matches the user's

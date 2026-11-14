@@ -165,6 +165,9 @@ the backend and private component before execution.
   Entering Duplicate Cleanup scans local fixed drives automatically; chosen
   folder scans remain available. A disk-backed inventory bounds memory use;
   paged groups disclose their result limits and partial-scan status.
+  Files under literal `.git` directory components remain reviewable but are
+  protected from duplicate removal; this does not identify bare repositories
+  or external Git directories.
 - Deep Cleanup expands application/category rows into backend-discovered
   folders and a bounded preview of exact files, with logical sizes and counts.
   Database-vacuum estimates are distinguished from measured file sizes.

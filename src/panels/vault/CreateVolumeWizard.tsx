@@ -1,5 +1,6 @@
+import { isImeComposing } from "@/lib/keyboard";
 import { Dialog, Button, FormGroup, InputGroup, HTMLSelect, Icon, CheckboxControl } from "@/components/ui/bp";
-import { useState, useMemo, useCallback, useEffect } from "react";
+import { useState, useMemo, useCallback, useEffect, useId } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import useBackend from "../../hooks/useBackend";
 import type { EncryptionPartition } from "../../hooks/useBackend";
@@ -105,6 +106,7 @@ function getPasswordStrength(pw: string): { score: number; label: string; color:
 }
 
 function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardProps) {
+    const partitionGroupName = useId();
     const { theme } = useTheme();
     const visibility = useVisibility();
     const isAdvanced = visibility.isVisible({ minDensity: "expert", capability: ["safeguards"] });
@@ -417,14 +419,14 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
                                 <span><strong>Irreversible:</strong> creating a Vault here replaces the selected partition’s filesystem and every file on it. Only partitions WinCommander identifies as safe are listed; do not select a partition containing data you need.</span>
                             </div>
                             <FormGroup label="Partition" labelFor="create-device">
-                                <div className="partition-list" id="create-device" role="listbox" aria-label="Partition to erase and encrypt">
+                                <div className="partition-list" id="create-device" role="radiogroup" aria-label="Partition to erase and encrypt">
                                     {partitions.filter(partition => partition.safeForCreation).map(partition => (
-                                        <button type="button" key={partition.devicePath} role="option" aria-selected={selectedDevicePath === partition.devicePath} className={`partition-row${selectedDevicePath === partition.devicePath ? " is-selected" : ""}`} onClick={() => { setSelectedDevicePath(partition.devicePath); setDeviceEraseAcknowledged(false); }}>
+                                        <label key={partition.devicePath} className={`partition-row${selectedDevicePath === partition.devicePath ? " is-selected" : ""}`}><input type="radio" name={partitionGroupName} checked={selectedDevicePath === partition.devicePath} onChange={() => { setSelectedDevicePath(partition.devicePath); setDeviceEraseAcknowledged(false); }} />
                                             <span className="partition-row-main">
                                                 <span className="partition-row-title">{partition.label || "Unlabeled partition"}<span className="partition-row-size">{partition.size}</span></span>
                                                 <span className="partition-row-sub">{partition.model} · Disk {partition.diskNumber} · Part {partition.partitionNumber} · {partition.filesystem || "Raw"}</span>
                                             </span>
-                                        </button>
+                                        </label>
                                     ))}
                                 </div>
                             </FormGroup>
@@ -752,7 +754,7 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
 
     const isSummary = currentStep?.id === "summary";
     const handleAdvanceFromInput = useCallback((event: React.KeyboardEvent<HTMLElement>) => {
-        if (event.key !== "Enter" || event.shiftKey || event.defaultPrevented) return;
+        if (event.key !== "Enter" || event.shiftKey || event.defaultPrevented || isImeComposing(event.nativeEvent)) return;
         event.preventDefault();
 
         if (done) {
@@ -772,11 +774,11 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
         }
     }, [applying, canNext, done, handleClose, handleCreate, isSummary]);
     const handleWizardEnter = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
-        if (event.key !== "Enter" || event.shiftKey || event.defaultPrevented) return;
+        if (event.key !== "Enter" || event.shiftKey || event.defaultPrevented || isImeComposing(event.nativeEvent)) return;
 
         const target = event.target as HTMLElement | null;
         if (!target) return;
-        if (target.closest("button")) return;
+        if (target.closest("button") || (target instanceof HTMLInputElement && (target.type === "radio" || target.type === "checkbox"))) return;
         if (target instanceof HTMLTextAreaElement) return;
 
         event.preventDefault();

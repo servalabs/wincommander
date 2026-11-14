@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useId } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Button } from "@/components/ui/bp";
 import type { EngineMountScope } from "./mountScope";
@@ -63,6 +63,7 @@ export default function DriveLetterPicker({
   onMountPointChange,
   effectiveScope,
 }: DriveLetterPickerProps) {
+  const radioName = useId();
   const choices = selectableDriveLetters(letters);
   const showModeToggle = mode !== undefined && onModeChange !== undefined;
   const folderDisabled = effectiveScope === "per-user";
@@ -78,11 +79,10 @@ export default function DriveLetterPicker({
   return (
     <div className="mount-target-picker">
       {showModeToggle && (
-        <div className="mount-target-toggle" role="tablist" aria-label="Mount target">
+        <div className="mount-target-toggle" role="group" aria-label="Mount target">
           <button
             type="button"
-            role="tab"
-            aria-selected={mode === "letter"}
+            aria-pressed={mode === "letter"}
             className={`mount-target-toggle-btn${mode === "letter" ? " is-active" : ""}`}
             onClick={() => onModeChange!("letter")}
           >
@@ -90,8 +90,7 @@ export default function DriveLetterPicker({
           </button>
           <button
             type="button"
-            role="tab"
-            aria-selected={mode === "folder"}
+            aria-pressed={mode === "folder"}
             disabled={folderDisabled}
             title={folderDisabled ? FOLDER_DISABLED_REASON : undefined}
             className={`mount-target-toggle-btn${mode === "folder" ? " is-active" : ""}`}
@@ -119,10 +118,8 @@ export default function DriveLetterPicker({
       ) : (
         <div className="drive-letter-selection">
           {variant === "grid" ? <div id={id} className="drive-letter-picker" role="radiogroup" aria-label="Drive letter">
-            {choices.map(letter => <button key={letter} type="button" role="radio" aria-checked={value === letter}
-              disabled={loading || unavailable}
-              className={`drive-letter-picker__option${value === letter ? " drive-letter-picker__option--selected" : ""}`}
-              onClick={() => onChange(letter)}>{letter}:</button>)}
+            {choices.map(letter => <label key={letter} className={`drive-letter-picker__option${value === letter ? " drive-letter-picker__option--selected" : ""}`}><input type="radio" name={radioName} value={letter} checked={value === letter}
+              disabled={loading || unavailable} onChange={() => onChange(letter)} />{letter}:</label>)}
           </div> : <select id={id} aria-label="Drive letter" className="drive-letter-select" value={choices.includes(value) ? value : ""}
             disabled={loading || unavailable || choices.length === 0} onChange={event => onChange(event.target.value)} onKeyDown={onKeyDown}>
             <option value="" disabled>{loading ? "Checking free letters…" : unavailable ? "Drive list unavailable" : "Select a free drive letter"}</option>
