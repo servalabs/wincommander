@@ -2,7 +2,8 @@
 param(
     [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$ExecutablePath,
     [ValidateSet("stage", "install", "new-identity")][string]$Action = "stage",
-    [string]$SourceProof = ''
+    [string]$SourceProof = '',
+    [switch]$ConfirmNewIdentity
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -25,6 +26,7 @@ try {
         if ($SourceProof -cnotmatch '^(F0{64}|[LPA][0-9a-f]{64})$') { throw 'Settings source proof is invalid or missing.' }
         & $resolved --settings-source-proof-lab install --offline-confirmed $SourceProof
     } elseif ($Action -eq 'new-identity') {
+        if (-not $ConfirmNewIdentity) { throw 'New device identity requires explicit confirmation.' }
         & $resolved --settings-generation-lab new-machine-identity --offline-confirmed --confirm-new-identity
     }
     if ($LASTEXITCODE -eq 2) { exit 2 }

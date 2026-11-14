@@ -586,7 +586,7 @@ FunctionEnd
         Abort "The device identity requires confirmation. Setup is incomplete and WinCommander may not start. Existing files were preserved; retry setup to review the choice."
       ${EndIf}
       !insertmacro WC_SELECT_NATIVE_POWERSHELL $R8
-      nsExec::ExecToStack /TIMEOUT=600000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-settings-lab.ps1" -ExecutablePath "$INSTDIR\wincommander-free.exe" -Action new-identity'
+      nsExec::ExecToStack /TIMEOUT=600000 '"$R8" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-settings-lab.ps1" -ExecutablePath "$INSTDIR\wincommander-free.exe" -Action new-identity -ConfirmNewIdentity'
       Pop $0
       Pop $1
       !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "settings-lab-new-identity" "$0" "$1"

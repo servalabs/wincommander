@@ -20,9 +20,10 @@ fn main() {
 if ($LASTEXITCODE -ne 0) { throw 'Synthetic proof helper did not compile.' }
 $wrapper = (Resolve-Path (Join-Path $PSScriptRoot '../src-tauri/commander-free/nsis/install-settings-generation.ps1')).Path
 $stdout = Join-Path $work 'stdout.txt'; $stderr = Join-Path $work 'stderr.txt'
-function Invoke-Fixture([string]$Action, [string]$Proof = '') {
+function Invoke-Fixture([string]$Action, [string]$Proof = '', [bool]$ConfirmIdentity = $false) {
     $args = @('-NoProfile', '-NonInteractive', '-File', ('"' + $wrapper + '"'), '-ExecutablePath', ('"' + $helper + '"'), '-Action', $Action)
     if ($Proof) { $args += @('-SourceProof', $Proof) }
+    if ($ConfirmIdentity) { $args += '-ConfirmNewIdentity' }
     $p = Start-Process -FilePath 'powershell.exe' -ArgumentList $args -WindowStyle Hidden -PassThru -Wait -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     return @{ Exit = $p.ExitCode; Output = (Get-Content -Raw -LiteralPath $stdout) }
 }
@@ -39,4 +40,8 @@ foreach ($bad in @('Labc', ('F'+('1'*64)), ('A'+('A'*64)), ('X'+('a'*64)))) {
 $env:WINCMD_TEST_EXIT='0'; $proof='L'+('a'*64)
 $result = Invoke-Fixture 'install' $proof
 if ($result.Exit -ne 0 -or $result.Output.Trim() -cne "--settings-source-proof-lab|install|--offline-confirmed|$proof") { throw 'Install proof was not forwarded.' }
+$result = Invoke-Fixture 'new-identity'
+if ($result.Exit -eq 0 -or $result.Output) { throw 'New identity proceeded without explicit confirmation.' }
+$result = Invoke-Fixture 'new-identity' '' $true
+if ($result.Exit -ne 0 -or $result.Output.Trim() -cne '--settings-generation-lab|new-machine-identity|--offline-confirmed|--confirm-new-identity') { throw 'Confirmed identity action was not forwarded.' }
 Write-Output 'Synthetic proof wrapper checks passed.'
