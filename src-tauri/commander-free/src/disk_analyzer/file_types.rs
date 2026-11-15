@@ -33,12 +33,9 @@ const CATEGORIES: [&str; 7] = [
 ];
 
 fn category(name: &str) -> usize {
-    let lower = name.to_ascii_lowercase();
-    let extension = lower
-        .rsplit_once('.')
-        .map(|(_, extension)| extension)
-        .unwrap_or("");
-    match extension {
+    let extension = std::path::Path::new(name).extension()
+        .and_then(|value| value.to_str()).unwrap_or("").to_ascii_lowercase();
+    match extension.as_str() {
         "jpg" | "jpeg" | "png" | "gif" | "bmp" | "tif" | "tiff" | "webp" | "heic" | "svg"
         | "ico" | "raw" => 0,
         "mp4" | "mkv" | "mov" | "avi" | "wmv" | "webm" | "m4v" | "mpeg" | "mpg" => 1,
@@ -247,6 +244,8 @@ mod tests {
             ("archive.7z", 5),
             ("unknown", 6),
             ("png", 6),
+            (".jpg", 6),
+            ("report.", 6),
         ] {
             assert_eq!(category(name), expected);
         }
