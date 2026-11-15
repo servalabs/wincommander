@@ -19,6 +19,35 @@ fn quota_error() -> SearchError {
     SearchError::Extract("Office document exceeds the bounded extraction budget".into())
 }
 
+fn read_part_bounded(
+    mut reader: impl Read,
+    max_bytes: usize,
+    deadline: std::time::Instant,
+) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        if std::time::Instant::now() >= deadline {
+            return Err(quota_error());
+        }
+        // Read one extra byte when at the limit so exact-size parts succeed
+        // but an oversized part cannot be silently truncated.
+        let limit = chunk.len().min(max_bytes.saturating_sub(bytes.len()).saturating_add(1));
+        let read = match reader.read(&mut chunk[..limit]) {
+            Ok(read) => read,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error.into()),
+        };
+        if std::time::Instant::now() >= deadline || read > max_bytes.saturating_sub(bytes.len()) {
+            return Err(quota_error());
+        }
+        if read == 0 {
+            return Ok(bytes);
+        }
+        bytes.extend_from_slice(&chunk[..read]);
+    }
+}
+
 /// Returns true for OOXML parts that carry real user-authored text.
 /// Excludes styles, themes, fonts, settings, numbering, etc.
 fn is_content_part(name: &str) -> bool {
@@ -35,6 +64,7 @@ fn is_content_part(name: &str) -> bool {
 
 /// Extract text from .docx or .pptx (OOXML zip containers).
 pub fn extract_office(path: &Path) -> Result<(String, DocProps)> {
+    let deadline = std::time::Instant::now() + EXTRACTION_TIME;
     let file = std::fs::File::open(path)?;
     let mut archive = ZipArchive::new(file).map_err(|e| SearchError::Extract(e.to_string()))?;
     if archive.has_duplicate_names() {
@@ -43,7 +73,6 @@ pub fn extract_office(path: &Path) -> Result<(String, DocProps)> {
     if archive.len() > MAX_ARCHIVE_ENTRIES {
         return Err(quota_error());
     }
-    let deadline = std::time::Instant::now() + EXTRACTION_TIME;
     let mut expanded = 0usize;
     let mut parts = 0usize;
 
@@ -65,12 +94,8 @@ pub fn extract_office(path: &Path) -> Result<(String, DocProps)> {
             if parts > MAX_CONTENT_PARTS || entry.size() > (MAX_EXPANDED_BYTES - expanded) as u64 {
                 return Err(quota_error());
             }
-            let mut xml_bytes = Vec::new();
-            let read = entry
-                .by_ref()
-                .take((MAX_EXPANDED_BYTES - expanded + 1) as u64)
-                .read_to_end(&mut xml_bytes)?;
-            expanded = expanded.checked_add(read).filter(|total| *total <= MAX_EXPANDED_BYTES)
+            let xml_bytes = read_part_bounded(&mut entry, MAX_EXPANDED_BYTES - expanded, deadline)?;
+            expanded = expanded.checked_add(xml_bytes.len()).filter(|total| *total <= MAX_EXPANDED_BYTES)
                 .ok_or_else(quota_error)?;
             let part_text = extract_xml_text_bounded(&xml_bytes, deadline, MAX_OUTPUT_BYTES.saturating_sub(text.len()))?;
             if part_text.len() >= MAX_OUTPUT_BYTES.saturating_sub(text.len()) {
@@ -282,6 +307,25 @@ mod tests {
     use super::*;
     use std::io::Write;
     use tempfile::NamedTempFile;
+
+    #[test]
+    fn part_read_checks_size_and_elapsed_time_between_reads() {
+        let deadline = std::time::Instant::now() + EXTRACTION_TIME;
+        assert_eq!(read_part_bounded(&b"abc"[..], 3, deadline).unwrap(), b"abc");
+        assert!(read_part_bounded(&b"abcd"[..], 3, deadline).is_err());
+        assert!(read_part_bounded(&b""[..], 0, deadline).unwrap().is_empty());
+
+        struct SlowReader;
+        impl Read for SlowReader {
+            fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                output[0] = b'x';
+                Ok(1)
+            }
+        }
+        let short_deadline = std::time::Instant::now() + std::time::Duration::from_millis(1);
+        assert!(read_part_bounded(SlowReader, 1024, short_deadline).is_err());
+    }
 
     #[test]
     fn xml_budget_accepts_exact_output_and_refuses_overflow_or_expired_time() {
