@@ -163,10 +163,10 @@
 .da-type-table tbody th { position: sticky; inset-inline-start: 0; z-index: 1; background: var(--color-bg-card); }
 .da-type-row > :not(:first-child) { text-align: right; font-variant-numeric: tabular-nums; }
 .da-type-name { overflow-wrap: anywhere; font-weight: normal; }
-.da-file-pane-tabs { display: flex; gap: 4px; padding-block: 8px; }
-.da-file-pane-tabs button { min-block-size: 32px; padding: 4px 9px; border: 1px solid var(--color-border); background: var(--color-bg-card); color: var(--color-text-muted); cursor: pointer; }
-.da-file-pane-tabs button[aria-pressed="true"] { color: var(--color-accent); border-color: var(--color-accent); }
-.da-type-sort { margin-inline-end: 6px; }
+.da-type-view { display: flex; gap: 4px; padding-block: 8px; }
+.da-type-view button { min-block-size: 32px; padding: 4px 9px; border: 1px solid var(--color-border); background: var(--color-bg-card); color: var(--color-text-muted); cursor: pointer; }
+.da-type-view button[aria-pressed="true"] { color: var(--color-accent); border-color: var(--color-accent); }
+.da-type-sort { display: flex; align-items: center; gap: 6px; margin-block: 8px; }
 .da-type-head { color: var(--color-text-muted); font-size: 10px; }
 .da-type-total { color: var(--color-accent); }
 .da-type-meter { display: block; margin-top: 7px; height: 4px; background: var(--color-bg-tertiary); border-radius: 4px; overflow: hidden; }
