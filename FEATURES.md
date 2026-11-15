@@ -241,7 +241,7 @@ operational risk, or proprietary enforcement logic.
   The service refuses another known mount with the same recorded container
   filename or file identity; different paths with the same filename are
   included. A file-container request is refused when an existing mount's
-  recorded container path cannot be verified.
+  recorded container path cannot be verified. This check covers service-known mounts.
 - Secure Storage offers explicit encrypted-container copy, copy checking, and
   backed-up file recovery with local file/folder pickers. Normally dismount the
   container before copying its backing file to existing local or network storage.

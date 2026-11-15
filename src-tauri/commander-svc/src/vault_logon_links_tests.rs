@@ -201,8 +201,15 @@ fn native_link_handle_pins_object_until_last_close() {
         unsafe { ProcessIdToSessionId(std::process::id(), &mut session) },
         0
     );
+    // Session 0 uses the global object directory; an SSH/service process may
+    // not have a `\Sessions\0\BaseNamedObjects` directory at all.
+    let parent = if session == 0 {
+        r"\BaseNamedObjects".to_owned()
+    } else {
+        format!(r"\Sessions\{session}\BaseNamedObjects")
+    };
     let path = format!(
-        r"\Sessions\{session}\BaseNamedObjects\WinCommander.LinkTest.{}.{}",
+        r"{parent}\WinCommander.LinkTest.{}.{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
