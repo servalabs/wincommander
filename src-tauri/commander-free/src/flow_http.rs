@@ -36,7 +36,10 @@ async fn send_with_timeout(
     if let Some(body) = body { request = request.body(body.to_owned()); }
     let response = request.send().await
         .map_err(|_| "HTTP request failed; remote outcome may be unknown".to_string())?;
-    let status = response.status().as_u16();
+    http_action_outcome(response.status().as_u16())
+}
+
+fn http_action_outcome(status: u16) -> Result<(), String> {
     if (200..300).contains(&status) { Ok(()) }
     else { Err(format!("HTTP action returned status {status}; completion was not acknowledged")) }
 }
@@ -45,6 +48,12 @@ async fn send_with_timeout(
 mod tests {
     use super::*;
     use std::{io::{Read, Write}, net::TcpListener, thread};
+
+    #[test]
+    fn only_success_status_is_an_acknowledgement() {
+        for status in [200, 201, 204, 299] { assert!(http_action_outcome(status).is_ok()); }
+        for status in [100, 301, 307, 400, 401, 403, 429, 500, 503] { assert!(http_action_outcome(status).is_err()); }
+    }
 
     fn server(status: u16, delay: Duration) -> (String, thread::JoinHandle<(String, bool)>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
