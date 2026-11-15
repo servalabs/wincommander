@@ -36,6 +36,7 @@ export function DuplicateScanStatus({ progress, scan, scanning, local }: { progr
       <span>{progress.scannedFiles.toLocaleString()} eligible files discovered{progress.phase === "hashing" ? ` · ${progress.hashedFiles.toLocaleString()} of ${progress.candidateFiles.toLocaleString()} same-size candidates processed · ${formatBytes(progress.bytesHashed)} read` : " · finding same-size candidates"}</span>
       {progress.currentPath && <span className="break-all font-mono text-[11px]">{displayScanPath(progress.currentPath)}</span>}
     </div>}
+    <p className="mt-2 text-[var(--text-dim)]">Scanning only reads files. Protected system and application files can appear in results, but removal is restricted. Links, directory-mounted volumes and inaccessible entries are excluded. Network and removable drives are opt-in through Choose folders; linked roots remain unsupported.</p>
     <div className="mt-2 flex flex-wrap gap-x-5 gap-y-2">
       {roots.length > 0 && <details><summary className="cursor-pointer">Scan locations ({roots.length})</summary><ul aria-label="Duplicate scan scope" className="mt-2 max-h-40 overflow-auto space-y-1 font-mono">{roots.map((root, index) => <li key={`${root}-${index}`} className="break-all">{displayScanPath(root)}</li>)}</ul></details>}
       {!!exclusions.length && <details><summary className="cursor-pointer">Excluded drives ({exclusions.length})</summary><ul className="mt-2 max-h-40 overflow-auto space-y-1">{exclusions.map((entry) => <li key={entry} className="break-all">{entry}</li>)}</ul></details>}
