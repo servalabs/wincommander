@@ -272,45 +272,6 @@ fn overwrite_and_delete_file(path: &Path) -> Result<(), String> {
 }
 
 #[cfg(windows)]
-fn original_file_attributes(path: &Path) -> Result<u32, String> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::GetFileAttributesW;
-
-    let wide_path = path
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect::<Vec<_>>();
-    let attributes = unsafe { GetFileAttributesW(wide_path.as_ptr()) };
-    if attributes == u32::MAX {
-        return Err(format!(
-            "cannot inspect file attributes: {}",
-            io::Error::last_os_error()
-        ));
-    }
-    Ok(attributes)
-}
-
-#[cfg(windows)]
-fn set_file_attributes(path: &Path, attributes: u32) -> Result<(), String> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::SetFileAttributesW;
-
-    let wide_path = path
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect::<Vec<_>>();
-    if unsafe { SetFileAttributesW(wide_path.as_ptr(), attributes) } == 0 {
-        return Err(format!(
-            "cannot update file attributes: {}",
-            io::Error::last_os_error()
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(windows)]
 fn overwrite_and_delete_file_inner(path: &Path, expected: &identity::ObjectPin) -> Result<(), String> {
     use std::os::windows::fs::OpenOptionsExt;
     use std::os::windows::io::AsRawHandle;
@@ -391,29 +352,43 @@ fn overwrite_and_delete_file(path: &Path) -> Result<(), String> {
 
 #[cfg(windows)]
 fn overwrite_and_delete_expected(path: &Path, expected: &identity::ObjectPin) -> Result<(), String> {
+    with_verified_readonly(path, expected, || overwrite_and_delete_file_inner(path, expected))
+}
+
+#[cfg(windows)]
+fn with_verified_readonly(
+    path: &Path,
+    expected: &identity::ObjectPin,
+    operation: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
     use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_READONLY;
 
     // Windows refuses a writable handle to a read-only file even when its
     // owner explicitly chose Secure Delete. Clear only that transient DOS
     // attribute; if secure erase cannot complete, restore the exact original
     // attributes so a failed operation does not silently change the file.
-    let (original_attributes, was_readonly) = {
-        let _name = expected.guard_name(path)?;
-        let original_attributes = original_file_attributes(path)?;
-        let was_readonly = original_attributes & FILE_ATTRIBUTE_READONLY != 0;
-        if was_readonly {
-            set_file_attributes(path, original_attributes & !FILE_ATTRIBUTE_READONLY)?;
+    let original_attributes = expected.attributes()?;
+    let readonly_handle = if original_attributes & FILE_ATTRIBUTE_READONLY != 0 {
+        // A name guard is not a guarantee against rename on every filesystem.
+        // Verify an attribute handle and mutate that same object by handle.
+        let file = expected.open_attribute_handle(path)?;
+        if expected.handle_attributes(&file)? != original_attributes {
+            return Err("erase target attributes changed".into());
         }
-        (original_attributes, was_readonly)
-    };
+        expected.set_attributes(&file, original_attributes & !FILE_ATTRIBUTE_READONLY)?;
+        Some(file)
+    } else { None };
 
-    let result = overwrite_and_delete_file_inner(path, expected);
-    if result.is_err() && was_readonly {
-        if let Ok(_name) = expected.guard_name(path) {
-            let _ = set_file_attributes(path, original_attributes);
+    match operation() {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            if let Some(file) = readonly_handle.as_ref() {
+                expected.restore_attributes(file, original_attributes)
+                    .map_err(|restore| format!("{error}; could not restore original attributes: {restore}"))?;
+            }
+            Err(error)
         }
     }
-    result
 }
 
 #[cfg(not(windows))]
@@ -554,7 +529,7 @@ pub fn prepare(raw_paths: Vec<String>) -> Result<PreparedSelection, String> {
 #[cfg(windows)]
 pub fn execute_prepared(selection: PreparedSelection) -> Result<(), String> {
     let PreparedSelection { targets, name_guards } = selection;
-    // The caller has consumed authority while these no-delete name guards held.
+    // The caller has consumed authority while the identity guards were held.
     drop(name_guards);
     for (target, _ancestors, pin) in targets {
         if pin.is_directory() {
@@ -726,5 +701,204 @@ mod tests {
 
         execute_cli(vec![file.to_string_lossy().into_owned()]).unwrap();
         assert!(!file.exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn prepared_file_replacement_never_erases_the_replacement() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("original.txt");
+        let renamed = directory.path().join("renamed.txt");
+        fs::write(&file, b"preserve").unwrap();
+        let prepared = prepare(vec![file.to_string_lossy().into_owned()]).unwrap();
+        match fs::rename(&file, &renamed) {
+            Ok(()) => {
+                eprintln!("fixture: rename succeeded; verifying replacement refusal");
+                fs::write(&file, b"replacement").unwrap();
+                let error = execute_prepared(prepared).unwrap_err();
+                assert!(error.contains("identity changed"), "unexpected rejection: {error}");
+                assert_eq!(fs::read(&file).unwrap(), b"replacement");
+                assert_eq!(fs::read(&renamed).unwrap(), b"preserve");
+            }
+            Err(error) => {
+                eprintln!("fixture: rename denied by sharing rules");
+                assert!(matches!(error.raw_os_error(), Some(5 | 32 | 33)), "unexpected rename failure: {error}");
+                assert_eq!(fs::read(&file).unwrap(), b"preserve");
+                drop(prepared);
+                fs::rename(&file, &renamed).unwrap();
+                assert_eq!(fs::read(&renamed).unwrap(), b"preserve");
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn prepared_directory_replacement_never_erases_replacement_children() {
+        let directory = tempfile::tempdir().unwrap();
+        let original = directory.path().join("target");
+        let renamed = directory.path().join("renamed");
+        fs::create_dir(&original).unwrap();
+        fs::write(original.join("original.txt"), b"original").unwrap();
+        let prepared = prepare(vec![original.to_string_lossy().into_owned()]).unwrap();
+        match fs::rename(&original, &renamed) {
+            Ok(()) => {
+                eprintln!("fixture: selected directory renamed; checking replacement tree");
+                fs::create_dir(&original).unwrap();
+                fs::write(original.join("replacement.txt"), b"replacement").unwrap();
+                let result = execute_prepared(prepared);
+                assert_eq!(fs::read(original.join("replacement.txt")).unwrap(), b"replacement");
+                assert_eq!(fs::read(renamed.join("original.txt")).unwrap(), b"original");
+                assert!(result.is_err(), "replacement tree must be refused");
+            }
+            Err(error) => {
+                eprintln!("fixture: selected directory rename denied");
+                assert!(matches!(error.raw_os_error(), Some(5 | 32 | 33)), "unexpected rename failure: {error}");
+                drop(prepared);
+                fs::rename(&original, &renamed).unwrap();
+                assert_eq!(fs::read(renamed.join("original.txt")).unwrap(), b"original");
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn prepared_ancestor_replacement_never_erases_replacement_children() {
+        let directory = tempfile::tempdir().unwrap();
+        let ancestor = directory.path().join("ancestor");
+        let renamed = directory.path().join("renamed");
+        let target = ancestor.join("target");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("original.txt"), b"original").unwrap();
+        let prepared = prepare(vec![target.to_string_lossy().into_owned()]).unwrap();
+        match fs::rename(&ancestor, &renamed) {
+            Ok(()) => {
+                eprintln!("fixture: ancestor renamed; checking replacement tree");
+                fs::create_dir_all(&target).unwrap();
+                fs::write(target.join("replacement.txt"), b"replacement").unwrap();
+                let result = execute_prepared(prepared);
+                assert_eq!(fs::read(target.join("replacement.txt")).unwrap(), b"replacement");
+                assert_eq!(fs::read(renamed.join("target").join("original.txt")).unwrap(), b"original");
+                assert!(result.is_err(), "replacement tree must be refused");
+            }
+            Err(error) => {
+                eprintln!("fixture: ancestor rename denied");
+                assert!(matches!(error.raw_os_error(), Some(5 | 32 | 33)), "unexpected rename failure: {error}");
+                drop(prepared);
+                fs::rename(&ancestor, &renamed).unwrap();
+                assert_eq!(fs::read(renamed.join("target").join("original.txt")).unwrap(), b"original");
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn refuses_hard_linked_target_without_erasing_either_name() {
+        let directory = tempfile::tempdir().unwrap();
+        let original = directory.path().join("original.txt");
+        let alias = directory.path().join("alias.txt");
+        fs::write(&original, b"preserve").unwrap();
+        fs::hard_link(&original, &alias).unwrap();
+        let error = execute_cli(vec![alias.to_string_lossy().into_owned()]).unwrap_err();
+        assert!(error.contains("hard-linked"), "unexpected error: {error}");
+        assert_eq!(fs::read(&original).unwrap(), b"preserve");
+        assert_eq!(fs::read(&alias).unwrap(), b"preserve");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn readonly_attribute_change_uses_verified_handle_after_replacement() {
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_READONLY;
+        let directory = tempfile::tempdir().unwrap();
+        let original = directory.path().join("original.txt");
+        let renamed = directory.path().join("renamed.txt");
+        fs::write(&original, b"original").unwrap();
+        let mut permissions = fs::metadata(&original).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&original, permissions).unwrap();
+        let pin = identity::ObjectPin::capture(&original, false, false).unwrap();
+        let attributes = pin.attributes().unwrap();
+        assert_ne!(attributes & FILE_ATTRIBUTE_READONLY, 0);
+        let handle = pin.open_attribute_handle(&original).unwrap();
+        assert_eq!(pin.handle_attributes(&handle).unwrap(), attributes);
+
+        // Replace the path after opening and verifying the handle, before the
+        // attribute mutation. Only the verified original may be changed.
+        fs::rename(&original, &renamed).unwrap();
+        fs::write(&original, b"replacement").unwrap();
+        let mut replacement_permissions = fs::metadata(&original).unwrap().permissions();
+        replacement_permissions.set_readonly(true);
+        fs::set_permissions(&original, replacement_permissions).unwrap();
+        pin.set_attributes(&handle, attributes & !FILE_ATTRIBUTE_READONLY).unwrap();
+        assert!(!fs::metadata(&renamed).unwrap().permissions().readonly());
+        assert!(fs::metadata(&original).unwrap().permissions().readonly());
+        assert_eq!(fs::read(&original).unwrap(), b"replacement");
+        assert_eq!(fs::read(&renamed).unwrap(), b"original");
+
+        pin.set_attributes(&handle, attributes).unwrap();
+        assert!(fs::metadata(&renamed).unwrap().permissions().readonly());
+        assert!(fs::metadata(&original).unwrap().permissions().readonly());
+        drop(handle);
+        drop(pin);
+        for path in [&original, &renamed] {
+            let mut permissions = fs::metadata(path).unwrap().permissions();
+            permissions.set_readonly(false);
+            fs::set_permissions(path, permissions).unwrap();
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn failed_erase_restores_readonly_on_original_after_replacement() {
+        let directory = tempfile::tempdir().unwrap();
+        let original = directory.path().join("original.txt");
+        let renamed = directory.path().join("renamed.txt");
+        fs::write(&original, b"original").unwrap();
+        let mut permissions = fs::metadata(&original).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&original, permissions).unwrap();
+        let pin = identity::ObjectPin::capture(&original, false, false).unwrap();
+
+        let error = with_verified_readonly(&original, &pin, || {
+            assert!(!fs::metadata(&original).unwrap().permissions().readonly());
+            fs::rename(&original, &renamed).unwrap();
+            fs::write(&original, b"replacement").unwrap();
+            Err("fixture erase failure".into())
+        }).unwrap_err();
+        assert_eq!(error, "fixture erase failure");
+        assert!(fs::metadata(&renamed).unwrap().permissions().readonly());
+        assert!(!fs::metadata(&original).unwrap().permissions().readonly());
+        assert_eq!(fs::read(&original).unwrap(), b"replacement");
+        assert_eq!(fs::read(&renamed).unwrap(), b"original");
+        drop(pin);
+        let mut permissions = fs::metadata(&renamed).unwrap().permissions();
+        permissions.set_readonly(false);
+        fs::set_permissions(&renamed, permissions).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn failed_erase_restores_readonly_if_a_hard_link_appears() {
+        let directory = tempfile::tempdir().unwrap();
+        let original = directory.path().join("original.txt");
+        let alias = directory.path().join("alias.txt");
+        fs::write(&original, b"original").unwrap();
+        let mut permissions = fs::metadata(&original).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&original, permissions).unwrap();
+        let pin = identity::ObjectPin::capture(&original, false, false).unwrap();
+
+        let error = with_verified_readonly(&original, &pin, || {
+            fs::hard_link(&original, &alias).unwrap();
+            Err("fixture erase failure".into())
+        }).unwrap_err();
+        assert_eq!(error, "fixture erase failure");
+        assert!(fs::metadata(&original).unwrap().permissions().readonly());
+        assert!(fs::metadata(&alias).unwrap().permissions().readonly());
+        assert_eq!(fs::read(&original).unwrap(), b"original");
+        assert_eq!(fs::read(&alias).unwrap(), b"original");
+        drop(pin);
+        let mut permissions = fs::metadata(&original).unwrap().permissions();
+        permissions.set_readonly(false);
+        fs::set_permissions(&original, permissions).unwrap();
     }
 }

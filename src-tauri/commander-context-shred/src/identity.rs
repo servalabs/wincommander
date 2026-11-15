@@ -1,11 +1,11 @@
-//! Windows object pins retain ancestor names and compare the final mutation handle.
+//! Windows object pins compare the identity of every mutation handle.
 use std::{fs::File, io, path::Path};
 use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
 use windows_sys::Win32::Storage::FileSystem::{
     GetFileInformationByHandle, SetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
     FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_DIRECTORY,
-    FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_SHARE_DELETE, FILE_READ_ATTRIBUTES, DELETE,
-    FileDispositionInfo, FILE_DISPOSITION_INFO,
+    FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_SHARE_DELETE, FILE_READ_ATTRIBUTES, FILE_WRITE_ATTRIBUTES, DELETE,
+    FileBasicInfo, FileDispositionInfo, FILE_BASIC_INFO, FILE_DISPOSITION_INFO, FILE_ATTRIBUTE_NORMAL,
 };
 
 pub(super) struct ObjectPin {
@@ -54,7 +54,58 @@ impl ObjectPin {
         Ok(())
     }
 
+    fn verify_same_object(&self, file: &File) -> Result<(), String> {
+        let info = information(file).map_err(|error| error.to_string())?;
+        if key(&info) != self.identity {
+            return Err("erase target identity changed".into());
+        }
+        Ok(())
+    }
+
     pub(super) fn is_directory(&self) -> bool { self.directory }
+
+    pub(super) fn attributes(&self) -> Result<u32, String> {
+        self.verify(&self.file)?;
+        information(&self.file).map(|info| info.dwFileAttributes).map_err(|error| error.to_string())
+    }
+
+    pub(super) fn open_attribute_handle(&self, path: &Path) -> Result<File, String> {
+        let file = std::fs::OpenOptions::new().access_mode(FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT).open(path)
+            .map_err(|error| format!("cannot open erase target attributes: {error}"))?;
+        self.verify(&file)?;
+        Ok(file)
+    }
+
+    pub(super) fn handle_attributes(&self, file: &File) -> Result<u32, String> {
+        self.verify(file)?;
+        information(file).map(|info| info.dwFileAttributes).map_err(|error| error.to_string())
+    }
+
+    pub(super) fn set_attributes(&self, file: &File, attributes: u32) -> Result<(), String> {
+        self.verify(file)?;
+        Self::write_attributes(file, attributes)
+    }
+
+    pub(super) fn restore_attributes(&self, file: &File, attributes: u32) -> Result<(), String> {
+        // Restore the same object even if a new hard link appeared after the
+        // readonly bit was cleared; restoration must not leave it writable.
+        self.verify_same_object(file)?;
+        Self::write_attributes(file, attributes)
+    }
+
+    fn write_attributes(file: &File, attributes: u32) -> Result<(), String> {
+        let info = FILE_BASIC_INFO {
+            CreationTime: 0, LastAccessTime: 0, LastWriteTime: 0, ChangeTime: 0,
+            FileAttributes: if attributes == 0 { FILE_ATTRIBUTE_NORMAL } else { attributes },
+        };
+        if unsafe { SetFileInformationByHandle(file.as_raw_handle(), FileBasicInfo,
+            std::ptr::from_ref(&info).cast(), std::mem::size_of::<FILE_BASIC_INFO>() as u32) } == 0 {
+            return Err(format!("cannot update erase target attributes: {}", io::Error::last_os_error()));
+        }
+        Ok(())
+    }
 
     pub(super) fn guard_name(&self, path: &Path) -> Result<File, String> {
         let file = std::fs::OpenOptions::new().access_mode(FILE_READ_ATTRIBUTES)
