@@ -29,6 +29,11 @@ test('Wi-Fi interval permits an intermediate value and saves only a valid comple
     await act(async () => { setValue.call(input, '2'); input.dispatchEvent(new dom.window.Event('input', { bubbles: true })); });
     await act(async () => input.blur());
     assert.deepEqual(values, [30]); assert.match(host.textContent, /Enter 30–3600 seconds/);
+    assert.equal(input.value, '2'); assert.equal(input.getAttribute('aria-invalid'), 'true');
+    assert.equal(document.getElementById(input.getAttribute('aria-describedby')).textContent, 'Enter 30–3600 seconds.');
+    await act(async () => { input.focus(); setValue.call(input, '60'); input.dispatchEvent(new dom.window.Event('input', { bubbles: true })); });
+    assert.equal(input.getAttribute('aria-invalid'), 'false');
+    await act(async () => input.blur()); assert.deepEqual(values, [30, 60]);
     await act(async () => root.unmount());
   `;
   const child = Bun.spawn([Bun.which('bun') ?? 'bun', '-e', script], { stdout: 'pipe', stderr: 'pipe' });

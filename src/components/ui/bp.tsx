@@ -1340,6 +1340,8 @@ export function InputGroup({
   readOnly,
   maxLength,
   "aria-label": ariaLabel,
+  "aria-invalid": ariaInvalid,
+  "aria-describedby": ariaDescribedBy,
   style,
   autoComplete,
   onBlur,
@@ -1375,6 +1377,8 @@ export function InputGroup({
   readOnly?: boolean;
   maxLength?: number;
   "aria-label"?: string;
+  "aria-invalid"?: React.AriaAttributes["aria-invalid"];
+  "aria-describedby"?: string;
   style?: React.CSSProperties;
   autoComplete?: string;
   onBlur?: React.FocusEventHandler<HTMLInputElement>;
@@ -1418,6 +1422,8 @@ export function InputGroup({
         readOnly={readOnly}
         maxLength={maxLength}
         aria-label={ariaLabel}
+        aria-invalid={ariaInvalid}
+        aria-describedby={ariaDescribedBy}
         style={style}
         autoComplete={autoComplete}
         onBlur={onBlur}
