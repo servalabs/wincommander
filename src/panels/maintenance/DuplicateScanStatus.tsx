@@ -34,7 +34,7 @@ export function DuplicateScanStatus({ progress, scan, scanning, local }: { progr
       {progress.currentPath && <span className="break-all font-mono text-[11px]">{displayScanPath(progress.currentPath)}</span>}
     </div>}
     {!scanning && minimumSizeBytes > 0 && <p className="mt-2 text-[var(--text-dim)]">{skippedSmallFiles.toLocaleString()} files below {formatBytes(minimumSizeBytes)} were excluded by the selected size rule.</p>}
-    <p className="mt-2 text-[var(--text-dim)]">Scanning only reads files. Protected system/application locations, links, directory-mounted volumes and inaccessible entries remain outside the existing safe scan policy. Network and removable drives are opt-in through Choose folders; linked roots remain unsupported.</p>
+    <p className="mt-2 text-[var(--text-dim)]">Scanning only reads files. Protected system and application files can appear in results, but removal is restricted. Links, directory-mounted volumes and inaccessible entries are excluded. Network and removable drives are opt-in through Choose folders; linked roots remain unsupported.</p>
     {!scanning && !scan?.cancelled && hasSafeExclusions && <p className="mt-2 text-[var(--text-dim)]">The scan finished with exclusions. Review the details before treating these results as complete.</p>}
     {!!state?.skippedLinks && <p className="mt-2 text-[var(--text-dim)]">{state.skippedLinks.toLocaleString()} linked entries excluded.</p>}
     {!!exclusions.length && <details className="mt-2"><summary className="cursor-pointer">Drives outside automatic scope ({exclusions.length})</summary><ul className="mt-2 space-y-1">{exclusions.map((entry) => <li key={entry} className="break-all">{entry}</li>)}</ul></details>}

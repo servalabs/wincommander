@@ -11,7 +11,9 @@ test("reports filtered files and uncounted folder contents in live and final sta
     expect(html).toContain("2 files excluded by local scan filters");
     expect(html).toContain("1 dot-named folder excluded (contents not counted)");
   }
-  expect(renderToStaticMarkup(<DuplicateScanStatus scan={scan} scanning={false} local />)).toContain("Scan finished · exclusions shown");
+  const final = renderToStaticMarkup(<DuplicateScanStatus scan={scan} scanning={false} local />);
+  expect(final).toContain("Scan finished · exclusions shown");
+  expect(final).toContain("Protected system and application files can appear in results, but removal is restricted.");
 });
 
 test("guidance preserves minimum-size and safety limits for chosen folders", () => {
