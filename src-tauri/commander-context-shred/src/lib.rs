@@ -180,6 +180,7 @@ fn validate_target(raw_path: &str) -> Result<PathBuf, String> {
 /// Bounds an Explorer `Player` verb to a deliberate, finite selection.
 pub const MAX_CONTEXT_TARGETS: usize = 100;
 
+#[cfg(not(windows))]
 fn validate_selection(raw_paths: &[String]) -> Result<Vec<PathBuf>, String> {
     Ok(validate_selection_with_originals(raw_paths)?
         .into_iter()
@@ -403,13 +404,6 @@ fn overwrite_and_delete_file_inner_with_hook(
             Err(cancel) => Err(format!("{error}; could not cancel pending deletion: {cancel}")),
         },
     }
-}
-
-#[cfg(all(windows, test))]
-fn overwrite_and_delete_file(path: &Path) -> Result<(), String> {
-    let _ancestors = identity::pin_ancestors(path)?;
-    let expected = identity::ObjectPin::capture(path, false, false)?;
-    overwrite_and_delete_expected(path, &expected)
 }
 
 #[cfg(windows)]
@@ -1068,6 +1062,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    #[allow(clippy::permissions_set_readonly_false)] // clears the Windows read-only attribute on a fixture
     fn readonly_attribute_change_uses_verified_handle_after_replacement() {
         use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_READONLY;
         let directory = tempfile::tempdir().unwrap();
@@ -1110,6 +1105,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    #[allow(clippy::permissions_set_readonly_false)] // clears the Windows read-only attribute on a fixture
     fn failed_erase_restores_readonly_on_original_after_replacement() {
         let directory = tempfile::tempdir().unwrap();
         let original = directory.path().join("original.txt");
@@ -1139,6 +1135,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    #[allow(clippy::permissions_set_readonly_false)] // clears the Windows read-only attribute on a fixture
     fn failed_erase_restores_readonly_if_a_hard_link_appears() {
         let directory = tempfile::tempdir().unwrap();
         let original = directory.path().join("original.txt");
