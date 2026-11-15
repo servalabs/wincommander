@@ -13,6 +13,9 @@
 //
 // Keep types in sync with: src/types/flows.ts
 
+#[path = "flow_http.rs"]
+mod flow_http;
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -3784,30 +3787,7 @@ async fn execute_action(
             // Raw arbitrary-URL HTTP is a paid, non-in-app action type; gate real
             // execution on the entitlement (same reasoning as ShellAction above).
             crate::license::require_paid("flows")?;
-            let client = reqwest::Client::new();
-            let mut request = match method.as_str() {
-                "GET" => client.get(url),
-                "POST" => client.post(url),
-                "PUT" => client.put(url),
-                "DELETE" => client.delete(url),
-                _ => return Err(format!("Unknown HTTP method: {}", method)),
-            };
-
-            if let Some(hdrs) = headers {
-                for (k, v) in hdrs {
-                    request = request.header(k.as_str(), v.as_str());
-                }
-            }
-
-            if let Some(body_str) = body {
-                request = request.body(body_str.clone());
-            }
-
-            request
-                .send()
-                .await
-                .map(|_| ())
-                .map_err(|e| format!("HTTP request failed: {}", e))
+            flow_http::send(method, url, headers.as_ref(), body.as_deref()).await
         }
 
         ActionBlock::NotifyAction {
