@@ -1694,4 +1694,56 @@ mod tests {
         drop(tree);
         assert_eq!(std::fs::read(&path).unwrap(), b"preserve");
     }
+
+    #[test]
+    fn writable_mapping_must_not_be_unlinked() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use std::os::windows::io::AsRawHandle;
+        use std::ffi::c_void;
+
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn CreateFileMappingW(file: *mut c_void, attributes: *const c_void, protect: u32, high: u32, low: u32, name: *const u16) -> *mut c_void;
+            fn MapViewOfFile(mapping: *mut c_void, access: u32, high: u32, low: u32, bytes: usize) -> *mut c_void;
+            fn UnmapViewOfFile(address: *const c_void) -> i32;
+            fn CloseHandle(handle: *mut c_void) -> i32;
+        }
+        struct Mapping { handle: *mut c_void, view: *mut c_void }
+        impl Drop for Mapping {
+            fn drop(&mut self) {
+                unsafe { UnmapViewOfFile(self.view); CloseHandle(self.handle); }
+            }
+        }
+
+        let f = Fixture::new();
+        let target = f.target();
+        std::fs::create_dir(&target).unwrap();
+        let path = target.join("mapped.txt");
+        std::fs::write(&path, b"preserve").unwrap();
+        // Allow delete sharing so the mapping, rather than a deliberately
+        // restrictive initial file handle, is the condition being tested.
+        let file = OpenOptions::new().read(true).write(true).share_mode(0x7).open(&path).unwrap();
+        let handle = unsafe { CreateFileMappingW(file.as_raw_handle(), std::ptr::null(), 0x04, 0, 0, std::ptr::null()) };
+        assert!(!handle.is_null(), "CreateFileMappingW failed: {}", io::Error::last_os_error());
+        let view = unsafe { MapViewOfFile(handle, 0x0002, 0, 0, 0) };
+        if view.is_null() {
+            let error = io::Error::last_os_error();
+            unsafe { CloseHandle(handle); }
+            panic!("MapViewOfFile failed: {error}");
+        }
+        let mapping = Mapping { handle, view };
+        unsafe { *(mapping.view.cast::<u8>()) = b'P'; }
+        drop(file);
+
+        match prepare(&target, selected_identity(&target), ProtectedRoots::pin(&[]).unwrap()) {
+            Err(error) => assert!(matches!(error.raw_os_error(), Some(5 | 32 | 33 | 1224)), "unexpected preparation failure: {error}"),
+            Ok(tree) => {
+                let failure = delete_prepared(tree).expect_err("a mapped file was accepted for deletion");
+                assert_eq!(failure.processed, 0, "a mapped file was already processed");
+                assert!(matches!(failure.error.raw_os_error(), Some(5 | 32 | 33 | 1224)), "unexpected deletion failure: {}", failure.error);
+            }
+        }
+        assert_eq!(std::fs::read(&path).unwrap(), b"Preserve");
+        drop(mapping);
+    }
 }
