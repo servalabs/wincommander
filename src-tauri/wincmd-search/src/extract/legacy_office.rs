@@ -2,10 +2,9 @@
 //!
 //! Classic `.doc`, `.xls`, and `.ppt` files use the Compound File Binary
 //! Format.  This deliberately does not try to interpret every application
-//! record: it validates the container marker, refuses encryption markers, and
-//! returns only bounded printable ANSI/UTF-16 runs.  That is enough for
-//! discovery without pretending an encrypted or malformed legacy file was
-//! indexed completely.
+//! record: it checks the container marker and some encryption markers, then
+//! returns bounded printable ANSI/UTF-16 runs. The marker check is incomplete:
+//! a successful result does not prove that the file is valid or unencrypted.
 
 use std::io::Read;
 use std::path::Path;
@@ -17,7 +16,7 @@ const MAX_LEGACY_FILE_BYTES: usize = 32 * 1024 * 1024;
 const MIN_RUN_CHARS: usize = 4;
 
 /// Extract searchable text from a classic OLE Office file without executing or
-/// expanding embedded objects.  Encrypted input remains explicit and skipped.
+/// expanding embedded objects. Some encrypted formats are not detected.
 pub fn extract_legacy_office(path: &Path) -> Result<String> {
     let mut file = std::fs::File::open(path)?;
     let mut bytes = Vec::with_capacity(1024 * 1024);
@@ -40,16 +39,25 @@ pub fn extract_legacy_office(path: &Path) -> Result<String> {
         ));
     }
 
-    let mut runs = printable_ansi_runs(&bytes);
-    runs.extend(printable_utf16le_runs(&bytes));
-    runs.sort();
-    runs.dedup();
+    let mut runs = Vec::new();
+    printable_ansi_runs(&bytes, &mut runs);
+    printable_utf16le_runs(&bytes, &mut runs);
+    runs.sort_unstable_by(|a, b| a.bytes(&bytes).cmp(b.bytes(&bytes)));
+    runs.dedup_by(|a, b| a.bytes(&bytes).eq(b.bytes(&bytes)));
     if runs.is_empty() {
         return Err(SearchError::Extract(
             "legacy Office file contains no readable text".into(),
         ));
     }
-    Ok(runs.join("\n"))
+    let capacity = runs.iter().map(|run| run.len as usize).sum::<usize>() + runs.len() - 1;
+    let mut text = String::with_capacity(capacity);
+    for (index, run) in runs.iter().enumerate() {
+        if index != 0 {
+            text.push('\n');
+        }
+        text.extend(run.bytes(&bytes).map(char::from));
+    }
+    Ok(text)
 }
 
 fn has_encryption_marker(bytes: &[u8]) -> bool {
@@ -66,47 +74,66 @@ fn is_printable(byte: u8) -> bool {
     matches!(byte, b' '..=b'~' | b'\t')
 }
 
-fn flush_run(out: &mut Vec<String>, run: &mut Vec<u8>) {
-    if run.len() >= MIN_RUN_CHARS {
-        let text = String::from_utf8_lossy(run).trim().to_owned();
-        if text.len() >= MIN_RUN_CHARS {
-            out.push(text);
-        }
-    }
-    run.clear();
+// Offsets point into the bounded input, avoiding a heap allocation per run.
+#[derive(Clone, Copy)]
+struct TextRun {
+    start: u32,
+    len: u32,
+    stride: u8,
 }
 
-fn printable_ansi_runs(bytes: &[u8]) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut run = Vec::new();
-    for &byte in bytes {
-        if is_printable(byte) {
-            run.push(byte);
-        } else {
-            flush_run(&mut out, &mut run);
-        }
+impl TextRun {
+    fn bytes<'a>(&self, source: &'a [u8]) -> impl Iterator<Item = u8> + 'a {
+        let start = self.start as usize;
+        let len = self.len as usize;
+        let stride = self.stride as usize;
+        (0..len).map(move |index| source[start + index * stride])
     }
-    flush_run(&mut out, &mut run);
-    out
 }
 
-fn printable_utf16le_runs(bytes: &[u8]) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut run = Vec::new();
+fn record_run(source: &[u8], mut start: usize, end: usize, stride: usize, runs: &mut Vec<TextRun>) {
+    let mut len = (end - start) / stride;
+    while len > 0 && source[start].is_ascii_whitespace() {
+        start += stride;
+        len -= 1;
+    }
+    while len > 0 && source[start + (len - 1) * stride].is_ascii_whitespace() {
+        len -= 1;
+    }
+    if len >= MIN_RUN_CHARS {
+        // The input is capped at 32 MiB, so offsets and lengths fit u32.
+        runs.push(TextRun {
+            start: start as u32,
+            len: len as u32,
+            stride: stride as u8,
+        });
+    }
+}
+
+fn printable_ansi_runs(bytes: &[u8], runs: &mut Vec<TextRun>) {
+    let mut start = 0;
+    for (index, &byte) in bytes.iter().enumerate() {
+        if !is_printable(byte) {
+            record_run(bytes, start, index, 1, runs);
+            start = index + 1;
+        }
+    }
+    record_run(bytes, start, bytes.len(), 1, runs);
+}
+
+fn printable_utf16le_runs(bytes: &[u8], runs: &mut Vec<TextRun>) {
+    let mut start = 0;
     let mut index = 0;
     while index + 1 < bytes.len() {
-        let low = bytes[index];
-        let high = bytes[index + 1];
-        if high == 0 && is_printable(low) {
-            run.push(low);
+        if bytes[index + 1] == 0 && is_printable(bytes[index]) {
             index += 2;
         } else {
-            flush_run(&mut out, &mut run);
+            record_run(bytes, start, index, 2, runs);
             index += 1;
+            start = index;
         }
     }
-    flush_run(&mut out, &mut run);
-    out
+    record_run(bytes, start, index, 2, runs);
 }
 
 #[cfg(test)]
@@ -148,6 +175,49 @@ mod tests {
     fn non_compound_input_is_not_misrepresented_as_legacy_office() {
         let mut file = NamedTempFile::with_suffix(".doc").unwrap();
         file.write_all(b"not a compound file").unwrap();
+        assert!(matches!(
+            extract_legacy_office(file.path()),
+            Err(SearchError::Extract(_))
+        ));
+    }
+    #[test]
+    fn many_duplicate_runs_are_returned_once() {
+        let file = compound_file(&b"same\0".repeat(100_001));
+        assert_eq!(extract_legacy_office(file.path()).unwrap(), "same");
+    }
+
+    #[test]
+    fn mixed_encodings_trim_sort_and_deduplicate_as_before() {
+        let mut contents = b" zulu \0alpha\t\0".to_vec();
+        contents.extend("alpha".encode_utf16().flat_map(u16::to_le_bytes));
+        contents.extend_from_slice(b"\0\0  abc  \0");
+        let file = compound_file(&contents);
+        assert_eq!(extract_legacy_office(file.path()).unwrap(), "alpha\nzulu");
+    }
+
+    #[test]
+    fn many_unique_runs_are_not_silently_truncated() {
+        let mut bytes = Vec::new();
+        for index in 0..100_001 {
+            bytes.extend_from_slice(format!("term{index:06}\0").as_bytes());
+        }
+        let file = compound_file(&bytes);
+        let result = extract_legacy_office(file.path()).unwrap();
+        assert_eq!(result.lines().count(), 100_001);
+        assert!(result.starts_with("term000000\n"));
+        assert!(result.ends_with("term100000"));
+    }
+
+    #[test]
+    fn input_size_limit_still_accepts_exact_boundary_and_rejects_one_byte_more() {
+        let contents = vec![b'x'; MAX_LEGACY_FILE_BYTES - COMPOUND_FILE_MAGIC.len()];
+        let file = compound_file(&contents);
+        assert_eq!(
+            extract_legacy_office(file.path()).unwrap().len(),
+            contents.len()
+        );
+        drop(file);
+        let file = compound_file(&[contents, vec![b'x']].concat());
         assert!(matches!(
             extract_legacy_office(file.path()),
             Err(SearchError::Extract(_))
