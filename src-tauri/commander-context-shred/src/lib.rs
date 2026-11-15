@@ -272,75 +272,130 @@ fn overwrite_and_delete_file(path: &Path) -> Result<(), String> {
 }
 
 #[cfg(windows)]
+struct PendingErase {
+    file: fs::File,
+    committed: bool,
+}
+
+#[cfg(windows)]
+impl PendingErase {
+    fn set(file: &fs::File, delete: bool) -> Result<(), String> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FileDispositionInfo, SetFileInformationByHandle, FILE_DISPOSITION_INFO,
+        };
+        let disposition = FILE_DISPOSITION_INFO { DeleteFile: delete };
+        if unsafe {
+            SetFileInformationByHandle(
+                file.as_raw_handle(),
+                FileDispositionInfo,
+                std::ptr::from_ref(&disposition).cast(),
+                std::mem::size_of::<FILE_DISPOSITION_INFO>() as u32,
+            )
+        } == 0 {
+            return Err(format!(
+                "cannot update erase disposition: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        Ok(())
+    }
+
+    fn begin(file: &fs::File) -> Result<Self, String> {
+        let retained = file
+            .try_clone()
+            .map_err(|error| format!("cannot retain erase handle: {error}"))?;
+        Self::set(&retained, true)?;
+        Ok(Self {
+            file: retained,
+            committed: false,
+        })
+    }
+
+    fn cancel(&mut self) -> Result<(), String> {
+        Self::set(&self.file, false)?;
+        self.committed = true;
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+impl Drop for PendingErase {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = Self::set(&self.file, false);
+        }
+    }
+}
+
+#[cfg(windows)]
 fn overwrite_and_delete_file_inner(path: &Path, expected: &identity::ObjectPin) -> Result<(), String> {
+    overwrite_and_delete_file_inner_with_hook(path, expected, || Ok(()))
+}
+
+#[cfg(windows)]
+fn overwrite_and_delete_file_inner_with_hook(
+    path: &Path,
+    expected: &identity::ObjectPin,
+    after_check: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
     use std::os::windows::fs::OpenOptionsExt;
-    use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::{
-        FileDispositionInfo, GetFileInformationByHandle, SetFileInformationByHandle,
-        BY_HANDLE_FILE_INFORMATION, DELETE, FILE_ATTRIBUTE_REPARSE_POINT, FILE_DISPOSITION_INFO,
-        FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE, FILE_SHARE_READ,
+        DELETE, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ,
     };
 
     let mut file = OpenOptions::new()
         .read(true)
         .write(true)
         .access_mode(0x8000_0000 | 0x4000_0000 | DELETE)
-        .share_mode(FILE_SHARE_READ | FILE_SHARE_DELETE)
+        .share_mode(FILE_SHARE_READ)
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
         .open(path)
         .map_err(|error| format!("cannot open file for verified erase: {error}"))?;
+    // Do not mark an unrelated replacement for deletion even briefly.
     expected.verify(&file)?;
-    let mut information = BY_HANDLE_FILE_INFORMATION::default();
-    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut information) } == 0 {
-        return Err(format!(
-            "cannot inspect opened erase target: {}",
-            io::Error::last_os_error()
-        ));
-    }
-    if information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
-        || information.nNumberOfLinks != 1
-    {
-        return Err("refused linked, reparse-point, or hard-linked erase target".into());
-    }
-    let length = file
-        .metadata()
-        .map_err(|error| format!("cannot inspect opened file: {error}"))?
-        .len();
-    let mut offset = 0u64;
-    let mut expected = [0u8; 64 * 1024];
-    let mut actual = [0u8; 64 * 1024];
-    while offset < length {
-        let bytes = (length - offset).min(expected.len() as u64) as usize;
-        SysRng.try_fill_bytes(&mut expected[..bytes]).map_err(|_| "overwrite randomness unavailable")?;
-        file.seek(SeekFrom::Start(offset))
-            .and_then(|_| file.write_all(&expected[..bytes]))
-            .and_then(|_| file.flush())
-            .and_then(|_| file.seek(SeekFrom::Start(offset)))
-            .and_then(|_| file.read_exact(&mut actual[..bytes]))
-            .map_err(|error| format!("cannot overwrite and verify file: {error}"))?;
-        if actual[..bytes] != expected[..bytes] {
-            return Err("file overwrite read-back verification failed".into());
+    // Denying delete sharing excludes pre-existing handles that could cancel a
+    // pending deletion. Mark the selected name before checking link count so a
+    // new hard link cannot appear between verification and overwrite.
+    let mut pending = PendingErase::begin(&file)?;
+    let result = (|| -> Result<(), String> {
+        expected.verify_pending_file(&file)?;
+        after_check()?;
+        let length = file
+            .metadata()
+            .map_err(|error| format!("cannot inspect opened file: {error}"))?
+            .len();
+        let mut offset = 0u64;
+        let mut expected = [0u8; 64 * 1024];
+        let mut actual = [0u8; 64 * 1024];
+        while offset < length {
+            let bytes = (length - offset).min(expected.len() as u64) as usize;
+            SysRng.try_fill_bytes(&mut expected[..bytes]).map_err(|_| "overwrite randomness unavailable")?;
+            file.seek(SeekFrom::Start(offset))
+                .and_then(|_| file.write_all(&expected[..bytes]))
+                .and_then(|_| file.flush())
+                .and_then(|_| file.seek(SeekFrom::Start(offset)))
+                .and_then(|_| file.read_exact(&mut actual[..bytes]))
+                .map_err(|error| format!("cannot overwrite and verify file: {error}"))?;
+            if actual[..bytes] != expected[..bytes] {
+                return Err("file overwrite read-back verification failed".into());
+            }
+            offset += bytes as u64;
         }
-        offset += bytes as u64;
+        file.sync_all()
+            .map_err(|error| format!("cannot flush overwritten file: {error}"))?;
+        Ok(())
+    })();
+    match result {
+        Ok(()) => {
+            pending.committed = true;
+            Ok(())
+        }
+        Err(error) => match pending.cancel() {
+            Ok(()) => Err(error),
+            Err(cancel) => Err(format!("{error}; could not cancel pending deletion: {cancel}")),
+        },
     }
-    file.sync_all()
-        .map_err(|error| format!("cannot flush overwritten file: {error}"))?;
-    let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
-    if unsafe {
-        SetFileInformationByHandle(
-            file.as_raw_handle(),
-            FileDispositionInfo,
-            std::ptr::from_ref(&disposition).cast(),
-            std::mem::size_of::<FILE_DISPOSITION_INFO>() as u32,
-        )
-    } == 0
-    {
-        return Err(format!(
-            "cannot delete verified erase target: {}",
-            io::Error::last_os_error()
-        ));
-    }
-    Ok(())
 }
 
 #[cfg(all(windows, test))]
@@ -592,6 +647,142 @@ pub fn log_result(error: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn link_created_after_validation_never_changes_either_name() {
+        let directory = tempfile::tempdir().unwrap();
+        let original = directory.path().join("original.txt");
+        let alias = directory.path().join("alias.txt");
+        fs::write(&original, b"preserve sentinel").unwrap();
+        let pin = identity::ObjectPin::capture(&original, false, false).unwrap();
+        let result = with_verified_readonly(&original, &pin, || {
+            overwrite_and_delete_file_inner_with_hook(&original, &pin, || {
+                fs::hard_link(&original, &alias).map_err(|_| "link blocked".to_string())
+            })
+        });
+        assert!(result.is_err());
+        assert_eq!(fs::read(&original).unwrap(), b"preserve sentinel");
+        if alias.exists() {
+            assert_eq!(fs::read(&alias).unwrap(), b"preserve sentinel");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn link_created_after_pin_is_not_overwritten_or_deleted() {
+        let directory = tempfile::tempdir().unwrap();
+        let original = directory.path().join("original.txt");
+        let alias = directory.path().join("alias.txt");
+        fs::write(&original, b"preserve sentinel").unwrap();
+        let pin = identity::ObjectPin::capture(&original, false, false).unwrap();
+        fs::hard_link(&original, &alias).unwrap();
+        assert!(overwrite_and_delete_expected(&original, &pin).is_err());
+        assert_eq!(fs::read(&original).unwrap(), b"preserve sentinel");
+        assert_eq!(fs::read(&alias).unwrap(), b"preserve sentinel");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn panic_before_overwrite_cancels_pending_deletion() {
+        let directory = tempfile::tempdir().unwrap();
+        let original = directory.path().join("original.txt");
+        fs::write(&original, b"preserve sentinel").unwrap();
+        let pin = identity::ObjectPin::capture(&original, false, false).unwrap();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = overwrite_and_delete_file_inner_with_hook(&original, &pin, || {
+                panic!("fixture panic before overwrite")
+            });
+        }));
+        assert!(result.is_err());
+        assert_eq!(fs::read(&original).unwrap(), b"preserve sentinel");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn preexisting_delete_capable_handle_blocks_erase_without_mutation() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            DELETE, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let original = directory.path().join("original.txt");
+        fs::write(&original, b"preserve sentinel").unwrap();
+        let other = OpenOptions::new()
+            .access_mode(FILE_READ_ATTRIBUTES | DELETE)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .open(&original)
+            .unwrap();
+        let pin = identity::ObjectPin::capture(&original, false, false).unwrap();
+        assert!(overwrite_and_delete_expected(&original, &pin).is_err());
+        assert_eq!(fs::read(&original).unwrap(), b"preserve sentinel");
+        drop(other);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn preexisting_attribute_handle_cannot_clear_or_link_pending_file() {
+        use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
+        use windows_sys::Win32::Storage::FileSystem::{
+            FileDispositionInfo, SetFileInformationByHandle, FILE_DISPOSITION_INFO,
+            FILE_FLAG_BACKUP_SEMANTICS, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE,
+            FILE_SHARE_READ, FILE_SHARE_WRITE,
+        };
+        #[repr(C)]
+        struct IoStatus { status: isize, information: usize }
+        #[link(name = "ntdll")]
+        extern "system" {
+            fn NtSetInformationFile(
+                file: *mut std::ffi::c_void, status: *mut IoStatus, info: *mut std::ffi::c_void,
+                len: u32, class: u32,
+            ) -> i32;
+        }
+        fn link(source: &fs::File, directory: &fs::File, name: &str) -> i32 {
+            use std::os::windows::ffi::OsStrExt;
+            let chars: Vec<u16> = std::ffi::OsStr::new(name).encode_wide().collect();
+            let length = 20 + chars.len() * 2;
+            let mut buffer = vec![0u64; length.div_ceil(8)];
+            let bytes = buffer.as_mut_ptr().cast::<u8>();
+            unsafe {
+                bytes.add(8).cast::<*mut std::ffi::c_void>().write(directory.as_raw_handle());
+                bytes.add(16).cast::<u32>().write((chars.len() * 2) as u32);
+                std::ptr::copy_nonoverlapping(chars.as_ptr().cast::<u8>(), bytes.add(20), chars.len() * 2);
+                let mut status = IoStatus { status: 0, information: 0 };
+                NtSetInformationFile(source.as_raw_handle(), &mut status, bytes.cast(), length as u32, 11)
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let original = root.path().join("original.txt");
+        let control = root.path().join("control.txt");
+        let alias = root.path().join("alias.txt");
+        fs::write(&original, b"preserve sentinel").unwrap();
+        let other = OpenOptions::new().access_mode(FILE_READ_ATTRIBUTES)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .open(&original).unwrap();
+        let directory = OpenOptions::new().access_mode(2)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS).open(root.path()).unwrap();
+        assert_eq!(link(&other, &directory, "control.txt"), 0);
+        fs::remove_file(&control).unwrap();
+        let pin = identity::ObjectPin::capture(&original, false, false).unwrap();
+        let result = with_verified_readonly(&original, &pin, || {
+            overwrite_and_delete_file_inner_with_hook(&original, &pin, || {
+                let disposition = FILE_DISPOSITION_INFO { DeleteFile: false };
+                assert_eq!(unsafe {
+                    SetFileInformationByHandle(
+                        other.as_raw_handle(), FileDispositionInfo,
+                        std::ptr::from_ref(&disposition).cast(),
+                        std::mem::size_of::<FILE_DISPOSITION_INFO>() as u32,
+                    )
+                }, 0);
+                assert!(link(&other, &directory, "alias.txt") < 0);
+                Err("fixture stopped before overwrite".into())
+            })
+        });
+        assert!(result.is_err());
+        assert!(!alias.exists());
+        assert_eq!(fs::read(&original).unwrap(), b"preserve sentinel");
+    }
 
     #[test]
     fn rejects_protected_roots_and_their_ancestors() {

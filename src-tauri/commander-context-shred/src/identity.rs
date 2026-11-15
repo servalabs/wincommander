@@ -62,6 +62,33 @@ impl ObjectPin {
         Ok(())
     }
 
+    pub(super) fn verify_pending_file(&self, file: &File) -> Result<(), String> {
+        use windows_sys::Win32::Storage::FileSystem::{
+            FileStandardInfo, GetFileInformationByHandleEx, FILE_STANDARD_INFO,
+        };
+        self.verify_same_object(file)?;
+        let mut info = FILE_STANDARD_INFO::default();
+        if unsafe {
+            GetFileInformationByHandleEx(
+                file.as_raw_handle(),
+                FileStandardInfo,
+                std::ptr::addr_of_mut!(info).cast(),
+                std::mem::size_of::<FILE_STANDARD_INFO>() as u32,
+            )
+        } == 0 {
+            return Err(format!(
+                "cannot inspect pending erase target: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        // The selected name is delete-pending and therefore no longer counts
+        // as a non-deleted link. Any remaining link makes overwrite unsafe.
+        if info.Directory || !info.DeletePending || info.NumberOfLinks != 0 {
+            return Err("refused erase target with another link or without pending deletion".into());
+        }
+        Ok(())
+    }
+
     pub(super) fn is_directory(&self) -> bool { self.directory }
 
     pub(super) fn attributes(&self) -> Result<u32, String> {
