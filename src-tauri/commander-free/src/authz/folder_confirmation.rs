@@ -50,7 +50,7 @@ fn safe_target(value: &str) -> String {
     value.chars().flat_map(|c| {
         if c == '\\' {
             vec!['\\', '\\']
-        } else if c.is_control() || matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{200e}' | '\u{200f}' | '\u{061c}') {
+        } else if c.is_control() || matches!(c, '\u{2028}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{200e}' | '\u{200f}' | '\u{061c}') {
             format!("\\u{{{:04X}}}", c as u32).chars().collect::<Vec<_>>()
         } else { vec![c] }
     }).collect()
@@ -65,7 +65,7 @@ fn shared_ownership_warning(has_shared_items: bool) -> &'static str {
 }
 
 fn confirmation_detail(path: &str, files: usize, folders: usize, shared_warning: &str) -> String {
-    format!("Permanently delete this folder?\n\nTarget: {}\nBackslashes in the target are displayed twice; control characters are escaped.\nFreshly verified current tree: {} files · {} folders (including the selected folder). These counts are independent of the earlier scan.{}\n\nNew items are not included and may cause partial deletion. This confirmation expires after 30 seconds.", safe_target(path), files, folders, shared_warning)
+    format!("Permanently delete this folder?\n\nTarget: {}\nBackslashes in the target are displayed twice; control and line separator characters are escaped.\nFreshly verified current tree: {} files · {} folders (including the selected folder). These counts are independent of the earlier scan.{}\n\nNew items are not included and may cause partial deletion. This confirmation expires after 30 seconds.", safe_target(path), files, folders, shared_warning)
 }
 
 pub(super) async fn confirm(folder: PreparedTree, permit: Permit) -> Result<Option<PreparedTree>, String> {
@@ -113,6 +113,14 @@ mod tests {
     }
 
     #[test]
+    fn confirmation_escapes_unicode_line_and_paragraph_separators() {
+        let detail = confirmation_detail("C:\\vault\\before\u{2028}middle\u{2029}after", 1, 1, "");
+        assert!(detail.contains("before\\u{2028}middle\\u{2029}after"));
+        assert!(!detail.contains('\u{2028}'));
+        assert!(!detail.contains('\u{2029}'));
+    }
+
+    #[test]
     fn confirmation_distinguishes_controls_from_literal_escape_text() {
         let control = "C:\\vault\\foo\u{202e}bar";
         let literal = "C:\\vault\\foo\\u{202E}bar";
@@ -124,7 +132,7 @@ mod tests {
     fn confirmation_detail_explains_the_rendered_path() {
         let detail = confirmation_detail("C:\\vault\\foo\u{202e}bar", 2, 1, "");
         assert!(detail.contains("Target: C:\\\\vault\\\\foo\\u{202E}bar"));
-        assert!(detail.contains("Backslashes in the target are displayed twice; control characters are escaped."));
+        assert!(detail.contains("Backslashes in the target are displayed twice; control and line separator characters are escaped."));
         assert!(detail.contains("2 files · 1 folders"));
     }
 
