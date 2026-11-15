@@ -1830,6 +1830,13 @@ mod tests {
             &crate::paths::atomic_write_machine_state,
         )
         .unwrap();
+        if let Ok(previous) = std::env::var("WINCMD_EVIDENCE_EXPECT_PREVIOUS") {
+            assert!(matches!(previous.as_str(), "administrator" | "system" | "example" | "wait-admin"));
+            assert!(
+                ledger.entries.iter().any(|item| item.summary == format!("identity-{previous}")),
+                "previous identity's entry was not retained"
+            );
+        }
         let mut item = entry();
         item.summary = format!("identity-{mode}");
         ledger.entries.push(item);
