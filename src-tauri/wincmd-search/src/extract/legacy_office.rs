@@ -200,7 +200,7 @@ mod tests {
             let mut bytes = Vec::with_capacity(length);
             for _ in 0..length {
                 seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-                let byte = match seed % 5 { 0 => 0, 1 => b'\t', _ => b' ' + ((seed >> 8) % 95) as u8 };
+                let byte = match seed % 7 { 0 => 0, 1 => b'\t', 2 => 0xff, _ => b' ' + ((seed >> 8) % 95) as u8 };
                 bytes.push(byte);
             }
             let mut old = Vec::new(); let mut run = Vec::new();
@@ -223,6 +223,12 @@ mod tests {
             let actual: Vec<String> = compact.iter().map(|run| run.bytes(&bytes).map(char::from).collect()).collect();
             assert_eq!(actual, old, "input length {length}");
         }
+    }
+
+    #[test]
+    fn finds_utf16_at_odd_offset_between_high_bytes() {
+        let file = compound_file(b"\xffh\0e\0l\0l\0o\0\xff");
+        assert_eq!(extract_legacy_office(file.path()).unwrap(), "hello");
     }
 
     #[test]
