@@ -54,6 +54,16 @@ impl ObjectPin {
         Ok(())
     }
 
+    pub(super) fn verify_path(&self, path: &Path) -> Result<(), String> {
+        let file = std::fs::OpenOptions::new()
+            .access_mode(FILE_READ_ATTRIBUTES)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path)
+            .map_err(|error| format!("cannot verify resolved erase target: {error}"))?;
+        self.verify(&file)
+    }
+
     fn verify_same_object(&self, file: &File) -> Result<(), String> {
         let info = information(file).map_err(|error| error.to_string())?;
         if key(&info) != self.identity {

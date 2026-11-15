@@ -181,6 +181,13 @@ fn validate_target(raw_path: &str) -> Result<PathBuf, String> {
 pub const MAX_CONTEXT_TARGETS: usize = 100;
 
 fn validate_selection(raw_paths: &[String]) -> Result<Vec<PathBuf>, String> {
+    Ok(validate_selection_with_originals(raw_paths)?
+        .into_iter()
+        .map(|(_, target)| target)
+        .collect())
+}
+
+fn validate_selection_with_originals(raw_paths: &[String]) -> Result<Vec<(PathBuf, PathBuf)>, String> {
     if raw_paths.is_empty() {
         return Err("refused missing Explorer target".into());
     }
@@ -189,21 +196,21 @@ fn validate_selection(raw_paths: &[String]) -> Result<Vec<PathBuf>, String> {
             "refused Explorer selection larger than {MAX_CONTEXT_TARGETS} items"
         ));
     }
-    let mut targets: Vec<PathBuf> = Vec::with_capacity(raw_paths.len());
+    let mut targets: Vec<(PathBuf, PathBuf)> = Vec::with_capacity(raw_paths.len());
     for raw_path in raw_paths {
         let target = validate_target(raw_path)?;
         let target_key = normalized(&target);
-        if targets.iter().any(|existing| {
+        if targets.iter().any(|(_, existing)| {
             let existing_key = normalized(existing);
             target_key == existing_key || target_key.starts_with(&(existing_key + "\\"))
         }) {
             continue;
         }
-        targets.retain(|existing| {
+        targets.retain(|(_, existing)| {
             let existing_key = normalized(existing);
             !(existing_key == target_key || existing_key.starts_with(&(target_key.clone() + "\\")))
         });
-        targets.push(target);
+        targets.push((PathBuf::from(raw_path), target));
     }
     Ok(targets)
 }
@@ -568,13 +575,25 @@ pub fn execute_prepared(selection: PreparedSelection) -> Result<(), String> {
 /// Pins approved object identities before the renderer capability is consumed.
 #[cfg(windows)]
 pub fn prepare(raw_paths: Vec<String>) -> Result<PreparedSelection, String> {
+    prepare_validated(validate_selection_with_originals(&raw_paths)?)
+}
+
+#[cfg(windows)]
+fn prepare_validated(validated: Vec<(PathBuf, PathBuf)>) -> Result<PreparedSelection, String> {
     let mut targets = Vec::new();
     let mut name_guards = Vec::new();
-    for initially_validated_target in validate_selection(&raw_paths)? {
-        let ancestors = identity::pin_ancestors(&initially_validated_target)?;
-        let target = validate_target(&initially_validated_target.to_string_lossy())?;
+    for (original, initially_validated_target) in validated {
+        // Pin the user-supplied namespace before resolving it again. Pinning
+        // only the canonical path would discard linked-parent evidence.
+        let mut ancestors = identity::pin_ancestors(&original)?;
+        let target = validate_target(&original.to_string_lossy())?;
+        if normalized(&target) != normalized(&initially_validated_target) {
+            return Err("erase target resolution changed before pinning".into());
+        }
+        ancestors.extend(identity::pin_ancestors(&target)?);
         let directory = fs::symlink_metadata(&target).map_err(|error| error.to_string())?.is_dir();
-        let pin = identity::ObjectPin::capture(&target, directory, true)?;
+        let pin = identity::ObjectPin::capture(&original, directory, true)?;
+        pin.verify_path(&target)?;
         if !directory { name_guards.push(pin.guard_name(&target)?); }
         targets.push((target, ancestors, pin));
     }
@@ -858,6 +877,33 @@ mod tests {
         let error = validate_target(&target.to_string_lossy()).unwrap_err();
         assert!(error.contains("reparse-point"), "{error}");
         assert_eq!(fs::read(outside.join("sentinel.txt")).unwrap(), b"preserve");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn refuses_ancestor_replaced_by_junction_after_selection() {
+        let directory = tempfile::tempdir().unwrap();
+        let original = directory.path().join("original");
+        let moved = directory.path().join("moved");
+        let outside = directory.path().join("outside");
+        fs::create_dir(&original).unwrap();
+        fs::create_dir(&outside).unwrap();
+        fs::write(original.join("sentinel.txt"), b"original").unwrap();
+        fs::write(outside.join("sentinel.txt"), b"outside").unwrap();
+        let raw = original.join("sentinel.txt").to_string_lossy().into_owned();
+        let validated = validate_selection_with_originals(&[raw]).unwrap();
+        fs::rename(&original, &moved).unwrap();
+        assert!(std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&original)
+            .arg(&outside)
+            .status()
+            .unwrap()
+            .success());
+
+        assert!(prepare_validated(validated).is_err());
+        assert_eq!(fs::read(moved.join("sentinel.txt")).unwrap(), b"original");
+        assert_eq!(fs::read(outside.join("sentinel.txt")).unwrap(), b"outside");
     }
 
     #[test]
