@@ -19,13 +19,16 @@ pub(crate) async fn secure_shred(
     path: String,
     capability_token: Option<String>,
 ) -> Result<(), String> {
+    // Keep the original path until the erase library has checked and pinned
+    // its namespace. Canonicalizing first could hide a linked ancestor.
+    let prepared = commander_context_shred::prepare(vec![path.clone()])?;
     let canonical_path = crate::authz::canonical_path(&path);
     crate::authz::consume_required(
         capability_token.as_deref(),
         crate::authz::DestructiveAction::DiskDelete,
         &crate::authz::secure_erase_args(&canonical_path),
     )?;
-    tokio::task::spawn_blocking(move || execute_cli(vec![canonical_path]))
+    tokio::task::spawn_blocking(move || commander_context_shred::execute_prepared(prepared))
         .await
         .map_err(|error| format!("secure erase worker failed: {error}"))?
 }

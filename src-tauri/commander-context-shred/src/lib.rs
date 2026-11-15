@@ -7,14 +7,18 @@ use std::{
     fs::OpenOptions,
     io::{self, Write},
     path::{Component, Path, PathBuf},
-    thread,
-    time::Duration,
 };
+
+#[cfg(not(windows))]
+use std::{thread, time::Duration};
 
 #[cfg(windows)]
 use std::io::{Read, Seek, SeekFrom};
 
 use rand::{rngs::SysRng, TryRng};
+
+#[cfg(windows)]
+mod identity;
 
 fn normalized(path: &Path) -> String {
     let value = path.to_string_lossy().replace('/', "\\");
@@ -156,9 +160,9 @@ fn validate_target(raw_path: &str) -> Result<PathBuf, String> {
     if !raw.is_absolute() {
         return Err("refused non-absolute Explorer target".into());
     }
-    if has_reparse_point(&raw)? {
-        return Err("refused linked or reparse-point Explorer target".into());
-    }
+    // Check the original path before canonicalization can hide a linked
+    // ancestor by resolving it to a different directory.
+    ensure_no_reparse_point_in_ancestors(&raw)?;
     let target = resolve_existing_target(&raw)?;
     let metadata = fs::metadata(&target)
         .map_err(|error| format!("cannot inspect Explorer target: {error}"))?;
@@ -177,6 +181,13 @@ fn validate_target(raw_path: &str) -> Result<PathBuf, String> {
 pub const MAX_CONTEXT_TARGETS: usize = 100;
 
 fn validate_selection(raw_paths: &[String]) -> Result<Vec<PathBuf>, String> {
+    Ok(validate_selection_with_originals(raw_paths)?
+        .into_iter()
+        .map(|(_, target)| target)
+        .collect())
+}
+
+fn validate_selection_with_originals(raw_paths: &[String]) -> Result<Vec<(PathBuf, PathBuf)>, String> {
     if raw_paths.is_empty() {
         return Err("refused missing Explorer target".into());
     }
@@ -185,25 +196,26 @@ fn validate_selection(raw_paths: &[String]) -> Result<Vec<PathBuf>, String> {
             "refused Explorer selection larger than {MAX_CONTEXT_TARGETS} items"
         ));
     }
-    let mut targets: Vec<PathBuf> = Vec::with_capacity(raw_paths.len());
+    let mut targets: Vec<(PathBuf, PathBuf)> = Vec::with_capacity(raw_paths.len());
     for raw_path in raw_paths {
         let target = validate_target(raw_path)?;
         let target_key = normalized(&target);
-        if targets.iter().any(|existing| {
+        if targets.iter().any(|(_, existing)| {
             let existing_key = normalized(existing);
             target_key == existing_key || target_key.starts_with(&(existing_key + "\\"))
         }) {
             continue;
         }
-        targets.retain(|existing| {
+        targets.retain(|(_, existing)| {
             let existing_key = normalized(existing);
             !(existing_key == target_key || existing_key.starts_with(&(target_key.clone() + "\\")))
         });
-        targets.push(target);
+        targets.push((PathBuf::from(raw_path), target));
     }
     Ok(targets)
 }
 
+#[cfg(not(windows))]
 fn remove_empty_directory_with_retries(path: &Path) -> io::Result<()> {
     let mut last_error = None;
     for _ in 0..4 {
@@ -267,136 +279,181 @@ fn overwrite_and_delete_file(path: &Path) -> Result<(), String> {
 }
 
 #[cfg(windows)]
-fn original_file_attributes(path: &Path) -> Result<u32, String> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::GetFileAttributesW;
-
-    let wide_path = path
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect::<Vec<_>>();
-    let attributes = unsafe { GetFileAttributesW(wide_path.as_ptr()) };
-    if attributes == u32::MAX {
-        return Err(format!(
-            "cannot inspect file attributes: {}",
-            io::Error::last_os_error()
-        ));
-    }
-    Ok(attributes)
+struct PendingErase {
+    file: fs::File,
+    committed: bool,
 }
 
 #[cfg(windows)]
-fn set_file_attributes(path: &Path, attributes: u32) -> Result<(), String> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::SetFileAttributesW;
-
-    let wide_path = path
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect::<Vec<_>>();
-    if unsafe { SetFileAttributesW(wide_path.as_ptr(), attributes) } == 0 {
-        return Err(format!(
-            "cannot update file attributes: {}",
-            io::Error::last_os_error()
-        ));
+impl PendingErase {
+    fn set(file: &fs::File, delete: bool) -> Result<(), String> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FileDispositionInfo, SetFileInformationByHandle, FILE_DISPOSITION_INFO,
+        };
+        let disposition = FILE_DISPOSITION_INFO { DeleteFile: delete };
+        if unsafe {
+            SetFileInformationByHandle(
+                file.as_raw_handle(),
+                FileDispositionInfo,
+                std::ptr::from_ref(&disposition).cast(),
+                std::mem::size_of::<FILE_DISPOSITION_INFO>() as u32,
+            )
+        } == 0 {
+            return Err(format!(
+                "cannot update erase disposition: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        Ok(())
     }
-    Ok(())
+
+    fn begin(file: &fs::File) -> Result<Self, String> {
+        let retained = file
+            .try_clone()
+            .map_err(|error| format!("cannot retain erase handle: {error}"))?;
+        Self::set(&retained, true)?;
+        Ok(Self {
+            file: retained,
+            committed: false,
+        })
+    }
+
+    fn cancel(&mut self) -> Result<(), String> {
+        Self::set(&self.file, false)?;
+        self.committed = true;
+        Ok(())
+    }
 }
 
 #[cfg(windows)]
-fn overwrite_and_delete_file_inner(path: &Path) -> Result<(), String> {
+impl Drop for PendingErase {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = Self::set(&self.file, false);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn overwrite_and_delete_file_inner(path: &Path, expected: &identity::ObjectPin) -> Result<(), String> {
+    overwrite_and_delete_file_inner_with_hook(path, expected, || Ok(()))
+}
+
+#[cfg(windows)]
+fn overwrite_and_delete_file_inner_with_hook(
+    path: &Path,
+    expected: &identity::ObjectPin,
+    after_check: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
     use std::os::windows::fs::OpenOptionsExt;
-    use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::{
-        FileDispositionInfo, GetFileInformationByHandle, SetFileInformationByHandle,
-        BY_HANDLE_FILE_INFORMATION, DELETE, FILE_ATTRIBUTE_REPARSE_POINT, FILE_DISPOSITION_INFO,
-        FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE, FILE_SHARE_READ,
+        DELETE, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ,
     };
 
     let mut file = OpenOptions::new()
         .read(true)
         .write(true)
         .access_mode(0x8000_0000 | 0x4000_0000 | DELETE)
-        .share_mode(FILE_SHARE_READ | FILE_SHARE_DELETE)
+        .share_mode(FILE_SHARE_READ)
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
         .open(path)
         .map_err(|error| format!("cannot open file for verified erase: {error}"))?;
-    let mut information = BY_HANDLE_FILE_INFORMATION::default();
-    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut information) } == 0 {
-        return Err(format!(
-            "cannot inspect opened erase target: {}",
-            io::Error::last_os_error()
-        ));
-    }
-    if information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
-        || information.nNumberOfLinks != 1
-    {
-        return Err("refused linked, reparse-point, or hard-linked erase target".into());
-    }
-    let length = file
-        .metadata()
-        .map_err(|error| format!("cannot inspect opened file: {error}"))?
-        .len();
-    let mut offset = 0u64;
-    let mut expected = [0u8; 64 * 1024];
-    let mut actual = [0u8; 64 * 1024];
-    while offset < length {
-        let bytes = (length - offset).min(expected.len() as u64) as usize;
-        SysRng.try_fill_bytes(&mut expected[..bytes]).map_err(|_| "overwrite randomness unavailable")?;
-        file.seek(SeekFrom::Start(offset))
-            .and_then(|_| file.write_all(&expected[..bytes]))
-            .and_then(|_| file.flush())
-            .and_then(|_| file.seek(SeekFrom::Start(offset)))
-            .and_then(|_| file.read_exact(&mut actual[..bytes]))
-            .map_err(|error| format!("cannot overwrite and verify file: {error}"))?;
-        if actual[..bytes] != expected[..bytes] {
-            return Err("file overwrite read-back verification failed".into());
+    // Do not mark an unrelated replacement for deletion even briefly.
+    expected.verify(&file)?;
+    // Denying delete sharing excludes pre-existing handles that could cancel a
+    // pending deletion. Mark the selected name before checking link count so a
+    // new hard link cannot appear between verification and overwrite.
+    let mut pending = PendingErase::begin(&file)?;
+    let result = (|| -> Result<(), String> {
+        expected.verify_pending_file(&file)?;
+        after_check()?;
+        let length = file
+            .metadata()
+            .map_err(|error| format!("cannot inspect opened file: {error}"))?
+            .len();
+        let mut offset = 0u64;
+        let mut expected = [0u8; 64 * 1024];
+        let mut actual = [0u8; 64 * 1024];
+        while offset < length {
+            let bytes = (length - offset).min(expected.len() as u64) as usize;
+            SysRng.try_fill_bytes(&mut expected[..bytes]).map_err(|_| "overwrite randomness unavailable")?;
+            file.seek(SeekFrom::Start(offset))
+                .and_then(|_| file.write_all(&expected[..bytes]))
+                .and_then(|_| file.flush())
+                .and_then(|_| file.seek(SeekFrom::Start(offset)))
+                .and_then(|_| file.read_exact(&mut actual[..bytes]))
+                .map_err(|error| format!("cannot overwrite and verify file: {error}"))?;
+            if actual[..bytes] != expected[..bytes] {
+                return Err("file overwrite read-back verification failed".into());
+            }
+            offset += bytes as u64;
         }
-        offset += bytes as u64;
+        file.sync_all()
+            .map_err(|error| format!("cannot flush overwritten file: {error}"))?;
+        Ok(())
+    })();
+    match result {
+        Ok(()) => {
+            pending.committed = true;
+            Ok(())
+        }
+        Err(error) => match pending.cancel() {
+            Ok(()) => Err(error),
+            Err(cancel) => Err(format!("{error}; could not cancel pending deletion: {cancel}")),
+        },
     }
-    file.sync_all()
-        .map_err(|error| format!("cannot flush overwritten file: {error}"))?;
-    let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
-    if unsafe {
-        SetFileInformationByHandle(
-            file.as_raw_handle(),
-            FileDispositionInfo,
-            std::ptr::from_ref(&disposition).cast(),
-            std::mem::size_of::<FILE_DISPOSITION_INFO>() as u32,
-        )
-    } == 0
-    {
-        return Err(format!(
-            "cannot delete verified erase target: {}",
-            io::Error::last_os_error()
-        ));
-    }
-    Ok(())
+}
+
+#[cfg(all(windows, test))]
+fn overwrite_and_delete_file(path: &Path) -> Result<(), String> {
+    let _ancestors = identity::pin_ancestors(path)?;
+    let expected = identity::ObjectPin::capture(path, false, false)?;
+    overwrite_and_delete_expected(path, &expected)
 }
 
 #[cfg(windows)]
-fn overwrite_and_delete_file(path: &Path) -> Result<(), String> {
+fn overwrite_and_delete_expected(path: &Path, expected: &identity::ObjectPin) -> Result<(), String> {
+    with_verified_readonly(path, expected, || overwrite_and_delete_file_inner(path, expected))
+}
+
+#[cfg(windows)]
+fn with_verified_readonly(
+    path: &Path,
+    expected: &identity::ObjectPin,
+    operation: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
     use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_READONLY;
 
     // Windows refuses a writable handle to a read-only file even when its
     // owner explicitly chose Secure Delete. Clear only that transient DOS
     // attribute; if secure erase cannot complete, restore the exact original
     // attributes so a failed operation does not silently change the file.
-    let original_attributes = original_file_attributes(path)?;
-    let was_readonly = original_attributes & FILE_ATTRIBUTE_READONLY != 0;
-    if was_readonly {
-        set_file_attributes(path, original_attributes & !FILE_ATTRIBUTE_READONLY)?;
-    }
+    let original_attributes = expected.attributes()?;
+    let readonly_handle = if original_attributes & FILE_ATTRIBUTE_READONLY != 0 {
+        // A name guard is not a guarantee against rename on every filesystem.
+        // Verify an attribute handle and mutate that same object by handle.
+        let file = expected.open_attribute_handle(path)?;
+        if expected.handle_attributes(&file)? != original_attributes {
+            return Err("erase target attributes changed".into());
+        }
+        expected.set_attributes(&file, original_attributes & !FILE_ATTRIBUTE_READONLY)?;
+        Some(file)
+    } else { None };
 
-    let result = overwrite_and_delete_file_inner(path);
-    if result.is_err() && was_readonly {
-        let _ = set_file_attributes(path, original_attributes);
+    match operation() {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            if let Some(file) = readonly_handle.as_ref() {
+                expected.restore_attributes(file, original_attributes)
+                    .map_err(|restore| format!("{error}; could not restore original attributes: {restore}"))?;
+            }
+            Err(error)
+        }
     }
-    result
 }
 
+#[cfg(not(windows))]
 fn secure_erase_directory(root: &Path) -> Result<(), String> {
     let mut files = Vec::new();
     let mut directories = Vec::new();
@@ -441,6 +498,7 @@ fn secure_erase_directory(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(not(windows))]
 fn secure_erase_path(path: &Path) -> Result<(), String> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|error| format!("cannot inspect erase target '{}': {error}", path.display()))?;
@@ -459,6 +517,7 @@ fn secure_erase_path(path: &Path) -> Result<(), String> {
     }
 }
 
+#[cfg(not(windows))]
 fn secure_erase_target(target: PathBuf) -> Result<(), String> {
     secure_erase_path(&target)?;
     match fs::symlink_metadata(&target) {
@@ -477,11 +536,115 @@ fn secure_erase_target(target: PathBuf) -> Result<(), String> {
 /// Executes a complete Explorer selection without UI, PowerShell, elevation,
 /// or a service hand-off. Every target is validated before any erase begins.
 pub fn execute_cli(raw_paths: Vec<String>) -> Result<(), String> {
+    #[cfg(windows)]
+    { execute_prepared(prepare(raw_paths)?) }
+    #[cfg(not(windows))]
+    {
     let targets = validate_selection(&raw_paths)?;
     for initially_validated_target in targets {
         let target = validate_target(&initially_validated_target.to_string_lossy())?;
         secure_erase_target(target)?;
     }
+    Ok(())
+    }
+}
+
+#[cfg(windows)]
+pub struct PreparedSelection {
+    targets: Vec<(PathBuf, Vec<identity::ObjectPin>, identity::ObjectPin)>,
+    name_guards: Vec<fs::File>,
+}
+
+#[cfg(not(windows))]
+pub struct PreparedSelection { targets: Vec<PathBuf> }
+
+#[cfg(not(windows))]
+pub fn prepare(raw_paths: Vec<String>) -> Result<PreparedSelection, String> {
+    Ok(PreparedSelection { targets: validate_selection(&raw_paths)? })
+}
+
+#[cfg(not(windows))]
+pub fn execute_prepared(selection: PreparedSelection) -> Result<(), String> {
+    for initially_validated_target in selection.targets {
+        let target = validate_target(&initially_validated_target.to_string_lossy())?;
+        secure_erase_target(target)?;
+    }
+    Ok(())
+}
+
+/// Pins approved object identities before the renderer capability is consumed.
+#[cfg(windows)]
+pub fn prepare(raw_paths: Vec<String>) -> Result<PreparedSelection, String> {
+    prepare_validated(validate_selection_with_originals(&raw_paths)?)
+}
+
+#[cfg(windows)]
+fn prepare_validated(validated: Vec<(PathBuf, PathBuf)>) -> Result<PreparedSelection, String> {
+    let mut targets = Vec::new();
+    let mut name_guards = Vec::new();
+    for (original, initially_validated_target) in validated {
+        // Pin the user-supplied namespace before resolving it again. Pinning
+        // only the canonical path would discard linked-parent evidence.
+        let mut ancestors = identity::pin_ancestors(&original)?;
+        let target = validate_target(&original.to_string_lossy())?;
+        if normalized(&target) != normalized(&initially_validated_target) {
+            return Err("erase target resolution changed before pinning".into());
+        }
+        ancestors.extend(identity::pin_ancestors(&target)?);
+        let directory = fs::symlink_metadata(&target).map_err(|error| error.to_string())?.is_dir();
+        let pin = identity::ObjectPin::capture(&original, directory, true)?;
+        pin.verify_path(&target)?;
+        if !directory { name_guards.push(pin.guard_name(&target)?); }
+        targets.push((target, ancestors, pin));
+    }
+    Ok(PreparedSelection { targets, name_guards })
+}
+
+#[cfg(windows)]
+pub fn execute_prepared(selection: PreparedSelection) -> Result<(), String> {
+    let PreparedSelection { targets, name_guards } = selection;
+    // The caller has consumed authority while the identity guards were held.
+    drop(name_guards);
+    for (target, _ancestors, pin) in targets {
+        if pin.is_directory() {
+            secure_erase_directory(&target, pin)?;
+        } else {
+            overwrite_and_delete_expected(&target, &pin)?;
+            // Windows completes handle-based deletion after the last pin closes.
+            drop(pin);
+        }
+        match fs::symlink_metadata(&target) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {},
+            _ => return Err("target absence could not be verified after erase".into()),
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn secure_erase_directory(root: &Path, root_pin: identity::ObjectPin) -> Result<(), String> {
+    let mut files = Vec::new();
+    let mut directories = vec![(root.to_path_buf(), root_pin)];
+    let mut cursor = 0;
+    while cursor < directories.len() {
+        let path = &directories[cursor].0;
+        for entry in fs::read_dir(path).map_err(|error| format!("cannot inspect pinned directory: {error}"))? {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let child = entry.path();
+            let metadata = fs::symlink_metadata(&child).map_err(|error| error.to_string())?;
+            if has_reparse_point(&child)? { return Err("refused reparse-point tree entry".into()); }
+            if metadata.is_dir() {
+                let pin = identity::ObjectPin::capture(&child, true, true)?;
+                directories.push((child, pin));
+            } else if metadata.is_file() {
+                let pin = identity::ObjectPin::capture(&child, false, false)?;
+                files.push((child, pin));
+            } else { return Err("refused unsupported tree entry".into()); }
+        }
+        cursor += 1;
+    }
+    for (path, pin) in files { overwrite_and_delete_expected(&path, &pin)?; }
+    for (_, pin) in directories.into_iter().rev() { pin.delete_directory()?; }
     Ok(())
 }
 
@@ -503,6 +666,142 @@ pub fn log_result(error: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn link_created_after_validation_never_changes_either_name() {
+        let directory = tempfile::tempdir().unwrap();
+        let original = directory.path().join("original.txt");
+        let alias = directory.path().join("alias.txt");
+        fs::write(&original, b"preserve sentinel").unwrap();
+        let pin = identity::ObjectPin::capture(&original, false, false).unwrap();
+        let result = with_verified_readonly(&original, &pin, || {
+            overwrite_and_delete_file_inner_with_hook(&original, &pin, || {
+                fs::hard_link(&original, &alias).map_err(|_| "link blocked".to_string())
+            })
+        });
+        assert!(result.is_err());
+        assert_eq!(fs::read(&original).unwrap(), b"preserve sentinel");
+        if alias.exists() {
+            assert_eq!(fs::read(&alias).unwrap(), b"preserve sentinel");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn link_created_after_pin_is_not_overwritten_or_deleted() {
+        let directory = tempfile::tempdir().unwrap();
+        let original = directory.path().join("original.txt");
+        let alias = directory.path().join("alias.txt");
+        fs::write(&original, b"preserve sentinel").unwrap();
+        let pin = identity::ObjectPin::capture(&original, false, false).unwrap();
+        fs::hard_link(&original, &alias).unwrap();
+        assert!(overwrite_and_delete_expected(&original, &pin).is_err());
+        assert_eq!(fs::read(&original).unwrap(), b"preserve sentinel");
+        assert_eq!(fs::read(&alias).unwrap(), b"preserve sentinel");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn panic_before_overwrite_cancels_pending_deletion() {
+        let directory = tempfile::tempdir().unwrap();
+        let original = directory.path().join("original.txt");
+        fs::write(&original, b"preserve sentinel").unwrap();
+        let pin = identity::ObjectPin::capture(&original, false, false).unwrap();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = overwrite_and_delete_file_inner_with_hook(&original, &pin, || {
+                panic!("fixture panic before overwrite")
+            });
+        }));
+        assert!(result.is_err());
+        assert_eq!(fs::read(&original).unwrap(), b"preserve sentinel");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn preexisting_delete_capable_handle_blocks_erase_without_mutation() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            DELETE, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let original = directory.path().join("original.txt");
+        fs::write(&original, b"preserve sentinel").unwrap();
+        let other = OpenOptions::new()
+            .access_mode(FILE_READ_ATTRIBUTES | DELETE)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .open(&original)
+            .unwrap();
+        let pin = identity::ObjectPin::capture(&original, false, false).unwrap();
+        assert!(overwrite_and_delete_expected(&original, &pin).is_err());
+        assert_eq!(fs::read(&original).unwrap(), b"preserve sentinel");
+        drop(other);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn preexisting_attribute_handle_cannot_clear_or_link_pending_file() {
+        use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
+        use windows_sys::Win32::Storage::FileSystem::{
+            FileDispositionInfo, SetFileInformationByHandle, FILE_DISPOSITION_INFO,
+            FILE_FLAG_BACKUP_SEMANTICS, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE,
+            FILE_SHARE_READ, FILE_SHARE_WRITE,
+        };
+        #[repr(C)]
+        struct IoStatus { status: isize, information: usize }
+        #[link(name = "ntdll")]
+        extern "system" {
+            fn NtSetInformationFile(
+                file: *mut std::ffi::c_void, status: *mut IoStatus, info: *mut std::ffi::c_void,
+                len: u32, class: u32,
+            ) -> i32;
+        }
+        fn link(source: &fs::File, directory: &fs::File, name: &str) -> i32 {
+            use std::os::windows::ffi::OsStrExt;
+            let chars: Vec<u16> = std::ffi::OsStr::new(name).encode_wide().collect();
+            let length = 20 + chars.len() * 2;
+            let mut buffer = vec![0u64; length.div_ceil(8)];
+            let bytes = buffer.as_mut_ptr().cast::<u8>();
+            unsafe {
+                bytes.add(8).cast::<*mut std::ffi::c_void>().write(directory.as_raw_handle());
+                bytes.add(16).cast::<u32>().write((chars.len() * 2) as u32);
+                std::ptr::copy_nonoverlapping(chars.as_ptr().cast::<u8>(), bytes.add(20), chars.len() * 2);
+                let mut status = IoStatus { status: 0, information: 0 };
+                NtSetInformationFile(source.as_raw_handle(), &mut status, bytes.cast(), length as u32, 11)
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let original = root.path().join("original.txt");
+        let control = root.path().join("control.txt");
+        let alias = root.path().join("alias.txt");
+        fs::write(&original, b"preserve sentinel").unwrap();
+        let other = OpenOptions::new().access_mode(FILE_READ_ATTRIBUTES)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .open(&original).unwrap();
+        let directory = OpenOptions::new().access_mode(2)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS).open(root.path()).unwrap();
+        assert_eq!(link(&other, &directory, "control.txt"), 0);
+        fs::remove_file(&control).unwrap();
+        let pin = identity::ObjectPin::capture(&original, false, false).unwrap();
+        let result = with_verified_readonly(&original, &pin, || {
+            overwrite_and_delete_file_inner_with_hook(&original, &pin, || {
+                let disposition = FILE_DISPOSITION_INFO { DeleteFile: false };
+                assert_eq!(unsafe {
+                    SetFileInformationByHandle(
+                        other.as_raw_handle(), FileDispositionInfo,
+                        std::ptr::from_ref(&disposition).cast(),
+                        std::mem::size_of::<FILE_DISPOSITION_INFO>() as u32,
+                    )
+                }, 0);
+                assert!(link(&other, &directory, "alias.txt") < 0);
+                Err("fixture stopped before overwrite".into())
+            })
+        });
+        assert!(result.is_err());
+        assert!(!alias.exists());
+        assert_eq!(fs::read(&original).unwrap(), b"preserve sentinel");
+    }
 
     #[test]
     fn rejects_protected_roots_and_their_ancestors() {
@@ -553,6 +852,58 @@ mod tests {
             resolve_existing_target_with(&file, |_| Err(io::Error::from_raw_os_error(2))).unwrap();
 
         assert_eq!(resolved, file);
+    }
+
+    #[test]
+    #[cfg(any(unix, windows))]
+    fn refuses_target_beneath_a_linked_ancestor() {
+        let directory = tempfile::tempdir().unwrap();
+        let outside = directory.path().join("outside");
+        let linked = directory.path().join("linked");
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("sentinel.txt"), b"preserve").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, &linked).unwrap();
+        #[cfg(windows)]
+        assert!(std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&linked)
+            .arg(&outside)
+            .status()
+            .unwrap()
+            .success());
+
+        let target = linked.join("sentinel.txt");
+        let error = validate_target(&target.to_string_lossy()).unwrap_err();
+        assert!(error.contains("reparse-point"), "{error}");
+        assert_eq!(fs::read(outside.join("sentinel.txt")).unwrap(), b"preserve");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn refuses_ancestor_replaced_by_junction_after_selection() {
+        let directory = tempfile::tempdir().unwrap();
+        let original = directory.path().join("original");
+        let moved = directory.path().join("moved");
+        let outside = directory.path().join("outside");
+        fs::create_dir(&original).unwrap();
+        fs::create_dir(&outside).unwrap();
+        fs::write(original.join("sentinel.txt"), b"original").unwrap();
+        fs::write(outside.join("sentinel.txt"), b"outside").unwrap();
+        let raw = original.join("sentinel.txt").to_string_lossy().into_owned();
+        let validated = validate_selection_with_originals(&[raw]).unwrap();
+        fs::rename(&original, &moved).unwrap();
+        assert!(std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&original)
+            .arg(&outside)
+            .status()
+            .unwrap()
+            .success());
+
+        assert!(prepare_validated(validated).is_err());
+        assert_eq!(fs::read(moved.join("sentinel.txt")).unwrap(), b"original");
+        assert_eq!(fs::read(outside.join("sentinel.txt")).unwrap(), b"outside");
     }
 
     #[test]
@@ -612,5 +963,204 @@ mod tests {
 
         execute_cli(vec![file.to_string_lossy().into_owned()]).unwrap();
         assert!(!file.exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn prepared_file_replacement_never_erases_the_replacement() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("original.txt");
+        let renamed = directory.path().join("renamed.txt");
+        fs::write(&file, b"preserve").unwrap();
+        let prepared = prepare(vec![file.to_string_lossy().into_owned()]).unwrap();
+        match fs::rename(&file, &renamed) {
+            Ok(()) => {
+                eprintln!("fixture: rename succeeded; verifying replacement refusal");
+                fs::write(&file, b"replacement").unwrap();
+                let error = execute_prepared(prepared).unwrap_err();
+                assert!(error.contains("identity changed"), "unexpected rejection: {error}");
+                assert_eq!(fs::read(&file).unwrap(), b"replacement");
+                assert_eq!(fs::read(&renamed).unwrap(), b"preserve");
+            }
+            Err(error) => {
+                eprintln!("fixture: rename denied by sharing rules");
+                assert!(matches!(error.raw_os_error(), Some(5 | 32 | 33)), "unexpected rename failure: {error}");
+                assert_eq!(fs::read(&file).unwrap(), b"preserve");
+                drop(prepared);
+                fs::rename(&file, &renamed).unwrap();
+                assert_eq!(fs::read(&renamed).unwrap(), b"preserve");
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn prepared_directory_replacement_never_erases_replacement_children() {
+        let directory = tempfile::tempdir().unwrap();
+        let original = directory.path().join("target");
+        let renamed = directory.path().join("renamed");
+        fs::create_dir(&original).unwrap();
+        fs::write(original.join("original.txt"), b"original").unwrap();
+        let prepared = prepare(vec![original.to_string_lossy().into_owned()]).unwrap();
+        match fs::rename(&original, &renamed) {
+            Ok(()) => {
+                eprintln!("fixture: selected directory renamed; checking replacement tree");
+                fs::create_dir(&original).unwrap();
+                fs::write(original.join("replacement.txt"), b"replacement").unwrap();
+                let result = execute_prepared(prepared);
+                assert_eq!(fs::read(original.join("replacement.txt")).unwrap(), b"replacement");
+                assert_eq!(fs::read(renamed.join("original.txt")).unwrap(), b"original");
+                assert!(result.is_err(), "replacement tree must be refused");
+            }
+            Err(error) => {
+                eprintln!("fixture: selected directory rename denied");
+                assert!(matches!(error.raw_os_error(), Some(5 | 32 | 33)), "unexpected rename failure: {error}");
+                drop(prepared);
+                fs::rename(&original, &renamed).unwrap();
+                assert_eq!(fs::read(renamed.join("original.txt")).unwrap(), b"original");
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn prepared_ancestor_replacement_never_erases_replacement_children() {
+        let directory = tempfile::tempdir().unwrap();
+        let ancestor = directory.path().join("ancestor");
+        let renamed = directory.path().join("renamed");
+        let target = ancestor.join("target");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("original.txt"), b"original").unwrap();
+        let prepared = prepare(vec![target.to_string_lossy().into_owned()]).unwrap();
+        match fs::rename(&ancestor, &renamed) {
+            Ok(()) => {
+                eprintln!("fixture: ancestor renamed; checking replacement tree");
+                fs::create_dir_all(&target).unwrap();
+                fs::write(target.join("replacement.txt"), b"replacement").unwrap();
+                let result = execute_prepared(prepared);
+                assert_eq!(fs::read(target.join("replacement.txt")).unwrap(), b"replacement");
+                assert_eq!(fs::read(renamed.join("target").join("original.txt")).unwrap(), b"original");
+                assert!(result.is_err(), "replacement tree must be refused");
+            }
+            Err(error) => {
+                eprintln!("fixture: ancestor rename denied");
+                assert!(matches!(error.raw_os_error(), Some(5 | 32 | 33)), "unexpected rename failure: {error}");
+                drop(prepared);
+                fs::rename(&ancestor, &renamed).unwrap();
+                assert_eq!(fs::read(renamed.join("target").join("original.txt")).unwrap(), b"original");
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn refuses_hard_linked_target_without_erasing_either_name() {
+        let directory = tempfile::tempdir().unwrap();
+        let original = directory.path().join("original.txt");
+        let alias = directory.path().join("alias.txt");
+        fs::write(&original, b"preserve").unwrap();
+        fs::hard_link(&original, &alias).unwrap();
+        let error = execute_cli(vec![alias.to_string_lossy().into_owned()]).unwrap_err();
+        assert!(error.contains("hard-linked"), "unexpected error: {error}");
+        assert_eq!(fs::read(&original).unwrap(), b"preserve");
+        assert_eq!(fs::read(&alias).unwrap(), b"preserve");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn readonly_attribute_change_uses_verified_handle_after_replacement() {
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_READONLY;
+        let directory = tempfile::tempdir().unwrap();
+        let original = directory.path().join("original.txt");
+        let renamed = directory.path().join("renamed.txt");
+        fs::write(&original, b"original").unwrap();
+        let mut permissions = fs::metadata(&original).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&original, permissions).unwrap();
+        let pin = identity::ObjectPin::capture(&original, false, false).unwrap();
+        let attributes = pin.attributes().unwrap();
+        assert_ne!(attributes & FILE_ATTRIBUTE_READONLY, 0);
+        let handle = pin.open_attribute_handle(&original).unwrap();
+        assert_eq!(pin.handle_attributes(&handle).unwrap(), attributes);
+
+        // Replace the path after opening and verifying the handle, before the
+        // attribute mutation. Only the verified original may be changed.
+        fs::rename(&original, &renamed).unwrap();
+        fs::write(&original, b"replacement").unwrap();
+        let mut replacement_permissions = fs::metadata(&original).unwrap().permissions();
+        replacement_permissions.set_readonly(true);
+        fs::set_permissions(&original, replacement_permissions).unwrap();
+        pin.set_attributes(&handle, attributes & !FILE_ATTRIBUTE_READONLY).unwrap();
+        assert!(!fs::metadata(&renamed).unwrap().permissions().readonly());
+        assert!(fs::metadata(&original).unwrap().permissions().readonly());
+        assert_eq!(fs::read(&original).unwrap(), b"replacement");
+        assert_eq!(fs::read(&renamed).unwrap(), b"original");
+
+        pin.set_attributes(&handle, attributes).unwrap();
+        assert!(fs::metadata(&renamed).unwrap().permissions().readonly());
+        assert!(fs::metadata(&original).unwrap().permissions().readonly());
+        drop(handle);
+        drop(pin);
+        for path in [&original, &renamed] {
+            let mut permissions = fs::metadata(path).unwrap().permissions();
+            permissions.set_readonly(false);
+            fs::set_permissions(path, permissions).unwrap();
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn failed_erase_restores_readonly_on_original_after_replacement() {
+        let directory = tempfile::tempdir().unwrap();
+        let original = directory.path().join("original.txt");
+        let renamed = directory.path().join("renamed.txt");
+        fs::write(&original, b"original").unwrap();
+        let mut permissions = fs::metadata(&original).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&original, permissions).unwrap();
+        let pin = identity::ObjectPin::capture(&original, false, false).unwrap();
+
+        let error = with_verified_readonly(&original, &pin, || {
+            assert!(!fs::metadata(&original).unwrap().permissions().readonly());
+            fs::rename(&original, &renamed).unwrap();
+            fs::write(&original, b"replacement").unwrap();
+            Err("fixture erase failure".into())
+        }).unwrap_err();
+        assert_eq!(error, "fixture erase failure");
+        assert!(fs::metadata(&renamed).unwrap().permissions().readonly());
+        assert!(!fs::metadata(&original).unwrap().permissions().readonly());
+        assert_eq!(fs::read(&original).unwrap(), b"replacement");
+        assert_eq!(fs::read(&renamed).unwrap(), b"original");
+        drop(pin);
+        let mut permissions = fs::metadata(&renamed).unwrap().permissions();
+        permissions.set_readonly(false);
+        fs::set_permissions(&renamed, permissions).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn failed_erase_restores_readonly_if_a_hard_link_appears() {
+        let directory = tempfile::tempdir().unwrap();
+        let original = directory.path().join("original.txt");
+        let alias = directory.path().join("alias.txt");
+        fs::write(&original, b"original").unwrap();
+        let mut permissions = fs::metadata(&original).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&original, permissions).unwrap();
+        let pin = identity::ObjectPin::capture(&original, false, false).unwrap();
+
+        let error = with_verified_readonly(&original, &pin, || {
+            fs::hard_link(&original, &alias).unwrap();
+            Err("fixture erase failure".into())
+        }).unwrap_err();
+        assert_eq!(error, "fixture erase failure");
+        assert!(fs::metadata(&original).unwrap().permissions().readonly());
+        assert!(fs::metadata(&alias).unwrap().permissions().readonly());
+        assert_eq!(fs::read(&original).unwrap(), b"original");
+        assert_eq!(fs::read(&alias).unwrap(), b"original");
+        drop(pin);
+        let mut permissions = fs::metadata(&original).unwrap().permissions();
+        permissions.set_readonly(false);
+        fs::set_permissions(&original, permissions).unwrap();
     }
 }
