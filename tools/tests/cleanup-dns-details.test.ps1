@@ -32,4 +32,10 @@ $view = Get-FleetForensicProjection -Category 'dns_cache'
 if ($view.error -or $view.total -ne 1 -or $view.shown -ne 1 -or $view.records[0].name -ne 'ordinary.fixture.invalid') { throw 'Fleet must retain only its filtered DNS scope.' }
 $cell = $view.records[0].data
 if ($cell.Length -ne 255 -or $cell -cne (('a' * 254) + [char]0x2026) -or -not $view.records[0].dataTruncated) { throw 'Long values must fit the protocol limit without splitting a UTF-16 surrogate pair.' }
+$script:dnsValue = 'a' * 256
+$view = Get-FleetForensicProjection -Category 'dns_cache'
+if ($view.records[0].data.Length -ne 256 -or $view.records[0].dataTruncated -or $view.records[0].data -cne $script:dnsValue) { throw 'A value exactly at the limit must remain unchanged.' }
+$script:dnsValue = 'a' * 257
+$view = Get-FleetForensicProjection -Category 'dns_cache'
+if ($view.records[0].data.Length -ne 256 -or -not $view.records[0].dataTruncated -or $view.records[0].data -cne (('a' * 255) + [char]0x2026)) { throw 'An overlong ASCII value must include the marker within the limit.' }
 Write-Output 'Passed: local DNS details retain records and Fleet keeps its prior scope with bounded cells.'
