@@ -19,8 +19,10 @@ pub(crate) async fn secure_shred(
     path: String,
     capability_token: Option<String>,
 ) -> Result<(), String> {
+    // Keep the original path until the erase library has checked and pinned
+    // its namespace. Canonicalizing first could hide a linked ancestor.
+    let prepared = commander_context_shred::prepare(vec![path.clone()])?;
     let canonical_path = crate::authz::canonical_path(&path);
-    let prepared = commander_context_shred::prepare(vec![canonical_path.clone()])?;
     crate::authz::consume_required(
         capability_token.as_deref(),
         crate::authz::DestructiveAction::DiskDelete,

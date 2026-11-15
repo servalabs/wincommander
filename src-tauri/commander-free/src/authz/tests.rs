@@ -39,6 +39,33 @@ async fn search_shred_rejects_wrong_target_and_consumes_confirmation() {
     assert_eq!(std::fs::read(other).unwrap(), b"other fixture");
 }
 
+#[cfg(windows)]
+#[tokio::test]
+async fn search_shred_rejects_a_target_beneath_a_junction() {
+    let dir = tempfile::tempdir().unwrap();
+    let outside = dir.path().join("outside");
+    let junction = dir.path().join("junction");
+    std::fs::create_dir(&outside).unwrap();
+    let target = outside.join("sentinel.txt");
+    std::fs::write(&target, b"preserve").unwrap();
+    assert!(std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(&junction)
+        .arg(&outside)
+        .status()
+        .unwrap()
+        .success());
+    let through_junction = junction.join("sentinel.txt").to_string_lossy().into_owned();
+    let canonical = canonical_path(&through_junction);
+    let token = mint(DestructiveAction::DiskDelete, &secure_erase_args(&canonical)).unwrap();
+
+    let error = crate::search_actions::search_shred_direct(through_junction, Some(token))
+        .await
+        .unwrap_err();
+    assert!(error.contains("reparse-point"), "{error}");
+    assert_eq!(std::fs::read(target).unwrap(), b"preserve");
+}
+
 #[test]
 fn token_is_single_use() {
     let tok = mint(DestructiveAction::KillSwitch, "on").unwrap();
