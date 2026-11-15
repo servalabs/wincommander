@@ -160,9 +160,9 @@ fn validate_target(raw_path: &str) -> Result<PathBuf, String> {
     if !raw.is_absolute() {
         return Err("refused non-absolute Explorer target".into());
     }
-    if has_reparse_point(&raw)? {
-        return Err("refused linked or reparse-point Explorer target".into());
-    }
+    // Check the original path before canonicalization can hide a linked
+    // ancestor by resolving it to a different directory.
+    ensure_no_reparse_point_in_ancestors(&raw)?;
     let target = resolve_existing_target(&raw)?;
     let metadata = fs::metadata(&target)
         .map_err(|error| format!("cannot inspect Explorer target: {error}"))?;
@@ -833,6 +833,31 @@ mod tests {
             resolve_existing_target_with(&file, |_| Err(io::Error::from_raw_os_error(2))).unwrap();
 
         assert_eq!(resolved, file);
+    }
+
+    #[test]
+    #[cfg(any(unix, windows))]
+    fn refuses_target_beneath_a_linked_ancestor() {
+        let directory = tempfile::tempdir().unwrap();
+        let outside = directory.path().join("outside");
+        let linked = directory.path().join("linked");
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("sentinel.txt"), b"preserve").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, &linked).unwrap();
+        #[cfg(windows)]
+        assert!(std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&linked)
+            .arg(&outside)
+            .status()
+            .unwrap()
+            .success());
+
+        let target = linked.join("sentinel.txt");
+        let error = validate_target(&target.to_string_lossy()).unwrap_err();
+        assert!(error.contains("reparse-point"), "{error}");
+        assert_eq!(fs::read(outside.join("sentinel.txt")).unwrap(), b"preserve");
     }
 
     #[test]
