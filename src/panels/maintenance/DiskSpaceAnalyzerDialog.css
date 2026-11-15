@@ -155,9 +155,18 @@
 .da-file-statistics > header { display: flex; gap: 12px; align-items: center; margin-bottom: 20px; }
 .da-file-statistics h3 { margin: 0 0 5px; font-size: 17px; font-weight: 500; }
 .da-file-statistics p { margin: 0; color: var(--color-text-muted); font-size: 11px; }
-.da-type-row { display: grid; grid-template-columns: minmax(130px, 1fr) repeat(3, minmax(70px, .45fr)); gap: 14px; align-items: center; padding: 14px 10px; border-bottom: 1px solid var(--color-border); font-size: 12px; }
+.da-type-scroll { max-inline-size: 100%; max-block-size: min(500px, 60vh); overflow: auto; }
+.da-type-table { inline-size: 100%; min-inline-size: 390px; border-collapse: separate; border-spacing: 0; text-align: left; }
+.da-type-table caption { text-align: left; padding-block: 8px; }
+.da-type-row > * { padding: 14px 10px; border-bottom: 1px solid var(--color-border); font-size: 12px; }
+.da-type-table thead th { position: sticky; inset-block-start: 0; z-index: 2; background: var(--color-bg-card); }
+.da-type-table tbody th { position: sticky; inset-inline-start: 0; z-index: 1; background: var(--color-bg-card); }
 .da-type-row > :not(:first-child) { text-align: right; font-variant-numeric: tabular-nums; }
-.da-type-name { text-transform: capitalize; }
+.da-type-name { overflow-wrap: anywhere; font-weight: normal; }
+.da-file-pane-tabs { display: flex; gap: 4px; padding-block: 8px; }
+.da-file-pane-tabs button { min-block-size: 32px; padding: 4px 9px; border: 1px solid var(--color-border); background: var(--color-bg-card); color: var(--color-text-muted); cursor: pointer; }
+.da-file-pane-tabs button[aria-pressed="true"] { color: var(--color-accent); border-color: var(--color-accent); }
+.da-type-sort { margin-inline-end: 6px; }
 .da-type-head { color: var(--color-text-muted); font-size: 10px; }
 .da-type-total { color: var(--color-accent); }
 .da-type-meter { display: block; margin-top: 7px; height: 4px; background: var(--color-bg-tertiary); border-radius: 4px; overflow: hidden; }
@@ -190,6 +199,6 @@
     .da-workspace-tabs { padding: 0 8px; }
     .da-workspace-tabs button { padding: 9px; }
     .da-file-statistics { min-height: 480px; padding: 12px; }
-    .da-type-row { grid-template-columns: minmax(100px, 1fr) repeat(3, minmax(52px, .45fr)); gap: 6px; padding-left: 0; padding-right: 0; font-size: 11px; }
+    .da-type-row > * { padding: 8px 4px; font-size: 11px; }
     .da-explorer-large .da-folders { flex-basis: 500px; height: 500px; }
 }
