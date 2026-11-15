@@ -230,7 +230,10 @@ operational risk, or proprietary enforcement logic.
   keyfile to select a standard, outer, or hidden volume automatically. Secure
   Storage and Quick Mount use machine-wide, writable mounts by default;
   Secure Storage also offers explicit read-only mounting. Existing file
-  permissions remain unchanged. Automatic or prompted account-permission repair
+  permissions remain unchanged. The service refuses another known mount with
+  the same recorded container filename or file identity, including files in
+  different folders with the same name. This check covers service-known mounts.
+  Automatic or prompted account-permission repair
   is unavailable; an inaccessible container reports an error without changing
   its permissions. Stego video backups can create, attach, restore, and refresh
   encrypted-container snapshots with explicit replacement confirmation; restoring
