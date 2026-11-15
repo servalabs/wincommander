@@ -5,6 +5,8 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Report RDP idle protection as unverified when only saved settings are available.
+
 - Refuse a service-managed Vault mount when its recorded filename or identity
   conflicts with another known mount, without disturbing the existing mount.
 
