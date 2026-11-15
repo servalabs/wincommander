@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use crate::{
     ActionOutcome, ActionOutcomeRecoveryCheckpoint, ClipboardEventReport, DeviceResourceSample,
-    InkReceiptReport, LocalAlertReport, PostureReport, SignedCommand,
+    InkReceiptReport, LocalAlertReport, PolicyEnvelope, PostureReport, SignedCommand,
 };
 
 /// Current version of the additive check-in envelope.
@@ -133,6 +133,10 @@ pub struct CheckinRequest {
     pub acks: Vec<CheckinAck>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub action_outcomes: Vec<ActionOutcome>,
+    /// Signed policy held by a recovered service identity; does not attest
+    /// that native controls have been applied or verified.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery_held_policy: Option<RecoveryHeldPolicy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub posture: Option<PostureReport>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -167,6 +171,19 @@ pub struct CheckinRequest {
     pub padding: String,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub decoy: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
+#[serde(deny_unknown_fields)]
+pub struct RecoveryHeldPolicy {
+    pub enrollment_generation:String,
+    pub config_revision:i64,
+    pub resolution_revision:i64,
+    pub epoch_version:i64,
+    pub policy_sha256:String,
+    pub policy:PolicyEnvelope,
 }
 
 /// Successful check-in response.
@@ -242,6 +259,13 @@ impl<Command> Default for CheckinResponse<Command> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn held_policy_is_additive_and_absent_for_legacy_requests() {
+        let request:CheckinRequest=serde_json::from_value(serde_json::json!({"device_id":"device","ts":1,"nonce":"n","hmac":"h"})).unwrap();
+        assert!(request.recovery_held_policy.is_none());
+        assert!(serde_json::to_value(request).unwrap().get("recovery_held_policy").is_none());
+    }
 
     #[test]
     fn old_minimal_request_defaults_additive_fields() {

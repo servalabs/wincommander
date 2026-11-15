@@ -112,6 +112,13 @@ impl SpkiPinSet {
         Self::new(pins)
     }
 
+    /// Require every configured pin to be valid; never silently drop a
+    /// planned rotation key. An absent setting is handled by the caller.
+    pub fn from_hex_list_strict(s: &str) -> Option<Self> {
+        let pins = s.split(',').map(SpkiPin::from_hex).collect::<Option<Vec<_>>>()?;
+        Self::new(pins)
+    }
+
     /// True if `hash` matches any pin in the set (constant-time per-pin compare).
     fn matches(&self, hash: &[u8; 32]) -> bool {
         self.0.iter().any(|pin| hash.ct_eq_bytes(&pin.0))
@@ -231,6 +238,59 @@ pub fn build_client_without_redirects(pins: Option<SpkiPinSet>) -> Result<reqwes
     build_client_inner(pins, true)
 }
 
+/// WinCommander Fleet transport: require TLS 1.3 hybrid key exchange and
+/// authenticate the peer using either the configured pin or platform roots.
+/// No HTTP or redirect fallback is permitted. This does not make the server's
+/// certificate signature post-quantum.
+#[cfg(feature = "required-hybrid-tls")]
+pub fn build_required_hybrid_client(pins: Option<SpkiPinSet>) -> Result<reqwest::Client, String> {
+    build_required_hybrid_client_with_config(&required_hybrid_tls_config(pins)?)
+}
+
+#[cfg(feature = "required-hybrid-tls")]
+pub struct RequiredHybridTlsConfig(ClientConfig);
+
+#[cfg(feature = "required-hybrid-tls")]
+impl RequiredHybridTlsConfig {
+    pub fn rustls_config(&self) -> Arc<ClientConfig> { Arc::new(self.0.clone()) }
+}
+
+#[cfg(feature = "required-hybrid-tls")]
+pub fn required_hybrid_tls_config(pins: Option<SpkiPinSet>) -> Result<RequiredHybridTlsConfig, String> {
+    use rustls_platform_verifier::BuilderVerifierExt;
+
+    let mut provider = aws_lc_rs::default_provider();
+    provider.kx_groups = vec![aws_lc_rs::kx_group::X25519MLKEM768];
+    let provider = Arc::new(provider);
+    let builder = ClientConfig::builder_with_provider(provider.clone())
+        .with_protocol_versions(&[&rustls::version::TLS13])
+        .map_err(|e| format!("fleet hybrid TLS configuration failed: {e}"))?;
+    let config = if let Some(pins) = pins {
+        let supported_algs = rustls::crypto::WebPkiSupportedAlgorithms {
+            all: provider.signature_verification_algorithms.all,
+            mapping: provider.signature_verification_algorithms.mapping,
+        };
+        builder.dangerous().with_custom_certificate_verifier(Arc::new(PinnedSpkiVerifier {
+            pins, supported_algs,
+        })).with_no_client_auth()
+    } else {
+        builder.with_platform_verifier()
+            .map_err(|e| format!("fleet certificate verifier unavailable: {e}"))?
+            .with_no_client_auth()
+    };
+    Ok(RequiredHybridTlsConfig(config))
+}
+
+#[cfg(feature = "required-hybrid-tls")]
+pub fn build_required_hybrid_client_with_config(config: &RequiredHybridTlsConfig) -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .https_only(true)
+        .redirect(reqwest::redirect::Policy::none())
+        .use_preconfigured_tls(config.0.clone())
+        .build()
+        .map_err(|e| format!("fleet hybrid client unavailable: {e}"))
+}
+
 fn build_client_inner(
     pins: Option<SpkiPinSet>,
     no_redirects: bool,
@@ -273,6 +333,26 @@ fn build_client_inner(
 mod tests {
     use super::*;
     use rcgen::{generate_simple_self_signed, CertifiedKey};
+
+    #[test]
+    fn strict_pin_list_never_discards_invalid_rotation_entries() {
+        let pin = "01".repeat(32);
+        let next = "02".repeat(32);
+        assert_eq!(SpkiPinSet::from_hex_list_strict(&format!(" {pin}, {next} ")).unwrap().pins().len(), 2);
+        assert!(SpkiPinSet::from_hex_list_strict(&format!("{pin},bad")).is_none());
+        assert!(SpkiPinSet::from_hex_list_strict(&format!("{pin},")).is_none());
+        assert!(SpkiPinSet::from_hex_list_strict("").is_none());
+    }
+
+    #[cfg(feature = "required-hybrid-tls")]
+    #[tokio::test]
+    #[ignore = "requires network access to Cloudflare's DNS endpoint"]
+    async fn live_unpinned_platform_trust_connects_with_required_hybrid() {
+        let client = build_required_hybrid_client(None).unwrap();
+        let response = client.get("https://cloudflare-dns.com/")
+            .timeout(std::time::Duration::from_secs(20)).send().await;
+        assert!(response.is_ok(), "hybrid platform-trusted TLS connection failed: {response:?}");
+    }
 
     #[tokio::test]
     async fn live_tls_pin_accepts_matching_server_and_rejects_mismatch() {
@@ -372,6 +452,19 @@ mod tests {
             attempt(classical.clone(), pinned()).await,
             (true, Some(rustls::NamedGroup::X25519))
         );
+        #[cfg(feature = "required-hybrid-tls")]
+        let hybrid_only = || build_required_hybrid_client(
+            Some(SpkiPinSet::new(vec![SpkiPin(pin)]).unwrap())
+        ).unwrap();
+        #[cfg(feature = "required-hybrid-tls")]
+        assert_eq!(
+            attempt(hybrid.clone(), hybrid_only()).await,
+            (true, Some(rustls::NamedGroup::X25519MLKEM768))
+        );
+        #[cfg(feature = "required-hybrid-tls")]
+        assert!(!attempt(classical.clone(), hybrid_only()).await.0);
+        #[cfg(feature = "required-hybrid-tls")]
+        assert!(hybrid_only().get("http://127.0.0.1:9/").send().await.is_err());
         // Exercise the regular reqwest TLS configuration as used by desktop clients too.
         // The custom root is only for this local, self-signed test server.
         let trusted = || {
@@ -403,6 +496,13 @@ mod tests {
             .await
             .0
         );
+        #[cfg(feature = "required-hybrid-tls")]
+        assert!(!attempt(
+            hybrid.clone(),
+            build_required_hybrid_client(Some(SpkiPinSet::new(vec![SpkiPin(wrong)]).unwrap())).unwrap()
+        ).await.0);
+        #[cfg(feature = "required-hybrid-tls")]
+        assert!(!attempt(hybrid.clone(), build_required_hybrid_client(None).unwrap()).await.0);
         assert!(!attempt(hybrid, build_client(None).unwrap()).await.0);
     }
 
