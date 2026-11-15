@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { Button, InputGroup, Switch, Tag } from '@/components/ui/bp';
+import { Button, Switch, Tag } from '@/components/ui/bp';
 import SectionCard from '../../components/shared/SectionCard';
 import { useAppConfirm } from '../../components/shared/AppConfirmDialog';
 import { useAppState } from '../../context/AppContext';
@@ -10,6 +10,7 @@ import { isFleetReportControlLocked } from '../../lib/fleetReportingPolicyLock';
 import { applyWifiApproval, canTrustAssociation, isWifiGuardRecoveryBlocked, setWifiGuardRecoveryBlocked, wifiBaselineIdentity, wifiReasonLabel, wifiSecurityLabel, wifiStatusLabel, withWifiGuardOperation, type WifiGuardAssociation, type WifiGuardHit, type WifiGuardStatus } from '../../lib/wifiGuard';
 import type { AppSettings, WifiGuardBaselineEntry } from '../../types/settings';
 import { InfoPopover } from './InfoTip';
+import WifiIntervalInput from './WifiIntervalInput';
 
 export default function WifiGuardSection({ embedded = false }: { expanded?: boolean; onExpandedChange?: (next: boolean) => void; embedded?: boolean } = {}) {
   const { appSettings, patchAppSettings, refreshSettings, systemInfo } = useAppState();
@@ -154,14 +155,10 @@ export default function WifiGuardSection({ embedded = false }: { expanded?: bool
     </div>)}
 
     <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-      <label>Check every (seconds)<InputGroup type="number" min={5} max={300} value={String(settings?.pollIntervalSecs ?? 10)} disabled={busy || needsElevation} onChange={(event) => {
-        const value = Number(event.target.value);
-        if (Number.isInteger(value) && value >= 5 && value <= 300) void mutate(async () => { await patchAppSettings({ ideal: { network: { wifiGuard: { pollIntervalSecs: value } } } }); });
-      }} /></label>
-      <label>Repeat alert (seconds)<InputGroup type="number" min={30} max={3600} value={String(settings?.alertDebounceSecs ?? 300)} disabled={busy || needsElevation} onChange={(event) => {
-        const value = Number(event.target.value);
-        if (Number.isInteger(value) && value >= 30 && value <= 3600) void mutate(async () => { await patchAppSettings({ ideal: { network: { wifiGuard: { alertDebounceSecs: value } } } }); });
-      }} /></label>
+      <WifiIntervalInput label="Check every (seconds)" min={5} max={300} value={settings?.pollIntervalSecs ?? 10} disabled={busy || needsElevation}
+        onCommit={(value) => { void mutate(async () => { await patchAppSettings({ ideal: { network: { wifiGuard: { pollIntervalSecs: value } } } }); }); }} />
+      <WifiIntervalInput label="Repeat alert (seconds)" min={30} max={3600} value={settings?.alertDebounceSecs ?? 300} disabled={busy || needsElevation}
+        onCommit={(value) => { void mutate(async () => { await patchAppSettings({ ideal: { network: { wifiGuard: { alertDebounceSecs: value } } } }); }); }} />
     </div>
     <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
       <Switch checked={required || settings?.reportToFleet === true} disabled={reportingLocked || busy || needsElevation} label={reportingLocked ? 'Fleet reporting required by device policy' : 'Report coarse Wi-Fi alerts to Fleet'} onChange={(event) => {
