@@ -1627,6 +1627,10 @@ pub struct AndroidFleetStatus {
 #[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
 #[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
 pub struct DeviceSummary {
+    /// Most recent app-reported Android posture, not an attestation.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts-codegen", ts(optional = nullable))]
+    pub android_posture: Option<String>,
     pub device_id: DeviceId,
     pub device_hash: String,
     /// Enrolled agent class (`wincommander`, `tuxcommander`, or `android`).

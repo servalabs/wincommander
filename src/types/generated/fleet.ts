@@ -621,7 +621,11 @@ sampled_at: string, };
  * A device as shown in the admin panel's fleet view. `online` is computed by
  * the server from `last_seen` against a freshness window.
  */
-export type DeviceSummary = { device_id: DeviceId, device_hash: string,
+export type DeviceSummary = {
+/**
+ * Most recent app-reported Android posture, not an attestation.
+ */
+android_posture?: string | null, device_id: DeviceId, device_hash: string,
 /**
  * Enrolled agent class (`wincommander`, `tuxcommander`, or `android`).
  * Additive/defaulted so older cached API responses still deserialize.
