@@ -7,9 +7,8 @@
 
 #[cfg(windows)]
 use std::{
-    env,
     net::{SocketAddr, TcpStream},
-    path::{Path, PathBuf},
+    path::Path,
     process::Command,
     sync::{Mutex, OnceLock},
     thread,
@@ -123,17 +122,17 @@ fn is_configured() -> bool {
 }
 
 #[cfg(windows)]
-#[derive(Debug)]
-struct Binaries {
-    server: PathBuf,
-    afk: PathBuf,
-    window: PathBuf,
-}
+#[path = "activity_watch_installation.rs"]
+mod installation;
+
+#[cfg(windows)]
+use installation::{discover_binaries, Binaries};
 
 #[cfg(windows)]
 #[derive(Clone, Copy)]
 enum ActivityWatchProcess {
     Server,
+    Tauri,
     AfkWatcher,
     WindowWatcher,
 }
@@ -142,6 +141,7 @@ enum ActivityWatchProcess {
 #[derive(Default, Debug, PartialEq, Eq)]
 struct SessionProcesses {
     server: usize,
+    tauri_server: usize,
     afk_watcher: usize,
     window_watcher: usize,
     unknown_session: usize,
@@ -152,6 +152,10 @@ impl SessionProcesses {
     fn add(&mut self, process: ActivityWatchProcess) {
         match process {
             ActivityWatchProcess::Server => self.server += 1,
+            ActivityWatchProcess::Tauri => {
+                self.server += 1;
+                self.tauri_server += 1;
+            }
             ActivityWatchProcess::AfkWatcher => self.afk_watcher += 1,
             ActivityWatchProcess::WindowWatcher => self.window_watcher += 1,
         }
@@ -206,12 +210,36 @@ fn ensure_started() -> Result<(), String> {
         return Err("activitywatch_server_owned_elsewhere".to_string());
     }
 
+    if running.tauri_server == 1 {
+        return wait_for_watcher_pair();
+    }
+
     let binaries = discover_binaries().ok_or_else(|| "activitywatch_not_installed".to_string())?;
+    let Binaries::Classic {
+        server,
+        afk,
+        window,
+    } = binaries
+    else {
+        if running.server != 0 {
+            return Err("activitywatch_local_api_unreachable".to_string());
+        }
+        if running.afk_watcher != 0 || running.window_watcher != 0 {
+            return Err("activitywatch_watchers_unhealthy".to_string());
+        }
+        if let Binaries::Tauri(launcher) = binaries {
+            start(&launcher)?;
+        }
+        if !server_ready() {
+            return Err("activitywatch_local_api_unreachable".to_string());
+        }
+        return wait_for_watcher_pair();
+    };
     if !server_healthy {
         if running.server == 1 {
             return Err("activitywatch_local_api_unreachable".to_string());
         }
-        start(&binaries.server)?;
+        start(&server)?;
         // Watchers need the REST API to be accepting connections; starting
         // them before the server is ready can leave them disconnected.
         if !server_ready() {
@@ -227,11 +255,14 @@ fn ensure_started() -> Result<(), String> {
     if !server_ready() || running.server != 1 {
         return Err("activitywatch_local_api_unreachable".to_string());
     }
+    if running.tauri_server == 1 {
+        return wait_for_watcher_pair();
+    }
     if running.afk_watcher == 0 {
-        start(&binaries.afk)?;
+        start(&afk)?;
     }
     if running.window_watcher == 0 {
-        start(&binaries.window)?;
+        start(&window)?;
     }
 
     wait_for_watcher_pair()?;
@@ -287,8 +318,10 @@ fn running_processes() -> Result<SessionProcesses, &'static str> {
 
 #[cfg(windows)]
 fn activity_watch_process(name: &str) -> Option<ActivityWatchProcess> {
-    match name.to_ascii_lowercase().trim_end_matches(".exe") {
+    let name = name.to_ascii_lowercase();
+    match name.strip_suffix(".exe").unwrap_or(&name) {
         "aw-server" | "aw-server-rust" => Some(ActivityWatchProcess::Server),
+        "aw-tauri" => Some(ActivityWatchProcess::Tauri),
         "aw-watcher-afk" => Some(ActivityWatchProcess::AfkWatcher),
         "aw-watcher-window" => Some(ActivityWatchProcess::WindowWatcher),
         _ => None,
@@ -300,7 +333,7 @@ fn wait_for_watcher_pair() -> Result<(), String> {
     for _ in 0..20 {
         let running = running_processes().map_err(str::to_string)?;
         running.validate().map_err(str::to_string)?;
-        if server_ready() && running.server == 1 && running.watcher_pair_running() {
+        if server_accepting_connections() && running.server == 1 && running.watcher_pair_running() {
             return Ok(());
         }
         thread::sleep(Duration::from_millis(250));
@@ -321,14 +354,19 @@ mod http;
 
 #[cfg(windows)]
 fn server_ready() -> bool {
-    let address: SocketAddr = "127.0.0.1:5600".parse().expect("constant socket address");
     for _ in 0..40 {
-        if TcpStream::connect_timeout(&address, Duration::from_millis(250)).is_ok() {
+        if server_accepting_connections() {
             return true;
         }
         thread::sleep(Duration::from_millis(250));
     }
     false
+}
+
+#[cfg(windows)]
+fn server_accepting_connections() -> bool {
+    let address: SocketAddr = "127.0.0.1:5600".parse().expect("constant socket address");
+    TcpStream::connect_timeout(&address, Duration::from_millis(250)).is_ok()
 }
 
 #[cfg(windows)]
@@ -344,64 +382,16 @@ fn start(executable: &Path) -> Result<(), String> {
         .map_err(|_| "activitywatch_start_failed".to_string())
 }
 
-#[cfg(windows)]
-fn discover_binaries() -> Option<Binaries> {
-    let mut roots = Vec::new();
-    if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
-        let local_app_data = PathBuf::from(local_app_data);
-        roots.push(local_app_data.join("Programs").join("ActivityWatch"));
-        let winget_packages = local_app_data
-            .join("Microsoft")
-            .join("WinGet")
-            .join("Packages");
-        if let Ok(entries) = std::fs::read_dir(winget_packages) {
-            roots.extend(
-                entries
-                    .filter_map(Result::ok)
-                    .map(|entry| entry.path())
-                    .filter(|path| {
-                        path.file_name()
-                            .and_then(|name| name.to_str())
-                            .is_some_and(|name| {
-                                name.to_ascii_lowercase().starts_with("activitywatch")
-                            })
-                    }),
-            );
-        }
-    }
-    if let Some(program_files) = env::var_os("ProgramFiles") {
-        roots.push(PathBuf::from(program_files).join("ActivityWatch"));
-    }
-    if let Some(program_files_x86) = env::var_os("ProgramFiles(x86)") {
-        roots.push(PathBuf::from(program_files_x86).join("ActivityWatch"));
-    }
-
-    roots.into_iter().find_map(|root| {
-        let server = [
-            "aw-server\\aw-server.exe",
-            "aw-server-rust\\aw-server-rust.exe",
-            "aw-server-rust\\aw-server.exe",
-            "aw-server.exe",
-        ]
-        .into_iter()
-        .map(|relative| root.join(relative))
-        .find(|path| path.is_file())?;
-        let afk = root.join("aw-watcher-afk\\aw-watcher-afk.exe");
-        let window = root.join("aw-watcher-window\\aw-watcher-window.exe");
-        (afk.is_file() && window.is_file()).then_some(Binaries {
-            server,
-            afk,
-            window,
-        })
-    })
-}
-
 #[cfg(all(test, windows))]
 mod tests {
     use super::{activity_watch_process, ActivityWatchProcess, SessionProcesses};
 
     #[test]
     fn classifies_only_the_supported_activitywatch_components() {
+        assert!(matches!(
+            activity_watch_process("aw-tauri.exe"),
+            Some(ActivityWatchProcess::Tauri)
+        ));
         assert!(matches!(
             activity_watch_process("aw-server.exe"),
             Some(ActivityWatchProcess::Server)
@@ -415,12 +405,28 @@ mod tests {
             Some(ActivityWatchProcess::WindowWatcher)
         ));
         assert!(activity_watch_process("aw-watcher-web").is_none());
+        assert!(activity_watch_process("aw-tauri.exe.exe").is_none());
+    }
+
+    #[test]
+    fn tauri_counts_as_one_server_and_conflicts_with_a_second_server() {
+        let mut state = SessionProcesses::default();
+        state.add(ActivityWatchProcess::Tauri);
+        state.add(ActivityWatchProcess::AfkWatcher);
+        state.add(ActivityWatchProcess::WindowWatcher);
+        assert_eq!(state.validate(), Ok(()));
+        assert_eq!(state.server, 1);
+        assert_eq!(state.tauri_server, 1);
+        assert!(state.watcher_pair_running());
+        state.add(ActivityWatchProcess::Server);
+        assert_eq!(state.validate(), Err("activitywatch_duplicate_server"));
     }
 
     #[test]
     fn rejects_duplicate_watchers_without_terminating_them() {
         let state = SessionProcesses {
             server: 1,
+            tauri_server: 0,
             afk_watcher: 2,
             window_watcher: 1,
             unknown_session: 0,
@@ -432,6 +438,7 @@ mod tests {
     fn accepts_exactly_one_server_and_watcher_pair() {
         let state = SessionProcesses {
             server: 1,
+            tauri_server: 0,
             afk_watcher: 1,
             window_watcher: 1,
             unknown_session: 0,

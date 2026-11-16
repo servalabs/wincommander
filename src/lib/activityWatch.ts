@@ -38,12 +38,14 @@ export type ActivityWatchFailureCode =
   | "not_installed"
   | "watchers_unhealthy"
   | "local_api_unreachable"
+  | "authorization_required"
   | "local_response_invalid"
   | "unknown";
 
 export function activityWatchFailureCode(error: unknown): ActivityWatchFailureCode {
   const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
   const normalized = message.toLowerCase();
+  if (/returned http (401|403)\b/.test(normalized)) return "authorization_required";
   if (normalized.includes("disabled in productivity settings")) return "startup_disabled";
   if (normalized.includes("not installed")) return "not_installed";
   if (normalized.includes("watchers") && (normalized.includes("unhealthy") || normalized.includes("missing") || normalized.includes("did not become healthy"))) return "watchers_unhealthy";
@@ -62,6 +64,8 @@ export function activityWatchFailureMessage(error: unknown): string {
       return "ActivityWatch is running, but one or more required watchers are unhealthy. Restart or repair ActivityWatch, then retry.";
     case "local_api_unreachable":
       return "ActivityWatch is installed, but its local API could not be reached. Restart ActivityWatch, then retry.";
+    case "authorization_required":
+      return "ActivityWatch requires local API authorization. API-key protected servers are not supported by this integration yet; keep your existing protection enabled.";
     case "local_response_invalid":
       return "ActivityWatch returned an invalid local response. Restart ActivityWatch, then retry.";
     case "unknown":
@@ -174,7 +178,7 @@ export function eventData(data: unknown): Record<string, unknown> {
 }
 
 export async function fetchBuckets(signal?: AbortSignal): Promise<AwBucketsMap> {
-  const payload = await fetchAwJson<unknown>("/api/0/buckets", undefined, signal);
+  const payload = await fetchAwJson<unknown>("/api/0/buckets/", undefined, signal);
   if (!isRecord(payload)) throw new AwUnavailableError("ActivityWatch returned invalid bucket data.");
 
   const buckets: AwBucketsMap = {};
