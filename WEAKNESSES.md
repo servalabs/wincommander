@@ -18,7 +18,8 @@ vulnerability details (report those through [SECURITY.md](SECURITY.md)).
   mechanism on one synthetic standard account only; the installed application
   and real ledger were not exercised. Widening access to Users is not an
   acceptable fix, because it would let any user alter or delete device-wide
-  evidence and the key. A service-mediated design is needed; it is not
+  evidence and the key. A service-mediated design is recorded in
+  [RESEARCH.md](RESEARCH.md#conditional-future-opportunities); it is not
   implemented.
 - The clippy and unit-test failures that came with the 2026-11-16 merge of `dev`
   were fixed the same day; see [STATUS.md](STATUS.md#the-2026-11-16-merge-of-dev).
