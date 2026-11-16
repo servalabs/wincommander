@@ -8309,8 +8309,38 @@
       ]
     },
     {
+      "id": "tauri:disk_confirm_folder_delete",
+      "name": "disk_confirm_folder_delete",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
+      ]
+    },
+    {
+      "id": "tauri:disk_delete_confirmed_folder",
+      "name": "disk_delete_confirmed_folder",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
+      ]
+    },
+    {
       "id": "tauri:disk_delete_item",
       "name": "disk_delete_item",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
+      ]
+    },
+    {
+      "id": "tauri:disk_folder_delete_available",
+      "name": "disk_folder_delete_available",
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
@@ -12417,6 +12447,16 @@
       ]
     },
     {
+      "id": "tauri:vault_manage_cloud_backup",
+      "name": "vault_manage_cloud_backup",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
+      ]
+    },
+    {
       "id": "tauri:vault_manage_personal_syncthing",
       "name": "vault_manage_personal_syncthing",
       "transport": "tauri",
@@ -12439,6 +12479,16 @@
     {
       "id": "tauri:vault_release_orphaned_drive_letters",
       "name": "vault_release_orphaned_drive_letters",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
+      ]
+    },
+    {
+      "id": "tauri:vault_setup_cloud_backup",
+      "name": "vault_setup_cloud_backup",
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,

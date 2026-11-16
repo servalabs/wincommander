@@ -56,6 +56,7 @@ export function applyVaultAccessPreset(
     return {
       ...entry,
       access_pattern: preset,
+      cloud_backup: entry.cloud_backup === "write_members" ? "owner_only" : entry.cloud_backup,
       grants: [{ principal_name: entry.owner_account, access: "write" }],
       mount: { ...entry.mount, presentation: "per-user" },
     };

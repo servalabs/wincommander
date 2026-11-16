@@ -10,6 +10,7 @@ import useVaultAccess, { FLEET_VAULTS_CHANGED_EVENT } from "@/hooks/useVaultAcce
 import useBackend from "@/hooks/useBackend";
 import { selectableDriveLetters, vaultOperationError } from "@/lib/vaultOperationFeedback";
 import { notifyPolicyMountSyncWarning } from "@/lib/vaultSyncWarning";
+import VaultCloudBackupButton from "@/components/shared/VaultCloudBackupButton";
 import VaultOperationNotice, { type VaultNoticeTone } from "@/components/shared/VaultOperationNotice";
 import { isUncertainVaultPolicySave, recoverVaultPolicySave, vaultDraftConflictReason, vaultMountResultConfirmed, vaultPolicyRevisionConfirmed } from "./vaultOperationConfirmation";
 import { showError, showSuccess } from "@/utils/toast";
@@ -1143,6 +1144,8 @@ export default function VaultAccessTab({ isAdmin, directory, onVisibilityChange 
                 </p>
               </div>
               {isMounted && entry.drive_letter && <Button variant="outline" size="sm" onClick={() => void openMountedEntry(entry.drive_letter!)}>Open in File Explorer</Button>}
+              {isMounted && entry.drive_letter && <VaultCloudBackupButton driveLabel={entry.drive_letter} personal={false}
+                disabled={entry.access !== "write"} disabledReason={entry.access !== "write" ? "Cloud backup requires write access" : undefined} />}
               {isMounted || needsCleanup ? (
                 <Button variant="outline" size="sm" disabled={unmountingEntryId === entry.entry_id} onClick={() => void unmountSelectedEntry(entry.entry_id)}>
                   {unmountingEntryId === entry.entry_id ? "Unmounting…" : needsCleanup ? "Retry cleanup" : "Unmount"}
@@ -1330,6 +1333,8 @@ export default function VaultAccessTab({ isAdmin, directory, onVisibilityChange 
                   </p>
                 </div>
                 {isMounted && authorized?.drive_letter && <Button variant="outline" size="sm" disabled={mountStateUnknown || !canEditEntry} onClick={() => void openMountedEntry(authorized.drive_letter!)}>Open in File Explorer</Button>}
+                {isMounted && authorized?.drive_letter && <VaultCloudBackupButton driveLabel={authorized.drive_letter} personal={false}
+                  disabled={mountStateUnknown || authorized.access !== "write"} disabledReason={authorized.access !== "write" ? "Cloud backup requires write access" : undefined} />}
                 {isMounted || needsCleanup ? (
                   <Button variant="outline" size="sm" disabled={unmountingEntryId === entry.id || mountStateUnknown || !canEditEntry} title={mountStateUnknown ? "Vault mount status is unavailable. Refresh before dismounting." : !canEditEntry ? "This Windows account cannot dismount this Vault." : undefined} onClick={() => void unmountSelectedEntry(entry.id)}>
                     {unmountingEntryId === entry.id ? "Unmounting…" : needsCleanup ? "Retry cleanup" : "Unmount"}

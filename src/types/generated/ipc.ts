@@ -172,6 +172,20 @@ tag: string,
  */
 inner: string, };
 
+export type VaultCloudBackupAction = "prepare" | "connect" | "configure" | "status" | "start" | "stop" | "verify" | "restore" | "disconnect" | "remove_setup";
+
+export type VaultCloudBackupConfiguration = { whole_vault: boolean, source_relative_paths: Array<string>, remote_folder_name: string, automatic: boolean, };
+
+export type VaultCloudBackupOutcome = "complete" | "partial" | "failed" | "interrupted" | "unknown";
+
+export type VaultCloudBackupPolicy = "owner_only" | "write_members";
+
+export type VaultCloudBackupReceipt = { run_id: string, outcome: VaultCloudBackupOutcome, started_at: string, finished_at: string | null, transferred_items: number, transferred_bytes: string, skipped_items: number, failed_items: number, };
+
+export type VaultCloudBackupRequest = { personal: boolean, internal_drive: number, action: VaultCloudBackupAction, expected_mount_receipt: string | null, configuration: VaultCloudBackupConfiguration | null, restore_relative_path: string | null, };
+
+export type VaultCloudBackupResult = { mount_receipt: string | null, engine_ready: boolean, connected: boolean, configured: boolean, automatic: boolean, watching: boolean, running: boolean, can_configure: boolean, configuration: VaultCloudBackupConfiguration | null, last_run: VaultCloudBackupReceipt | null, reason_code: string | null, };
+
 export type VaultSyncAction = "enable" | "list" | "rename" | "remove";
 
 export type VaultSyncFolder = { folder_id: string, relative_path: string, label: string, paused: boolean, recovery_required: boolean, };

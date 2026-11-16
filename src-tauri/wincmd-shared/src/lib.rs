@@ -22,6 +22,7 @@
 
 use serde::{Deserialize, Serialize};
 pub mod managed_deployment;
+pub mod vault_cloud_backup;
 pub mod vault_sync;
 
 /// Magic string in the Hello frame so a connecting peer can spot a

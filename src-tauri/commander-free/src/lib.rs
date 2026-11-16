@@ -202,6 +202,7 @@ mod uninstall_leftovers;
 mod updater;
 mod usb_guard;
 mod vault_access;
+mod vault_cloud_backup;
 mod vault_mount_verification;
 mod vm_sandbox;
 mod vpn_kill_switch;
@@ -3076,6 +3077,8 @@ pub fn run() {
             vault_access::vault_unmount_entry,
             vault_access::vault_enroll_personal_syncthing,
             vault_access::vault_manage_personal_syncthing,
+            vault_cloud_backup::vault_setup_cloud_backup,
+            vault_cloud_backup::vault_manage_cloud_backup,
             vault_access::vault_release_orphaned_drive_letters,
             vault_access::vault_list_authorized_entries,
             vault_access::get_vault_available_drive_letters,

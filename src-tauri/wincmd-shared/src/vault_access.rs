@@ -51,8 +51,20 @@ pub struct VaultAccessEntry {
     /// introduced, so an existing configured binding can be discovered once.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub syncthing_opt_in: Option<bool>,
+    /// Missing consent never permits exporting mounted files to a cloud account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud_backup: Option<VaultCloudBackupPolicy>,
     pub grants: Vec<VaultGrantInput>,
     pub mount: VaultMountPolicy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "ipc.ts"))]
+#[serde(rename_all = "snake_case")]
+pub enum VaultCloudBackupPolicy {
+    OwnerOnly,
+    WriteMembers,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -998,6 +1010,16 @@ mod tests {
         let legacy: VaultAccessEntry = serde_json::from_value(wire.clone()).unwrap();
         assert_eq!(legacy.access_pattern, None);
         assert_eq!(legacy.syncthing_opt_in, None);
+        assert_eq!(legacy.cloud_backup, None);
+        wire["cloud_backup"] = serde_json::json!("owner_only");
+        let owner_backup: VaultAccessEntry = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(owner_backup.cloud_backup, Some(VaultCloudBackupPolicy::OwnerOnly));
+        wire["cloud_backup"] = serde_json::json!("write_members");
+        let member_backup: VaultAccessEntry = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(member_backup.cloud_backup, Some(VaultCloudBackupPolicy::WriteMembers));
+        wire["cloud_backup"] = serde_json::json!("all_members");
+        assert!(serde_json::from_value::<VaultAccessEntry>(wire.clone()).is_err());
+        wire.as_object_mut().unwrap().remove("cloud_backup");
         wire["syncthing_opt_in"] = serde_json::json!(false);
         let opted_out: VaultAccessEntry = serde_json::from_value(wire.clone()).unwrap();
         assert_eq!(opted_out.syncthing_opt_in, Some(false));
@@ -1053,6 +1075,7 @@ mod tests {
                 owner_account: "Administrator".into(),
                 access_pattern: None,
                 syncthing_opt_in: None,
+                cloud_backup: None,
                 grants: vec![VaultGrantInput {
                     principal_name: "Partner".into(),
                     access: VaultAccess::Write,

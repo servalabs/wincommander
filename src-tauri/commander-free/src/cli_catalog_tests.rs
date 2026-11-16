@@ -32,6 +32,8 @@ fn every_registered_tauri_handler_is_cli_executable() {
         "require_calculator_peek_hotkey",
         "vault_enroll_personal_syncthing",
         "vault_manage_personal_syncthing",
+        "vault_setup_cloud_backup",
+        "vault_manage_cloud_backup",
     ] {
         assert!(
             tauri_commands.iter().any(|entry| entry.name == name),

@@ -15,6 +15,7 @@ import VolumeActionsMenu from "./VolumeActionsMenu";
 import SystemEncryptionSection from "./SystemEncryptionSection";
 import RamDisksSection from "./RamDisksSection";
 import BackupRecoverySection from "./BackupRecoverySection";
+import CloudBackupSection from "./CloudBackupSection";
 import StegoBackupSection from "./StegoBackupSection";
 import { showSuccess, showError } from "../../utils/toast";
 import type { EncryptionPartition } from "../../hooks/useBackend";
@@ -87,6 +88,7 @@ function VaultPanel() {
             <RamDisksSection />
           </div>
           <BackupRecoverySection />
+          <CloudBackupSection volumes={volumes} statusError={vaultStatusError} />
           <StegoBackupSection />
           {processElevation !== "administrator" && <section aria-label="My vaults" hidden={!showAssignedVaults}>
             <SectionCard title="My vaults" icon="lock">

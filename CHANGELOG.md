@@ -5,6 +5,11 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Add the typed service and Pro-gated UI integration for optional Vault cloud
+  backup, with explicit consent and automatic uploads while mounted. Requires
+  the paired Pro implementation; installed and real-account acceptance remain
+  pending before release.
+
 - Merge the `dev` branch into `main` (859 commits). Known failing gates and the
   standard-user evidence-storage regression that came with it are recorded in
   [STATUS.md](STATUS.md#the-2026-11-16-merge-of-dev); gated work stays disabled by default.

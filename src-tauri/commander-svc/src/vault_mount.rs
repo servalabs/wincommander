@@ -22,6 +22,8 @@ mod letter_cleanup;
 mod recovery;
 #[path = "vault_sync_management.rs"]
 mod sync_management;
+#[path = "vault_cloud_backup.rs"]
+mod cloud_backup;
 #[path = "vault_slot.rs"]
 mod slot;
 
@@ -596,6 +598,7 @@ pub(crate) fn valid_relative_sync_path(value: &str) -> bool {
     let path = std::path::Path::new(value);
     !value.is_empty()
         && !path.is_absolute()
+        && !cloud_backup::overlaps_backup_state(value)
         && path
             .components()
             .all(|component| matches!(component, std::path::Component::Normal(_)))
@@ -1390,6 +1393,7 @@ impl VaultMountBroker {
                     if self.persist_active(store, &mounts).is_err() {
                         return Err(VaultMountReason::DismountFailed);
                     }
+                    self.queue_cloud_backup_resume(&entry_id, &active, caller_token);
                     return Ok((
                         reply.drive_letter,
                         reply.internal_drive,
@@ -1787,6 +1791,7 @@ impl VaultMountBroker {
                     VaultMountReason::DismountFailed,
                 );
             }
+            self.queue_cloud_backup_resume(entry_id, &mount, caller_token);
             // A missing binding is a no-op. Only the owner-only per-user
             // policy shape may resume a binding; a shared policy never gains
             // a local profile simply because it was mounted.
@@ -1907,6 +1912,7 @@ impl VaultMountBroker {
                 sync_warning: None,
             };
         };
+        self.stop_cloud_backup_for_mount(&active, true);
         // A partial resume may have failed before recording that the folder is managed.
         if requires_syncthing_pause(&active) {
             let paused = sync_call("vault.syncthing.pause", &active);
@@ -2029,6 +2035,7 @@ impl VaultMountBroker {
                 sync_warning: None,
             };
         };
+        self.stop_cloud_backup_for_mount(&active, false);
         if requires_syncthing_pause(&active) && !expired_sync_paused {
             match self.active.lock() {
                 Ok(mut mounts) => {

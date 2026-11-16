@@ -68,6 +68,8 @@ fn request_timeout_for(feature_id: &str) -> std::time::Duration {
         "svc.vault.mount" => VAULT_MOUNT_TIMEOUT,
         "svc.vault.enroll_personal_syncthing" => SYNCTHING_ENROLLMENT_TIMEOUT,
         "svc.vault.manage_personal_syncthing" => SYNCTHING_MANAGEMENT_TIMEOUT,
+        "svc.vault.setup_cloud_backup" => std::time::Duration::from_secs(190),
+        "svc.vault.manage_cloud_backup" => std::time::Duration::from_secs(190),
         _ => SVC_TRANSPORT_TIMEOUT,
     }
 }
@@ -83,6 +85,8 @@ fn may_still_be_completing(feature_id: &str) -> bool {
             | "svc.vault.dismount_personal"
             | "svc.vault.enroll_personal_syncthing"
             | "svc.vault.manage_personal_syncthing"
+            | "svc.vault.setup_cloud_backup"
+            | "svc.vault.manage_cloud_backup"
             | "svc.vault.release_orphaned_drive_letters"
     )
 }
