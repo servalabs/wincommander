@@ -190,9 +190,14 @@ the backend and private component before execution.
   review surfaces where available in the current build.
 - Backend-owned candidate identifiers and live revalidation before mutations;
   the frontend does not submit arbitrary filesystem targets.
-- Explorer and search-result secure erase for regular files uses one verified
-  Windows handle for overwrite, read-back, and deletion. Folder shredding is
-  refused until handle-safe recursive traversal is implemented.
+- Explorer and search-result secure erase pins the selected object and its
+  ancestors with Windows handles. Regular files are overwritten, read back and
+  deleted through one handle; folders are inspected completely first and then
+  erased entry by entry through pinned handles. Reparse points, hard-linked
+  files, protected roots and objects replaced after selection are refused.
+  Overwrite does not guarantee removal from SSD/NVMe remapped cells. Windows
+  tests for these checks exist in `commander-context-shred`; live behavior on
+  real Explorer selections is not verified here.
 
 ### Search and automation surface
 
@@ -248,7 +253,8 @@ operational risk, or proprietary enforcement logic.
   Restore checks the selected mounted generation and writes plaintext contents
   to a new folder; legacy recovery requires an explicit choice. These checks do
   not prove remote durability or retention. Requires a matching updated Pro;
-  availability starts with a future release containing this paired app change.
+  availability starts with a future release containing this paired app change
+  (see [ROADMAP.md](ROADMAP.md)).
   Copy-check results identify the submitted folder and when the app received
   the result using this device's clock. They remain scoped to that check across
   picker changes and panel navigation; they do not track later file changes or
@@ -338,7 +344,8 @@ listed as a product feature. The public status and the evidence required before
 any scoped quantum-resistant claim are in
 [SECURITY.md](SECURITY.md#cryptography-and-post-quantum-status).
 
-Current operational limits that qualify these capabilities are in
-[SECURITY.md](SECURITY.md). Deliberate product exclusions are in
+Planned, deferred and partially implemented work is in
+[ROADMAP.md](ROADMAP.md). Current operational limits that qualify these
+capabilities are in [SECURITY.md](SECURITY.md). Deliberate product exclusions are in
 [NON-GOALS.md](NON-GOALS.md); source ownership and technical interfaces are in
 [ARCHITECTURE.md](ARCHITECTURE.md).

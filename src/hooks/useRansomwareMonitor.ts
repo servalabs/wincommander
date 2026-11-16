@@ -24,7 +24,7 @@ export const DEFAULT_RANSOMWARE_THRESHOLD = 50;
 export const DEFAULT_RANSOMWARE_WINDOW_SECONDS = 30;
 export const DEFAULT_RANSOMWARE_ALERT_COOLDOWN_SECONDS = 300;
 export const DEFAULT_RANSOMWARE_ATTRIBUTION_MIN_FILES = 5;
-// Suspend-by-default per roadmap (F-3 v2): reversible, names the culprit.
+// Suspend-by-default (F-3 v2): reversible, names the culprit.
 export const DEFAULT_RANSOMWARE_ACTION: RansomwareAction = "suspend";
 
 export default function useRansomwareMonitor(

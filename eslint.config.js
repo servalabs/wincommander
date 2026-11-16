@@ -1,4 +1,4 @@
-// F-11 (security-audit-report.md): ESLint 9 flat config.
+// ESLint 9 flat config (security-audit finding F-11).
 //
 // Starts permissive — only the security-critical rules are errors. Style
 // and "code smell" rules are off so the first PR doesn't drown in noise.

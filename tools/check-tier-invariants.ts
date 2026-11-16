@@ -5,7 +5,7 @@
 // ═══════════════════════════════════════════════════════════════════════
 //
 // Loads the toggle + feature registries and asserts every entry obeys
-// the four invariants in ref/architecture.md (Open-Core Architecture — CI invariants):
+// the tier and risk invariants described in ARCHITECTURE.md (Tier & risk model):
 //
 //   1. tier in {"free", "paid"}                         (TS already enforces)
 //   2. irreversible: true   ⇒ needsAdmin: true
@@ -130,7 +130,7 @@ function main(): void {
     console.error(`  - ${v}`);
   }
   console.error(
-    "\nSee ref/architecture.md (Open-Core Architecture — CI invariants) for the full invariant list.",
+    "\nSee ARCHITECTURE.md (Tier & risk model) for the tier and risk rules.",
   );
   process.exit(1);
 }

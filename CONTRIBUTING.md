@@ -40,123 +40,82 @@ and [OPEN_CORE.md](OPEN_CORE.md).
 
 ## Local setup
 
+[AGENTS.md](AGENTS.md#working-here) owns the command list; this section adds
+context for contributors.
+
 Prerequisites:
 
 - Windows 11 (Admin account)
 - Visual Studio Build Tools 2026 with **Desktop development with C++**,
   **MSVC v143**, and **Windows 11 SDK (10.0.26100)**
+- Git submodules: `git submodule update --init --recursive -- assets`
 - Optional: Python 3.12 if you're touching the AI / Privacy Shield
   features (`tools/install_python_deps.ps1`)
 
-Install + run:
+First run and later runs:
 
 ```powershell
-# First run — installs Bun when absent and the Rust version pinned by this repo.
+# Installs the pinned Bun and Rust toolchain when absent, prepares native
+# components, then starts Tauri.
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\dev.ps1
 
-# Subsequent runs
-bun run dev:tauri    # canonical: launches the full Tauri window lifecycle
-bun run dev:reset    # erases %APPDATA%\WinCommander\settings.json first
+bun run dev:tauri    # same launcher
+bun run dev:admin    # relaunch elevated for administrator-only development checks
+bun run dev:reset    # deletes saved settings.dat/settings.json (machine and user profiles), then starts
 ```
 
-`bun run dev:tauri` invokes the `beforeDevCommand` from
-`tauri.conf.json`, which verifies the pinned toolchain, then runs `bun run dev:server` (encrypt-backend → build
-Pro sidecar in debug → launch Vite) and then opens the Tauri window.
-The bare `bun run dev` only runs the frontend pipeline without the
-Tauri window — useful for frontend-only iteration but you won't see
-the app shell. Use `bun run dev:reset` whenever you want to test
-first-run / fresh-install behaviour.
+`tools/dev.ps1` completes dependency, Pro and local-service preparation
+*before* starting Tauri's frontend wait, so a cold native build cannot consume
+that deadline; Tauri's `beforeDevCommand` then only starts Vite on
+`http://127.0.0.1:1420`. Keep Vaults safely dismounted for backend replacement:
+mounted or unverifiable Vault state stops native preparation, and
+`bun run dev:server` remains available for a preserved frontend session. Use
+the desktop launcher for native testing; a browser-only session does not load
+new native code.
 
-### The `encrypt-backend` prerequisite
+### Free-only development (no Pro checkout)
 
-A fresh clone has no `.enc` blobs — they are gitignored. The
-`build.rs` compile step calls `include_bytes!` on each `.enc` file, so
-`cargo build` (and `bun run tauri -- dev`) will fail until the blobs exist.
+With no sibling Pro workspace, `tools/dev.ps1` starts the Free-only app
+automatically (it sets `WINCOMMANDER_DEV_FREE_ONLY=1`); paid actions stay
+unavailable. `bun run dev:free` starts only the Vite pipeline without the Pro
+build, and `bun run build:free` produces the Free web bundle (`dist/`) without
+`build:pro:release` or `hash-pro`.
 
-**Run this once after cloning, and again after any edit to
-`src-tauri/commander-free/scripts/**/*.ps1`:**
+Pro features need a sibling clone of the private Pro repository (looked up as
+`../commander-pro`, `../wicommander-pro` or `../wincommander-pro`); set
+`WINCOMMANDER_PRO_WORKSPACE` to override. It is not part of the public Free
+build. See [OPEN_CORE.md](OPEN_CORE.md).
 
-```powershell
-bun run encrypt-backend
-```
+### The `encrypt-backend` step
 
-This rotates the per-build AES salt and writes fresh `.enc` files that
-the next `cargo build` picks up.
-
-### Free-only dev/build loop (no `../commander-pro` required)
-
-Contributors who have only cloned this repo (no sibling
-`../commander-pro`) can work on the Free app without the Pro shell-out.
-Use the `*:free` scripts added for this purpose:
-
-**Vite-only frontend development** (no Tauri window):
-
-```powershell
-bun run dev:free   # kill:dev + encrypt-backend + Vite — no build:pro
-```
-
-**Full Tauri dev window — Free path (two terminals required):**
-
-`tauri.conf.json`'s `beforeDevCommand` is hardcoded to
-`bun run fetch-icons && bun run dev`, and `bun run dev` includes
-`build:pro` (which shells out to `../commander-pro`). That config is
-shared and intentionally not overridden here.
-
-Free contributors use two terminals:
-
-```powershell
-# Terminal 1 — start Vite (Free; no Pro build):
-bun run dev:free
-
-# Terminal 2 — once Vite is serving on http://[::1]:1420, open the Tauri window.
-# beforeDevCommand will try bun run dev and fail on build:pro; that is expected.
-# Tauri connects to the already-running devUrl (http://[::1]:1420) regardless.
-bun run dev:tauri:free
-```
-
-`bun run dev:tauri:free` is an alias for `bun run dev:tauri` (both
-invoke the same bootstrap, which runs `bun run tauri -- dev --config src-tauri/commander-free/tauri.conf.json`).
-The `beforeDevCommand` will error when it hits `build:pro` and there is
-no `../commander-pro` sibling, but by that point Vite is already
-serving from terminal 1, and Tauri connects to it successfully. The
-window opens normally; only the Pro sidecar is absent.
-
-**Free web bundle (no Tauri packaging, no Pro build):**
-
-```powershell
-bun run build:free   # encrypt-backend + tsc + vite build
-```
-
-This produces the Vite `dist/` output. It omits `build:pro:release` and
-`hash-pro` — neither is required for a Free web bundle.
-
-**Pro features** require a sibling clone at `../commander-pro/` (not
-`../wincommander-pro/`). If your local checkout still uses a legacy
-folder name such as `../wicommander-pro/`, `bun run build:pro` resolves
-it automatically; set `WINCOMMANDER_PRO_WORKSPACE` to override the
-location explicitly. They are not part of the public Free build. See
-[OPEN_CORE.md](OPEN_CORE.md) for the dual-licence model.
+Debug builds embed the plaintext PowerShell sources directly, so ordinary
+development does not need the `.enc` blobs. Release-oriented scripts
+(`build`, `build:free`, `build:tauri:release`) run `bun run encrypt-backend`,
+which rotates the per-build AES salt and writes the gitignored `.enc` files.
+Run it yourself after editing `src-tauri/commander-free/scripts/**/*.ps1` when
+you are preparing a release build.
 
 ## Testing your change
 
-Before opening a PR:
+Before opening a PR (see AGENTS.md for the full list):
 
 ```powershell
 bun x tsc --noEmit              # frontend type-check
-bun run lint                    # ESLint (--max-warnings=0) — blocking
+bun run lint                    # ESLint (--max-warnings=0) - blocking
 bun run lint:tiers              # tier + risk invariants
-bun run gen:types:check         # Rust→TS wire types in sync (run `bun run gen:types` if not)
-cd src-tauri && cargo check --workspace
+bun run lint:quality            # code-quality guards (file-size limits etc.)
+bun run lint:docs               # Markdown relative links and anchors
+bun run gen:types:check         # Rust->TS wire types in sync (run `bun run gen:types` if not)
+cd src-tauri && cargo check --all-targets
 cd src-tauri && cargo clippy --workspace --all-targets -- -D warnings   # blocking
 cd src-tauri && cargo test --workspace
 ```
 
-CI runs all of these on every push. PRs that fail CI won't be
-reviewed. `bun run lint:strings-free` is the local form of the AV-clean
-gate; CI enforces it as a hard requirement via the `strings-grep-free`
+CI runs these checks. `bun run lint:strings-free` is the local form of the
+AV-clean gate; CI enforces it as a hard requirement via the `strings-grep-free`
 job (`-HardGate`), which fails the merge on any forbidden token.
 
-For UI changes, smoke-test the actual feature in a Tauri dev window —
+For UI changes, smoke-test the actual feature in a Tauri dev window -
 type-check + invariants verify code shape, not user-visible behaviour.
 
 ## Testing Pro features as an external contributor

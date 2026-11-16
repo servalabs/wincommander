@@ -7,10 +7,9 @@
 # Scans the WinCommander Free binary for forbidden ASCII tokens that
 # indicate paid / Privacy Clean code has leaked into the open-source
 # build. The Free binary must be AV-clean -- Defender / SmartScreen /
-# VirusTotal should never flag it on download. Paid commands physically
-# move into wincommander-pro.exe in Phase 6 of the rollout; until then
-# this check is expected to fail (the current single binary contains
-# everything). After Phase 6 (P4), -HardGate is flipped on in CI.
+# VirusTotal should never flag it on download. Paid commands live in
+# wincommander-pro.exe; CI runs this check with -HardGate (blocking) in the
+# strings-grep-free job.
 #
 # Forbidden tokens are loaded from tools/strings-grep-forbidden.txt so
 # P2 can append duress-feature symbols without touching this script.

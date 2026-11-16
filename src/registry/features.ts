@@ -15,7 +15,7 @@
 //     rollout progresses (Phases 2-10).
 //
 // Every feature carries the same tier + 4-risk-boolean classification as
-// toggles. CI invariants (in ref/architecture.md — Open-Core Architecture) apply.
+// toggles. CI invariants (see ARCHITECTURE.md, Tier & risk model) apply.
 
 import type { IconName } from "@/components/ui/bp";
 import type { Tier } from "../types/toggles";

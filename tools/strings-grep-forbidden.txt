@@ -40,7 +40,7 @@ Clear-SearchIndex
 Clear-PrintSpooler
 Clear-Recall
 
-# ── A-5 additions (open-source.md Part 1 §4.3) ──────────────────────────
+# ── A-5 additions ──────────────────────────
 Set-MpPreference
 USBSTOR
 VeraCrypt Format

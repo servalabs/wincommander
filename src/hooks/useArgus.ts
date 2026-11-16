@@ -7,7 +7,7 @@
 // shapes below are hand-typed to match the Pro collectors' JSON — there
 // is no generated binding to import for these IPC calls.
 //
-// PRIVACY INVARIANT (see AGENTS.md): none of these shapes carry window
+// PRIVACY INVARIANT (see ARCHITECTURE.md, Argus rows): none of these shapes carry window
 // titles, exe paths, URLs, filenames, printer names, document names, or
 // usernames — only aggregate scalars/enums cross the IPC boundary.
 //

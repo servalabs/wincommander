@@ -257,17 +257,24 @@ authoritative statement of what WinCommander does not claim to defend against.
   it, and a Windows user switch leaves the previous session running. But an
   explicit quit, a sign-out, a crash, a failed startup, or a sidecar or update
   failure can interrupt session-bound check-ins and enforcement. The installed
-  LocalSystem service does not yet own the full Fleet lifecycle.
+  LocalSystem service does not yet own the full Fleet lifecycle
+  ([ROADMAP.md](ROADMAP.md)).
 - Managed-state enforcement is partial, not absent. Supported settings that
   have a mapped enable/disable command are periodically probed and re-applied,
   including organization-locked paths. Controls without such a mapping, and
   one-shot or irreversible actions, are observational only. Console readings
   can also come from evidence channels with different freshness and coverage,
   so a reading is not by itself proof that every policy path converged.
-- Windows Server/RDS, physical USB, hardware-backed keys, signed installers,
-  and clean-machine behavior still require environment-specific validation.
-  Planned or source-tested functionality is not a shipped or independently
-  certified guarantee.
+- The ordinary per-user content-search index (under the user's WinCommander
+  data folder, `file-search\fts`) is not encrypted by WinCommander and holds
+  text extracted from indexed folders. Rely on Windows disk encryption and
+  restrict the profile; indexes of selected VeraCrypt folders live inside the
+  mounted volume instead (see Private-volume search).
+- Planned or source-tested functionality is not a shipped or independently
+  certified guarantee. Environments that have not been validated (Windows
+  Server/RDS, physical USB, hardware-backed keys, signed installers, clean
+  machines) are listed in [WEAKNESSES.md](WEAKNESSES.md#validation-gaps); the
+  acceptance work is in [USER-TASKS.md](USER-TASKS.md).
 
 ## Free-to-Pro process and destructive-target boundary
 
@@ -287,10 +294,14 @@ success only when Pro returns a matching typed receipt. These controls have
 source and automated-test coverage; signed installed-Windows substitution and
 drive-reassignment testing remains part of release acceptance.
 
-Explorer and search-result secure erase now overwrite, verify, and delete a
-regular file through one opened Windows handle, and reject reparse points and
-hard links. Folder shredding fails closed until handle-relative, reparse-safe
-recursive traversal is available.
+Explorer and search-result secure erase pins the selected object and its
+ancestors, then overwrites, verifies and deletes a regular file through one
+opened Windows handle. Folders are inspected completely before any change and
+erased entry by entry through pinned handles; reparse points, hard-linked
+files, protected roots and a target or ancestor replaced after selection are
+refused. These checks have source and Windows automated-test coverage; they
+were not exercised on a live Explorer session or other media types when this
+was written.
 
 ## Cryptography and post-quantum status
 
@@ -358,7 +369,7 @@ evidence that all existing local data is encrypted.
 
 Clearing the application log removes its history; retain any history needed for
 troubleshooting before clearing it. A safe migration and visible status flow
-remain to be implemented. Do not delete key material to retry: older settings,
+are not implemented (see [ROADMAP.md](ROADMAP.md)). Do not delete key material to retry: older settings,
 logs and diagnostic data may need that same key. If a settings key is missing,
 preserve the existing settings, logs and backups, and seek help restoring the
 matching key. Data in other Windows profiles or on disconnected storage may

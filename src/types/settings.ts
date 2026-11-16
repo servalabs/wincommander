@@ -904,8 +904,8 @@ export interface FileWatchTriggerSettings {
  *  modified within `windowSeconds`, fires a loud notification — the
  *  textbook ransomware signature. */
 /** F-3 v2 automated response (Pro ETW path only). "monitor" alerts and
- *  names the offending process; "suspend" freezes it (reversible — the
- *  roadmap "suspend-by-default"); "kill" terminates it. The notify
+ *  names the offending process; "suspend" freezes it (reversible; the
+ *  default); "kill" terminates it. The notify
  *  fallback can't attribute a PID, so it always behaves as "monitor". */
 export type RansomwareAction = "monitor" | "suspend" | "kill";
 
@@ -1739,7 +1739,7 @@ export interface PolicySettings {
    *  connected admin server (`apply_admin_config_cmd`): a standalone box has
    *  no server to push that, yet still has exactly one administrator who
    *  needs to stop other signed-in users from switching a shared vault to
-   *  per-user scope. Settings are machine-wide (see AGENTS.md), so one write
+   *  per-user scope. Settings are machine-wide (see ARCHITECTURE.md, Data model), so one write
    *  here pins the effective scope for every user's session. `null`/absent
    *  = not pinned, users choose freely. */
   pinnedMountScope?: "auto" | "machine" | "per-user" | null;

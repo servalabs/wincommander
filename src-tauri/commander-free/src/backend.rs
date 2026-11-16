@@ -1490,8 +1490,8 @@ const SENSITIVE_COMMANDS: &[SensitiveCommand] = &[
     },
     SensitiveCommand {
         // Paid: dispatches to Pro's stdin-based EncVolFormat.exe engine
-        // (encvol_engine::dismount_all_volumes) — see AGENTS.md "Vault/volumes
-        // create+mount+dismount are Pro-only" (2026-07-10). Was mis-registered
+        // (encvol_engine::dismount_all_volumes) — Vault/volumes
+        // create+mount+dismount are Pro-only (2026-07-10). Was mis-registered
         // Free here, which silently overrode the (also-paid) fallback match
         // arm for this command since sensitive_command() is checked first.
         parts: &["Dismount~-", "All~", "Encryption~", "Volumes~"],
@@ -1653,7 +1653,7 @@ fn get_required_frontend_module(command: &str) -> Option<&'static str> {
 // "free" for everything else. Mirrors the tier classifications in:
 //   - src/registry/privacy.toggles.ts
 //   - src/registry/tweaks.toggles.ts
-//   - the panel-table in ref/architecture.md (Open-Core Architecture — Feature classification) and ref/roadmap.md (Binary placement per panel).
+//   - FEATURES.md (the public Free/Pro boundary) and ARCHITECTURE.md (Tier & risk model).
 //
 // run_backend_script() consults this BEFORE dispatch and refuses paid
 // commands when no entitlement is present (see license::require_paid).

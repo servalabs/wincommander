@@ -19,6 +19,24 @@ stricter rule when instructions conflict.
 - [NON-GOALS.md](NON-GOALS.md) — deliberate product boundaries
 - [POSITIONING.md](POSITIONING.md) — intended audience and product stance
 - [CHANGELOG.md](CHANGELOG.md) — public release-facing changes
+- [STATUS.md](STATUS.md) — current state of `main` and `dev`, and how it was
+  checked
+- [ROADMAP.md](ROADMAP.md) — the only list of open public work (deferred, WIP,
+  partial, full pending)
+- [WEAKNESSES.md](WEAKNESSES.md) — known engineering and product limits
+- [USER-TASKS.md](USER-TASKS.md) — manual acceptance runs and owner decisions
+- [RESEARCH.md](RESEARCH.md) — measured findings, rejected options, conditional
+  opportunities
+- [INTEGRATIONS.md](INTEGRATIONS.md) — external services, optional components
+  and their trust boundaries
+- [CONTRIBUTING.md](CONTRIBUTING.md), [CLA.md](CLA.md),
+  [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) — contribution process and legal terms
+- [BESTPRACTICES.md](BESTPRACTICES.md) — engineering baseline that applies to
+  every change (`CLAUDE.md` is only a pointer to this file)
+- Crate- and tool-local references, kept next to what they describe:
+  `src-tauri/wincmd-pq-experiment/` (experimental post-quantum rehearsal
+  tooling), `src-tauri/wci-verify/README.md`,
+  `tools/import-secret-rules/README.md`
 
 The public code and these root documents are the source of truth for public
 interfaces. Detailed design references, plans, runbooks, mockups, private
@@ -36,13 +54,23 @@ implementation, commercial work, and acceptance records live in
   boundaries. `SECURITY.md` owns the threat model and disclosure policy.
 - `PERFORMANCE.md` owns responsiveness design, budgets, baselines, and
   measurement evidence. `CHANGELOG.md` owns shipped historical changes.
-- This repository carries **no weaknesses ledger and no roadmap**. The open
-  limitations and validation gaps for this client are tracked privately in
-  `wincommander-pro` (`WEAKNESSES.md`, Free-client boundaries), and
-  approved future work in that repository's `ROADMAP.md`. A limitation that must
-  reach users belongs here as a boundary in `NON-GOALS.md` or a threat-model
-  statement in `SECURITY.md`, written for that audience — never as a new
-  weaknesses or roadmap file.
+- Living status documents (root Markdown, each fact in exactly one place):
+  `STATUS.md` owns the current state of `main` and `dev` and how it was
+  checked; `ROADMAP.md` owns open work in four parts (Deferred, WIP, Partial,
+  Full pending) and contains only unfinished items — completed work moves to
+  `CHANGELOG.md` and the capability docs, and work present only on `dev` is
+  listed as WIP, never as shipped; `WEAKNESSES.md` owns known engineering and
+  product limits that are not security claims; `USER-TASKS.md` owns manual
+  acceptance runs and owner decisions; `RESEARCH.md` owns measured findings,
+  rejected options and conditional opportunities; `INTEGRATIONS.md` owns
+  external-service and optional-component boundaries.
+- Public-appropriate content only in those files. Vulnerability details,
+  private Pro/Fleet planning and internal audits stay in `wincommander-pro`;
+  a limitation users must rely on belongs in `SECURITY.md` or `NON-GOALS.md`.
+  Describe only limits already public in this repository's docs or source.
+- Documentation structure: root Markdown only (plus the crate/tool-local
+  references listed above). Do not add dated plans, audits, handoffs, redirect
+  stubs or `docs/` trees; git history is the archive.
 
 ## Repository shape
 
@@ -67,6 +95,8 @@ Run commands from the repository root in PowerShell on Windows.
 - Type-check: `bun x tsc --noEmit`
 - Frontend lint: `bun run lint`
 - Tier invariants: `bun run lint:tiers`
+- Documentation links and anchors: `bun run lint:docs`
+- Changed-file quality guards: `bun run lint:quality`
 - Generated type drift: `bun run gen:types:check`
 - Free-binary string boundary: `bun run lint:strings-free`
 - Rust checks: from `src-tauri`, run `cargo check --all-targets` and
@@ -90,8 +120,9 @@ essential shared assets before compiling or starting the app.
 
 - Use `rg`/`rg --files` for search.
 - Preserve unrelated working-tree changes.
-- Keep product Markdown in the public root; do not add plans, readiness
-  ledgers, internal audits, or private runbooks here.
+- Keep product Markdown in the public root; do not add dated plans, readiness
+  ledgers, internal audits, or private runbooks here. Open work belongs in
+  the living files above.
 - Do not commit `.env`, credentials, signing material, internal endpoints,
   private design URLs, local capture paths, or customer/employee data.
 - Keep paid enforcement server-side/backend-side. UI visibility is not an

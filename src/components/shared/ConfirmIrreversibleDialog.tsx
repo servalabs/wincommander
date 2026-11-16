@@ -14,7 +14,7 @@
 // Why countdown-instead-of-typed-phrase: matches Obsidian / VS Code /
 // 1Password — clear button label + a brief enforced pause is enough
 // friction for accidental clicks while not insulting users who genuinely
-// want to proceed. See ref/architecture.md (Open-Core Architecture — Risk model + Backend).
+// want to proceed. See ARCHITECTURE.md (Tier & risk model).
 //
 // Usage:
 //   const [open, setOpen] = useState(false);

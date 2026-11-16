@@ -750,7 +750,7 @@ fn pick_non_empty(values: &[&'static str]) -> &'static str {
 // In release builds, the licence API base and verification public key
 // are sourced exclusively from the build-time `option_env!()` embed
 // (see get_config). This prevents the "drop a .env next to the EXE to
-// re-key licence verification" bypass — see ref/security-audit-report.md.
+// re-key licence verification" bypass.
 #[cfg(debug_assertions)]
 fn ensure_dotenv_loaded() {
     let _ = DOTENV_LOADED.get_or_init(|| {
@@ -1441,8 +1441,8 @@ fn status_from_cached(
 // `ensure_license_gate()` was removed in Phase 4 of the tier-split rollout.
 // The Free binary launches without a license; per-feature paywall is enforced
 // at the call site via license::require_paid (paid commands) and
-// license::has_entitlement (granular checks). See the rollout plan at
-// `ref/roadmap.md` (Part 1 — Active Rollout Plan).
+// license::has_entitlement (granular checks). See OPEN_CORE.md.
+//
 
 #[tauri::command]
 pub async fn get_license_status() -> Result<serde_json::Value, String> {
