@@ -295,7 +295,9 @@ Public release notes are published with each versioned
   checked receipt. VeraCrypt headers use verified file/partition handles and
   BitLocker uses the resolved volume GUID. Explorer/search secure erase now
   overwrites, reads back, and deletes regular files through one handle while
-  refusing reparse points, hard links, and folders. These are source and
+  refusing reparse points and hard links. Folders are erased only after a full
+  pre-inspection, entry by entry through pinned handles, and refuse a target or
+  ancestor replaced after selection. These are source and
   automated-test claims; signed installed-Windows attack acceptance is pending.
 
 - Destructive desktop actions now require a native, target-specific confirmation
