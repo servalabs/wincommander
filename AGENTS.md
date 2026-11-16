@@ -19,8 +19,14 @@ stricter rule when instructions conflict.
 - [NON-GOALS.md](NON-GOALS.md) — deliberate product boundaries
 - [POSITIONING.md](POSITIONING.md) — intended audience and product stance
 - [CHANGELOG.md](CHANGELOG.md) — public release-facing changes
+- [STATUS.md](STATUS.md) — current state of `main` and `dev`, and how it was
+  checked
 - [ROADMAP.md](ROADMAP.md) — the only list of open public work (deferred, WIP,
   partial, full pending)
+- [WEAKNESSES.md](WEAKNESSES.md) — known engineering and product limits
+- [USER-TASKS.md](USER-TASKS.md) — manual acceptance runs and owner decisions
+- [RESEARCH.md](RESEARCH.md) — measured findings, rejected options, conditional
+  opportunities
 - [INTEGRATIONS.md](INTEGRATIONS.md) — external services, optional components
   and their trust boundaries
 - [CONTRIBUTING.md](CONTRIBUTING.md), [CLA.md](CLA.md),
@@ -48,20 +54,23 @@ implementation, commercial work, and acceptance records live in
   boundaries. `SECURITY.md` owns the threat model and disclosure policy.
 - `PERFORMANCE.md` owns responsiveness design, budgets, baselines, and
   measurement evidence. `CHANGELOG.md` owns shipped historical changes.
-- `ROADMAP.md` owns open public work in four parts (Deferred, WIP, Partial,
-  Full pending) and contains only unfinished items; completed work moves to
-  `CHANGELOG.md` and the capability docs. Work present only on `dev` is listed
-  as WIP, never as shipped. `INTEGRATIONS.md` owns external-service and
-  optional-component boundaries.
-- This repository carries **no weaknesses ledger, status report, research log
-  or user-task list**. Open limitations, validation gaps and acceptance work
-  for this client are tracked privately in `wincommander-pro`; commercial and
-  Pro/Fleet planning stays there too. A limitation that must reach users
-  belongs here as a boundary in `NON-GOALS.md` or a threat-model or
-  operational-limit statement in `SECURITY.md`, written for that audience.
+- Living status documents (root Markdown, each fact in exactly one place):
+  `STATUS.md` owns the current state of `main` and `dev` and how it was
+  checked; `ROADMAP.md` owns open work in four parts (Deferred, WIP, Partial,
+  Full pending) and contains only unfinished items — completed work moves to
+  `CHANGELOG.md` and the capability docs, and work present only on `dev` is
+  listed as WIP, never as shipped; `WEAKNESSES.md` owns known engineering and
+  product limits that are not security claims; `USER-TASKS.md` owns manual
+  acceptance runs and owner decisions; `RESEARCH.md` owns measured findings,
+  rejected options and conditional opportunities; `INTEGRATIONS.md` owns
+  external-service and optional-component boundaries.
+- Public-appropriate content only in those files. Vulnerability details,
+  private Pro/Fleet planning and internal audits stay in `wincommander-pro`;
+  a limitation users must rely on belongs in `SECURITY.md` or `NON-GOALS.md`.
+  Describe only limits already public in this repository's docs or source.
 - Documentation structure: root Markdown only (plus the crate/tool-local
-  references listed above). Do not add dated plans, audits, handoffs or
-  `docs/` trees; git history is the archive.
+  references listed above). Do not add dated plans, audits, handoffs, redirect
+  stubs or `docs/` trees; git history is the archive.
 
 ## Repository shape
 
@@ -111,8 +120,9 @@ essential shared assets before compiling or starting the app.
 
 - Use `rg`/`rg --files` for search.
 - Preserve unrelated working-tree changes.
-- Keep product Markdown in the public root; do not add plans, readiness
-  ledgers, internal audits, or private runbooks here.
+- Keep product Markdown in the public root; do not add dated plans, readiness
+  ledgers, internal audits, or private runbooks here. Open work belongs in
+  the living files above.
 - Do not commit `.env`, credentials, signing material, internal endpoints,
   private design URLs, local capture paths, or customer/employee data.
 - Keep paid enforcement server-side/backend-side. UI visibility is not an
