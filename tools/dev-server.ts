@@ -61,9 +61,27 @@ const FRONTEND_ONLY = process.argv.includes("--frontend-only");
 const PREPARE_ONLY = process.argv.includes("--prepare-only");
 const VITE_ONLY = process.argv.includes("--vite-only");
 
+function windowsPowerShellEnv(): NodeJS.ProcessEnv {
+  // Bun and PowerShell 7 leave their module path in the process environment.
+  // Windows PowerShell keeps that path when it is passed explicitly, then
+  // fails to import Microsoft.PowerShell.Security (Get-Acl) during the
+  // elevated service sync. Start it on the Windows PowerShell module path.
+  const env = { ...process.env };
+  const systemRoot = process.env.SystemRoot ?? "C:\\Windows";
+  const programFiles = process.env.ProgramFiles ?? "C:\\Program Files";
+  const userModules = process.env.USERPROFILE
+    ? `${process.env.USERPROFILE}\\Documents\\WindowsPowerShell\\Modules`
+    : "";
+  env.PSModulePath = [userModules, `${programFiles}\\WindowsPowerShell\\Modules`, `${systemRoot}\\System32\\WindowsPowerShell\\v1.0\\Modules`]
+    .filter((entry) => entry.length > 0)
+    .join(";");
+  return env;
+}
+
 function run(tag: string, cmd: string, args: string[]): Promise<number> {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn(cmd, args, { cwd: ROOT, env: process.env, stdio: "inherit", shell: false });
+    const env = cmd === WINDOWS_POWERSHELL ? windowsPowerShellEnv() : process.env;
+    const child = spawn(cmd, args, { cwd: ROOT, env, stdio: "inherit", shell: false });
     child.on("error", reject);
     child.on("exit", (code) => resolvePromise(code ?? 1));
   });
