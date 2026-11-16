@@ -11,6 +11,8 @@ use wincmd_shared::vault_cloud_backup::{
 mod supervisor;
 #[path = "vault_cloud_backup_attestation.rs"]
 mod attestation;
+#[path = "vault_cloud_backup_operations.rs"]
+mod operations;
 
 impl VaultMountBroker {
     pub(crate) fn manage_cloud_backup(
@@ -25,6 +27,9 @@ impl VaultMountBroker {
         if !request.valid() {
             return Err(VaultMountReason::InvalidRequest);
         }
+        let operation = operations::for_target(caller_sid, caller_session, request.internal_drive)?;
+        let _operation = tokio::task::block_in_place(|| operation.lock())
+            .map_err(|_| VaultMountReason::BrokerRejected)?;
         let (entry_id, active) = self.with_exclusive_operation(|| {
             let (id, active) = self.eligible_cloud_backup_mount(
                 store,

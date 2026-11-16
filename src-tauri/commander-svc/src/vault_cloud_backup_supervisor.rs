@@ -137,6 +137,12 @@ pub(super) fn start(broker: Arc<VaultMountBroker>, store: Arc<VaultAccessStore>)
 }
 
 fn renew_record(broker: &VaultMountBroker, store: &VaultAccessStore, record: Arc<Lease>) {
+    let Ok(operation) = operations::for_target(
+        &record.active.caller_sid, record.active.session_id, record.active.internal_drive,
+    ) else { return; };
+    let Ok(_operation) = tokio::task::block_in_place(|| operation.lock()) else { return; };
+    // A replacement action holds this same lock through its private call and
+    // registration. An old renewal can never dispatch Stop after that launch.
     if record.cancelled.load(Ordering::Acquire) {
         return;
     }
