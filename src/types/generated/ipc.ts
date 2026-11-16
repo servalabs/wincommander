@@ -174,6 +174,11 @@ inner: string, };
 
 export type VaultCloudBackupAction = "prepare" | "connect" | "configure" | "status" | "start" | "stop" | "verify" | "restore" | "disconnect" | "remove_setup";
 
+/**
+ * Read-only service attestation for a caller that cannot query driver ownership.
+ */
+export type VaultCloudBackupAttestationRequest = { personal: boolean, internal_drive: number, expected_engine_mount_identity: string, };
+
 export type VaultCloudBackupConfiguration = { whole_vault: boolean, source_relative_paths: Array<string>, remote_folder_name: string, automatic: boolean, };
 
 export type VaultCloudBackupOutcome = "complete" | "partial" | "failed" | "interrupted" | "unknown";

@@ -1,6 +1,29 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 use super::*;
 
+#[test]
+fn mount_attestation_is_bounded_and_cannot_supply_authority_or_paths() {
+    let mut request = VaultCloudBackupAttestationRequest {
+        personal: true,
+        internal_drive: 12,
+        expected_engine_mount_identity: "veracrypt:example:17".into(),
+    };
+    assert!(request.valid());
+    for identity in [String::new(), "a".repeat(193), "generation\n".into()] {
+        request.expected_engine_mount_identity = identity;
+        assert!(!request.valid());
+    }
+    request.expected_engine_mount_identity = "generation".into();
+    request.internal_drive = 26;
+    assert!(!request.valid());
+    request.internal_drive = 12;
+    for field in ["owner_sid", "drive_letter", "volume_identity", "executable"] {
+        let mut wire = serde_json::to_value(&request).unwrap();
+        wire[field] = "untrusted".into();
+        assert!(serde_json::from_value::<VaultCloudBackupAttestationRequest>(wire).is_err());
+    }
+}
+
 fn request(action: VaultCloudBackupAction) -> VaultCloudBackupRequest {
     VaultCloudBackupRequest {
         personal: true,

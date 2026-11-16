@@ -4,6 +4,26 @@ use serde::{Deserialize, Serialize};
 
 use crate::vault_sync::{valid_sync_folder_id, valid_sync_mount_receipt, valid_sync_path};
 
+/// Read-only service attestation for a caller that cannot query driver ownership.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "ipc.ts"))]
+#[serde(deny_unknown_fields)]
+pub struct VaultCloudBackupAttestationRequest {
+    pub personal: bool,
+    pub internal_drive: u8,
+    pub expected_engine_mount_identity: String,
+}
+
+impl VaultCloudBackupAttestationRequest {
+    pub fn valid(&self) -> bool {
+        self.internal_drive <= 25
+            && !self.expected_engine_mount_identity.is_empty()
+            && self.expected_engine_mount_identity.len() <= 192
+            && !self.expected_engine_mount_identity.chars().any(char::is_control)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
 #[cfg_attr(feature = "ts-codegen", ts(export, export_to = "ipc.ts"))]

@@ -180,6 +180,7 @@ pub fn is_known_verb(feature_id: &str) -> bool {
             | "svc.vault.manage_personal_syncthing"
             | "svc.vault.setup_cloud_backup"
             | "svc.vault.manage_cloud_backup"
+            | "svc.vault.attest_cloud_backup"
             | "svc.vault.release_orphaned_drive_letters"
             | "svc.vault.list_authorized"
             | "svc.vault.drive_letters"
@@ -446,7 +447,8 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         // caller-controlled file I/O in the authenticated caller's token.
         "svc.vault.create_personal"
         | "svc.vault.setup_cloud_backup"
-        | "svc.vault.manage_cloud_backup" => CapabilityClass::InteractiveSession,
+        | "svc.vault.manage_cloud_backup"
+        | "svc.vault.attest_cloud_backup" => CapabilityClass::InteractiveSession,
 
         // Creates/updates a Windows local group and sets its EXACT
         // membership from admin-supplied SIDs (the Access control UI's
@@ -553,7 +555,7 @@ mod tests {
 
     #[test]
     fn cloud_backup_requires_authenticated_interactive_session() {
-        for verb in ["svc.vault.setup_cloud_backup", "svc.vault.manage_cloud_backup"] {
+        for verb in ["svc.vault.setup_cloud_backup", "svc.vault.manage_cloud_backup", "svc.vault.attest_cloud_backup"] {
             assert!(is_known_verb(verb));
             assert_eq!(classify_verb(verb), CapabilityClass::InteractiveSession);
         }

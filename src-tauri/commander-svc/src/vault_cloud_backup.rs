@@ -9,6 +9,8 @@ use wincmd_shared::vault_cloud_backup::{
 
 #[path = "vault_cloud_backup_supervisor.rs"]
 mod supervisor;
+#[path = "vault_cloud_backup_attestation.rs"]
+mod attestation;
 
 impl VaultMountBroker {
     pub(crate) fn manage_cloud_backup(

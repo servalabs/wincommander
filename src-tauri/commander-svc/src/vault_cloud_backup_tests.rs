@@ -2,6 +2,22 @@
 use super::*;
 
 #[test]
+fn mount_attestation_requires_a_live_authenticated_caller_before_inspection() {
+    use wincmd_shared::vault_cloud_backup::VaultCloudBackupAttestationRequest;
+    let broker = crate::vault_mount::policy_edit_test_broker("test-backup", "test-identity");
+    let store = crate::vault_access::test_policy_store();
+    let mut request = VaultCloudBackupAttestationRequest {
+        personal: true, internal_drive: 12,
+        expected_engine_mount_identity: "driver-generation".into(),
+    };
+    assert!(matches!(broker.attest_cloud_backup(&store, &request, std::ptr::null_mut(), 7, "S-1-5-21-owner"), Err(VaultMountReason::NotAuthorized)));
+    // Session zero is rejected before an untrusted token can reach any Win32 query.
+    assert!(matches!(broker.attest_cloud_backup(&store, &request, 1usize as _, 0, "S-1-5-21-owner"), Err(VaultMountReason::NotAuthorized)));
+    request.expected_engine_mount_identity.clear();
+    assert!(matches!(broker.attest_cloud_backup(&store, &request, std::ptr::null_mut(), 7, "S-1-5-21-owner"), Err(VaultMountReason::InvalidRequest)));
+}
+
+#[test]
 fn missing_cloud_consent_never_allows_a_write_member_to_export() {
     assert!(!policy_permits_backup(
         None,
