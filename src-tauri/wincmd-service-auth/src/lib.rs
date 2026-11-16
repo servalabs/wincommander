@@ -72,6 +72,13 @@ fn service_executable(command: &Path) -> io::Result<PathBuf> {
 
 pub fn verify_service_peer(pipe: &impl AsRawHandle) -> io::Result<VerifiedServicePeer> {
     let pid = server_process_id(pipe)?;
+    let verified = verify_service_process(pid)?;
+    if server_process_id(pipe)? != pid { return Err(denied()); }
+    Ok(verified)
+}
+
+/// Verify a kernel-observed process ID against the registered service, never a caller-supplied PID.
+pub fn verify_service_process(pid: u32) -> io::Result<VerifiedServicePeer> {
     let process = pin_process(pid)?;
     let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
         .map_err(|_| denied())?;
@@ -110,7 +117,7 @@ pub fn verify_service_peer(pipe: &impl AsRawHandle) -> io::Result<VerifiedServic
         status.process_id,
         pid,
     )?;
-    if status.service_type != ServiceType::OWN_PROCESS || server_process_id(pipe)? != pid {
+    if status.service_type != ServiceType::OWN_PROCESS {
         return Err(denied());
     }
     Ok(VerifiedServicePeer { _process: process })

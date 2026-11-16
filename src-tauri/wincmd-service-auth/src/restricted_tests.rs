@@ -101,7 +101,9 @@ async fn installed_service_authenticates_with_admin_group_disabled() {
         // The updated service adds the exact caller's metadata-only grant
         // asynchronously after accept; no request is sent while waiting.
         let verified = verify_service_peer(&client).unwrap();
+        let verified_process = verify_service_process(pid).unwrap();
+        assert!(verify_service_process(std::process::id()).is_err());
         let guard = pin_process(pid).unwrap();
-        drop((verified, guard, client));
+        drop((verified, verified_process, guard, client));
     });
 }
