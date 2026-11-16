@@ -295,7 +295,7 @@ html:not(.search-overlay-window) .app-content::before {
 
 /* ════════════════════════════════════════════════════════════════════
    V2 reference micro-animation library.
-   Ports the signature live motion from ref/WinCommander (standalone)_V2.html
+   Ports the signature live motion from the V2 design reference (not in this repository)
    — the small "novelty" cues that make the UI feel alive: blinking status
    dots, an indeterminate scan sweep, a one-shot pop on freshly-actioned
    rows, and a gentle breathing metric bar.

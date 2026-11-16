@@ -5,7 +5,7 @@
 // capacity rules can be tested without a Tauri host — the component used to
 // decide everything inline and nothing here was reachable from a test.
 //
-// Technique (ARCHITECTURE.md:125): the container is APPENDED to the carrier
+// Technique: the container is APPENDED to the carrier
 // with a `WCSTEGO1` + offset trailer. So the carrier is not a capacity
 // ceiling — it is cover. What matters is (a) the output stays plausible as an
 // ordinary video, and (b) the destination has room for carrier + container.
@@ -29,7 +29,7 @@ export const MIN_PASSWORD_LENGTH = 8;
  */
 export const PLAUSIBLE_CARRIER_RATIO = 3;
 
-/** `WCSTEGO1` magic + a 64-bit payload offset (ARCHITECTURE.md:125). */
+/** `WCSTEGO1` magic + a 64-bit payload offset. */
 export const STEGO_TRAILER_BYTES = 16;
 
 /**

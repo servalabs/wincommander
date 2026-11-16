@@ -2,8 +2,8 @@ name: invariants
 
 # Tier-split CI invariants. Runs on relevant PRs and trusted pushes to main,
 # with path selection and concurrency cancellation to bound Actions usage.
-# of the rules in ref/architecture.md (Open-Core Architecture — CI invariants) before they
-# merge. Three jobs:
+# of the tier rules in ARCHITECTURE.md (Tier & risk model) before they
+# merge. Core jobs:
 #
 #   ts-schema       — TypeScript compiles (proves every ToggleDef has the
 #                     5 required tier+risk fields)
@@ -11,12 +11,9 @@ name: invariants
 #   cargo-check     — Rust compiles (license::has_paid_entitlement +
 #                     has_entitlement, run_backend_script tier gate)
 #
-# Phase 5 of the rollout adds two more jobs once Phase 6 lands:
-#   strings-grep-free     — scans wincommander-free.exe for forbidden
-#                           tokens (vssadmin, cipher /w, etc.) — proves
-#                           paid code never tainted the AV-clean build
-#   reproducible-build    — builds each binary twice on a clean runner;
-#                           SHA-256 must match across runs
+# Also below: strings-grep-free (blocking; scans wincommander-free.exe for
+# forbidden tokens so paid code never taints the AV-clean build). A
+# reproducible-build job is drafted but commented out; see ROADMAP.md.
 
 on:
   workflow_dispatch:
@@ -92,6 +89,8 @@ jobs:
           bun-version: 1.4.3
       - run: bun install --frozen-lockfile
       - run: bun run lint:tiers
+      - name: Markdown links and anchors
+        run: bun run lint:docs
 
   code-quality-guards:
     name: Changed-file quality guards
@@ -444,7 +443,7 @@ jobs:
       - run: cargo install cargo-deny --locked
       - run: cargo deny check
 
-  # A-5 — Free binary AV-clean strings check (open-source.md Part 1 §4.3).
+  # A-5 — Free binary AV-clean strings check.
   # Activated after A-2 stripped paid PowerShell from Free's encrypted
   # modules. Build the Free binary (--release for realistic strings
   # layout), then run tools/strings-grep-free.ps1 which scans for the
