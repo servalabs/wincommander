@@ -11,9 +11,9 @@ intent only; it is not a delivery commitment and carries no dates.
   does not repeat them.
 - Current capabilities are in [FEATURES.md](FEATURES.md); security limits and
   the post-quantum claim boundary are in [SECURITY.md](SECURITY.md).
-- Current state of `main` and of the `dev` branch is in
-  [STATUS.md](STATUS.md). Work that exists only on `dev` is listed under WIP
-  and is **not** part of `main` or any release.
+- Current state of `main` (which now includes the former `dev`) is in
+  [STATUS.md](STATUS.md). Gated, disabled or unaccepted work that arrived with
+  the 2026-11-16 merge is listed under WIP and is **not** part of any release.
 - Commercial (Pro/Fleet) planning and internal limitation ledgers are not
   tracked in this repository.
 - Known limits are in [WEAKNESSES.md](WEAKNESSES.md); manual and live
@@ -62,8 +62,8 @@ Consciously postponed, or blocked on an external dependency or decision.
 
 ## 2. WIP
 
-Actively in progress, or present only as an experiment, an unwired seam, or on
-the `dev` branch.
+Actively in progress, or present only as an experiment, an unwired seam, or
+gated and disabled by default.
 
 On `main`, opt-in and not part of default builds:
 
@@ -78,7 +78,7 @@ On `main`, opt-in and not part of default builds:
   CI runs its tests (`invariants.yml`). Verification: independent review and a
   qualified installed update path before any claim.
 
-Only on `origin/dev` (not on `main`, not shipped; merge status in [STATUS.md](STATUS.md#the-dev-branch)). Docs on `dev` must be reconciled before any merge.
+Arrived on `main` with the 2026-11-16 merge of `dev` (see [STATUS.md](STATUS.md#the-2026-11-16-merge-of-dev)); gated, disabled by default or unaccepted, and not shipped.
 
 - **Evidence-history storage migration.** Moves evidence storage to a location
   that standard (non-administrator) users cannot write. Needs a
@@ -86,7 +86,7 @@ Only on `origin/dev` (not on `main`, not shipped; merge status in [STATUS.md](ST
   is not implemented. Verification: standard-user and administrator sessions on
   installed Windows.
 - **Recursive folder deletion in the Maintenance analyzer and duplicate
-  cleanup.** Gated and disabled by default on `dev`; `main` offers no recursive
+  cleanup.** Gated and disabled by default; the default build offers no recursive
   folder deletion there. Verification: Windows, elevated and standard, with
   shared handles and junctions.
 - **Experimental settings-generation cutover** (versioned encrypted settings
@@ -95,7 +95,7 @@ Only on `origin/dev` (not on `main`, not shipped; merge status in [STATUS.md](ST
   provisioning and cross-account tests (constraints and acceptance runs are
   recorded in RESEARCH.md).
 - **Encrypted content-search index cutover.** On `main` the ordinary per-user
-  index is not encrypted (see Full pending). `dev` holds a disabled research
+  index is not encrypted (see Full pending). The tree holds a disabled research
   design and prototype (design conclusions in RESEARCH.md).
 - **Fleet service-owned recovery/re-admission authority.** Test-only fixtures
   and gated source; no production enablement.

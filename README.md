@@ -82,7 +82,7 @@ on the GitHub Release:
 | [POSITIONING.md](POSITIONING.md)   | Who it's for and how it compares to alternatives              |
 | [NON-GOALS.md](NON-GOALS.md)       | What WinCommander deliberately is not                         |
 | [ROADMAP.md](ROADMAP.md)           | Deferred, in-progress, partial and pending work               |
-| [STATUS.md](STATUS.md)             | Current state of `main` and `dev`, and how it was checked     |
+| [STATUS.md](STATUS.md)             | Current state of `main`, and how it was checked     |
 | [WEAKNESSES.md](WEAKNESSES.md)     | Known engineering and product limits                          |
 | [USER-TASKS.md](USER-TASKS.md)     | Manual acceptance runs and owner decisions                    |
 | [RESEARCH.md](RESEARCH.md)         | Measured findings, rejected options, future opportunities     |

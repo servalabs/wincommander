@@ -8,6 +8,22 @@ claims. Limits that qualify what users may rely on for security are owned by
 disclosed in public documentation or visible in public source, and no
 vulnerability details (report those through [SECURITY.md](SECURITY.md)).
 
+## Known regressions on main
+
+- **Standard users cannot record evidence events.** The evidence-history
+  migration stores the ledger and its key in the machine-state directory, which
+  is protected to SYSTEM and Administrators, while the desktop runs as the
+  invoking (standard) user. A standard-user session is expected to fail to
+  record events and to persist the failure marker. Verified for the ACL
+  mechanism on one synthetic standard account only; the installed application
+  and real ledger were not exercised. Widening access to Users is not an
+  acceptable fix, because it would let any user alter or delete device-wide
+  evidence and the key. A service-mediated design is needed; it is not
+  implemented.
+- **CI gates fail on `main`** after the 2026-11-16 merge of `dev` (clippy, the
+  changed-file quality guard and three unit tests); details in
+  [STATUS.md](STATUS.md#the-2026-11-16-merge-of-dev).
+
 ## Validation gaps
 
 Behaviour below is covered by source review and automated tests at most; it has

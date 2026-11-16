@@ -4,8 +4,8 @@ Explored ideas, measured findings, rejected options and conditional future
 opportunities. Conclusions only: commitments are in [ROADMAP.md](ROADMAP.md),
 deliberate exclusions in [NON-GOALS.md](NON-GOALS.md), and design decisions in
 [ARCHITECTURE.md](ARCHITECTURE.md). Items marked "dev notes" come from design
-notes that exist only on the `dev` branch and describe unimplemented, unshipped
-work.
+notes that were kept on the `dev` branch before it merged into `main` and describe
+unimplemented, unshipped work.
 
 ## Measured findings
 

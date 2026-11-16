@@ -6,8 +6,9 @@ the change record is in [CHANGELOG.md](CHANGELOG.md). Open work is in
 [ROADMAP.md](ROADMAP.md), known limits in [WEAKNESSES.md](WEAKNESSES.md), and
 manual or owner-side work in [USER-TASKS.md](USER-TASKS.md).
 
-Written against `main` at `25bd7c16`. Update the commit reference whenever this
-file is revised.
+Written against `main` at `18db2411`, the commit `main` and `dev` share since the
+2026-11-16 merge (section below). Update the commit reference whenever this file
+is revised.
 
 ## What `main` is
 
@@ -35,20 +36,41 @@ file is revised.
 - Service placeholders: `commander-svc` starts idle `reconciler` and
   `command_worker` tasks ([ROADMAP.md](ROADMAP.md#3-partial)).
 
-## The `dev` branch
+## The 2026-11-16 merge of `dev`
 
-`origin/dev` is 856 commits ahead of `main` and has nothing `main` lacks. It is
-deliberately not merged. At the last full check (2026-11-15) it failed `main`'s
-clippy gate, the changed-file size guard and some unit tests, and it carries
-a standard-user regression (see the evidence-history entry in
-[ROADMAP.md](ROADMAP.md#2-wip)). Everything that exists only on
-`dev` is listed as WIP in [ROADMAP.md](ROADMAP.md#2-wip) and is not shipped.
-Its docs diverge from `main`; reconcile them rather than merging blindly. The
-decision on how to land `dev` is in [USER-TASKS.md](USER-TASKS.md).
+On the owner's decision, `main` was fast-forwarded to `dev` (859 commits), so
+`main` and `dev` are the same commit. The merge was made **knowingly with
+failing gates**; `main` CI is therefore expected to be red until they are fixed:
+
+- `cargo clippy --workspace --all-targets -- -D warnings` reported 51 errors,
+  and the two feature-combination clippy runs 24 and 46 (mostly
+  too-many-arguments, dead code, duplicate module loads and constant
+  assertions) at the last full check (2026-11-15, on the pre-merge `dev` tip).
+- The changed-file quality guard reports 21 violations for the merge range
+  (new source files over the 320-line limit, grown files over 360, one explicit
+  `any`); it has no waiver for file size.
+- Three unit tests fail:
+  `cli::catalog_tests::every_registered_tauri_handler_is_cli_executable`,
+  `duplicate_finder::tests::verified_removal_deletes_selected_copy_and_retains_identical_copy`
+  and `fleet_agent::tests::fleet_operations_use_the_explicit_service_gate_but_status_is_read_only`.
+  Their causes were not investigated.
+- **Standard-user regression:** the evidence-history storage migration moves the
+  device-wide ledger to a directory that standard (non-administrator) users
+  cannot write, so a standard-user session cannot record or persist evidence
+  events. See [WEAKNESSES.md](WEAKNESSES.md#known-regressions-on-main).
+
+Experimental and gated work that arrived with the merge (folder deletion,
+settings-generation cutover, encrypted index, service-owned recovery fixtures)
+stays disabled or unwired by default and is listed in
+[ROADMAP.md](ROADMAP.md#2-wip). Docs for features that arrived with the merge
+(`FEATURES.md`, `ARCHITECTURE.md`, `SECURITY.md`) were merged textually but not
+reconciled feature by feature against the 859 commits; treat them as unverified
+for those features. The owner decision still open is how to fix the gates
+([USER-TASKS.md](USER-TASKS.md)).
 
 ## How this was checked
 
-- Statements about code were checked by reading source and tests on `main` from
+- Statements about code were checked, before the merge above, by reading source and tests on the previous `main` from
   a Linux checkout. Windows-only tests (`#[cfg(windows)]`, PowerShell suites)
   were not executed there, and nothing was exercised on a live Windows
   machine, Server/RDS, physical USB, an installed service or a signed
