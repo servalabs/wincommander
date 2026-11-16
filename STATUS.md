@@ -6,8 +6,8 @@ the change record is in [CHANGELOG.md](CHANGELOG.md). Open work is in
 [ROADMAP.md](ROADMAP.md), known limits in [WEAKNESSES.md](WEAKNESSES.md), and
 manual or owner-side work in [USER-TASKS.md](USER-TASKS.md).
 
-Written against `main` at `18db2411`, the commit `main` and `dev` share since the
-2026-11-16 merge (section below). Update the commit reference whenever this file
+Written against `main` at `ddc01916` (after the 2026-11-16 merge of `dev`, section
+below). Update the commit reference whenever this file
 is revised.
 
 ## What `main` is
@@ -38,8 +38,8 @@ is revised.
 
 ## The 2026-11-16 merge of `dev`
 
-On the owner's decision, `main` was fast-forwarded to `dev` (859 commits), so
-`main` and `dev` are the same commit. The merge was made **knowingly with
+On the owner's decision, `main` was fast-forwarded to `dev` (859 commits) and the
+`dev` branch was then deleted, so `main` is the only branch. The merge was made **knowingly with
 failing gates**; `main` CI is therefore expected to be red until they are fixed:
 
 - `cargo clippy --workspace --all-targets -- -D warnings` reported 51 errors,
