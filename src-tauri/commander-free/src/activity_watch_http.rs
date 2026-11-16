@@ -77,3 +77,7 @@ async fn fetch_json(client: &Client, url: Url, maximum: usize) -> Result<Value, 
 #[cfg(test)]
 #[path = "activity_watch_http_tests.rs"]
 mod tests;
+
+#[cfg(all(test, windows))]
+#[path = "activity_watch_vm_tests.rs"]
+mod vm_tests;
