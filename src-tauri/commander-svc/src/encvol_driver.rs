@@ -19,7 +19,7 @@ const DRIVER_PATH: &str = r"C:\ProgramData\WinCommander\bin\engine\EncVolKm.sys"
 // fails with ERROR_INVALID_NAME (123) on every attempt. Only user-mode
 // service ImagePaths (which are command lines) may be quoted.
 const NT_DRIVER_PATH: &str = r"\??\C:\ProgramData\WinCommander\bin\engine\EncVolKm.sys";
-const DRIVER_SHA256: &str = "1F0C6DB3559D1356C38A1486A967CD90DB5E6202E433FEA1DFE510DDB884FFB6";
+const DRIVER_SHA256: &str = "7745B5194E5B4659CF3F8DD57096A18EE4C810899DAD69081168D43E3683501E";
 const ERROR_SERVICE_DOES_NOT_EXIST: i32 = 1060;
 const ERROR_SERVICE_EXISTS: i32 = 1073;
 const ERROR_SERVICE_ALREADY_RUNNING: i32 = 1056;

@@ -11,7 +11,7 @@ function Repair-WcPinnedDriverAccess {
     if (-not ([Security.Principal.WindowsPrincipal]$identity).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
         throw 'Driver access repair requires administrator approval.'
     }
-    $expectedHash = '1F0C6DB3559D1356C38A1486A967CD90DB5E6202E433FEA1DFE510DDB884FFB6'
+    $expectedHash = '7745B5194E5B4659CF3F8DD57096A18EE4C810899DAD69081168D43E3683501E'
     $cursor = [IO.Path]::GetFullPath($Path)
     while ($cursor) {
         $item = Get-Item -LiteralPath $cursor -Force
@@ -21,7 +21,7 @@ function Repair-WcPinnedDriverAccess {
         $cursor = [IO.Path]::GetDirectoryName($cursor)
     }
     $item = Get-Item -LiteralPath $Path -Force
-    if ($item.PSIsContainer -or $item.Length -ne 667840) { throw 'Unexpected driver payload size.' }
+    if ($item.PSIsContainer -or $item.Length -ne 669368) { throw 'Unexpected driver payload size.' }
     $original = Get-Acl -LiteralPath $Path
     $owner = $original.GetOwner([Security.Principal.SecurityIdentifier]).Value
     if ($owner -notin @('S-1-5-18', 'S-1-5-32-544')) { throw 'Unexpected driver owner.' }

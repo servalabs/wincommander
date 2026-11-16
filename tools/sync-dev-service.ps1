@@ -40,7 +40,7 @@ $managedPro = 'C:\ProgramData\WinCommander\bin\wincommander-pro.dev.exe'
 $driverServiceName = 'WinCommanderEncVol'
 $driverPath = Join-Path $env:ProgramData 'WinCommander\bin\engine\EncVolKm.sys'
 $driverNtPath = '\??\C:\ProgramData\WinCommander\bin\engine\EncVolKm.sys'
-$driverSha256 = '1F0C6DB3559D1356C38A1486A967CD90DB5E6202E433FEA1DFE510DDB884FFB6'
+$driverSha256 = '7745B5194E5B4659CF3F8DD57096A18EE4C810899DAD69081168D43E3683501E'
 $driverAccessRepair = Join-Path $PSScriptRoot 'repair-vault-driver-access.ps1'
 $activeMountRegistry = Join-Path $env:ProgramData 'WinCommander\policy\vault-active-mounts-v1.json'
 
