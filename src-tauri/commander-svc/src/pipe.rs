@@ -3233,6 +3233,12 @@ async fn handle_vault_mount(
                     "VLT.DRIVER.CONFIGURE_FAILED"
                 }
                 crate::encvol_driver::EnsureDriverError::ServiceStart => "VLT.DRIVER.START_FAILED",
+                crate::encvol_driver::EnsureDriverError::ActivationState => {
+                    "VLT.DRIVER.ACTIVATION_UNVERIFIED"
+                }
+                crate::encvol_driver::EnsureDriverError::RestartRequired => {
+                    "VLT.DRIVER.RESTART_REQUIRED"
+                }
             };
             crate::diagnostics::record_vault_failure(
                 diagnostic_operation_id,
