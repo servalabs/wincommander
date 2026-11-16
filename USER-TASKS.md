@@ -34,12 +34,12 @@ Remove an item when it has passed on the intended build.
 
 ## Decisions and owner actions
 
-1. **Fix the gates after the `dev` merge.** `main` was fast-forwarded to `dev` on
-   2026-11-16 with known clippy, quality-guard and unit-test failures and a
-   standard-user evidence-storage regression
-   ([STATUS.md](STATUS.md#the-2026-11-16-merge-of-dev)). Decide the order of the
-   fixes. The standard-user fix needs a service-mediated design to be
-   implemented first.
+1. **Standard-user evidence storage and oversized files.** `main` was
+   fast-forwarded to `dev` on 2026-11-16; the clippy and unit-test failures were
+   fixed the same day, but the standard-user evidence-storage regression and the
+   oversized files remain ([STATUS.md](STATUS.md#the-2026-11-16-merge-of-dev),
+   [WEAKNESSES.md](WEAKNESSES.md#code-health)). Decide the order. The
+   standard-user fix needs a service-mediated design to be implemented first.
 2. **Post-quantum path.** Decide key custody, a signing ceremony and an
    independent reviewer before any production hybrid signing or public claim
    ([SECURITY.md](SECURITY.md#cryptography-and-post-quantum-status)).

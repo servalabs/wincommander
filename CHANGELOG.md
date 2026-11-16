@@ -5,8 +5,9 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
-- Merge the `dev` branch into `main` (859 commits). Known failing gates and the
-  standard-user evidence-storage regression that came with it are recorded in
+- Merge the `dev` branch into `main` (859 commits) and fix the clippy and unit-test
+  failures that came with it. The standard-user evidence-storage regression and
+  oversized files are recorded in
   [STATUS.md](STATUS.md#the-2026-11-16-merge-of-dev); gated work stays disabled by default.
 
 - Report RDP idle protection as unverified when only saved settings are available.

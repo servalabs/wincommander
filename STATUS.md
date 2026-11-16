@@ -39,21 +39,28 @@ is revised.
 ## The 2026-11-16 merge of `dev`
 
 On the owner's decision, `main` was fast-forwarded to `dev` (859 commits) and the
-`dev` branch was then deleted, so `main` is the only branch. The merge was made **knowingly with
-failing gates**; `main` CI is therefore expected to be red until they are fixed:
+`dev` branch was then deleted, so `main` is the only branch. The merge was made
+knowingly with failing gates. The lint and test failures were fixed the same day
+(commit `27f22f4f`):
 
-- `cargo clippy --workspace --all-targets -- -D warnings` reported 51 errors,
-  and the two feature-combination clippy runs 24 and 46 (mostly
-  too-many-arguments, dead code, duplicate module loads and constant
-  assertions) at the last full check (2026-11-15, on the pre-merge `dev` tip).
-- The changed-file quality guard reports 21 violations for the merge range
-  (new source files over the 320-line limit, grown files over 360, one explicit
-  `any`); it has no waiver for file size.
-- Three unit tests fail:
-  `cli::catalog_tests::every_registered_tauri_handler_is_cli_executable`,
-  `duplicate_finder::tests::verified_removal_deletes_selected_copy_and_retains_identical_copy`
-  and `fleet_agent::tests::fleet_operations_use_the_explicit_service_gate_but_status_is_read_only`.
-  Their causes were not investigated.
+- `cargo clippy` (workspace, and the two pq feature combinations) exit 0 on
+  Windows. The 121 errors were fixed with scoped `#[allow]` attributes on
+  items that are only unreachable in some feature or build combinations, type
+  aliases, and a few rewrites; the allowed dead code is still dead code in
+  those builds.
+- `cargo test --workspace --no-fail-fast` passed 3184 tests with 0 failures on
+  Windows. Three tests had failed: the fleet service-gate test (its expected
+  count of gated sites was stale: 14 now, including the five recovery
+  mutations), the CLI-catalog test (`cli_catalog.generated.json` was stale by
+  three folder-delete handlers; regenerated), and the duplicate-finder test
+  (fails only when `USERDOMAIN` does not match the real machine name, as in an
+  SSH session where it is `WORKGROUP`; it passes with the real name).
+- `gen:types:check`, `lint:tiers`, `lint:quality` (against the previous
+  `main`), `lint:docs` and the security guardrail scripts pass. Hosted CI has
+  not been re-run.
+- The changed-file size guard flagged 20 source files that arrived over its
+  limits with the merge; they remain oversized and are listed in
+  [WEAKNESSES.md](WEAKNESSES.md#code-health).
 - **Standard-user regression:** the evidence-history storage migration moves the
   device-wide ledger to a directory that standard (non-administrator) users
   cannot write, so a standard-user session cannot record or persist evidence

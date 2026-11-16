@@ -20,9 +20,8 @@ vulnerability details (report those through [SECURITY.md](SECURITY.md)).
   acceptable fix, because it would let any user alter or delete device-wide
   evidence and the key. A service-mediated design is needed; it is not
   implemented.
-- **CI gates fail on `main`** after the 2026-11-16 merge of `dev` (clippy, the
-  changed-file quality guard and three unit tests); details in
-  [STATUS.md](STATUS.md#the-2026-11-16-merge-of-dev).
+- The clippy and unit-test failures that came with the 2026-11-16 merge of `dev`
+  were fixed the same day; see [STATUS.md](STATUS.md#the-2026-11-16-merge-of-dev).
 
 ## Validation gaps
 
@@ -58,6 +57,17 @@ not been validated in the named environment. Acceptance work is tracked in
 
 ## Code health
 
+- Twenty source files that arrived with the 2026-11-16 merge are over the
+  changed-file size guard (new files over 320 lines, grown files over 360), for
+  example `commander-svc/src/fleet_handoff_confirmation.rs` (about 3,300 lines),
+  `commander-free/src/evidence_storage.rs` (about 1,900) and
+  `commander-free/src/disk_tree_delete.rs` (about 1,700). The guard only
+  inspects additions since its base, so it passes for new changes; splitting
+  these files by responsibility is open work.
+- About 26 items are marked `#[allow(dead_code)]` (mostly in `license.rs`,
+  `licence_release_guard.rs` and the duplicate finder) because they are unused in
+  some feature or build combinations; they should be gated with `cfg` or removed
+  when those paths settle.
 - Several legacy files are far above the 300-line guideline in
   [AGENTS.md](AGENTS.md), for example `commander-free/src/backend.rs`
   (about 11,000 lines), `commander-svc/src/vault_access.rs` (about 9,700) and
