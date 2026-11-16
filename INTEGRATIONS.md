@@ -22,11 +22,11 @@ endpoint in the Free client.
 | Component | When | Verification noted in source |
 | :-- | :-- | :-- |
 | Everything + `es.exe` CLI (voidtools) | Instant Search install | `es.exe` Authenticode signer is checked (`scripts/core/utils.ps1`); Everything via winget. |
-| ImDisk (ltr-data.se) | RAM-disk engine install | Download URLs are in `dependencies.ps1`; verification of the installer is not confirmed here. |
+| ImDisk (ltr-data.se) | RAM-disk engine install | Download URLs are in `dependencies.ps1`; installer verification is an open limit ([WEAKNESSES.md](WEAKNESSES.md#optional-third-party-components)). |
 | Pro sidecar (`wincommander-pro.exe`) | Entitled Pro install | Pinned host, SHA-256 check, atomic install (`pro_install.rs`). |
 | Investigator application | Licence with the Investigator entitlement | Minisign-verified manifest and host-pinned hashes (`investigator_install.rs`). |
-| Privacy Shield detector models (Google MediaPipe model storage) | When Privacy Shield prepares its models | Size sanity check only in the script; no hash pinning found (not verified further). |
-| Firefox extensions (addons.mozilla.org) | Browser hardening option | Installed through Firefox policy by add-on slug; no pinning of add-on hashes in WinCommander (not verified further). |
+| Privacy Shield detector models (Google MediaPipe model storage) | When Privacy Shield prepares its models | Size sanity check only; see [WEAKNESSES.md](WEAKNESSES.md#optional-third-party-components). |
+| Firefox extensions (addons.mozilla.org) | Browser hardening option | Installed through Firefox policy by add-on slug; see [WEAKNESSES.md](WEAKNESSES.md#optional-third-party-components). |
 | winget packages | Packages & Apps and dependency installs | Delegated to winget; Windows Server 2019/2022 lack winget. |
 
 ## Local-only integrations

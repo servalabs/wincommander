@@ -270,10 +270,11 @@ authoritative statement of what WinCommander does not claim to defend against.
   text extracted from indexed folders. Rely on Windows disk encryption and
   restrict the profile; indexes of selected VeraCrypt folders live inside the
   mounted volume instead (see Private-volume search).
-- Windows Server/RDS, physical USB, hardware-backed keys, signed installers,
-  and clean-machine behavior still require environment-specific validation.
-  Planned or source-tested functionality is not a shipped or independently
-  certified guarantee.
+- Planned or source-tested functionality is not a shipped or independently
+  certified guarantee. Environments that have not been validated (Windows
+  Server/RDS, physical USB, hardware-backed keys, signed installers, clean
+  machines) are listed in [WEAKNESSES.md](WEAKNESSES.md#validation-gaps); the
+  acceptance work is in [USER-TASKS.md](USER-TASKS.md).
 
 ## Free-to-Pro process and destructive-target boundary
 

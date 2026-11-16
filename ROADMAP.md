@@ -11,14 +11,15 @@ intent only; it is not a delivery commitment and carries no dates.
   does not repeat them.
 - Current capabilities are in [FEATURES.md](FEATURES.md); security limits and
   the post-quantum claim boundary are in [SECURITY.md](SECURITY.md).
-- Describes `main` as of commit `25bd7c16`. Work that exists only on the
-  `dev` branch is listed under WIP and is **not** part of `main` or any
-  release.
+- Current state of `main` and of the `dev` branch is in
+  [STATUS.md](STATUS.md). Work that exists only on `dev` is listed under WIP
+  and is **not** part of `main` or any release.
 - Commercial (Pro/Fleet) planning and internal limitation ledgers are not
   tracked in this repository.
-- "Verification" lines name live or manual checks that have not been
-  performed. Automated tests that exist only for Windows were not executed
-  when this file was written (written from a Linux checkout).
+- Known limits are in [WEAKNESSES.md](WEAKNESSES.md); manual and live
+  acceptance work, and owner decisions, are in [USER-TASKS.md](USER-TASKS.md);
+  explored ideas and conclusions are in [RESEARCH.md](RESEARCH.md). "Verification"
+  lines below name checks that have not been performed.
 
 ## 1. Deferred
 
@@ -55,11 +56,9 @@ Consciously postponed, or blocked on an external dependency or decision.
   shaping exists in `src-tauri/fleet-agent-core/src/config.rs`; the tunnel tier
   is explicitly deferred.
 - **Reproducible-build CI gate (build twice, compare SHA-256).** A job is
-  drafted but commented out in `.github/workflows/invariants.yml`. Release
-  builds embed a per-build random encryption salt (`tools/encrypt.ts`,
-  `commander-free/build.rs`), which probably prevents byte-identical rebuilds
-  (not verified). Release provenance today is the SLSA attestation and SBOM
-  from `release.yml`.
+  drafted but commented out in `.github/workflows/invariants.yml`; it cannot
+  pass while release builds embed a per-build random salt (see
+  [WEAKNESSES.md](WEAKNESSES.md#build-and-release)).
 
 ## 2. WIP
 
@@ -79,11 +78,7 @@ On `main`, opt-in and not part of default builds:
   CI runs its tests (`invariants.yml`). Verification: independent review and a
   qualified installed update path before any claim.
 
-Only on `origin/dev` (about 850 commits ahead of `main`; **not on main, not
-shipped**). `dev` is not merged because, at the last check (2026-11-15), it
-failed `main`'s clippy gate, the file-size quality guard and some unit tests,
-and it contains a regression for standard users described below. Docs on `dev`
-must be reconciled before any merge.
+Only on `origin/dev` (not on `main`, not shipped; merge status in [STATUS.md](STATUS.md#the-dev-branch)). Docs on `dev` must be reconciled before any merge.
 
 - **Evidence-history storage migration.** Moves evidence storage to a location
   that standard (non-administrator) users cannot write. Needs a
@@ -125,11 +120,6 @@ Partly implemented. What exists, and exactly what is missing.
   in `flow_engine.rs`. Missing: `CameraTrigger` is still rejected in
   `flow_engine.rs` validation and `flow_capabilities.rs` still reports the bus
   as failed; no camera-specific event is emitted.
-- **Installed-environment validation.** Source and automated tests exist for
-  the service, Vault, USB, secure-erase and installer paths; not performed:
-  installed-service standard-user acceptance, password-reset and simultaneous
-  user cases, Windows Server/RDS, physical USB, hardware-backed keys, signed
-  installers and clean-machine runs ([SECURITY.md](SECURITY.md#current-operational-limits)).
 - **Selective VeraCrypt header destruction.** Overwrite is issued and flushed
   but not independently re-mounted to confirm (`selective_erase.rs`).
   Verification: live container test.
@@ -156,11 +146,5 @@ Not started.
   capability.
 - **Audit record for confirmed irreversible actions.** The confirmation dialog
   only logs to the console (`ConfirmIrreversibleDialog.tsx`).
-- **Published performance baseline and device-class budgets.** None exists
-  ([PERFORMANCE.md](PERFORMANCE.md)). Verification: measured captures on
-  Windows with `bun run startup:benchmark`.
-- **Code-owner placeholder.** `.github/CODEOWNERS` still uses a placeholder
-  handle for shared-crate paths, so required code-owner review cannot apply to
-  them until replaced.
 - **UI polish.** Consolidate the two Switch components (`ui/switch.tsx`,
   `shared/WCSwitch.tsx`); sliding tab indicator (`ui/bp.tsx`).
