@@ -273,5 +273,6 @@ fn ace_parser_rejects_truncated_and_malformed_entries() {
     }
 }
 
+#[allow(clippy::duplicate_mod)] // the same file is deliberately included under more than one module path
 #[path = "fleet_lifecycle_mutex_security_tests.rs"]
 mod security_tests;

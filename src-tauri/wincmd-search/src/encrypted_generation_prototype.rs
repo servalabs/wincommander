@@ -86,6 +86,7 @@ impl PinnedSelectionStore {
     pub(crate) fn open(root: &std::path::Path) -> io::Result<Self> {
         Self::open_mode(root, crate::read_only::AccessMode::Writable)
     }
+    #[allow(dead_code)] // not reached in every feature combination or build path
     pub(crate) fn open_readonly(root: &std::path::Path) -> io::Result<Self> {
         Self::open_mode(root, crate::read_only::AccessMode::GuardedReader)
     }

@@ -32,6 +32,7 @@ impl Default for SpaceGuard {
 }
 
 impl SpaceGuard {
+    #[allow(dead_code)] // not reached in every feature combination or build path
     pub(crate) fn observe_path(&mut self, index_dir: &Path) -> SpaceState {
         self.observe(fs4::available_space(index_dir))
     }
@@ -58,6 +59,7 @@ impl SpaceGuard {
     }
 
     /// An overflow or watcher failure invalidates the incremental stream.
+    #[allow(dead_code)] // not reached in every feature combination or build path
     pub(crate) fn require_reconciliation(&mut self) {
         self.note_change();
         if self.state == SpaceState::Ready {

@@ -5007,6 +5007,7 @@ mod test_support {
 #[cfg(test)]
 mod tests {
     #[test]
+    #[allow(clippy::assertions_on_constants)] // asserts a build-time readiness flag stays off
     fn recovery_verbs_remain_disabled_until_signed_v2_admission_is_ready() {
         let enabled = false;
         assert_eq!(super::OPERATOR_PIN_READY,enabled);assert_eq!(super::RECOVERY_RESUME_READY,enabled);
@@ -5018,39 +5019,46 @@ mod tests {
     }
     #[cfg(not(feature="fleet-recovery-lab"))]
     #[test]
+    #[allow(clippy::assertions_on_constants)] // asserts a build-time readiness flag stays off
     fn operator_pin_ipc_stays_unavailable_until_recovery_is_ready() {
         assert!(!super::OPERATOR_PIN_READY);
         assert!(super::handle_operator_key_pin(serde_json::json!({"operator_key":"invalid"}),None).is_err());
     }
     #[tokio::test]
+    #[allow(clippy::assertions_on_constants)] // asserts a build-time readiness flag stays off
     async fn recovery_resume_ipc_stays_unavailable_until_recovery_is_ready() {
         assert!(!super::RECOVERY_RESUME_READY);
         assert!(super::handle_recovery_resume(serde_json::json!({}), None).await.is_err());
     }
     #[tokio::test]
+    #[allow(clippy::assertions_on_constants)] // asserts a build-time readiness flag stays off
     async fn recovery_stage_ipc_stays_unavailable_until_recovery_is_ready() {
         assert!(!super::RECOVERY_STAGE_READY);
         assert!(super::handle_recovery_stage(serde_json::json!({}), None).await.is_err());
     }
     #[tokio::test]
+    #[allow(clippy::assertions_on_constants)] // asserts a build-time readiness flag stays off
     async fn recovery_readmission_ipc_stays_unavailable() {
         assert!(!super::RECOVERY_READMISSION_READY);
         assert!(super::handle_recovery_readmission(serde_json::json!({}),None).await.is_err());
     }
     #[cfg(not(feature="fleet-recovery-lab"))]
     #[tokio::test]
+    #[allow(clippy::assertions_on_constants)] // asserts a build-time readiness flag stays off
     async fn recovery_handoff_ipc_stays_unavailable_until_recovery_is_ready() {
         assert!(!super::RECOVERY_HANDOFF_READY);
         assert!(super::handle_recovery_handoff(serde_json::json!({}), None).await.is_err());
     }
     #[cfg(not(feature="fleet-recovery-lab"))]
     #[tokio::test]
+    #[allow(clippy::assertions_on_constants)] // asserts a build-time readiness flag stays off
     async fn recovery_finish_ipc_stays_unavailable_until_recovery_is_ready() {
         assert!(!super::RECOVERY_FINISH_READY);
         assert!(super::handle_recovery_finish(serde_json::json!({}), None).await.is_err());
     }
     #[cfg(not(feature="fleet-recovery-lab"))]
     #[tokio::test]
+    #[allow(clippy::assertions_on_constants)] // asserts a build-time readiness flag stays off
     async fn recovery_contact_ipc_stays_unavailable_until_recovery_is_ready() {
         assert!(!super::RECOVERY_CONTACT_READY);
         assert!(super::handle_recovery_contact(serde_json::json!({}),false).await.is_err());

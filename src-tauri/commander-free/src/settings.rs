@@ -2518,6 +2518,7 @@ pub(crate) fn cached_settings() -> Option<AppSettings> {
 }
 
 /// Inspect the committed toggle without hydrating or cloning the settings store.
+#[allow(dead_code)] // not reached in every feature combination or build path
 pub(crate) fn cached_advanced_tools_enabled() -> Option<bool> {
     SETTINGS_CACHE.lock().ok().and_then(|cache| {
         cache.as_ref().map(|settings| settings.ideal.identity.advanced_tools_enabled.unwrap_or(false))

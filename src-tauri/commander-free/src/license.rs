@@ -35,6 +35,7 @@ const MAX_TRIAL_ELIGIBILITY_CACHE_TTL_SECONDS: u64 = 24 * 60 * 60;
 /// read-only at the licensing worker.  D1 mutations are reserved for a real
 /// lifecycle change such as a new activation or an explicit deactivation.
 const LICENSE_SERVICE_REFRESH_INTERVAL_SECONDS: u64 = 4 * 60 * 60;
+#[allow(dead_code)] // not reached in every feature combination or build path
 const LICENSE_NETWORK_HINT: &str = "Check your connection or try another network; the licence service requires a quantum-resistant secure connection.";
 // Allow ample room for a hybrid proof and legacy fields while bounding both
 // declared-length and streaming/chunked server responses.
@@ -189,6 +190,7 @@ struct LicenseStatus {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)] // not reached in every feature combination or build path
 struct WorkerTokenResponse {
     ok: bool,
     payload: Option<String>,
@@ -239,6 +241,7 @@ struct TrialAvailability {
     cache_ttl_seconds: u64,
 }
 
+#[allow(dead_code)] // not reached in every feature combination or build path
 fn worker_rejection(payload: &WorkerTokenResponse, fallback: &str) -> (bool, String) {
     if payload.entitlement_revoked {
         return (true, "License entitlement has been revoked.".to_string());
@@ -253,6 +256,7 @@ fn worker_rejection(payload: &WorkerTokenResponse, fallback: &str) -> (bool, Str
 }
 
 #[derive(Debug, Serialize)]
+#[allow(dead_code)] // not reached in every feature combination or build path
 struct WorkerActivateRequest<'a> {
     #[serde(rename = "licenseKey")]
     license_key: &'a str,
@@ -285,6 +289,7 @@ struct WorkerRefreshRequest<'a> {
 }
 
 #[derive(Debug, Serialize)]
+#[allow(dead_code)] // not reached in every feature combination or build path
 struct WorkerDeactivateRequest<'a> {
     payload: &'a str,
     signature: &'a str,
@@ -302,6 +307,7 @@ struct WorkerDeactivateRequest<'a> {
 /// and never accepts a path or an administrator decision from the renderer.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)] // not reached in every feature combination or build path
 struct ServiceLicenseCacheWriteRequest<'a> {
     payload: &'a str,
     signature: &'a str,
@@ -927,6 +933,7 @@ fn save_trial_eligibility_cache(device_hash: &str, availability: TrialAvailabili
 }
 
 #[cfg_attr(feature = "portable", allow(dead_code))] // portable edition has no trial
+#[allow(dead_code)] // not reached in every feature combination or build path
 fn clear_trial_eligibility_cache() {
     if let Ok(path) = trial_eligibility_cache_path() {
         let _ = fs::remove_file(path);
@@ -1008,6 +1015,7 @@ fn deny_unconfirmed_history(status: &mut LicenseStatus) {
     status.reason = Some("The local licence security check could not confirm this licence. Start the WinCommander service or reactivate your licence.".into());
 }
 
+#[allow(dead_code)] // not reached in every feature combination or build path
 fn save_cached_license_direct(cached: &CachedLicense) -> Result<(), String> {
     #[cfg(windows)]
     let _release_guard = licence_release_guard::acquire()?;
@@ -1018,6 +1026,7 @@ fn save_cached_license_direct(cached: &CachedLicense) -> Result<(), String> {
 }
 
 #[cfg(windows)]
+#[allow(dead_code)] // not reached in every feature combination or build path
 fn direct_cache_write_permitted(elevated: bool) -> bool {
     elevated && !cfg!(feature = "experimental-pq-licence")
 }
@@ -1025,6 +1034,7 @@ fn direct_cache_write_permitted(elevated: bool) -> bool {
 /// Persist a verified signed token without granting a standard user write
 /// access to the shared ProgramData cache. Only classical builds may use an
 /// elevated fallback; hybrid builds must retain the service's replay checks.
+#[allow(dead_code)] // not reached in every feature combination or build path
 async fn save_cached_license(cached: &CachedLicense) -> Result<(), String> {
     #[cfg(windows)]
     {
@@ -1069,6 +1079,7 @@ fn require_license_removal_administrator() -> Result<(), String> {
     license_removal_authorized(crate::startup_elevation::is_current_process_elevated())
 }
 
+#[allow(dead_code)] // not reached in every feature combination or build path
 fn clear_cached_license_inner() -> Result<(), String> {
     #[cfg(windows)]
     let _release_guard = licence_release_guard::acquire()?;
@@ -1338,6 +1349,7 @@ fn verify_token_claims(token: &SignedTokenEnvelope, public_key: &str) -> Result<
 
 // An administrator may use a legacy token only to remove its seat;
 // it never grants features or authorizes refresh in a hybrid build.
+#[allow(dead_code)] // not reached in every feature combination or build path
 fn verify_token_for_removal(token: &SignedTokenEnvelope, public_key: &str) -> Result<LicenseClaims, String> {
     #[cfg(feature = "experimental-pq-licence")]
     if token.hybrid.is_none() {
@@ -1606,7 +1618,7 @@ pub async fn activate_license(license_key: String) -> Result<serde_json::Value, 
         if !matches!(response, Ok(value) if value == serde_json::json!({"activated": true})) {
             return Err("Secure activation could not be confirmed. Keep WinCommander installed and retry.".into());
         }
-        return get_license_status().await;
+        get_license_status().await
     }
     #[cfg(not(all(windows, feature = "experimental-pq-licence")))]
     {
@@ -1850,7 +1862,7 @@ pub async fn clear_license_cache() -> Result<(), String> {
     #[cfg(all(windows, feature = "experimental-pq-licence"))]
     {
         require_license_removal_administrator()?;
-        return release_hybrid_from_service().await;
+        release_hybrid_from_service().await
     }
     #[cfg(not(all(windows, feature = "experimental-pq-licence")))]
     {
@@ -2090,7 +2102,7 @@ pub async fn release_license_seat_if_present() -> Result<bool, String> {
         // reactivate after the service replies but before uninstall finishes.
         // Keep uninstall closed until the service and server both own a
         // durable retirement fence that survives that entire handoff.
-        return Err("Uninstall is temporarily unavailable while licence security is being upgraded.".into());
+        Err("Uninstall is temporarily unavailable while licence security is being upgraded.".into())
     }
     #[cfg(not(all(windows, feature = "experimental-pq-licence")))]
     {

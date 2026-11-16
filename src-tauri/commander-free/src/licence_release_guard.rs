@@ -1,21 +1,27 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Coordinate direct desktop cache changes with an in-progress service release.
+#[allow(clippy::duplicate_mod)] // the same file is deliberately included under more than one module path
 #[path = "updater/hybrid_free_anchor.rs"]
 #[allow(dead_code)] // Only marker presence is needed here.
 mod anchor;
+#[allow(clippy::duplicate_mod)] // the same file is deliberately included under more than one module path
 #[path = "fleet_lifecycle_mutex.rs"]
 #[allow(dead_code)] // Only named-lock acquisition is needed here.
 mod coordination;
 #[path = "../../runtime-support/licence_release_path.rs"]
 mod release_path;
 
+#[allow(dead_code)] // not reached in every feature combination or build path
 const LOCK: &str = r"Global\WinCommander.Licence.Security.v1";
+#[allow(dead_code)] // not reached in every feature combination or build path
 const UNAVAILABLE: &str = "A licence release is in progress or its security state is unavailable. Retry the release before changing the licence.";
 
+#[allow(dead_code)] // not reached in every feature combination or build path
 pub(super) struct Guard {
     _guard: coordination::Guard,
 }
 
+#[allow(dead_code)] // not reached in every feature combination or build path
 pub(super) fn acquire() -> Result<Guard, String> {
     acquire_at(
         &anchor::Anchor::machine_named(release_path::RELEASE_OPERATION_REGISTRY_PATH),
@@ -23,6 +29,7 @@ pub(super) fn acquire() -> Result<Guard, String> {
     )
 }
 
+#[allow(dead_code)] // not reached in every feature combination or build path
 fn acquire_at(store: &anchor::Anchor, name: &str) -> Result<Guard, String> {
     let guard = coordination::acquire_named(name, 30_000).map_err(|_| UNAVAILABLE.to_string())?;
     if store.exists().map_err(|_| UNAVAILABLE.to_string())? {

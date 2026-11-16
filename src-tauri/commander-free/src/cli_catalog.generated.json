@@ -8309,8 +8309,38 @@
       ]
     },
     {
+      "id": "tauri:disk_confirm_folder_delete",
+      "name": "disk_confirm_folder_delete",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
+      ]
+    },
+    {
+      "id": "tauri:disk_delete_confirmed_folder",
+      "name": "disk_delete_confirmed_folder",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
+      ]
+    },
+    {
       "id": "tauri:disk_delete_item",
       "name": "disk_delete_item",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
+      ]
+    },
+    {
+      "id": "tauri:disk_folder_delete_available",
+      "name": "disk_folder_delete_available",
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,

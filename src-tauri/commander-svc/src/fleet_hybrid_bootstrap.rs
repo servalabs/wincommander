@@ -7,6 +7,7 @@ use super::{origins, trust_audit, validate_hybrid_trust, validate_transport_prof
 impl FleetMachinePolicy {
     /// The caller must authorize an administrator and independently approve all
     /// keys and origins. This is not exposed through the service pipe.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn provision_hybrid_bootstrap(
         &self,
         org_id: String,
