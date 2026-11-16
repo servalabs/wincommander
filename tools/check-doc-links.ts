@@ -38,8 +38,8 @@ function collect(dir: string, out: string[]): void {
   }
 }
 
-function stripCode(text: string): string {
-  // Blank out fenced code blocks (keeping line numbers) and inline code spans.
+function stripCode(text: string, inline = true): string {
+  // Blank out fenced code blocks (keeping line numbers) and, optionally, inline code spans.
   const lines = text.split("\n");
   let fence: string | null = null;
   const kept = lines.map((line) => {
@@ -52,7 +52,7 @@ function stripCode(text: string): string {
       fence = m[1];
       return "";
     }
-    return line.replace(/`[^`\n]*`/g, (s) => " ".repeat(s.length));
+    return inline ? line.replace(/`[^`\n]*`/g, (s) => " ".repeat(s.length)) : line;
   });
   return kept.join("\n");
 }
@@ -74,7 +74,7 @@ function anchorsOf(file: string): Set<string> {
   if (cached) return cached;
   const set = new Set<string>();
   const seen = new Map<string, number>();
-  const text = stripCode(readFileSync(file, "utf8"));
+  const text = stripCode(readFileSync(file, "utf8"), false);
   for (const line of text.split("\n")) {
     const m = /^\s{0,3}#{1,6}\s+(.*?)\s*#*\s*$/.exec(line);
     if (m) {
