@@ -92,12 +92,11 @@ Only on `origin/dev` (not on `main`, not shipped; merge status in [STATUS.md](ST
 - **Experimental settings-generation cutover** (versioned encrypted settings
   generations with a protected cutover record). Disconnected from installers
   and normal startup; needs an independent anti-rollback anchor, installer
-  provisioning and cross-account tests
-  (`docs/SETTINGS-GENERATION-INTEGRATION.md` on `dev`).
+  provisioning and cross-account tests (constraints and acceptance runs are
+  recorded in RESEARCH.md).
 - **Encrypted content-search index cutover.** On `main` the ordinary per-user
   index is not encrypted (see Full pending). `dev` holds a disabled research
-  design and prototype (`src-tauri/wincmd-search/ENCRYPTED-INDEX-CUTOVER-WIP.md`
-  on `dev`).
+  design and prototype (design conclusions in RESEARCH.md).
 - **Fleet service-owned recovery/re-admission authority.** Test-only fixtures
   and gated source; no production enablement.
 - **Experimental per-generation search leases.**

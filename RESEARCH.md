@@ -48,6 +48,21 @@ work.
   a standard-user test or a test against a real ProgramData ACL, so it neither
   proves a product weakness nor safety. Conclusion: do not rely on holding such
   a pin as the only substitution defence in the settings cutover design.
+- **Pinned parent directory can still become a junction (probe, 2026-11-06).**
+  A directory pinned with the settings migration's Windows read/share flags
+  (a read handle denying delete sharing, plus a second handle requesting
+  `0x116`) could still be turned into a junction in a disposable fixture, using
+  a restricted LUA token (maximum privileges disabled, Administrators not
+  enabled, Users enabled) against a protected fixture ACL (Users W,RX; SYSTEM
+  and Administrators full control). With `--deny-write` the mutation handle
+  failed with sharing violation 32; while that pin was held an existing child
+  could be read and a new child could still be created, and a pre-existing
+  directory write handle prevented acquiring the pin. This is not a separately
+  signed-in standard-user test, not run against the real ProgramData ACL, and
+  not proof the product path is exploitable; a failed attempt may reflect token
+  privileges or filesystem policy, and holding such a pin may conflict with
+  unrelated software. Reproduce with `tools/settings-parent-reparse-probe.rs`
+  (run instructions are in its header comment).
 
 ## Rejected or ruled-out options
 
@@ -69,6 +84,15 @@ work.
   cache. Open validation: large reads against the prototype range limit, crash
   and disk-full recovery, cross-user isolation and installed-service behaviour.
   Deleting files does not guarantee erasure on SSDs, backups or snapshots.
+  The prototype's experimental file format v2 derives a separate key per
+  random 256-bit file ID, uses distinct counter nonces for chunks and the
+  footer, and caps each file at 65,536 chunks. It depends on fresh OS
+  randomness across crashes, needs native streaming validation and
+  cryptographic review, and cannot reopen v1 files (rebuild into a fresh
+  unselected generation). Fixed test keys and the experimental `Directory`
+  are not production key custody, and the portable chunk tests establish none of
+  the production properties above. The index is currently plaintext and holds
+  potentially sensitive extracted content; the design is disabled by default.
 - **Versioned encrypted settings generations (dev notes).** A cutover record
   stored beside the data it protects is not an anti-rollback anchor: restoring
   an older matching record and generation is undetectable. A usable design needs
@@ -76,6 +100,46 @@ work.
   provisioning against a held known-folder root, coordination of every writer
   (including early headless command paths that read settings before UI setup),
   and elevated, LocalSystem and standard-user acceptance runs.
+  Further constraints found while building the gated experiment:
+  - Routing and scope: normal builds keep the current format and guarded-key
+    writes. The non-default `experimental-settings-generation` feature (plus
+    `WINCOMMANDER_EXPERIMENTAL_SETTINGS_GENERATION=1` in debug builds) routes
+    section reads and writes through the experimental lock and anchor; nothing
+    provisions the lock or starts a generation in normal startup or the
+    installer. Per-user installs use user-scoped DPAPI for a new generation,
+    fail with an account/profile recovery message if Windows cannot unlock it,
+    and never retry with machine scope; SSH or noninteractive access may need
+    the profile loaded and is not accepted until tested.
+  - Installer: the post-install hook must not invoke the provisioner until a
+    verified known-folder root and parent ACL are held against substitution,
+    the lock file's exact ACL is checked on the held handle, and elevated
+    Administrator, LocalSystem and standard-user tests pass. Stopping the named
+    desktop image and service is not proof every older writer has stopped, and
+    process scans neither stop a later launch nor identify renamed copies.
+  - Selection gate: it must run before every settings read or write, including
+    paths that execute before Tauri `setup`. Stable data uses short-lived shared
+    read ownership; pending state needs authorised exclusive recovery from a
+    fresh held source snapshot; the old store and signing key stay recoverable
+    and a corrupt selected generation is never silently bypassed. An existing
+    store with a missing cutover anchor fails closed and is not reclassified as
+    legacy. Deleting or restoring all cutover artifacts is indistinguishable
+    from no prior migration, so the first-rollout assumption holds until an
+    independent anchor exists.
+  - Lab commands: `--settings-generation-lab status`, `fresh --offline-confirmed`
+    and `migrate --offline-confirmed` can modify the real settings root, have
+    not been run, and the offline flag is an operator statement rather than a
+    fence. They must not reach a release installer until enforced maintenance
+    mode, protected root and lock ACL acceptance, source preservation and
+    crash and cross-user tests pass. The staged encrypted candidate is retained
+    and the original settings and signing key stay in place.
+  - Acceptance: the machine-lock fixture tests are `#[ignore]` (they need an
+    elevated token). Run `cargo test -p commander-free elevated_provision_is_idempotent -- --ignored`
+    and `cargo test -p commander-free settings_rotation_trial::tests -- --ignored`
+    in both elevated Administrator and LocalSystem contexts, then separate
+    standard-user versus privileged cross-account tests; an ignored test is not
+    evidence. Also required: interruption-safe executable and service recovery,
+    binding migration to the original user's identity for per-user installs, and
+    source and signing-identity checks at activation.
 - **Remote file search and semantic or forensic search backends.** Seams are
   reserved in `fleet-proto` (`SearchMode`) and `wincmd-search`
   (`SemanticBackend`, `ForensicBackend`); a handler and catalog entry would be
