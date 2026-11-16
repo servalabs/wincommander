@@ -62,6 +62,11 @@ Consciously postponed, or blocked on an external dependency or decision.
 
 ## 2. WIP
 
+- **ActivityWatch classic/Tauri compatibility.** The candidate handles the
+  classic API's canonical bucket route and Tauri's managed server/watchers.
+  Verification: installed Windows startup, status, stop and maintenance with
+  both distributions. API-key management remains outside the local viewer.
+
 Actively in progress, or present only as an experiment, an unwired seam, or
 gated and disabled by default.
 

@@ -33,7 +33,7 @@ endpoint in the Free client.
 
 | Integration | Boundary |
 | :-- | :-- |
-| ActivityWatch | Reads the user's local ActivityWatch over loopback HTTP when installed and enabled; productivity view only. |
+| ActivityWatch | Reads the user's local ActivityWatch over fixed loopback HTTP when installed and enabled; productivity view only. Supports classic server/watchers and the experimental Tauri app's managed watcher lifecycle. API-key protected servers report authorization required; this integration does not read stored keys or disable authentication. |
 | Tailscale / ProtonVPN | The VPN kill-switch polls `tailscale.exe ip` and `netsh interface`; no account access. |
 | Syncthing, VeraCrypt (Pro Vault) | Driven locally by the paid component and service; Syncthing device pairing stays the user's action ([FEATURES.md](FEATURES.md#pro)). |
 | BleachBit | Used by the self-destruct cleanup step (`run_bleachbit_clean`); browsers are excluded there. |
