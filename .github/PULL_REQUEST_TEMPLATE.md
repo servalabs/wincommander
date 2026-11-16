@@ -19,7 +19,8 @@
 - [ ] `bun x tsc --noEmit` passes
 - [ ] `bun run lint` passes (ESLint, `--max-warnings=0`)
 - [ ] `bun run lint:tiers` passes (tier + risk invariants)
-- [ ] `cd src-tauri && cargo check --workspace` passes
+- [ ] `bun run lint:docs` passes if I touched Markdown
+- [ ] `cd src-tauri && cargo check --all-targets` passes
 - [ ] `cd src-tauri && cargo clippy --workspace --all-targets -- -D warnings` passes
 - [ ] If I edited any `.ps1` under
       `src-tauri/commander-free/scripts/modules/`, I ran

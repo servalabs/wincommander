@@ -2,7 +2,8 @@
 
 This document defines the boundaries that keep WinCommander understandable and
 safe. `POSITIONING.md` explains the product; `SECURITY.md` explains the threat
-model; the private Pro roadmap owns future paid work.
+model; [ROADMAP.md](ROADMAP.md) owns planned public work, and the private Pro
+roadmap owns future paid work.
 
 ## Product scope
 

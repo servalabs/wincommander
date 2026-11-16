@@ -19,6 +19,18 @@ stricter rule when instructions conflict.
 - [NON-GOALS.md](NON-GOALS.md) — deliberate product boundaries
 - [POSITIONING.md](POSITIONING.md) — intended audience and product stance
 - [CHANGELOG.md](CHANGELOG.md) — public release-facing changes
+- [ROADMAP.md](ROADMAP.md) — the only list of open public work (deferred, WIP,
+  partial, full pending)
+- [INTEGRATIONS.md](INTEGRATIONS.md) — external services, optional components
+  and their trust boundaries
+- [CONTRIBUTING.md](CONTRIBUTING.md), [CLA.md](CLA.md),
+  [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) — contribution process and legal terms
+- [BESTPRACTICES.md](BESTPRACTICES.md) — engineering baseline that applies to
+  every change (`CLAUDE.md` is only a pointer to this file)
+- Crate- and tool-local references, kept next to what they describe:
+  `src-tauri/wincmd-pq-experiment/` (experimental post-quantum rehearsal
+  tooling), `src-tauri/wci-verify/README.md`,
+  `tools/import-secret-rules/README.md`
 
 The public code and these root documents are the source of truth for public
 interfaces. Detailed design references, plans, runbooks, mockups, private
@@ -36,13 +48,20 @@ implementation, commercial work, and acceptance records live in
   boundaries. `SECURITY.md` owns the threat model and disclosure policy.
 - `PERFORMANCE.md` owns responsiveness design, budgets, baselines, and
   measurement evidence. `CHANGELOG.md` owns shipped historical changes.
-- This repository carries **no weaknesses ledger and no roadmap**. The open
-  limitations and validation gaps for this client are tracked privately in
-  `wincommander-pro` (`WEAKNESSES.md`, Free-client boundaries), and
-  approved future work in that repository's `ROADMAP.md`. A limitation that must
-  reach users belongs here as a boundary in `NON-GOALS.md` or a threat-model
-  statement in `SECURITY.md`, written for that audience — never as a new
-  weaknesses or roadmap file.
+- `ROADMAP.md` owns open public work in four parts (Deferred, WIP, Partial,
+  Full pending) and contains only unfinished items; completed work moves to
+  `CHANGELOG.md` and the capability docs. Work present only on `dev` is listed
+  as WIP, never as shipped. `INTEGRATIONS.md` owns external-service and
+  optional-component boundaries.
+- This repository carries **no weaknesses ledger, status report, research log
+  or user-task list**. Open limitations, validation gaps and acceptance work
+  for this client are tracked privately in `wincommander-pro`; commercial and
+  Pro/Fleet planning stays there too. A limitation that must reach users
+  belongs here as a boundary in `NON-GOALS.md` or a threat-model or
+  operational-limit statement in `SECURITY.md`, written for that audience.
+- Documentation structure: root Markdown only (plus the crate/tool-local
+  references listed above). Do not add dated plans, audits, handoffs or
+  `docs/` trees; git history is the archive.
 
 ## Repository shape
 
@@ -67,6 +86,8 @@ Run commands from the repository root in PowerShell on Windows.
 - Type-check: `bun x tsc --noEmit`
 - Frontend lint: `bun run lint`
 - Tier invariants: `bun run lint:tiers`
+- Documentation links and anchors: `bun run lint:docs`
+- Changed-file quality guards: `bun run lint:quality`
 - Generated type drift: `bun run gen:types:check`
 - Free-binary string boundary: `bun run lint:strings-free`
 - Rust checks: from `src-tauri`, run `cargo check --all-targets` and
