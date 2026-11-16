@@ -146,10 +146,12 @@ const BROKER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 fn broker_timeout_for(feature_id: &str) -> std::time::Duration {
     if feature_id == "managed.deployment.apply" {
         std::time::Duration::from_secs(300)
-    } else if feature_id == "vault.backup.manage" {
+    } else if matches!(feature_id, "vault.backup.manage" | "vault.backup.resume") {
         std::time::Duration::from_secs(180)
     } else if feature_id.starts_with("vault.backup.") {
-        std::time::Duration::from_secs(5)
+        // Includes verified image hashing, standard-user startup and entitlement
+        // before dispatch; the measured startup alone can consume five seconds.
+        std::time::Duration::from_secs(15)
     } else if feature_id == "vault.syncthing.prepare" {
         // First use can download the verified prerequisite before starting its profile.
         std::time::Duration::from_secs(180)

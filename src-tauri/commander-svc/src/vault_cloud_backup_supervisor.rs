@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Short leases prevent unattended backup from outliving mount/policy authority.
+//! Track mount/policy authority; running jobs independently attest it to the service.
 use super::*;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -170,14 +170,16 @@ fn renew_record(broker: &VaultMountBroker, store: &VaultAccessStore, record: Arc
     if record.cancelled.load(Ordering::Acquire) {
         return;
     }
-    let feature = if record.resume.swap(false, Ordering::AcqRel) {
-        "vault.backup.resume"
-    } else {
-        "vault.backup.renew"
-    };
+    // The running job attests its exact generation, logon and current grant
+    // through the service every 500 ms. Do not repeatedly start a complete Pro
+    // process merely to renew a caller-writable file. Only mount resume needs
+    // this private dispatch; explicit actions register an already-started job.
+    if !record.resume.swap(false, Ordering::AcqRel) {
+        return;
+    }
     let request = request_for(&record, Action::Status);
     let result = backup_call(
-        feature,
+        "vault.backup.resume",
         next_internal_operation_id(),
         &record.active,
         record.token as HANDLE,
