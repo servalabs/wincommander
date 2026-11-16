@@ -93,7 +93,7 @@ struct MachineProUpdateOutcome {
 // binary download) must point at this host. Any other host is rejected
 // in Rust so a compromised webview / XSS / devtools call cannot pivot
 // install_pro_binary into "download arbitrary EXE from attacker URL,
-// run it under the user's session". See ref/security-audit-report.md F-1.
+// run it under the user's session". Audit finding F-1.
 //
 // This must stay in lock-step with src/hooks/useProInstall.ts's
 // PRO_MANIFEST_BASE. It governs only Pro manifests and binaries; the Free

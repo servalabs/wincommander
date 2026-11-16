@@ -2,7 +2,7 @@
 //! F6 Phase-1, Piece 2 — Reboot-to-USB arming predicate.
 //!
 //! This module provides the gate predicate that the distress-wipe assembly
-//! (F6 Phase-1 Piece 3, not yet implemented) will consult before arming the
+//! (F6 Phase-1 Piece 3, `commander-free/src/f6_orchestrator.rs`) consults before arming the
 //! UEFI BootNext + reboot path.
 //!
 //! # Arming gates (spec §6 gate 2)

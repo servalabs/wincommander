@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // src-tauri/commander-free/src/f6_verify_boot.rs
 //
-// F6 Phase-1, Piece 3 (tools/wipe-usb/README.md §6.6, "P1 Piece 3") — USB boot
+// F6 Phase-1, Piece 3 ("P1 Piece 3") — USB boot
 // chain self-test.
 //
 // ════════════════════════════════════════════════════════════════════════

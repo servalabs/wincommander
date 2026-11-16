@@ -2187,8 +2187,8 @@ pub fn run() {
                 // Event resolution routes through session_instance::resolve_context_menu_event
                 // — the single shared verb→event map used by both this cold-start path
                 // and the warm-forward path, so a new verb only needs to be taught once
-                // (see that function's doc comment and AGENTS.md's "a missing branch
-                // SECURE-DELETES the target" gotcha).
+                // (see that function's doc comment: a missing branch
+                // SECURE-DELETES the target).
                 let menu_paths: Vec<String> = args[1..]
                     .iter()
                     .filter(|p| !p.starts_with("--"))

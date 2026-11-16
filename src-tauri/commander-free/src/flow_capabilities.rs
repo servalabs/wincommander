@@ -329,10 +329,10 @@ fn check_webhook_listener(tailscale_status: CapabilityStatus) -> CapabilityCheck
     }
 }
 
-/// Privacy Shield event bus. NOT YET WIRED — this is the dependency
-/// for CameraTrigger, and the roadmap calls out `flows.fix-camera`
-/// as blocked on Privacy Shield emitting events. So always Fail until
-/// that ships.
+/// Privacy Shield event bus for CameraTrigger. CameraTrigger is still
+/// rejected by flow validation (see ROADMAP.md, Partial), so this check
+/// always reports Fail until camera-specific events are emitted and the
+/// trigger is enabled.
 fn check_privacy_shield_bus() -> CapabilityCheck {
     CapabilityCheck {
         id: "privacy-shield-bus".to_string(),

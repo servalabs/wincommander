@@ -16,11 +16,10 @@
 //     in `coercion_phrase.rs` and the frontend-bridge stopgap in
 //     `flow_engine.rs::listen_key_sequence`.
 //
-// Future (planned in ref/roadmap.md Track 1b `shared`):
-//
 //   - `fs_watcher` — single `notify::RecommendedWatcher` per parent
-//     directory, subscriber-fan-out. Replaces three duplicate watchers
-//     in `decoy_monitor`, `ransomware_monitor`, `flow_engine`.
+//     directory, subscriber fan-out, shared by `ransomware_monitor`,
+//     `flow_engine` and `downloads_watcher`.
+//   - `webhook_server` — shared local webhook listener.
 
 pub mod fs_watcher;
 pub mod keyboard_hook;

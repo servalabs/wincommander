@@ -13,8 +13,8 @@
 // This is a REVERSIBLE response only — it unmounts, it does not erase any
 // key or touch the vault contents; re-entering the password remounts it
 // normally. Deliberately does NOT escalate to lockdown/self-destruct or any
-// key-erasing command — those require their own explicit trigger, per
-// AGENTS.md's rule that the lockdown cascade is never invoked inline.
+// key-erasing command — those require their own explicit trigger; the
+// lockdown cascade is never invoked inline.
 // Clears the interval on cleanup.
 
 import { useEffect, useRef } from "react";

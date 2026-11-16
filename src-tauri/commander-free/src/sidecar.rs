@@ -223,7 +223,7 @@ fn current_pro_spawn_cooldown_error() -> Option<String> {
 // never compared, so even a locally-swapped wincommander-pro.exe was
 // trusted as long as it implemented the wire protocol — Pro is the
 // privileged side (RDP credentials, lockdown, dismount). The audit
-// tracks this as F-3 in ref/security-audit-report.md.
+// tracked this as finding F-3.
 //
 // Accepted hashes are injected at build time via env vars:
 //   WINCMD_PRO_SHA256_CURRENT   — sha256 of the current release binary

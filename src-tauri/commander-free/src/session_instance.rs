@@ -676,8 +676,8 @@ fn forward_args_with_attempts(sid: u32, args: &[String], attempts: usize) -> (bo
 /// to the default. The default for an unrecognized/absent verb is
 /// intentionally "shred-requested" (the plain in-app secure-delete flow), so
 /// every non-shred verb MUST be listed explicitly here or it silently
-/// shreds — see AGENTS.md's "a missing branch SECURE-DELETES the target"
-/// gotcha. `has_flag` lets each caller supply its own membership check
+/// shreds (a missing branch SECURE-DELETES the target)
+/// — a known gotcha. `has_flag` lets each caller supply its own membership check
 /// (`Vec<&str>::contains` here, `Vec<String>::iter().any` in lib.rs) without
 /// this function caring about the caller's storage type.
 pub(crate) fn resolve_context_menu_event(has_flag: impl Fn(&str) -> bool) -> &'static str {

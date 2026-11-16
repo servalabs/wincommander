@@ -25,7 +25,7 @@
 //   - Auto-kill / auto-suspend. The toast tells the user what to do
 //     (disconnect network, kill the process). Acting automatically
 //     without process attribution risks killing the wrong thing.
-//   - Entropy delta on writes. The roadmap mentions this but in v1
+//   - Entropy delta on writes. Not implemented (see ROADMAP.md); in v1
 //     it'd require reading file contents before AND after each write —
 //     too heavy for a monitor. Volume alone catches real ransomware;
 //     entropy is v2 polish.
