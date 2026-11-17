@@ -14,6 +14,7 @@ import { useLicenseQuery } from "@/hooks/queries/useLicenseQuery";
 import { fleetLinkLabel, fleetLinkState, type FleetLinkStatus } from "./fleetLinkPresentation";
 import { fleetShieldProfileStatus } from "../../lib/fleetShieldProfileStatus";
 import { FleetSignedContact } from "./FleetSignedContact";
+import { describeFleetConnectError, fleetAddressWarning, FLEET_HTTPS_HINT } from "./fleetConnectErrors";
 
 interface FleetStatus extends FleetLinkStatus {
   // True while Pro's check-in loop is alive and self-healing (connected or
@@ -246,6 +247,12 @@ export default function FleetConnectView() {
       return;
     }
     setError(null);
+    // Reject plain http:// before any enrollment work; the backend enforces
+    // the same rule, this only saves a round trip and explains the fix.
+    if (/^http:/i.test(serverUrl.trim())) {
+      setError(FLEET_HTTPS_HINT);
+      return;
+    }
     setCleanupRetry(false);
     setRemovalNotice(null);
     setBusy(true);
@@ -270,11 +277,17 @@ export default function FleetConnectView() {
       } else if (msg.includes("entitlement required") || msg.includes("license")) {
         setError("An active Fleet subscription is required for fleet enrollment.");
       } else {
-        setError(msg);
+        setError(describeFleetConnectError(msg));
       }
     } finally {
       setBusy(false);
     }
+  }
+
+  // Retry with the saved address; with none saved, ask for one instead.
+  function retryConnection() {
+    if (!serverUrl.trim()) { setEditingConnection(true); return; }
+    void connect();
   }
 
   async function finalizeApprovedUnenroll() {
@@ -495,7 +508,7 @@ export default function FleetConnectView() {
         }}>Retry local cleanup</Button>
       </div>}
 
-      {isConnected && status ? (
+      {isConnected && status && !editingConnection ? (
         <div className="fleet-connect-status">
           <dl className="fleet-connect-meta">
             <div className="fleet-meta">
@@ -515,7 +528,7 @@ export default function FleetConnectView() {
           </dl>
           {isAwaitingApproval && !unenrollInfo && (
             <div className="fleet-connect-enrolling">
-              <p><Icon icon="time" size={13} /> Request submitted — waiting for the fleet admin to approve this device. No policy or commands are applied yet.</p>
+              <p><Icon icon="time" size={13} /> Waiting for admin approval — this device has been submitted to Fleet. An administrator must approve it in the Fleet console; no policy or commands are applied until then. This view updates automatically.</p>
               {status.admissionFingerprint && /^[0-9a-f]{64}$/.test(status.admissionFingerprint)
                 ? <p>Device identity fingerprint: <code>{status.admissionFingerprint}</code>. Compare this with Fleet using a trusted channel before approval.</p>
                 : <p>Device identity fingerprint is unavailable. Do not approve until it can be verified.</p>}
@@ -561,6 +574,7 @@ export default function FleetConnectView() {
                   </Button>
                 </div>
               )}
+              {!unenrollInfo && <Button variant="outline" size="sm" disabled={busy} onClick={() => setEditingConnection(true)}>Change Fleet server</Button>}{" "}
               <Button variant="outline" size="sm" disabled={busy} onClick={disconnect}>
                 {busy && !repairingTrust
                   ? (unenrollInfo ? "Checking…" : "Requesting…")
@@ -589,6 +603,7 @@ export default function FleetConnectView() {
               <Icon icon="warning-sign" size={13} intent="danger" /> {agentError}
             </p>
           )}
+          {(status?.serverUrl ?? "").toLowerCase().startsWith("http:") && <p className="fleet-connect-error" role="alert"><Icon icon="warning-sign" size={13} intent="danger" /> {FLEET_HTTPS_HINT}</p>}
           {unenrollInfo && <p className="fleet-connect-enrolling" role="status">Leave requested — waiting for an administrator to approve removal.</p>}
           {error && <p className="fleet-connect-error" role="alert"><Icon icon="warning-sign" size={13} intent="danger" /> {error}</p>}
           {fleetEntitled && <>
@@ -608,6 +623,11 @@ export default function FleetConnectView() {
           <p className="fleet-connect-enrolling">
             <Icon icon="offline" size={13} /> This device is known to Fleet but is not currently checking in.
           </p>
+          {status.serverUrl.toLowerCase().startsWith("http:") && <p className="fleet-connect-error" role="alert"><Icon icon="warning-sign" size={13} intent="danger" /> {FLEET_HTTPS_HINT}</p>}
+          {fleetEntitled && <>
+            <Button variant="outline" size="sm" disabled={busy} onClick={retryConnection}>Retry connection</Button>{" "}
+            <Button variant="outline" size="sm" disabled={busy} onClick={() => setEditingConnection(true)}>Change Fleet server</Button>{" "}
+          </>}
           {fleetEntitled && wasEnrolled && <Button variant="outline" size="sm" disabled={busy} onClick={checkRemoval}>Check removal status</Button>}
           {agentError && <p className="fleet-connect-error" role="alert"><Icon icon="warning-sign" size={13} intent="danger" /> {agentError}</p>}
           {error && <p className="fleet-connect-error" role="alert"><Icon icon="warning-sign" size={13} intent="danger" /> {error}</p>}
@@ -624,11 +644,13 @@ export default function FleetConnectView() {
               placeholder="https://fleet.example.com"
               spellCheck={false}
               autoComplete="url"
-              disabled={enrolling}
             />
             <span className="fleet-field-hint">
-              Requires HTTPS with post-quantum hybrid TLS enabled on the server.
+              Requires an https:// address with post-quantum hybrid TLS enabled on the server (plain http:// is rejected).
             </span>
+            {fleetAddressWarning(serverUrl) && (
+              <span className="fleet-field-hint fleet-connect-error" role="alert">{fleetAddressWarning(serverUrl)}</span>
+            )}
           </label>
 
           <label className="fleet-field">
@@ -639,7 +661,6 @@ export default function FleetConnectView() {
               placeholder="Base64 Ed25519 key (optional)"
               spellCheck={false}
               className="mono"
-              disabled={enrolling}
             />
             <span className="fleet-field-hint">
               Pin the Fleet signing key to verify commands and signed contact.
@@ -657,7 +678,7 @@ export default function FleetConnectView() {
             <Switch
               checked={dispatch}
               onCheckedChange={setDispatch}
-              disabled={!signingKeyPub.trim() || enrolling}
+              disabled={!signingKeyPub.trim()}
               aria-label="Enable command dispatch"
             />
           </div>
@@ -685,10 +706,10 @@ export default function FleetConnectView() {
 
           <Button
             variant="primary"
-            disabled={busy || enrolling || !serverUrl.trim()}
+            disabled={busy || !serverUrl.trim()}
             onClick={connect}
           >
-            {busy ? "Connecting…" : enrolling ? "Enrolling…" : "Connect to Fleet"}
+            {busy ? "Connecting…" : enrolling ? "Retry connection" : "Connect to Fleet"}
           </Button>
           {editingConnection && <Button variant="outline" size="sm" disabled={busy} onClick={() => setEditingConnection(false)}>Cancel</Button>}
           {fleetEntitled && wasEnrolled && isRemoved && (

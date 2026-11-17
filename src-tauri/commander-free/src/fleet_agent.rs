@@ -118,9 +118,14 @@ fn normalize_fleet_server_url(raw: &str) -> Result<String, String> {
     Ok(parsed.origin().ascii_serialization())
 }
 
+/// Operator-facing rejection for a non-HTTPS Fleet address. The Fleet panel
+/// keys its actionable hint on the stable "requires an https:// address"
+/// fragment, so keep that wording in sync with FleetConnectView.
+const HTTPS_REQUIRED_MESSAGE: &str = "Fleet requires an https:// address (an HTTPS server with post-quantum hybrid TLS). Change http:// to https:// and use the server's HTTPS port.";
+
 fn require_secure_fleet_origin(origin: &str) -> Result<(), String> {
     if !origin.starts_with("https://") {
-        return Err("Fleet requires an HTTPS server with post-quantum hybrid TLS support.".into());
+        return Err(HTTPS_REQUIRED_MESSAGE.into());
     }
     Ok(())
 }
@@ -402,14 +407,14 @@ pub async fn fleet_repair_machine_trust(
     if !crate::authz::native_confirm_fleet_trust_repair(&app).await {
         return Err("Machine trust repair was cancelled".into());
     }
-    fleet_connect_inner(
+    Box::pin(fleet_connect_inner(
         app,
         current.app.fleet.server_url,
         current.app.fleet.dispatch,
         current.app.fleet.signing_key_pub,
         None,
         Some(plan.confirmation_binding()),
-    )
+    ))
     .await
 }
 
@@ -458,17 +463,19 @@ async fn fleet_connect_inner(
     confirmation: Option<String>,
     repair_expected_binding: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    lifecycle_lease::run(async move {
-        fleet_connect_inner_locked(
-            app,
-            server_url,
-            dispatch,
-            signing_key_pub,
-            confirmation,
-            repair_expected_binding,
-        )
-        .await
-    })
+    // The locked connect future is very large (it embeds every service and
+    // sidecar call it awaits). The lifecycle lease moves its operation onto a
+    // blocking-pool thread (2 MiB stack) and polls it inside `block_on`; a
+    // by-value future there overflows that stack in debug builds. Keep it on
+    // the heap from the moment it is created so only a pointer ever moves.
+    lifecycle_lease::run(Box::pin(fleet_connect_inner_locked(
+        app,
+        server_url,
+        dispatch,
+        signing_key_pub,
+        confirmation,
+        repair_expected_binding,
+    )))
     .await
 }
 
@@ -532,7 +539,7 @@ async fn fleet_connect_inner_locked(
         Some(crate::svc_client::call("svc.fleet.get_trust", serde_json::json!({})).await?)
     } else {
         tokio::time::timeout(
-            std::time::Duration::from_millis(100),
+            SERVICE_ENROLLMENT_PROBE_TIMEOUT,
             crate::svc_client::call("svc.fleet.get_trust", serde_json::json!({})),
         )
         .await
@@ -589,6 +596,7 @@ async fn fleet_connect_inner_locked(
                     .into(),
             );
         }
+        cancel_trust_bridge();
         let request = crate::svc_client::call(
             "svc.fleet.begin_enrollment",
             serde_json::json!({
@@ -601,7 +609,7 @@ async fn fleet_connect_inner_locked(
         let reply = if repair_expected_binding.is_some() {
             Some(request.await?)
         } else {
-            tokio::time::timeout(std::time::Duration::from_millis(100), request)
+            tokio::time::timeout(SERVICE_ENROLLMENT_PROBE_TIMEOUT, request)
                 .await
                 .ok()
                 .and_then(Result::ok)
@@ -653,13 +661,43 @@ async fn fleet_connect_inner_locked(
         } else {
             let device = committed.device_id.clone();
             let key = signing_key_pub.clone();
-            tokio::spawn(async move {
+            // A newer connect attempt owns the service's single pending
+            // challenge, so the older attempt's bridge must stop waiting for
+            // a proof that can no longer match.
+            let bridge = tokio::spawn(async move {
                 let _ =
                     establish_service_enrollment_trust(&device, &key, previous_trust, false).await;
             });
+            replace_trust_bridge(bridge);
         }
     }
     Ok(status)
+}
+
+/// The privileged service probes are optional for an ordinary connect, so a
+/// missing or slow service must not stall it. 100 ms was shorter than a cold
+/// pipe connect plus the service's durable write, which silently dropped the
+/// challenge and left the device enrolled without machine trust.
+const SERVICE_ENROLLMENT_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+/// Pro's first enrollment may take up to 30 s; wait for its proof (500 ms apart).
+const TRUST_PROOF_ATTEMPTS: usize = 120;
+
+static TRUST_BRIDGE: Mutex<Option<tokio::task::JoinHandle<()>>> = Mutex::new(None);
+
+fn replace_trust_bridge(next: tokio::task::JoinHandle<()>) {
+    let mut slot = TRUST_BRIDGE.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some(previous) = slot.replace(next) {
+        previous.abort();
+    }
+}
+
+/// Stop any background machine-trust wait from an earlier attempt. Called
+/// before a new attempt asks the service for its (superseding) challenge.
+fn cancel_trust_bridge() {
+    let mut slot = TRUST_BRIDGE.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some(previous) = slot.take() {
+        previous.abort();
+    }
 }
 
 fn service_enrollment_action(
@@ -683,7 +721,7 @@ async fn establish_service_enrollment_trust(
     previous_trust: Option<Value>,
     confirmed_identity_change: bool,
 ) -> Result<(), String> {
-    for _ in 0..40 {
+    for _ in 0..TRUST_PROOF_ATTEMPTS {
         if let Ok(proof) =
             crate::sidecar::dispatch_paid_command("fleet_agent_enrollment_trust", Value::Null).await
         {
@@ -1611,8 +1649,9 @@ async fn service_shield_policy() -> Result<Value, String> {
                 "warn",
                 "core",
                 &format!(
-                    "[FleetPrivacyShield] service policy failure stage: {}",
-                    shield_service_error_stage(&error)
+                    "[FleetPrivacyShield] service policy failure stage: {} reason: {}",
+                    shield_service_error_stage(&error),
+                    shield_service_rejection_reason(&error)
                 ),
             );
             shield_service_error(&error).to_string()
@@ -1636,6 +1675,29 @@ fn shield_service_error_stage(error: &str) -> &'static str {
         "service_identity"
     } else if error.starts_with("service rejected request:") {
         "service_rejection"
+    } else {
+        "other"
+    }
+}
+
+/// Fixed, path-free reason codes for a service "forbidden" rejection. The
+/// service's peer-authorization messages are fixed strings, so mapping them to
+/// tokens exposes no private detail while telling an operator which gate
+/// rejected this app (path allow-list vs session vs rate limit).
+fn shield_service_rejection_reason(error: &str) -> &'static str {
+    if !error.starts_with("service rejected request: forbidden ") {
+        return "n/a";
+    }
+    if error.contains("binary path is not on the allow-list") {
+        "peer_path_not_allowed"
+    } else if error.contains("not in the active interactive session") {
+        "peer_wrong_session"
+    } else if error.contains("peer identity could not be determined") {
+        "peer_identity_unavailable"
+    } else if error.contains("rate limit") {
+        "peer_rate_limited"
+    } else if error.contains("privileged verb requires") {
+        "elevation_required"
     } else {
         "other"
     }
@@ -6224,5 +6286,108 @@ mod tests {
             !policy.is_transport(),
             "PolicyError must report is_transport=false"
         );
+    }
+}
+
+#[cfg(test)]
+mod fleet_connect_v2_tests {
+    use super::*;
+
+    fn body<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
+        source
+            .split(start)
+            .nth(1)
+            .expect("start marker")
+            .split(end)
+            .next()
+            .expect("end marker")
+    }
+
+    /// Regression for STATUS_STACK_OVERFLOW on "Connect to Fleet": every layer
+    /// that wraps the very large connect future must hold it on the heap, and
+    /// the lease that moves it to a blocking thread must box it too.
+    #[test]
+    fn connect_future_is_boxed_at_every_layer() {
+        let source = include_str!("fleet_agent.rs");
+        let command = body(
+            source,
+            "pub async fn fleet_connect(",
+            "pub async fn fleet_recovery_stage",
+        );
+        assert!(command.contains("Box::pin(fleet_connect_inner("));
+        let inner = body(
+            source,
+            "async fn fleet_connect_inner(",
+            "async fn fleet_connect_inner_locked(",
+        );
+        assert!(inner.contains("lifecycle_lease::run(Box::pin(fleet_connect_inner_locked("));
+        let repair = body(
+            source,
+            "pub async fn fleet_repair_machine_trust",
+            "pub async fn fleet_machine_trust_status",
+        );
+        assert!(repair.contains("Box::pin(fleet_connect_inner("));
+        let lease = include_str!("fleet_lifecycle_lease.rs");
+        assert!(body(lease, "pub(super) async fn run_with", "pub(crate) async fn launch")
+            .contains("let operation = Box::pin(operation);"));
+    }
+
+    #[test]
+    fn plain_http_is_rejected_with_an_actionable_https_hint() {
+        for url in ["http://fleet.example.test:9443", "http://10.0.0.5:8787"] {
+            let origin = normalize_fleet_server_url(url).unwrap();
+            let error = require_secure_fleet_origin(&origin).unwrap_err();
+            assert!(error.contains("requires an https:// address"), "{error}");
+            assert!(error.contains("Change http:// to https://"), "{error}");
+        }
+        // The security rule is unchanged: only https origins pass.
+        let secure = normalize_fleet_server_url("https://test-linux.leo-ordinal.ts.net:9443").unwrap();
+        assert_eq!(secure, "https://test-linux.leo-ordinal.ts.net:9443");
+        assert!(require_secure_fleet_origin(&secure).is_ok());
+        // A mistyped `http:///` stays http after repair and is still rejected.
+        let repaired = normalize_fleet_server_url("http:///fleet.example.test").unwrap();
+        assert!(require_secure_fleet_origin(&repaired).is_err());
+    }
+
+    #[test]
+    fn service_rejections_map_to_fixed_operator_reasons() {
+        let forbidden = |message: &str| {
+            format!("service rejected request: forbidden ({message}) [operation 7]")
+        };
+        assert_eq!(
+            shield_service_rejection_reason(&forbidden(
+                "session-helper peer binary path is not on the allow-list"
+            )),
+            "peer_path_not_allowed"
+        );
+        assert_eq!(
+            shield_service_rejection_reason(&forbidden(
+                "session-helper peer is not in the active interactive session"
+            )),
+            "peer_wrong_session"
+        );
+        assert_eq!(
+            shield_service_rejection_reason(&forbidden(
+                "privileged verb requires SYSTEM/Admin caller"
+            )),
+            "elevation_required"
+        );
+        assert_eq!(shield_service_rejection_reason("service connect failed: x"), "n/a");
+        assert_eq!(
+            shield_service_rejection_reason(&forbidden("some private detail")),
+            "other"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_newer_connect_attempt_cancels_the_previous_trust_bridge() {
+        let first = tokio::spawn(std::future::pending::<()>());
+        replace_trust_bridge(first);
+        let probe = tokio::spawn(std::future::pending::<()>());
+        let abort = probe.abort_handle();
+        replace_trust_bridge(probe);
+        cancel_trust_bridge();
+        tokio::task::yield_now().await;
+        assert!(abort.is_finished());
     }
 }

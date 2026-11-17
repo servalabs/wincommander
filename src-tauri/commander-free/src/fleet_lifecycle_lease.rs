@@ -30,6 +30,10 @@ where
     L: 'static,
     A: FnOnce() -> Result<L, String> + Send + 'static,
 {
+    // `block_on` below pins this future on a 2 MiB blocking-pool stack, and
+    // `HELD.scope`/`select!` move it again. Operations such as Fleet connect are
+    // large state machines; box them so only a pointer is ever moved there.
+    let operation = Box::pin(operation);
     let runtime = tokio::runtime::Handle::current();
     let (cancel, mut cancelled) = tokio::sync::oneshot::channel::<()>();
     let cancellation_guard = CancelOnDrop(Some(cancel));

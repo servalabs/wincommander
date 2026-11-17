@@ -140,3 +140,39 @@ async fn inaccessible_machine_mutex_never_runs_the_operation() {
     assert!(result.is_err());
     assert!(!ran.load(Ordering::SeqCst));
 }
+
+/// Regression: Fleet connect's future is far larger than the 2 MiB blocking-
+/// pool stack the lease polls it on. Moving it there by value overflowed the
+/// stack (STATUS_STACK_OVERFLOW on "Connect to Fleet"); the lease must hold
+/// any operation on the heap. Without the boxing this test aborts the process.
+#[test]
+fn an_operation_larger_than_the_blocking_stack_runs_without_overflow() {
+    async fn oversized(ran: Arc<AtomicBool>, pad: [u8; 3 * 1024 * 1024]) -> Result<(), String> {
+        tokio::task::yield_now().await;
+        ran.store(pad[pad.len() - 1] == 0, Ordering::SeqCst);
+        Ok(())
+    }
+    let ran = Arc::new(AtomicBool::new(false));
+    let thread_ran = ran.clone();
+    // Build the oversized future on a roomy thread so only the lease's own
+    // handling of it is under test.
+    std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime
+                .block_on(run_with(
+                    || Ok(()),
+                    oversized(thread_ran, [0u8; 3 * 1024 * 1024]),
+                ))
+                .unwrap();
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+    assert!(ran.load(Ordering::SeqCst));
+}

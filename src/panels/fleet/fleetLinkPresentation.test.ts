@@ -46,3 +46,12 @@ describe("Fleet link presentation", () => {
     expect(fleetLinkState(status({ connected: true, lastSignedContactAt: null }))).toBe("linked");
   });
 });
+
+describe("Fleet link presentation while awaiting approval", () => {
+  test("a retrying agent held for admin approval is pending, not an error", () => {
+    const held = status({ pendingApproval: true, retrying: true, lastError: "check-in timed out" });
+    expect(fleetLinkState(held)).toBe("pending");
+    expect(fleetLinkState({ ...held, retrying: false })).toBe("error");
+    expect(fleetLinkState({ ...held, deviceId: "" })).toBe("error");
+  });
+});

@@ -23,10 +23,10 @@ test("another Windows profile sees active retry, terminal failure, then recovere
     globalThis.setInterval = (callback, delay) => { const id = ++nextTimer; timers.set(id, { callback, delay }); return id; };
     globalThis.clearInterval = id => timers.delete(id);
     let status = { connected: false, deviceId: 'device-123', serverUrl: 'https://fleet.example.test', lastEnrollAt: null, lastError: 'server temporarily unavailable', retrying: true };
-    const calls = []; const connectArgs = [];
+    const calls = []; const connectArgs = []; let connectError = null;
     mock.module('@tauri-apps/api/core', () => ({ invoke: async (command, args) => {
       calls.push(command);
-      if (command === 'fleet_connect') { connectArgs.push(args); return {}; }
+      if (command === 'fleet_connect') { connectArgs.push(args); if (connectError) throw connectError; return {}; }
       if (command === 'fleet_status') return { ...status };
       if (command === 'fleet_machine_trust_status') return { trustBound: true, shieldPolicyStatus: 'unverified' };
       if (command === 'fleet_service_contact_status') return { observation: null };
@@ -86,6 +86,33 @@ test("another Windows profile sees active retry, terminal failure, then recovere
     status = { ...status, retrying: false, lastError: 'enroll rejected: HTTP 403 Forbidden' };
     await act(async () => { [...timers.values()].find(timer => timer.delay === 1000).callback(); });
     assert.match(host.textContent, /Last agent error \(may be from an earlier attempt\): enroll rejected: HTTP 403 Forbidden/);
+    // While enrolling, the address stays editable and the attempt can be retried.
+    const urlInput = () => host.querySelector('input[placeholder="https://fleet.example.com"]');
+    const retry = () => [...host.querySelectorAll('button')].find(button => button.textContent === 'Retry connection');
+    const setUrl = async value => act(async () => {
+      Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value').set.call(urlInput(), value);
+      urlInput().dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    });
+    assert.ok(!urlInput().disabled, 'address stays editable while enrolling');
+    assert.ok(retry() && !retry().disabled, 'enrolling can be retried');
+    // Plain http:// is explained and never reaches the backend.
+    await setUrl('http://fleet.example.test:9443');
+    assert.match(host.textContent, /Fleet requires an https:\/\/ address/);
+    await act(async () => { retry().click(); });
+    assert.equal(connectArgs.length, 1, 'http:// must not be sent to fleet_connect');
+    // A backend https rejection is shown as the same actionable hint.
+    connectError = 'Fleet requires an HTTPS server with post-quantum hybrid TLS support.';
+    await setUrl('https://fleet.example.test:9443');
+    await act(async () => { retry().click(); });
+    assert.equal(connectArgs.length, 2);
+    assert.match(host.textContent, /Change http:\/\/ to https:\/\//);
+    connectError = null;
+    // Admitted-but-unapproved: clear waiting state, still correctable.
+    status = { ...status, connected: false, retrying: true, pendingApproval: true, lastError: null, admissionFingerprint: null };
+    await act(async () => { [...timers.values()].find(timer => timer.delay === 1000).callback(); });
+    assert.match(host.textContent, /Waiting for admin approval/);
+    assert.match(host.querySelector('.fleet-connect-badge').textContent, /Awaiting approval/);
+    assert.ok([...host.querySelectorAll('button')].some(button => button.textContent === 'Change Fleet server'));
     await act(async () => { root.unmount(); });
     assert.equal(timers.size, 0);
     dom.window.close();
