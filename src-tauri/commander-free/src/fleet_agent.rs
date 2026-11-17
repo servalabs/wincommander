@@ -34,6 +34,7 @@ use wincmd_shared::fleet::{
 
 #[path = "fleet_lifecycle_lease.rs"]
 pub(crate) mod lifecycle_lease;
+#[allow(clippy::duplicate_mod)] // the same file is deliberately included under more than one module path
 #[path = "fleet_lifecycle_mutex.rs"]
 mod lifecycle_mutex;
 #[path = "fleet_removal.rs"]
@@ -4630,6 +4631,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::assertions_on_constants)] // asserts a build-time readiness flag stays off
     fn recovery_policy_needs_current_service_identity_and_never_trusts_equal_epoch() {
         let (mut settings, mut envelope) = signed_shield_envelope();
         settings.policy.master_config_version = Some(5);
@@ -5660,8 +5662,8 @@ mod tests {
         let obsolete_gate = ["require", "_paid(\"fleet agent\")"].concat();
         assert_eq!(
             source.matches(&service_gate).count(),
-            9,
-            "Fleet mutations require the service gate; machine-scoped status, Shield desired-state reads, and Shield read-back receipts deliberately do not"
+            14,
+            "Fleet mutations (including the five recovery operations: pin operator key, stage, handoff, finish, resume) require the service gate; machine-scoped status, Shield desired-state reads, and Shield read-back receipts deliberately do not"
         );
         let repair_start = source
             .find("pub async fn fleet_repair_machine_trust")

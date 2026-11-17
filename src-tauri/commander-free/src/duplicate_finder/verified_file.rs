@@ -201,6 +201,7 @@ pub(crate) fn verify_current_user_owns(handle: &File) -> Result<(), String> {
 
 /// Display checks are advisory; removal repeats this check on its held handle.
 #[cfg(windows)]
+#[allow(dead_code)] // not reached in every feature combination or build path
 pub(super) fn ownership_review(path: &std::path::Path) -> (Option<&'static str>, bool) {
     let Ok(handle) = File::open(path) else {
         return (Some("file owner cannot be verified as the current user"), false);

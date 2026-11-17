@@ -10,6 +10,7 @@ use windows_sys::Win32::{
     },
 };
 
+#[allow(clippy::duplicate_mod)] // the same file is deliberately included under more than one module path
 #[path = "hybrid_free_anchor_security.rs"]
 mod security;
 
@@ -218,6 +219,7 @@ pub(crate) fn remove_test_key(path: &str) -> Result<(), String> {
     }
 }
 
+#[allow(clippy::duplicate_mod)] // the same file is deliberately included under more than one module path
 #[cfg(test)]
 #[path = "hybrid_free_anchor_tests.rs"]
 mod tests;

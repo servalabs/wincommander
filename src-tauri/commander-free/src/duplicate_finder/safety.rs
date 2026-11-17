@@ -126,6 +126,7 @@ pub(crate) fn ensure_decoy_mutation_allowed() -> Result<(), String> {
 }
 
 /// Avoid repeated licence verification only when the committed toggle is off.
+#[allow(dead_code)] // not reached in every feature combination or build path
 pub(crate) fn ensure_per_item_mutation_allowed() -> Result<(), String> {
     ensure_decoy_mutation_allowed()?;
     ensure_advanced_with_cached_toggle(
@@ -134,6 +135,7 @@ pub(crate) fn ensure_per_item_mutation_allowed() -> Result<(), String> {
     )
 }
 
+#[allow(dead_code)] // not reached in every feature combination or build path
 fn ensure_advanced_with_cached_toggle(
     enabled: Option<bool>,
     is_advanced: impl FnOnce() -> bool,
@@ -144,19 +146,6 @@ fn ensure_advanced_with_cached_toggle(
     Ok(())
 }
 
-#[cfg(test)]
-mod per_item_mode_tests {
-    use super::ensure_advanced_with_cached_toggle;
-
-    #[test]
-    fn disabled_toggle_skips_licence_probe_but_enabled_or_unknown_is_rechecked() {
-        assert!(ensure_advanced_with_cached_toggle(Some(false), || panic!("unnecessary licence probe")).is_ok());
-        assert!(ensure_advanced_with_cached_toggle(Some(true), || true).is_err());
-        assert!(ensure_advanced_with_cached_toggle(None, || true).is_err());
-        assert!(ensure_advanced_with_cached_toggle(Some(true), || false).is_ok());
-        assert!(ensure_advanced_with_cached_toggle(None, || false).is_ok());
-    }
-}
 
 // Literal Git metadata components remain reviewable but are not deletion targets.
 // This does not identify bare repositories or external Git directories.
@@ -340,4 +329,18 @@ pub(super) fn is_link_or_reparse(meta: &fs::Metadata) -> bool {
 #[cfg(not(windows))]
 pub(super) fn is_link_or_reparse(meta: &fs::Metadata) -> bool {
     meta.file_type().is_symlink()
+}
+
+#[cfg(test)]
+mod per_item_mode_tests {
+    use super::ensure_advanced_with_cached_toggle;
+
+    #[test]
+    fn disabled_toggle_skips_licence_probe_but_enabled_or_unknown_is_rechecked() {
+        assert!(ensure_advanced_with_cached_toggle(Some(false), || panic!("unnecessary licence probe")).is_ok());
+        assert!(ensure_advanced_with_cached_toggle(Some(true), || true).is_err());
+        assert!(ensure_advanced_with_cached_toggle(None, || true).is_err());
+        assert!(ensure_advanced_with_cached_toggle(Some(true), || false).is_ok());
+        assert!(ensure_advanced_with_cached_toggle(None, || false).is_ok());
+    }
 }

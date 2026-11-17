@@ -74,6 +74,53 @@ unimplemented, unshipped work.
 
 ## Conditional future opportunities
 
+- **Service-mediated evidence ledger (design only, not implemented).** Fixes the
+  standard-user regression in [WEAKNESSES.md](WEAKNESSES.md#known-regressions-on-main)
+  without widening the machine-state ACL, which would let any user alter or delete
+  device-wide evidence and its key.
+  - *Boundary:* the service (`commander-svc`, SYSTEM) becomes the only reader and
+    writer of the ledger file, failure marker and key; the desktop calls it over
+    the existing pipe protocol (`svc_client::call`). The machine-state ACL stays as
+    it is.
+  - *Operations:* `evidence.record` (any interactive user through the signed
+    desktop or sidecar; the server stamps time and accepts only `source`,
+    `severity`, `summary` and `detail`, with allow-listed `source`/`severity`,
+    length caps and a per-caller rate limit), `evidence.read` (paged and bounded;
+    whether a standard user sees other users' entries is an open privacy
+    decision), `evidence.clear` (Administrators only, verified from the elevated
+    token on the server) and `evidence.failure_marker` get/set (service-owned, so a
+    user cannot erase it).
+  - *Identity:* taken from the pipe peer (`peer_auth::SessionHelperGate`,
+    `PeerIdentitySnapshot`, `TrustOrigin`), never from arguments; the service
+    appends the verified SID hash and session id as server-controlled fields. This
+    is an additive schema change, so confirm older readers tolerate unknown fields.
+  - *Integrity:* the key never leaves the service-owned location; the existing hash
+    chain and authenticated encryption stay, and only the service can extend the
+    chain. The evidence lock and the failure-seen flag move into the service, and
+    the client reports "service unavailable" as a distinct, visible error.
+  - *Existing records:* the service runs the current `read_with_machine_source`
+    merge of the current and legacy machine ledgers. The per-user legacy ledger is
+    not read on the service's own authority: the calling user's client sends it in
+    bounded chunks, and the service verifies and appends it as
+    `imported-from-user`, once. No source file is deleted or truncated until the
+    import is verified by re-reading, and a byte-for-byte backup of the machine
+    ledger and key is taken first.
+  - *Service down:* never write the device ledger as the user. Queue events in an
+    append-only, per-user, size-capped file labelled unverified, and replay through
+    `evidence.record` later, keeping the original client time as a separate field.
+  - *Verification before it can ship:* service unit tests with a fake peer
+    (caller-supplied identity ignored, non-admin `clear` rejected, oversize and
+    rate-limit and invalid-field rejection, idempotent import and replay, a crash
+    between append and acknowledge); a disposable Administrator-owned Windows
+    fixture exercised by two standard accounts and SYSTEM (record, read and the
+    failure marker; direct file open, key read, rename and delete all fail; the
+    machine-state ACL byte-identical before and after; migration from a real-shaped
+    legacy ledger keeps every record and the chain verifies; upgrade ordering
+    between old and new client and service; restart; elevated clear). Real ledgers
+    are preserved and never used for migration experiments.
+  - *Open decisions:* visibility of other users' events, who may clear, retention
+    and `MAX_ENTRIES` trimming now that one process owns the file, and whether the
+    sidecar calls the service directly or through the desktop process.
 - **Encrypted content index (dev notes).** If pursued: a random 256-bit key per
   Windows user and index identity protected with user-scoped DPAPI, never
   machine-scoped install material; rebuild from the original documents into a

@@ -10,6 +10,9 @@ use zeroize::{Zeroize, Zeroizing};
 
 use super::{EvidenceEntry, MAX_ENTRIES};
 
+/// Entries, their record digests and whether the source needed repair.
+type LedgerRead = (Vec<EvidenceEntry>, Vec<[u8; 32]>, bool);
+
 const PREFIX: &str = "enc:v2:";
 const SCOPE: &str = "machine:evidence-ledger";
 const MAX_IMPORTED_PROFILES: usize = 256;
@@ -160,10 +163,8 @@ fn unique_rollover(previous: &[[u8; 32]], current: &[[u8; 32]]) -> Result<usize,
     }
     let mut overlap = None;
     for length in 1..=MAX_ENTRIES {
-        if previous[MAX_ENTRIES - length..] == current[..length] {
-            if overlap.replace(length).is_some() {
-                return Err("Old evidence rollover is ambiguous; original preserved".into());
-            }
+        if previous[MAX_ENTRIES - length..] == current[..length] && overlap.replace(length).is_some() {
+            return Err("Old evidence rollover is ambiguous; original preserved".into());
         }
     }
     overlap
@@ -459,7 +460,7 @@ pub(super) fn read_with_machine_source(
             let fingerprint = digest(&raw);
             if ledger.machine_source_digest.as_deref() != Some(fingerprint.as_str()) {
                 let candidate =
-                    (|| -> Result<(Vec<EvidenceEntry>, Vec<[u8; 32]>, bool), String> {
+                    (|| -> Result<LedgerRead, String> {
                         if !raw.is_empty() && !raw.ends_with('\n') {
                             return Err("Machine source has an incomplete final record".into());
                         }
@@ -556,6 +557,7 @@ pub(super) fn read_with_machine_source(
 /// Clear the protected machine ledger, the old machine ledger, and at most the
 /// calling profile's old ledger. Caller holds the same mutex as old writers.
 /// A persisted intent prevents old plaintext from being re-imported on restart.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn clear_user_requested(
     path: &Path,
     machine_source: &Path,
@@ -628,11 +630,10 @@ mod tests {
         let machine = dir.path().join("machine");
         let key = dir.path().join("key");
         let failure_marker = dir.path().join("no-failure-marker");
-        let mut ledger = Ledger::default();
-        ledger.clear_scope = Some(ClearScope {
+        let ledger = Ledger { clear_scope: Some(ClearScope {
             user: "user-a".into(), machine: machine.clone(), profile: None,
             machine_snapshot: None, profile_snapshot: None,
-        });
+        }), ..Default::default() };
         write(&protected, &key, &ledger, &crate::datastore_io::atomic_write).unwrap();
         let old = format!("{}\n", serde_json::to_string(&entry()).unwrap());
         fs::write(&machine, &old).unwrap();

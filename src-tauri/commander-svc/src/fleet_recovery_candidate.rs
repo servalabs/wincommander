@@ -82,6 +82,7 @@ pub(crate) struct CandidateStore<'a> { fs: &'a dyn PolicyFs, path: PathBuf, prot
 impl<'a> CandidateStore<'a> {
     /// Signs only a cancellation for the locally frozen decision after the
     /// caller has checked protected state and local administrator approval.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn sign_cancel(&self,old:&FleetTrust,current:&FleetTrust,previous:&str,next:&str,generation:&str,
         decision:&str,now:i64,nonce:&str)->Result<String,&'static str> {
         if !uuid(previous) || !uuid(next) || !uuid(generation) || !uuid(nonce) || decision.len()!=64
@@ -95,6 +96,7 @@ impl<'a> CandidateStore<'a> {
     }
     /// Caller holds protected trust and the journal lease and has checked the
     /// next signed decision and the fully drained snapshot.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn sign_drain(&self,old:&FleetTrust,current:&FleetTrust,previous:&str,next:&crate::fleet_identity_handoff::VerifiedHandoff,
         snapshot:&str,now:i64,nonce:&str)->Result<String,&'static str> {
         if !next.matches_trust(current) || !uuid(previous) || !uuid(next.retirement_id()) || !uuid(next.new_generation()) || !uuid(nonce)
@@ -109,6 +111,7 @@ impl<'a> CandidateStore<'a> {
             next.next_sequence(),next.previous_hash(),snapshot,&current.signer_key,now,nonce)).map_err(|_| INVALID)?;
         Ok(B64.encode(key.sign(&bytes).to_bytes()))
     }
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn sign_late_evidence(&self,trust:&FleetTrust,retirement:&str,fingerprint:&[u8;32],
         command:&str,evidence_id:&str,unknown_receipt:&str,unknown_hash:&str,result_hash:&str)->Result<String,&'static str> {
         let valid_hash=|value:&str|value.len()==64 && value.bytes().all(|byte|byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
@@ -248,6 +251,7 @@ impl<'a> CandidateStore<'a> {
             "nonce":nonce, "signature":B64.encode(key.sign(&preimage).to_bytes())}))
     }
     /// Signs only a closed, recovery-bound confirmation after service review.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn sign_confirmation(&self, trust:&FleetTrust, retirement:&str, new_generation:&str,
         decision_digest:&str, archive_digest:&str, fingerprint:&[u8;32], now:i64) -> Result<serde_json::Value,&'static str> {
         let valid_hash=|s:&str| s.len()==64 && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));

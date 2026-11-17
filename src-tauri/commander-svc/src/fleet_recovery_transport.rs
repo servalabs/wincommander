@@ -186,6 +186,7 @@ mod tests {
 /// Begins only from a reviewed, protected old trust and signed retirement.
 /// A future caller must first establish native approval and old-process quiescence.
 #[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn prepare_and_resume(store:&FleetMachinePolicy, candidate:&CandidateStore<'_>,
     retirement_receipt:&[u8], handoff:&crate::fleet_identity_handoff::Handoff,
     recovery:&str, generation:&str, archive:&str, protector:&dyn crate::fleet_credential::Protector,

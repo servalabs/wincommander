@@ -17,6 +17,9 @@ use windows_sys::Win32::{
 };
 use winreg::{enums::HKEY_LOCAL_MACHINE, RegKey};
 
+/// The home-directory label and each browser profile's label and path.
+type ProfileSet = (String, Vec<(String, PathBuf)>);
+
 const UNAVAILABLE: &str = "user profile locations could not be verified";
 const OTHER_PROFILE: &str = "another user profile is protected";
 
@@ -214,7 +217,7 @@ fn expand_path(value: &str) -> Result<PathBuf, &'static str> {
     fs::canonicalize(path).map_err(|_| UNAVAILABLE)
 }
 
-fn collect_profiles(resolve: impl Fn(&str) -> Result<PathBuf, &'static str>) -> Result<(String, Vec<(String, PathBuf)>), &'static str> {
+fn collect_profiles(resolve: impl Fn(&str) -> Result<PathBuf, &'static str>) -> Result<ProfileSet, &'static str> {
     let sid = current_sid()?;
     let key = RegKey::predef(HKEY_LOCAL_MACHINE)
         .open_subkey("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList")
@@ -240,12 +243,12 @@ fn collect_profiles(resolve: impl Fn(&str) -> Result<PathBuf, &'static str>) -> 
     Ok((sid, paths))
 }
 
-pub(crate) fn profiles() -> Result<(String, Vec<(String, PathBuf)>), &'static str> {
+pub(crate) fn profiles() -> Result<ProfileSet, &'static str> {
     collect_profiles(expand_path)
 }
 
 #[cfg(feature = "experimental-disk-tree-delete")]
-pub(crate) fn profiles_unresolved() -> Result<(String, Vec<(String, PathBuf)>), &'static str> {
+pub(crate) fn profiles_unresolved() -> Result<ProfileSet, &'static str> {
     let mut buffer = vec![0u16; 32768];
     let length = unsafe { GetWindowsDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) } as usize;
     if length == 0 || length >= buffer.len() { return Err(UNAVAILABLE); }
@@ -314,7 +317,7 @@ fn describe_profile<'a>(
     ("outside", None)
 }
 
-pub(super) struct Snapshot(Result<(String, Vec<(String, PathBuf)>), &'static str>);
+pub(super) struct Snapshot(Result<ProfileSet, &'static str>);
 
 impl Snapshot {
     pub(super) fn load() -> Self {
@@ -322,6 +325,7 @@ impl Snapshot {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)] // not reached in every feature combination or build path
     pub(super) fn fixture(current_root: PathBuf) -> Self {
         Self(Ok(("fixture-user".into(), vec![("fixture-user".into(), current_root)])))
     }

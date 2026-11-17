@@ -118,6 +118,7 @@ mod gpo_policy;
         feature = "experimental-pq-pro-release"
     )
 ))]
+#[allow(clippy::duplicate_mod)] // the same file is deliberately included under more than one module path
 #[path = "updater/hybrid_free_anchor.rs"]
 mod hybrid_update_anchor;
 mod inactivity_timer;

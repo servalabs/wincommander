@@ -391,7 +391,7 @@ pub(super) fn create_new_machine_identity_explicitly() -> Result<(), String> {
     owner.create_new_f6_confirmed(|| {
         let (signing, _) = wincmd_shared::wipe_auth::generate_provisioning_keypair();
         let seed = zeroize::Zeroizing::new(wincmd_shared::wipe_auth::signing_key_to_bytes(&signing));
-        Ok(serde_json::json!({"signing_seed_hex": hex::encode(&*seed)}))
+        Ok(serde_json::json!({"signing_seed_hex": hex::encode(*seed)}))
     }).map(|_| ())
 }
 
@@ -482,6 +482,6 @@ fn install_migration_with_proof(expected: Option<&InstallSourceProof>) -> Result
     provision_machine_f6_after_selection(&root, scope, || {
         let (signing, _) = wincmd_shared::wipe_auth::generate_provisioning_keypair();
         let seed = zeroize::Zeroizing::new(wincmd_shared::wipe_auth::signing_key_to_bytes(&signing));
-        Ok(serde_json::json!({"signing_seed_hex": hex::encode(&*seed)}))
+        Ok(serde_json::json!({"signing_seed_hex": hex::encode(*seed)}))
     })
 }

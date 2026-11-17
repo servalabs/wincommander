@@ -31,6 +31,7 @@ use std::{
 
 #[path = "evidence_clear_io.rs"]
 mod clear_io;
+#[allow(clippy::duplicate_mod)] // the same file is deliberately included under more than one module path
 #[path = "fleet_lifecycle_mutex.rs"]
 #[allow(dead_code)]
 mod mutex;

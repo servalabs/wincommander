@@ -1463,10 +1463,10 @@ async fn spawn_pro_session_unlocked(role: SessionRole) -> Result<ProSession, Str
                 Some(serde_json::Value::Null) | None => None,
                 Some(v) => serde_json::to_string(v).ok(),
             };
-            if crate::evidence::evidence_record(source, severity, summary, detail).is_err() {
-                if app.emit("evidence-record-failed", ()).is_err() {
-                    crate::log_message("warn", "Evidence recording failed; alert delivery unavailable");
-                }
+            if crate::evidence::evidence_record(source, severity, summary, detail).is_err()
+                && app.emit("evidence-record-failed", ()).is_err()
+            {
+                crate::log_message("warn", "Evidence recording failed; alert delivery unavailable");
             }
             // The evidence payload remains internal; only failures are signalled.
             return;

@@ -95,6 +95,7 @@ pub(super) fn issue_upgrade_challenge(store:&crate::fleet_machine_policy::FleetM
         Ok(STANDARD.encode(token.as_slice()))
     })
 }
+#[allow(clippy::too_many_arguments)]
 pub(super) fn confirm_upgrade_challenge(store:&crate::fleet_machine_policy::FleetMachinePolicy,fs:&dyn crate::policy_store::PolicyFs,
     dir:&std::path::Path,peer:&AuthenticatedPipePeer,device:&str,recovery:&str,encoded:&str,protocol:u32)->Result<(),&'static str> {
     use base64::{engine::general_purpose::STANDARD,Engine};
@@ -161,6 +162,7 @@ fn prepare_upgrade_boundary(fs:&dyn crate::policy_store::PolicyFs,dir:&std::path
 
 /// The callback must perform the fresh service challenge against the exact
 /// protected installed Pro process and return its image hash and process identity.
+#[allow(clippy::too_many_arguments)]
 fn complete_upgrade_boundary(fs:&dyn crate::policy_store::PolicyFs,dir:&std::path::Path,trust:&crate::fleet_machine_policy::FleetTrust,
     verified:&VerifiedHandoff,approval:&ConsumedApproval,authorized:bool,boot:&[u8;32],
     challenge:impl FnOnce(u32)->Result<(String,u32,u64),&'static str>)->Result<(),&'static str> {
@@ -197,6 +199,7 @@ fn complete_upgrade_boundary(fs:&dyn crate::policy_store::PolicyFs,dir:&std::pat
 
 /// Unmounted wrappers: prepare before Restart, then require a freshly
 /// authenticated challenge to the protected installed Pro after Restart.
+#[allow(clippy::too_many_arguments)]
 fn prepare_upgrade_before_restart(store:&crate::fleet_machine_policy::FleetMachinePolicy,fs:&dyn crate::policy_store::PolicyFs,
     dir:&std::path::Path,handoff:&Handoff,verified:&VerifiedHandoff,key:&[u8;32],approval:&ConsumedApproval,witness:&SessionWitness)->Result<(),&'static str> {
     let boot=crate::managed_deployment::registry::recovery_boot_token()?;
@@ -208,6 +211,7 @@ fn prepare_upgrade_before_restart(store:&crate::fleet_machine_policy::FleetMachi
         prepare_upgrade_boundary(fs,dir,trust,&fresh,approval,authorized,&boot)
     })
 }
+#[allow(clippy::too_many_arguments)]
 fn verify_upgrade_after_restart(store:&crate::fleet_machine_policy::FleetMachinePolicy,fs:&dyn crate::policy_store::PolicyFs,
     dir:&std::path::Path,handoff:&Handoff,verified:&VerifiedHandoff,key:&[u8;32],approval:&ConsumedApproval,witness:&SessionWitness,
     challenge:impl FnOnce(u32)->Result<(String,u32,u64),&'static str>)->Result<(),&'static str> {
@@ -221,6 +225,7 @@ fn verify_upgrade_after_restart(store:&crate::fleet_machine_policy::FleetMachine
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn upgrade_restart_required(store:&crate::fleet_machine_policy::FleetMachinePolicy,fs:&dyn crate::policy_store::PolicyFs,
     dir:&std::path::Path,handoff:&Handoff,verified:&VerifiedHandoff,key:&[u8;32],approval:&ConsumedApproval,witness:&SessionWitness)->Result<bool,&'static str> {
     let boot=crate::managed_deployment::registry::recovery_boot_token()?;
@@ -248,6 +253,7 @@ pub(super) fn upgrade_restart_required(store:&crate::fleet_machine_policy::Fleet
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn probe_upgrade_after_restart(store:&crate::fleet_machine_policy::FleetMachinePolicy,fs:&dyn crate::policy_store::PolicyFs,
     dir:&std::path::Path,handoff:&Handoff,verified:&VerifiedHandoff,key:&[u8;32],approval:&ConsumedApproval,witness:&SessionWitness)->Result<(),&'static str> {
     use base64::{engine::general_purpose::STANDARD,Engine};
@@ -452,6 +458,7 @@ fn start_legacy_work(fs:&dyn crate::policy_store::PolicyFs,dir:&std::path::Path,
     fs.atomic_write(&legacy_work_path(dir,trust)?,&serde_json::to_vec(&ledger).map_err(|_| "legacy work unavailable")?).map_err(|_| "legacy work unavailable")?;
     Ok(STANDARD.encode(token.as_slice()))
 }
+#[allow(clippy::too_many_arguments)]
 fn complete_legacy_work(fs:&dyn crate::policy_store::PolicyFs,dir:&std::path::Path,trust:&crate::fleet_machine_policy::FleetTrust,
     device:&str,kind:&str,work_id:&str,token:&[u8;32],peer:&AuthenticatedExecutionPeer)->Result<(),&'static str> {
     use subtle::ConstantTimeEq;
@@ -484,6 +491,7 @@ fn poll_stop_request(fs:&dyn crate::policy_store::PolicyFs,dir:&std::path::Path,
         .map_err(|_| "stop request unavailable")?;
     Ok(serde_json::json!({"pending":true,"device_id":request.device_id,"recovery_id":request.recovery_id,"token":STANDARD.encode(token.as_slice())}))
 }
+#[allow(clippy::too_many_arguments)]
 fn complete_stop_request(fs:&dyn crate::policy_store::PolicyFs,dir:&std::path::Path,trust:&crate::fleet_machine_policy::FleetTrust,
     device:&str,recovery:&str,token:&[u8;32],peer:&AuthenticatedExecutionPeer,state:&str)->Result<(),&'static str> {
     use subtle::ConstantTimeEq;
@@ -541,6 +549,7 @@ pub(super) fn legacy_work_start_for_pro(store:&crate::fleet_machine_policy::Flee
     let owner=execution_peer(peer)?;
     store.with_handoff_trust(|trust|start_legacy_work(fs,dir,trust,device,kind,work_id,&owner))
 }
+#[allow(clippy::too_many_arguments)]
 pub(super) fn legacy_work_complete_for_pro(store:&crate::fleet_machine_policy::FleetMachinePolicy,fs:&dyn crate::policy_store::PolicyFs,
     dir:&std::path::Path,peer:&AuthenticatedPipePeer,device:&str,kind:&str,work_id:&str,token:&str)->Result<(),&'static str> {
     use base64::{engine::general_purpose::STANDARD,Engine};
@@ -549,6 +558,7 @@ pub(super) fn legacy_work_complete_for_pro(store:&crate::fleet_machine_policy::F
     let token:zeroize::Zeroizing<[u8;32]>=zeroize::Zeroizing::new(raw.as_slice().try_into().map_err(|_| "legacy work unavailable")?);
     store.with_handoff_trust(|trust|complete_legacy_work(fs,dir,trust,device,kind,work_id,&token,&owner))
 }
+#[allow(clippy::too_many_arguments)]
 pub(super) fn stop_complete_for_pro(store:&crate::fleet_machine_policy::FleetMachinePolicy,fs:&dyn crate::policy_store::PolicyFs,
     dir:&std::path::Path,peer:&AuthenticatedPipePeer,device:&str,recovery:&str,token:&str,state:&str)->Result<(),&'static str> {
     use base64::{engine::general_purpose::STANDARD,Engine};
@@ -787,6 +797,7 @@ impl Drop for SensitivePayload { fn drop(&mut self) { wincmd_shared::zeroize_jso
 
 /// Process one authenticated broker notification; return an acknowledgement
 /// only after exact bytes have been sealed and read back successfully.
+#[allow(clippy::too_many_arguments)]
 fn receive_transferred_archive(payload:serde_json::Value, operation:u64, fs:&dyn crate::policy_store::PolicyFs,
     dir:&std::path::Path, protector:&dyn crate::fleet_credential::Protector,
     trust:&crate::fleet_machine_policy::FleetTrust, verified:&VerifiedHandoff,
@@ -860,6 +871,7 @@ fn persist_review(fs:&dyn crate::policy_store::PolicyFs, dir:&std::path::Path,
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn record_review(store:&crate::fleet_machine_policy::FleetMachinePolicy, fs:&dyn crate::policy_store::PolicyFs,
     dir:&std::path::Path, handoff:&Handoff, initial:&VerifiedHandoff, local_key:&[u8;32],
     consumed:ConsumedApproval, receipt:ArchiveReceipt) -> Result<(), &'static str> {
@@ -895,6 +907,7 @@ fn persist_historical_handoff(fs:&dyn crate::policy_store::PolicyFs,dir:&std::pa
 }
 
 #[cfg(test)]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn test_seed_review(fs:&dyn crate::policy_store::PolicyFs,dir:&std::path::Path,
     trust:&crate::fleet_machine_policy::FleetTrust,handoff:&Handoff,retirement:&str,key:&[u8;32],now:i64,archive:&str)
     ->Result<(),&'static str> {
@@ -1003,6 +1016,7 @@ fn with_historical_recovery<T>(store:&crate::fleet_machine_policy::FleetMachineP
 
 /// This coordinator is deliberately unmounted. Its caller must first obtain
 /// native consent and consume a grant bound to the verified handoff.
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn archive_review_with_broker(store:&crate::fleet_machine_policy::FleetMachinePolicy,
     fs:&dyn crate::policy_store::PolicyFs, dir:&std::path::Path,
     protector:&dyn crate::fleet_credential::Protector, trust:&crate::fleet_machine_policy::FleetTrust,
@@ -1785,6 +1799,7 @@ fn verify_drain_cancellation(receipt:&DrainCancellation,current:&crate::fleet_ma
         .map_err(|_| "cancellation unavailable")?;
     key.verify_strict(&bytes,&signature).map_err(|_| "cancellation unavailable")
 }
+#[allow(clippy::too_many_arguments)]
 fn clear_cancelled_freeze(journal:&mut ReplacementJournal,inbox:&CommandInbox,receipt:&DrainCancellation,current:&crate::fleet_machine_policy::FleetTrust,
     previous:&str,nonce:&str,now:i64,authorized:impl FnOnce()->bool)->Result<(),&'static str> {
     let freeze=journal.drain_freeze.as_ref().or_else(||journal.cancelled_freezes.iter().find(|item|
@@ -1800,6 +1815,7 @@ fn clear_cancelled_freeze(journal:&mut ReplacementJournal,inbox:&CommandInbox,re
 }
 /// Unmounted; the caller must obtain the signed server cancellation using a
 /// fresh request and capture the interactive administrator before networking.
+#[allow(clippy::too_many_arguments)]
 fn unfreeze_cancelled_recovery(store:&crate::fleet_machine_policy::FleetMachinePolicy,fs:&dyn crate::policy_store::PolicyFs,
     dir:&std::path::Path,protector:&dyn crate::fleet_credential::Protector,candidate:&crate::fleet_recovery_candidate::CandidateStore<'_>,
     response:&[u8],nonce:&str,witness:&SessionWitness,approval:&CancelApproval)->Result<(),&'static str> {
@@ -2026,7 +2042,7 @@ fn freeze_for_next(journal:&mut ReplacementJournal,inbox:&CommandInbox,next:&Ver
     journal.drain_freeze=Some(wanted);Ok(snapshot)
 }
 fn drain_snapshot(journal:&ReplacementJournal,inbox:&CommandInbox)->Result<String,&'static str> {
-    let mut journal_value=serde_json::to_value(&*journal).map_err(|_| "drain proof unavailable")?;
+    let mut journal_value=serde_json::to_value(journal).map_err(|_| "drain proof unavailable")?;
     let fields=journal_value.as_object_mut().ok_or("drain proof unavailable")?;
     fields.remove("inbox_sealed");fields.remove("drain_freeze");
     let mut value=serde_json::json!(["wincommander:fleet:recovery-drain-snapshot:v1",journal_value,inbox]);
@@ -2037,6 +2053,7 @@ fn drain_snapshot(journal:&ReplacementJournal,inbox:&CommandInbox)->Result<Strin
 
 /// Unmounted proof generator. Trust and journal remain locked until the proof
 /// is signed; the server must consume its nonce and recheck the head atomically.
+#[allow(clippy::too_many_arguments)]
 fn issue_drain_statement(store:&crate::fleet_machine_policy::FleetMachinePolicy,fs:&dyn crate::policy_store::PolicyFs,
     dir:&std::path::Path,protector:&dyn crate::fleet_credential::Protector,candidate:&crate::fleet_recovery_candidate::CandidateStore<'_>,
     handoff:&Handoff,next_id:&str,next_generation:&str,now:i64)->Result<serde_json::Value,&'static str> {
@@ -2083,6 +2100,7 @@ fn issue_cancel_request(store:&crate::fleet_machine_policy::FleetMachinePolicy,f
 
 /// Caller holds the machine trust lock throughout this check and the ensuing
 /// commit. Every normal writer acquires that lock before the journal lock.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn check_previous_recovery_drained(fs:&dyn crate::policy_store::PolicyFs,dir:&std::path::Path,
     protector:&dyn crate::fleet_credential::Protector,current:&crate::fleet_machine_policy::FleetTrust,
     old:&crate::fleet_machine_policy::FleetTrust,recovery:&str,decision:&str,archive:&str,fingerprint:&str,
@@ -2103,18 +2121,21 @@ pub(crate) fn check_previous_recovery_drained(fs:&dyn crate::policy_store::Polic
     })
 }
 #[cfg(test)]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn test_freeze_drain(fs:&dyn crate::policy_store::PolicyFs,dir:&std::path::Path,
     protector:&dyn crate::fleet_credential::Protector,current:&crate::fleet_machine_policy::FleetTrust,
     old:&crate::fleet_machine_policy::FleetTrust,previous:&VerifiedHandoff,archive:&str,operator:&str,next:&VerifiedHandoff)->Result<(),&'static str> {
     mutate_unified_journal_inner(fs,dir,protector,current,old,previous,archive,operator,true,|journal,inbox|freeze_for_next(journal,inbox,next).map(|_|()))
 }
 #[cfg(test)]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn test_frozen_admission(fs:&dyn crate::policy_store::PolicyFs,dir:&std::path::Path,
     protector:&dyn crate::fleet_credential::Protector,current:&crate::fleet_machine_policy::FleetTrust,
     old:&crate::fleet_machine_policy::FleetTrust,previous:&VerifiedHandoff,archive:&str,operator:&str)->Result<(),&'static str> {
     mutate_unified_journal(fs,dir,protector,current,old,previous,archive,operator,|_,_|Ok(()))
 }
 #[cfg(test)]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn test_cancel_drain(fs:&dyn crate::policy_store::PolicyFs,dir:&std::path::Path,
     protector:&dyn crate::fleet_credential::Protector,current:&crate::fleet_machine_policy::FleetTrust,
     old:&crate::fleet_machine_policy::FleetTrust,previous:&VerifiedHandoff,archive:&str,operator:&str,
@@ -2189,6 +2210,7 @@ pub(super) fn grant_for_pro(store:&crate::fleet_machine_policy::FleetMachinePoli
 
 /// A returned result is accepted only against the issuing Pro process and the
 /// exact durable one-use grant; journal completion is one atomic write.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn result_from_pro(store:&crate::fleet_machine_policy::FleetMachinePolicy,fs:&dyn crate::policy_store::PolicyFs,
     dir:&std::path::Path,protector:&dyn crate::fleet_credential::Protector,
     candidate:&crate::fleet_recovery_candidate::CandidateStore<'_>,peer:&AuthenticatedPipePeer,
@@ -2206,6 +2228,7 @@ pub(super) fn result_from_pro(store:&crate::fleet_machine_policy::FleetMachinePo
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn start_for_pro(store:&crate::fleet_machine_policy::FleetMachinePolicy,fs:&dyn crate::policy_store::PolicyFs,
     dir:&std::path::Path,protector:&dyn crate::fleet_credential::Protector,
     candidate:&crate::fleet_recovery_candidate::CandidateStore<'_>,peer:&AuthenticatedPipePeer,
@@ -2240,6 +2263,7 @@ fn valid_inbox_command(command:&fleet_proto::SignedCommand, trust:&crate::fleet_
         command.action_class.as_wire_str(),&command.payload,command.epoch_version);
     fleet_proto::verify_signature_b64(expected_key,&bytes,&command.signature)
 }
+#[allow(clippy::too_many_arguments)]
 fn valid_late_receipt(receipt:&LateEvidenceReceipt,current:&crate::fleet_machine_policy::FleetTrust,
     verified:&VerifiedHandoff,command:&str,review:&UnknownReview,late:&LateEvidence,nonce:Option<&str>,now:Option<i64>)->bool {
     use base64::{engine::general_purpose::STANDARD,Engine};
@@ -2274,6 +2298,7 @@ fn valid_late_evidence(entry:&InboxCommand,journal:&ReplacementJournal,current:&
         && late.receipt.as_ref().map_or(true, |receipt|valid_late_receipt(receipt,current,verified,&entry.command.command_id,review,late,None,None))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn record_late_receipt(fs:&dyn crate::policy_store::PolicyFs,dir:&std::path::Path,
     protector:&dyn crate::fleet_credential::Protector,current:&crate::fleet_machine_policy::FleetTrust,
     old:&crate::fleet_machine_policy::FleetTrust,verified:&VerifiedHandoff,archive:&str,operator:&str,
@@ -2365,12 +2390,14 @@ fn next_late_retry(eligible:&[String],after:Option<&str>)->Option<String> {
 
 /// The encrypted inbox and outcome chain share one atomic journal write.
 /// A pre-inbox draft journal loads with an empty inbox; no prior evidence is removed.
+#[allow(clippy::too_many_arguments)]
 fn mutate_unified_journal<T>(fs:&dyn crate::policy_store::PolicyFs,dir:&std::path::Path,
     protector:&dyn crate::fleet_credential::Protector,current:&crate::fleet_machine_policy::FleetTrust,
     old:&crate::fleet_machine_policy::FleetTrust,verified:&VerifiedHandoff,archive:&str,operator:&str,
     change:impl FnOnce(&mut ReplacementJournal,&mut CommandInbox)->Result<T,&'static str>) ->Result<T,&'static str> {
     mutate_unified_journal_inner(fs,dir,protector,current,old,verified,archive,operator,false,change)
 }
+#[allow(clippy::too_many_arguments)]
 fn mutate_unified_journal_inner<T>(fs:&dyn crate::policy_store::PolicyFs,dir:&std::path::Path,
     protector:&dyn crate::fleet_credential::Protector,current:&crate::fleet_machine_policy::FleetTrust,
     old:&crate::fleet_machine_policy::FleetTrust,verified:&VerifiedHandoff,archive:&str,operator:&str,allow_frozen:bool,
@@ -2438,6 +2465,7 @@ fn persist_unified_batch(fs:&dyn crate::policy_store::PolicyFs,dir:&std::path::P
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn issue_unified_grant(fs:&dyn crate::policy_store::PolicyFs,dir:&std::path::Path,
     protector:&dyn crate::fleet_credential::Protector,current:&crate::fleet_machine_policy::FleetTrust,
     old:&crate::fleet_machine_policy::FleetTrust,verified:&VerifiedHandoff,archive:&str,operator:&str,
@@ -2456,6 +2484,7 @@ fn issue_unified_grant(fs:&dyn crate::policy_store::PolicyFs,dir:&std::path::Pat
 
 /// Persist a single start authorization before the helper begins the effect.
 /// A lost start response is unknown and cannot be retried as a new execution.
+#[allow(clippy::too_many_arguments)]
 fn start_unified_grant(fs:&dyn crate::policy_store::PolicyFs,dir:&std::path::Path,
     protector:&dyn crate::fleet_credential::Protector,current:&crate::fleet_machine_policy::FleetTrust,
     old:&crate::fleet_machine_policy::FleetTrust,verified:&VerifiedHandoff,archive:&str,operator:&str,
@@ -2474,6 +2503,7 @@ fn start_unified_grant(fs:&dyn crate::policy_store::PolicyFs,dir:&std::path::Pat
 }
 
 /// Commit the verified result, ACK and grant completion in one journal write.
+#[allow(clippy::too_many_arguments)]
 fn finish_unified_grant(fs:&dyn crate::policy_store::PolicyFs,dir:&std::path::Path,
     protector:&dyn crate::fleet_credential::Protector,candidate:&crate::fleet_recovery_candidate::CandidateStore<'_>,
     current:&crate::fleet_machine_policy::FleetTrust,old:&crate::fleet_machine_policy::FleetTrust,
@@ -2545,6 +2575,7 @@ fn confirm_unknown(peer:&AuthenticatedPipePeer, command:&fleet_proto::SignedComm
     if !ok || response!=IDYES || !session_matches(peer) { return Err("unknown review denied"); }
     Ok(UnknownApproval { actor_sid:peer.caller_sid().into(),session:peer.session_id(),logon:peer.authentication_id(),command_digest:digest,expires:Instant::now()+Duration::from_secs(120) })
 }
+#[allow(clippy::too_many_arguments)]
 fn acknowledge_unknown(fs:&dyn crate::policy_store::PolicyFs,dir:&std::path::Path,
     protector:&dyn crate::fleet_credential::Protector,candidate:&crate::fleet_recovery_candidate::CandidateStore<'_>,
     current:&crate::fleet_machine_policy::FleetTrust,old:&crate::fleet_machine_policy::FleetTrust,
@@ -2647,6 +2678,7 @@ fn persist_command_batch(fs:&dyn crate::policy_store::PolicyFs, dir:&std::path::
 /// Once granted, the entry stays in flight even if the reply is lost or the
 /// process crashes; only a verified result can ever complete it.
 #[cfg(test)]
+#[allow(clippy::too_many_arguments)]
 fn issue_execution_grant(fs:&dyn crate::policy_store::PolicyFs,dir:&std::path::Path,
     protector:&dyn crate::fleet_credential::Protector, trust:&crate::fleet_machine_policy::FleetTrust,
     operator:&str,principal:&AuthenticatedExecutionPeer, command_id:&str,epoch:i64,now:i64)
@@ -3162,6 +3194,7 @@ mod recovery_contact_tests {
     }
     #[cfg(not(feature="fleet-recovery-lab"))]
     #[tokio::test]
+    #[allow(clippy::assertions_on_constants)] // asserts a build-time readiness flag stays off
     async fn automatic_contact_remains_disabled() {
         assert!(!AUTOMATIC_RECOVERY_CONTACT_READY);
         tokio::time::timeout(Duration::from_millis(100),run_automatic_recovery_contact()).await.unwrap();
@@ -3184,8 +3217,7 @@ mod recovery_contact_tests {
                 STANDARD.encode(Sha256::digest(&prepared.request)), STANDARD.encode(Sha256::digest(response))]));
             format!("v2.{}", STANDARD.encode(signer.sign(&tuple).to_bytes()))
         };
-        let mut response = fleet_proto::CheckinResponse::<fleet_proto::SignedCommand>::default();
-        response.pending_approval = true;
+        let mut response = fleet_proto::CheckinResponse::<fleet_proto::SignedCommand> { pending_approval: true, ..Default::default() };
         let safe = serde_json::to_vec(&response).unwrap();
         let wrong = sign(&prepared, &safe, &STANDARD.encode([1u8; 32]));
         assert!(prepared.verify_response(&safe, &wrong).is_err());

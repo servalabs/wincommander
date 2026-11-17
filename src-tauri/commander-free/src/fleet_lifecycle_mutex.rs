@@ -254,6 +254,7 @@ impl Drop for Guard {
     }
 }
 
+#[allow(clippy::duplicate_mod)] // the same file is deliberately included under more than one module path
 #[cfg(all(test, windows))]
 #[path = "fleet_lifecycle_mutex_tests.rs"]
 mod tests;
