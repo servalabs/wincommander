@@ -42,6 +42,16 @@ export class FileIconCache {
     }
   }
 
+  /** Number of live entries (for diagnostics and tests). */
+  get size(): number {
+    return this.entries.size;
+  }
+
+  /** Bytes currently accounted against the budget. */
+  get byteSize(): number {
+    return this.bytes;
+  }
+
   get(path: string): FileIconData | undefined {
     const entry = this.entries.get(path);
     if (!entry) return undefined;

@@ -46,8 +46,11 @@ import FileTypeIcon from "./FileTypeIcon";
 import { useSearchResultContextMenu } from "@/hooks/useSearchResultContextMenu";
 import "./EverythingSearchBar.css";
 
-const esbIconCache = new Map<string, string | null>();
 import { rememberSearchHandoff } from "@/lib/searchPrivacy";
+import { FileIconCache } from "@/lib/fileIconCache";
+
+// Bounded (entry count, 8 MiB, TTL) so long sessions cannot grow it forever.
+const esbIconCache = new FileIconCache();
 
 const TYPE_FILTER_META: Record<string, { label: string; icon: string }> = {
   videos: { label: "Video", icon: "video" },
@@ -128,8 +131,9 @@ function NativeSearchIcon({ result }: { result: SearchResult }) {
       setIconData(result.icon_data);
       return;
     }
-    if (esbIconCache.has(result.full_path)) {
-      setIconData(esbIconCache.get(result.full_path) ?? null);
+    const cached = esbIconCache.get(result.full_path);
+    if (cached !== undefined) {
+      setIconData(cached);
       return;
     }
     invoke<string | null>("get_file_icon_data", { path: result.full_path })
