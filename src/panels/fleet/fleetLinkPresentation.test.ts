@@ -48,10 +48,22 @@ describe("Fleet link presentation", () => {
 });
 
 describe("Fleet link presentation while awaiting approval", () => {
-  test("a retrying agent held for admin approval is pending, not an error", () => {
-    const held = status({ pendingApproval: true, retrying: true, lastError: "check-in timed out" });
+  const accepted = "2026-11-17T10:00:00Z";
+
+  test("a connected, unapproved device is pending", () => {
+    expect(fleetLinkState(status({ connected: true, pendingApproval: true, lastError: "stale" }))).toBe("pending");
+  });
+
+  test("a retrying agent is pending only with an accepted enrollment and no current failure", () => {
+    const held = status({ pendingApproval: true, retrying: true, lastEnrollAt: accepted });
     expect(fleetLinkState(held)).toBe("pending");
-    expect(fleetLinkState({ ...held, retrying: false })).toBe("error");
-    expect(fleetLinkState({ ...held, deviceId: "" })).toBe("error");
+    // A current error means the last contact failed: pendingApproval may be stale.
+    expect(fleetLinkState({ ...held, lastError: "check-in timed out" })).toBe("reconnecting");
+    // No evidence the server ever accepted the enrollment.
+    expect(fleetLinkState({ ...held, lastEnrollAt: null })).toBe("reconnecting");
+    // Not retrying: nothing is running, so a stale flag must not claim approval is awaited.
+    expect(fleetLinkState({ ...held, retrying: false })).toBe("offline");
+    expect(fleetLinkState({ ...held, retrying: false, lastError: "removed" })).toBe("error");
+    expect(fleetLinkState({ ...held, deviceId: "" })).toBe("not_linked");
   });
 });

@@ -176,3 +176,31 @@ fn an_operation_larger_than_the_blocking_stack_runs_without_overflow() {
         .unwrap();
     assert!(ran.load(Ordering::SeqCst));
 }
+
+/// Two Connect attempts (for example a retry click while enrolling) can never
+/// run inside the lifecycle lease at the same time: the second waits for, or
+/// is refused by, the first, and the lease is free again afterwards.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn overlapping_connect_attempts_are_serialized_by_the_lease() {
+    use std::sync::atomic::AtomicUsize;
+    let active = Arc::new(AtomicUsize::new(0));
+    let peak = Arc::new(AtomicUsize::new(0));
+    let attempt = |active: Arc<AtomicUsize>, peak: Arc<AtomicUsize>| async move {
+        run(async move {
+            let now = active.fetch_add(1, Ordering::SeqCst) + 1;
+            peak.fetch_max(now, Ordering::SeqCst);
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            active.fetch_sub(1, Ordering::SeqCst);
+            Ok::<_, String>(())
+        })
+        .await
+    };
+    let (a, b) = tokio::join!(
+        attempt(active.clone(), peak.clone()),
+        attempt(active.clone(), peak.clone())
+    );
+    assert!(a.is_ok() && b.is_ok(), "{a:?} {b:?}");
+    assert_eq!(peak.load(Ordering::SeqCst), 1, "attempts overlapped");
+    // The lease is not lost: a later attempt still runs.
+    assert!(attempt(active, peak).await.is_ok());
+}

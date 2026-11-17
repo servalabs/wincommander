@@ -23,10 +23,10 @@ test("another Windows profile sees active retry, terminal failure, then recovere
     globalThis.setInterval = (callback, delay) => { const id = ++nextTimer; timers.set(id, { callback, delay }); return id; };
     globalThis.clearInterval = id => timers.delete(id);
     let status = { connected: false, deviceId: 'device-123', serverUrl: 'https://fleet.example.test', lastEnrollAt: null, lastError: 'server temporarily unavailable', retrying: true };
-    const calls = []; const connectArgs = []; let connectError = null;
+    const calls = []; const connectArgs = []; let connectError = null; let connectGate = null;
     mock.module('@tauri-apps/api/core', () => ({ invoke: async (command, args) => {
       calls.push(command);
-      if (command === 'fleet_connect') { connectArgs.push(args); if (connectError) throw connectError; return {}; }
+      if (command === 'fleet_connect') { connectArgs.push(args); if (connectError) throw connectError; if (connectGate) await connectGate; return {}; }
       if (command === 'fleet_status') return { ...status };
       if (command === 'fleet_machine_trust_status') return { trustBound: true, shieldPolicyStatus: 'unverified' };
       if (command === 'fleet_service_contact_status') return { observation: null };
@@ -107,12 +107,25 @@ test("another Windows profile sees active retry, terminal failure, then recovere
     assert.equal(connectArgs.length, 2);
     assert.match(host.textContent, /Change http:\/\/ to https:\/\//);
     connectError = null;
+    // A retry click while an attempt is still in flight cannot start a second
+    // overlapping fleet_connect: the stale node is clicked twice before release.
+    let release; connectGate = new Promise(resolve => { release = resolve; });
+    const before = connectArgs.length, staleRetry = retry();
+    await act(async () => { staleRetry.click(); staleRetry.click(); });
+    assert.equal(connectArgs.length, before + 1, 'a second click must not start another connect');
+    assert.ok([...host.querySelectorAll('button')].find(button => button.textContent === 'Connecting…').disabled, 'connect is disabled while in flight');
+    await act(async () => { release(); connectGate = null; await Promise.resolve(); });
     // Admitted-but-unapproved: clear waiting state, still correctable.
-    status = { ...status, connected: false, retrying: true, pendingApproval: true, lastError: null, admissionFingerprint: null };
+    status = { ...status, connected: false, retrying: true, pendingApproval: true, lastError: null, lastEnrollAt: '2026-11-17T10:00:00Z', admissionFingerprint: null };
     await act(async () => { [...timers.values()].find(timer => timer.delay === 1000).callback(); });
     assert.match(host.textContent, /Waiting for admin approval/);
     assert.match(host.querySelector('.fleet-connect-badge').textContent, /Awaiting approval/);
     assert.ok([...host.querySelectorAll('button')].some(button => button.textContent === 'Change Fleet server'));
+    // A stale pendingApproval flag with a current failure is not "waiting".
+    status = { ...status, lastError: 'check-in timed out' };
+    await act(async () => { [...timers.values()].find(timer => timer.delay === 1000 || timer.delay === 4000).callback(); });
+    assert.ok(!host.textContent.includes('Waiting for admin approval'));
+    assert.match(host.textContent, /check-in timed out/);
     await act(async () => { root.unmount(); });
     assert.equal(timers.size, 0);
     dom.window.close();

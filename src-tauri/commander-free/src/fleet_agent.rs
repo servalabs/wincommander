@@ -317,15 +317,16 @@ pub async fn fleet_connect(
     confirmation: Option<String>,
 ) -> Result<serde_json::Value, String> {
     // Keep the large enrollment future out of Tauri's main-thread command wrapper.
-    Box::pin(fleet_connect_inner(
+    let outcome = fleet_connect_inner(
         app,
         server_url,
         dispatch,
         signing_key_pub,
         confirmation,
         None,
-    ))
-    .await
+    )
+    .await?;
+    Ok(outcome.status)
 }
 
 /// Submit a signed retirement receipt to the privileged Fleet service.
@@ -407,15 +408,26 @@ pub async fn fleet_repair_machine_trust(
     if !crate::authz::native_confirm_fleet_trust_repair(&app).await {
         return Err("Machine trust repair was cancelled".into());
     }
-    Box::pin(fleet_connect_inner(
+    let outcome = fleet_connect_inner(
         app,
         current.app.fleet.server_url,
         current.app.fleet.dispatch,
         current.app.fleet.signing_key_pub,
         None,
         Some(plan.confirmation_binding()),
-    ))
-    .await
+    )
+    .await?;
+    // The lifecycle lease and connection gate were released when the connect
+    // returned; the proof wait below must not hold them.
+    if let Some(bridge) = outcome.repair_trust {
+        match bridge.await {
+            Ok(result) => result?,
+            Err(_) => {
+                return Err("Machine trust repair was superseded by a newer Fleet connection attempt".into())
+            }
+        }
+    }
+    Ok(outcome.status)
 }
 
 /// Read-only machine trust visibility for the already-linked device card.
@@ -455,28 +467,35 @@ fn repair_connection_matches(
     !plan.needs_confirmation() && plan.confirmation_binding() == expected_binding
 }
 
-async fn fleet_connect_inner(
+/// A connect attempt held on the heap. Returning this (rather than an
+/// `async fn` future) makes the boxing part of the function's type, so a
+/// caller cannot embed the large connect state machine by value.
+type ConnectFuture =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<ConnectOutcome, String>> + Send>>;
+
+fn fleet_connect_inner(
     app: tauri::AppHandle,
     server_url: String,
     dispatch: bool,
     signing_key_pub: String,
     confirmation: Option<String>,
     repair_expected_binding: Option<String>,
-) -> Result<serde_json::Value, String> {
-    // The locked connect future is very large (it embeds every service and
-    // sidecar call it awaits). The lifecycle lease moves its operation onto a
-    // blocking-pool thread (2 MiB stack) and polls it inside `block_on`; a
-    // by-value future there overflows that stack in debug builds. Keep it on
-    // the heap from the moment it is created so only a pointer ever moves.
-    lifecycle_lease::run(Box::pin(fleet_connect_inner_locked(
-        app,
-        server_url,
-        dispatch,
-        signing_key_pub,
-        confirmation,
-        repair_expected_binding,
-    )))
-    .await
+) -> ConnectFuture {
+    // The lifecycle lease moves its operation onto a blocking-pool thread
+    // (2 MiB stack) and polls it inside `block_on`, so the connect state
+    // machine stays on the heap (lease::run_with boxes it again for any
+    // other caller).
+    Box::pin(async move {
+        lifecycle_lease::run(Box::pin(fleet_connect_inner_locked(
+            app,
+            server_url,
+            dispatch,
+            signing_key_pub,
+            confirmation,
+            repair_expected_binding,
+        )))
+        .await
+    })
 }
 
 async fn fleet_connect_inner_locked(
@@ -486,7 +505,7 @@ async fn fleet_connect_inner_locked(
     signing_key_pub: String,
     confirmation: Option<String>,
     repair_expected_binding: Option<String>,
-) -> Result<serde_json::Value, String> {
+) -> Result<ConnectOutcome, String> {
     crate::license::require_service_feature("fleet")?;
     let _connection = FLEET_CONNECT_GATE
         .try_lock()
@@ -596,7 +615,6 @@ async fn fleet_connect_inner_locked(
                     .into(),
             );
         }
-        cancel_trust_bridge();
         let request = crate::svc_client::call(
             "svc.fleet.begin_enrollment",
             serde_json::json!({
@@ -627,6 +645,11 @@ async fn fleet_connect_inner_locked(
         if repair_expected_binding.is_some() && challenge.is_none() {
             return Err("Fleet service enrollment challenge is invalid".into());
         }
+        // The service keeps one pending challenge. Only once this attempt owns
+        // a fresh one is an earlier attempt's trust wait stale; if the service
+        // never answered, the earlier challenge is still valid and its wait
+        // must keep running.
+        supersede_trust_bridge(challenge.is_some());
         challenge.map(|value| (value, previous_trust))
     } else {
         None
@@ -649,29 +672,60 @@ async fn fleet_connect_inner_locked(
         args["shieldProgressChallenge"] = Value::String(challenge.clone());
     }
     let status = crate::sidecar::dispatch_paid_command("fleet_agent_configure", args).await?;
+    let mut repair_trust = None;
     if let Some((_, previous_trust)) = service_challenge {
+        let pending = PendingTrust {
+            device_id: committed.device_id.clone(),
+            signer_key: signing_key_pub.clone(),
+            previous_trust,
+            confirmed_identity_change: repair_expected_binding.is_some()
+                && plan.allows_trust_replacement()
+                && confirmed,
+        };
+        let bridge = spawn_trust_bridge(pending);
         if repair_expected_binding.is_some() {
-            establish_service_enrollment_trust(
-                &committed.device_id,
-                &signing_key_pub,
-                previous_trust,
-                plan.allows_trust_replacement() && confirmed,
-            )
-            .await?;
-        } else {
-            let device = committed.device_id.clone();
-            let key = signing_key_pub.clone();
-            // A newer connect attempt owns the service's single pending
-            // challenge, so the older attempt's bridge must stop waiting for
-            // a proof that can no longer match.
-            let bridge = tokio::spawn(async move {
-                let _ =
-                    establish_service_enrollment_trust(&device, &key, previous_trust, false).await;
-            });
-            replace_trust_bridge(bridge);
+            // The caller awaits this only after the lifecycle lease and
+            // connection gate are released: the proof wait can take a minute.
+            repair_trust = Some(bridge);
         }
     }
-    Ok(status)
+    Ok(ConnectOutcome {
+        status,
+        repair_trust,
+    })
+}
+
+/// Result of a connect attempt. `repair_trust` is the still-running machine
+/// trust wait of a repair, to be awaited outside the lifecycle lease.
+struct ConnectOutcome {
+    status: serde_json::Value,
+    repair_trust: Option<tokio::task::JoinHandle<Result<(), String>>>,
+}
+
+/// Everything the trust bridge needs, bound to one enrollment attempt (its
+/// device, signer and the service's pending challenge it was started under).
+struct PendingTrust {
+    device_id: String,
+    signer_key: String,
+    previous_trust: Option<Value>,
+    confirmed_identity_change: bool,
+}
+
+/// Wait for Pro's enrollment proof and hand it to the service, in the
+/// background, registered so a newer attempt (which supersedes the service's
+/// single pending challenge) cancels it.
+fn spawn_trust_bridge(pending: PendingTrust) -> tokio::task::JoinHandle<Result<(), String>> {
+    let handle = tokio::spawn(async move {
+        establish_service_enrollment_trust(
+            &pending.device_id,
+            &pending.signer_key,
+            pending.previous_trust,
+            pending.confirmed_identity_change,
+        )
+        .await
+    });
+    register_trust_bridge(handle.abort_handle());
+    handle
 }
 
 /// The privileged service probes are optional for an ordinary connect, so a
@@ -682,21 +736,30 @@ const SERVICE_ENROLLMENT_PROBE_TIMEOUT: std::time::Duration = std::time::Duratio
 /// Pro's first enrollment may take up to 30 s; wait for its proof (500 ms apart).
 const TRUST_PROOF_ATTEMPTS: usize = 120;
 
-static TRUST_BRIDGE: Mutex<Option<tokio::task::JoinHandle<()>>> = Mutex::new(None);
+static TRUST_BRIDGE: Mutex<Option<tokio::task::AbortHandle>> = Mutex::new(None);
 
-fn replace_trust_bridge(next: tokio::task::JoinHandle<()>) {
+fn register_trust_bridge(next: tokio::task::AbortHandle) {
     let mut slot = TRUST_BRIDGE.lock().unwrap_or_else(|p| p.into_inner());
     if let Some(previous) = slot.replace(next) {
         previous.abort();
     }
 }
 
-/// Stop any background machine-trust wait from an earlier attempt. Called
-/// before a new attempt asks the service for its (superseding) challenge.
+/// Stop any background machine-trust wait from an earlier attempt, once a
+/// newer attempt owns the service's (superseding) challenge.
 fn cancel_trust_bridge() {
     let mut slot = TRUST_BRIDGE.lock().unwrap_or_else(|p| p.into_inner());
     if let Some(previous) = slot.take() {
         previous.abort();
+    }
+}
+
+/// Cancel an earlier attempt's trust wait only when this attempt now owns a
+/// fresh service challenge (`owns_challenge`); otherwise the earlier challenge
+/// is still the service's pending one and its wait must keep running.
+fn supersede_trust_bridge(owns_challenge: bool) {
+    if owns_challenge {
+        cancel_trust_bridge();
     }
 }
 
@@ -6293,44 +6356,24 @@ mod tests {
 mod fleet_connect_v2_tests {
     use super::*;
 
-    fn body<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
-        source
-            .split(start)
-            .nth(1)
-            .expect("start marker")
-            .split(end)
-            .next()
-            .expect("end marker")
+    /// The connect entry point's return type is a heap future. This is
+    /// checked by the compiler: if `fleet_connect_inner` ever becomes an
+    /// `async fn` again (embedding the connect state machine by value in each
+    /// caller), this coercion stops compiling. The lease's own boxing is
+    /// covered by `an_operation_larger_than_the_blocking_stack_runs_without_overflow`.
+    #[test]
+    fn connect_entry_point_returns_a_heap_future() {
+        let _entry: fn(
+            tauri::AppHandle,
+            String,
+            bool,
+            String,
+            Option<String>,
+            Option<String>,
+        ) -> ConnectFuture = fleet_connect_inner;
+        assert_eq!(std::mem::size_of::<ConnectFuture>(), 2 * std::mem::size_of::<usize>());
     }
 
-    /// Regression for STATUS_STACK_OVERFLOW on "Connect to Fleet": every layer
-    /// that wraps the very large connect future must hold it on the heap, and
-    /// the lease that moves it to a blocking thread must box it too.
-    #[test]
-    fn connect_future_is_boxed_at_every_layer() {
-        let source = include_str!("fleet_agent.rs");
-        let command = body(
-            source,
-            "pub async fn fleet_connect(",
-            "pub async fn fleet_recovery_stage",
-        );
-        assert!(command.contains("Box::pin(fleet_connect_inner("));
-        let inner = body(
-            source,
-            "async fn fleet_connect_inner(",
-            "async fn fleet_connect_inner_locked(",
-        );
-        assert!(inner.contains("lifecycle_lease::run(Box::pin(fleet_connect_inner_locked("));
-        let repair = body(
-            source,
-            "pub async fn fleet_repair_machine_trust",
-            "pub async fn fleet_machine_trust_status",
-        );
-        assert!(repair.contains("Box::pin(fleet_connect_inner("));
-        let lease = include_str!("fleet_lifecycle_lease.rs");
-        assert!(body(lease, "pub(super) async fn run_with", "pub(crate) async fn launch")
-            .contains("let operation = Box::pin(operation);"));
-    }
 
     #[test]
     fn plain_http_is_rejected_with_an_actionable_https_hint() {
@@ -6379,15 +6422,47 @@ mod fleet_connect_v2_tests {
         );
     }
 
+    /// One test owns the process-wide bridge slot, so these steps cannot race.
     #[tokio::test]
-    async fn a_newer_connect_attempt_cancels_the_previous_trust_bridge() {
-        let first = tokio::spawn(std::future::pending::<()>());
-        replace_trust_bridge(first);
-        let probe = tokio::spawn(std::future::pending::<()>());
-        let abort = probe.abort_handle();
-        replace_trust_bridge(probe);
-        cancel_trust_bridge();
+    async fn trust_bridge_is_superseded_only_by_an_attempt_that_owns_the_challenge() {
+        let earlier = tokio::spawn(std::future::pending::<()>());
+        let earlier_abort = earlier.abort_handle();
+        register_trust_bridge(earlier.abort_handle());
+        // The service never answered the newer attempt: the earlier challenge
+        // is still pending, so its wait keeps running.
+        supersede_trust_bridge(false);
         tokio::task::yield_now().await;
-        assert!(abort.is_finished());
+        assert!(!earlier_abort.is_finished());
+        // A newer attempt that owns a fresh challenge supersedes it.
+        supersede_trust_bridge(true);
+        tokio::task::yield_now().await;
+        assert!(earlier_abort.is_finished());
+        // Registering a replacement aborts the one it replaces.
+        let first = tokio::spawn(std::future::pending::<()>());
+        let first_abort = first.abort_handle();
+        register_trust_bridge(first.abort_handle());
+        let second = tokio::spawn(std::future::pending::<()>());
+        let second_abort = second.abort_handle();
+        register_trust_bridge(second.abort_handle());
+        tokio::task::yield_now().await;
+        assert!(first_abort.is_finished() && !second_abort.is_finished());
+        cancel_trust_bridge();
+    }
+
+    /// The repair wait is a separate task the caller awaits after the lease
+    /// is released; starting it never blocks the connect, and a newer attempt
+    /// ends it as "superseded" instead of leaving it holding anything.
+    #[tokio::test]
+    async fn spawned_trust_wait_is_cancellable_and_does_not_block_the_caller() {
+        let started = std::time::Instant::now();
+        let handle = spawn_trust_bridge(PendingTrust {
+            device_id: "device".into(),
+            signer_key: "key".into(),
+            previous_trust: None,
+            confirmed_identity_change: false,
+        });
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        cancel_trust_bridge();
+        assert!(handle.await.unwrap_err().is_cancelled());
     }
 }

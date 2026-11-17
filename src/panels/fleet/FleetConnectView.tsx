@@ -117,6 +117,9 @@ export default function FleetConnectView() {
   const enrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const unenrollPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const unenrollEpochRef = useRef(0);
+  // Synchronous guard: `busy` only updates on the next render, so two quick
+  // clicks could otherwise start two overlapping fleet_connect calls.
+  const connectingRef = useRef(false);
 
   useEffect(() => {
     if (status?.cleanupPending) setCleanupRetry(true);
@@ -246,6 +249,7 @@ export default function FleetConnectView() {
       setError("An active Fleet subscription is required for fleet enrollment.");
       return;
     }
+    if (connectingRef.current) return;
     setError(null);
     // Reject plain http:// before any enrollment work; the backend enforces
     // the same rule, this only saves a round trip and explains the fix.
@@ -255,6 +259,7 @@ export default function FleetConnectView() {
     }
     setCleanupRetry(false);
     setRemovalNotice(null);
+    connectingRef.current = true;
     setBusy(true);
     try {
       // fleet_connect: persists config to settings, then sends fleet_agent_configure
@@ -280,6 +285,7 @@ export default function FleetConnectView() {
         setError(describeFleetConnectError(msg));
       }
     } finally {
+      connectingRef.current = false;
       setBusy(false);
     }
   }

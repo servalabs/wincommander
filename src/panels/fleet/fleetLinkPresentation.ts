@@ -23,9 +23,13 @@ export function fleetLinkState(status: FleetLinkStatus | null): FleetLinkState {
   if (status.connected) return status.pendingApproval ? "pending" : "linked";
 
   const hasDeviceIdentity = status.deviceId.trim().length > 0 && status.serverUrl.trim().length > 0;
-  // The agent is alive and its enrollment is held for an administrator, even
-  // if the latest check-in failed transiently. Do not present that as an error.
-  if (status.pendingApproval && status.retrying && hasDeviceIdentity) return "pending";
+  // `pendingApproval` is only refreshed by a successful check-in, so on its
+  // own it can be stale while the agent is failing to reach the server.
+  // While not connected, show "pending" only with evidence that the server
+  // accepted the enrollment (lastEnrollAt) and nothing has failed since (no
+  // lastError); any current error is a reconnect problem and wins.
+  if (status.pendingApproval && status.retrying && hasDeviceIdentity
+      && !!status.lastEnrollAt && !status.lastError) return "pending";
   // A transient failure remains useful context while the agent is still retrying.
   if (status.retrying && hasDeviceIdentity) return "reconnecting";
   if (status.lastError) return "error";
