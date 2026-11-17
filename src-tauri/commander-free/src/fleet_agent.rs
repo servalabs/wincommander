@@ -311,14 +311,15 @@ pub async fn fleet_connect(
     signing_key_pub: String,
     confirmation: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    fleet_connect_inner(
+    // Keep the large enrollment future out of Tauri's main-thread command wrapper.
+    Box::pin(fleet_connect_inner(
         app,
         server_url,
         dispatch,
         signing_key_pub,
         confirmation,
         None,
-    )
+    ))
     .await
 }
 

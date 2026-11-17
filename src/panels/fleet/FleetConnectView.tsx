@@ -75,6 +75,7 @@ export default function FleetConnectView() {
   const fleetEntitled = license?.valid === true &&
     (license.active_service_features ?? license.features ?? []).includes("fleet");
   const [serverUrl, setServerUrl] = useState("");
+  const [editingConnection, setEditingConnection] = useState(false);
   const [dispatch, setDispatch] = useState(false);
   const [signingKeyPub, setSigningKeyPub] = useState("");
   const [status, setStatus] = useState<FleetStatus | null>(null);
@@ -258,6 +259,7 @@ export default function FleetConnectView() {
         dispatch,
         signingKeyPub: signingKeyPub.trim(),
       });
+      setEditingConnection(false);
       startEnrollPoll();
     } catch (err) {
       const msg = typeof err === "string" ? err : "Connection failed.";
@@ -567,7 +569,7 @@ export default function FleetConnectView() {
             </>
           ) : <p className="fleet-connect-enrolling">This is the device agent’s read-only link status.</p>}
         </div>
-      ) : isReconnecting ? (
+      ) : isReconnecting && !editingConnection ? (
         <div className="fleet-connect-status">
           <dl className="fleet-connect-meta">
             <div className="fleet-meta">
@@ -590,13 +592,14 @@ export default function FleetConnectView() {
           {unenrollInfo && <p className="fleet-connect-enrolling" role="status">Leave requested — waiting for an administrator to approve removal.</p>}
           {error && <p className="fleet-connect-error" role="alert"><Icon icon="warning-sign" size={13} intent="danger" /> {error}</p>}
           {fleetEntitled && <>
+            {!reapplicationPending && !unenrollInfo && <Button variant="outline" size="sm" disabled={busy} onClick={() => setEditingConnection(true)}>Change Fleet server</Button>}{" "}
             <Button variant="outline" size="sm" disabled={busy} onClick={disconnect}>
               {busy ? "Requesting…" : "Request to leave"}
             </Button>{" "}
             <Button variant="outline" size="sm" disabled={busy} onClick={checkRemoval}>Check removal status</Button>
           </>}
         </div>
-      ) : hasAuthoritativeDeviceLink && status ? (
+      ) : hasAuthoritativeDeviceLink && status && !editingConnection ? (
         <div className="fleet-connect-status">
           <dl className="fleet-connect-meta">
             <div className="fleet-meta"><dt>Device ID</dt><dd className="mono">{status.deviceId || "—"}</dd></div>
@@ -667,7 +670,7 @@ export default function FleetConnectView() {
           )}
 
           {/* Agent-level error from fleet_status poll (enrollment errors from Pro) */}
-          {agentError && !enrolling && (
+          {agentError && (
             <p className="fleet-connect-error" role="alert">
               <Icon icon="warning-sign" size={13} intent="danger" /> Last agent error (may be from an earlier attempt): {agentError}
             </p>
@@ -687,6 +690,7 @@ export default function FleetConnectView() {
           >
             {busy ? "Connecting…" : enrolling ? "Enrolling…" : "Connect to Fleet"}
           </Button>
+          {editingConnection && <Button variant="outline" size="sm" disabled={busy} onClick={() => setEditingConnection(false)}>Cancel</Button>}
           {fleetEntitled && wasEnrolled && isRemoved && (
             <Button variant="outline" size="sm" disabled={busy} onClick={checkRemoval}>Check removal status</Button>
           )}

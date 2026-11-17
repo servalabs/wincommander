@@ -23,9 +23,10 @@ test("another Windows profile sees active retry, terminal failure, then recovere
     globalThis.setInterval = (callback, delay) => { const id = ++nextTimer; timers.set(id, { callback, delay }); return id; };
     globalThis.clearInterval = id => timers.delete(id);
     let status = { connected: false, deviceId: 'device-123', serverUrl: 'https://fleet.example.test', lastEnrollAt: null, lastError: 'server temporarily unavailable', retrying: true };
-    const calls = [];
-    mock.module('@tauri-apps/api/core', () => ({ invoke: async command => {
+    const calls = []; const connectArgs = [];
+    mock.module('@tauri-apps/api/core', () => ({ invoke: async (command, args) => {
       calls.push(command);
+      if (command === 'fleet_connect') { connectArgs.push(args); return {}; }
       if (command === 'fleet_status') return { ...status };
       if (command === 'fleet_machine_trust_status') return { trustBound: true, shieldPolicyStatus: 'unverified' };
       if (command === 'fleet_service_contact_status') return { observation: null };
@@ -45,6 +46,13 @@ test("another Windows profile sees active retry, terminal failure, then recovere
     assert.match(host.textContent, /Reconnecting/);
     assert.match(host.textContent, /server temporarily unavailable/);
     assert.ok(!connect(), 'active retry must not offer another enrollment');
+    const change = [...host.querySelectorAll('button')].find(button => button.textContent === 'Change Fleet server');
+    assert.ok(change, 'an explicit address change must be available while retrying');
+    await act(async () => { change.click(); });
+    assert.ok(connect(), 'explicit address change opens the existing connection form');
+    assert.ok(host.querySelector('input[placeholder="https://fleet.example.com"]'));
+    await act(async () => { [...host.querySelectorAll('button')].find(button => button.textContent === 'Cancel').click(); });
+    assert.ok(!connect(), 'cancelling returns to the existing retry');
     assert.ok(!host.textContent.includes('stays enrolled'), 'retry alone cannot establish completed enrollment');
     status = { ...status, retrying: false, lastError: 'enrollment rejected' };
     await poll();
@@ -64,6 +72,20 @@ test("another Windows profile sees active retry, terminal failure, then recovere
     await poll();
     assert.match(host.textContent, /fingerprint is unavailable/);
     assert.ok(calls.every(command => ['fleet_status', 'fleet_machine_trust_status', 'fleet_service_contact_status'].includes(command)));
+    status = { ...status, connected: false, retrying: true, lastError: 'connection unavailable' };
+    await poll();
+    await act(async () => { [...host.querySelectorAll('button')].find(button => button.textContent === 'Change Fleet server').click(); });
+    const input = host.querySelector('input[placeholder="https://fleet.example.com"]');
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value').set.call(input, 'https://fleet.example.test:9443');
+      input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    });
+    await act(async () => { connect().click(); });
+    assert.equal(connectArgs.length, 1);
+    assert.equal(connectArgs[0].serverUrl, 'https://fleet.example.test:9443');
+    status = { ...status, retrying: false, lastError: 'enroll rejected: HTTP 403 Forbidden' };
+    await act(async () => { [...timers.values()].find(timer => timer.delay === 1000).callback(); });
+    assert.match(host.textContent, /Last agent error \(may be from an earlier attempt\): enroll rejected: HTTP 403 Forbidden/);
     await act(async () => { root.unmount(); });
     assert.equal(timers.size, 0);
     dom.window.close();
