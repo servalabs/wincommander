@@ -37,10 +37,10 @@ describe("Fleet connect error wording", () => {
 
   test("epoch adoption refusals are explained from a closed vocabulary", () => {
     expect(describeEpochAdoptionIssue(null)).toBeNull();
-    expect(describeEpochAdoptionIssue("epoch_generation_unconfirmed")).toContain("new server needs adoption");
+    expect(describeEpochAdoptionIssue("epoch_trust_generation_differs")).toContain("new server needs adoption");
     expect(describeEpochAdoptionIssue("epoch_rollback_refused")).toContain("rollback protection");
     expect(describeEpochAdoptionIssue("C:\secret")).toBe("A signed Fleet policy could not be adopted.");
-    expect(epochIssueNeedsRepair("epoch_generation_unconfirmed")).toBe(true);
+    expect(epochIssueNeedsRepair("epoch_trust_generation_differs")).toBe(true);
     expect(epochIssueNeedsRepair("epoch_rollback_refused")).toBe(false);
   });
 });

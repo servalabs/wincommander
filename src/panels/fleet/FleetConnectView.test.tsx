@@ -113,7 +113,7 @@ test("another Windows profile sees active retry, terminal failure, then recovere
     await poll();
     assert.match(host.textContent, /Service trust needs repair/);
     // A signed policy epoch from the new server that was not adopted is explained, not just logged.
-    status = { ...status, epochAdoptionIssue: 'epoch_generation_unconfirmed' };
+    status = { ...status, epochAdoptionIssue: 'epoch_trust_generation_differs' };
     await poll();
     assert.match(host.textContent, /Fleet policy from the new server needs adoption/);
     assert.ok([...host.querySelectorAll('button')].some(button => button.textContent === 'Repair machine trust'));

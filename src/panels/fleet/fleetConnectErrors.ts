@@ -65,8 +65,13 @@ export function trustBridgeNeedsRepair(code: string | null | undefined): boolean
 }
 
 const EPOCH_ADOPTION_HINTS: Record<string, string> = {
-  epoch_generation_unconfirmed:
-    "Fleet policy from the new server needs adoption, but this device's service has not confirmed the new enrollment yet. Repair machine trust, then the policy applies automatically.",
+  epoch_service_evidence_unavailable:
+    "Fleet policy from the new server needs adoption, but this device's service could not be asked to confirm the new enrollment (the privileged service read was unavailable).",
+  epoch_trust_generation_differs:
+    "Fleet policy from the new server needs adoption, but this device's service still trusts a different enrollment. Repair machine trust, then the policy applies automatically.",
+  epoch_trust_audit_missing:
+    "Fleet policy from the new server needs adoption, but this device's service did not record a confirmed enrollment for it. Repair machine trust, then the policy applies automatically.",
+  epoch_version_invalid: "The Fleet policy from the new server carries an invalid epoch number and was not adopted.",
   epoch_below_service_floor:
     "The Fleet policy from the new server is older than the policy this device's service already holds for it, so it was not adopted.",
   epoch_rollback_refused:
@@ -79,7 +84,7 @@ export function describeEpochAdoptionIssue(code: string | null | undefined): str
   return EPOCH_ADOPTION_HINTS[code] ?? "A signed Fleet policy could not be adopted.";
 }
 
-/** Only an unconfirmed new enrollment is cleared by the trust repair. */
+/** Only a service trust that disagrees with the new enrollment is cleared by the trust repair. */
 export function epochIssueNeedsRepair(code: string | null | undefined): boolean {
-  return code === "epoch_generation_unconfirmed";
+  return code === "epoch_trust_generation_differs" || code === "epoch_trust_audit_missing";
 }

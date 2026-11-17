@@ -1691,13 +1691,16 @@ fn epoch_floor_decision(
         }
     };
     let Some(evidence) = evidence else {
-        return refuse("epoch_generation_unconfirmed");
+        return refuse("epoch_service_evidence_unavailable");
     };
-    if version < 1
-        || evidence.trust_generation.as_deref() != Some(generation)
-        || !evidence.audit_confirms
-    {
-        return refuse("epoch_generation_unconfirmed");
+    if version < 1 {
+        return refuse("epoch_version_invalid");
+    }
+    if evidence.trust_generation.as_deref() != Some(generation) {
+        return refuse("epoch_trust_generation_differs");
+    }
+    if !evidence.audit_confirms {
+        return refuse("epoch_trust_audit_missing");
     }
     if evidence.service_policy_generation.as_deref() == Some(generation)
         && evidence.service_policy_version.is_some_and(|held| held > version)
@@ -1717,9 +1720,14 @@ fn verified_epoch_generation(
 ) -> Option<String> {
     let envelope: wincmd_shared::fleet::PolicyEnvelope =
         serde_json::from_value(response.get("policyEnvelope").cloned()?).ok()?;
-    let generation = validate_cached_shield_envelope(settings, &envelope).ok()?;
-    (serde_json::to_value(envelope.config.as_ref()).ok().as_ref() == Some(epoch))
-        .then_some(generation)
+    // `validate_cached_shield_envelope` returns the pinned SIGNER key it
+    // verified against, not the generation: take the generation from the
+    // envelope itself, which that validation has just proven canonical.
+    validate_cached_shield_envelope(settings, &envelope).ok()?;
+    if serde_json::to_value(envelope.config.as_ref()).ok().as_ref() != Some(epoch) {
+        return None;
+    }
+    envelope.enrollment_generation.clone()
 }
 
 /// Ask the protected service which generation it trusts and what policy it
@@ -1931,6 +1939,24 @@ async fn fleet_apply_pending_epoch_inner() -> Result<serde_json::Value, ApplyErr
             return epoch_floor_hold(&operation_id, &resp, version, "not_newer").await;
         }
         EpochFloorDecision::Refused(code) => {
+            if epoch_adoption_issue() != Some(code) {
+                // Generation ids are not secrets; the first eight characters
+                // are enough to tell which side disagrees.
+                let short = |value: Option<&str>| value.map_or("none".to_string(), |v| v.chars().take(8).collect());
+                crate::log_message_src(
+                    "warn",
+                    "core",
+                    &format!(
+                        "[FleetEpoch] refusal detail: epoch={version} floor={applied} epoch_generation={} recorded_generation={} service_trust_generation={} audit_confirms={} service_policy={}@{}",
+                        short(epoch_generation.as_deref()),
+                        short(settings.policy.master_config_generation.as_deref()),
+                        short(evidence.as_ref().and_then(|e| e.trust_generation.as_deref())),
+                        evidence.as_ref().is_some_and(|e| e.audit_confirms),
+                        short(evidence.as_ref().and_then(|e| e.service_policy_generation.as_deref())),
+                        evidence.as_ref().and_then(|e| e.service_policy_version).map_or("none".to_string(), |v| v.to_string()),
+                    ),
+                );
+            }
             set_epoch_adoption_issue(Some(code));
             return epoch_floor_hold(&operation_id, &resp, version, code).await;
         }
@@ -5890,6 +5916,27 @@ mod tests {
         );
     }
 
+    /// Regression: the generation was once taken from the value that
+    /// `validate_cached_shield_envelope` returns, which is the pinned SIGNER
+    /// key, so no real epoch ever matched the service's trust generation.
+    #[test]
+    fn the_epoch_generation_is_the_envelopes_enrollment_generation_not_the_signer_key() {
+        let (settings, mut envelope) = signed_shield_envelope();
+        attach_signed_config(&mut envelope, 1);
+        let epoch = serde_json::to_value(envelope.config.as_ref()).unwrap();
+        let response = json!({"epoch": epoch, "policyEnvelope": envelope});
+        let generation = super::verified_epoch_generation(&settings, &response, &epoch);
+        assert_eq!(generation.as_deref(), Some("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"));
+        assert_ne!(generation.as_deref(), settings.policy.fleet_signing_key.as_deref());
+        // An epoch the envelope does not carry, or a tampered envelope, yields none.
+        let other = json!({"version": 99});
+        assert_eq!(super::verified_epoch_generation(&settings, &response, &other), None);
+        let mut forged = envelope.clone();
+        forged.enrollment_generation = Some("cccccccc-cccc-4ccc-8ccc-cccccccccccc".into());
+        let response = json!({"epoch": epoch, "policyEnvelope": forged});
+        assert_eq!(super::verified_epoch_generation(&settings, &response, &epoch), None);
+    }
+
     #[test]
     fn precommit_requires_the_exact_verified_incoming_envelope() {
         let (mut settings, mut envelope) = signed_shield_envelope();
@@ -8025,23 +8072,25 @@ mod fleet_connect_v2_tests {
     }
 
     #[test]
-    fn a_lower_epoch_from_an_unconfirmed_generation_is_refused_with_a_reason() {
+    fn a_lower_epoch_from_an_unconfirmed_generation_is_refused_with_the_failing_condition() {
         let refused = |evidence: Option<GenerationEvidence>| {
             epoch_floor_decision(10, Some(G_OLD), 1, Some(G_NEW), evidence.as_ref())
         };
-        let unconfirmed = EpochFloorDecision::Refused("epoch_generation_unconfirmed");
         // No service evidence (non-elevated, service down): fail closed.
-        assert_eq!(refused(None), unconfirmed);
+        assert_eq!(refused(None), EpochFloorDecision::Refused("epoch_service_evidence_unavailable"));
         // The service trusts a different generation than the epoch's.
-        assert_eq!(refused(Some(confirmed(G_OLD))), unconfirmed);
+        assert_eq!(
+            refused(Some(confirmed(G_OLD))),
+            EpochFloorDecision::Refused("epoch_trust_generation_differs")
+        );
         // Trust matches but was never established by a provision/re-enrollment.
         let mut unaudited = confirmed(G_NEW);
         unaudited.audit_confirms = false;
-        assert_eq!(refused(Some(unaudited)), unconfirmed);
+        assert_eq!(refused(Some(unaudited)), EpochFloorDecision::Refused("epoch_trust_audit_missing"));
         // Epoch 0 is never an enrollment epoch.
         assert_eq!(
             epoch_floor_decision(10, Some(G_OLD), 0, Some(G_NEW), Some(&confirmed(G_NEW))),
-            unconfirmed
+            EpochFloorDecision::Refused("epoch_version_invalid")
         );
         // Never below the policy the service already holds for that generation.
         let mut ahead = confirmed(G_NEW);
@@ -8049,6 +8098,34 @@ mod fleet_connect_v2_tests {
         assert_eq!(refused(Some(ahead)), EpochFloorDecision::Refused("epoch_below_service_floor"));
     }
 
+    /// The device's real service record: provision for the old generation,
+    /// then the user-confirmed replace (`reenroll`) for the new one.
+    #[test]
+    fn the_real_replace_audit_shape_confirms_the_new_generation() {
+        let trust = serde_json::json!({
+            "trust": {"org_id": "local", "device_id": "d", "signer_key": "k", "enrollment_generation": G_NEW},
+            "audit": [
+                {"action": "provision", "caller_sid": "S-1-5-21-1", "generation": G_OLD, "unix_time": 1793953115u64},
+                {"action": "reenroll", "caller_sid": "S-1-5-21-1", "generation": G_NEW, "unix_time": 1794920169u64},
+            ],
+            "origins": ["https://test-linux.leo-ordinal.ts.net:9443"],
+            "service_enabled": true,
+        });
+        let policy = serde_json::json!({"trust_bound": true, "policy": {
+            "enrollment_generation": G_NEW, "config": {"version": 1}, "shield_revision": 2}});
+        let evidence = generation_evidence_from(&trust, &policy);
+        assert_eq!(evidence, confirmed(G_NEW));
+        assert!(matches!(
+            epoch_floor_decision(10, None, 1, Some(G_NEW), Some(&evidence)),
+            EpochFloorDecision::Adopt(Some(crate::settings::EpochGeneration { floor_reset: true, .. }))
+        ));
+        // `bind_origins` records "origins"; that alone never confirms a generation.
+        let origins_only = serde_json::json!({
+            "trust": {"enrollment_generation": G_NEW},
+            "audit": [{"action": "origins", "caller_sid": "S-1-5-18", "generation": G_NEW, "unix_time": 1}],
+        });
+        assert!(!generation_evidence_from(&origins_only, &Value::Null).audit_confirms);
+    }
     #[test]
     fn evidence_is_read_from_the_service_trust_audit_and_policy() {
         let trust = serde_json::json!({
@@ -8080,8 +8157,8 @@ mod fleet_connect_v2_tests {
         let _serial = GLOBAL_TRUST_STATE.blocking_lock();
         set_epoch_adoption_issue(None);
         assert_eq!(epoch_adoption_issue(), None);
-        set_epoch_adoption_issue(Some("epoch_generation_unconfirmed"));
-        assert_eq!(epoch_adoption_issue(), Some("epoch_generation_unconfirmed"));
+        set_epoch_adoption_issue(Some("epoch_trust_generation_differs"));
+        assert_eq!(epoch_adoption_issue(), Some("epoch_trust_generation_differs"));
         set_epoch_adoption_issue(None);
         assert_eq!(epoch_adoption_issue(), None);
     }
