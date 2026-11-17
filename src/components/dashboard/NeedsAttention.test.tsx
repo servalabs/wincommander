@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import NeedsAttention from "./NeedsAttention";
-import type { ScanFinding } from "../startup/WizardAnimations";
+import type { ScanFinding } from "@/lib/scanFindings";
 
 const finding: ScanFinding = { id: "officeLog", label: "Disable Office logging", category: "privacy", severity: "warning", impact: "Logging policy needs attention" };
 

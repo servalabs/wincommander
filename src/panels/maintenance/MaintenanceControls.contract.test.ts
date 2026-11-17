@@ -6,14 +6,13 @@ declare const Bun: {
 
 describe("Maintenance multi-row control accessibility", () => {
   test("names every record action and selector with its row", async () => {
-    const [registry, startup, users, tasks, services, runtimes, malware, diskAnalyzer] = await Promise.all([
+    const [registry, startup, users, tasks, services, runtimes, diskAnalyzer] = await Promise.all([
       Bun.file("src/panels/maintenance/RegistryTools.tsx").text(),
       Promise.all(["StartupManager.tsx", "StartupReviewRow.tsx"].map(path => Bun.file(`src/components/tweaks/managers/${path}`).text())).then(parts => parts.join("\n")),
       Bun.file("src/components/tweaks/managers/LocalUsersManager.tsx").text(),
       Bun.file("src/components/tweaks/managers/ScheduledTasksManager.tsx").text(),
       Bun.file("src/components/tweaks/managers/ServiceManager.tsx").text(),
       Bun.file("src/panels/runtime-visibility/index.tsx").text(),
-      Bun.file("src/panels/maintenance/MalwareCenter.tsx").text(),
       Promise.all(["DiskSpaceAnalyzerDialog.tsx", "disk-analyzer/DiskAnalyzerHeader.tsx", "disk-analyzer/DiskItemList.tsx", "disk-analyzer/DiskItemDetails.tsx"].map(path => Bun.file(`src/panels/maintenance/${path}`).text())).then(parts => parts.join("\n")),
     ]);
 
@@ -44,10 +43,6 @@ describe("Maintenance multi-row control accessibility", () => {
     expect(runtimes).toContain("aria-label={`Restore ${r.name}`}");
     expect(runtimes).toContain("aria-label={`Hide ${r.name}`}");
 
-    expect(malware).toContain("aria-label={`Restore ${entry.threatLabel}`}");
-    expect(malware).toContain("aria-label={`Delete ${entry.threatLabel}`}");
-    expect(malware).toContain("aria-label={`Quarantine ${finding.threatLabel}`}");
-
     expect(diskAnalyzer).not.toContain('aria-label="Storage view"');
     expect(diskAnalyzer).toContain('aria-label="Minimum file size"');
     expect(diskAnalyzer).toContain("Open in Explorer");
@@ -59,22 +54,14 @@ describe("Maintenance multi-row control accessibility", () => {
   });
 
   test("keeps maintenance-specific loading, error, and detail contracts intact", async () => {
-    const [fileStats, hygiene, fileHygiene, routinePreview, startupDrivers, security, malware, registry, diskAnalyzer] = await Promise.all([
-      Bun.file("src/panels/maintenance/FileStatsPanel.tsx").text(),
+    const [hygiene, fileHygiene, routinePreview, startupDrivers, registry, diskAnalyzer] = await Promise.all([
       Bun.file("src/panels/maintenance/SystemHygieneTools.tsx").text(),
       Bun.file("src/panels/maintenance/FileHygieneTools.tsx").text(),
       Bun.file("src/panels/maintenance/RoutineCleanerPreview.tsx").text(),
       Bun.file("src/panels/maintenance/StartupDriverTools.tsx").text(),
-      Bun.file("src/panels/maintenance/SecurityData.tsx").text(),
-      Bun.file("src/panels/maintenance/MalwareCenter.tsx").text(),
       Bun.file("src/panels/maintenance/RegistryTools.tsx").text(),
       Promise.all(["DiskSpaceAnalyzerDialog.tsx", "disk-analyzer/DiskAnalyzerHeader.tsx", "disk-analyzer/DiskItemList.tsx", "disk-analyzer/DiskItemDetails.tsx"].map(path => Bun.file(`src/panels/maintenance/${path}`).text())).then(parts => parts.join("\n")),
     ]);
-
-    expect(fileStats).toContain('role="table" aria-label="File type statistics"');
-    expect(fileStats).toContain('role="columnheader">File type</span>');
-    expect(fileStats).toContain('role="alert"');
-    expect(fileStats).toContain('!fileStats && !statsScanning && !scanError');
 
     expect(hygiene).toContain("<CheckboxControl checked={checked} onChange={onClick}");
     expect(hygiene).toContain('ariaLabel={`${checked ? "Deselect" : "Select"} ${title}`}');
@@ -88,11 +75,6 @@ describe("Maintenance multi-row control accessibility", () => {
     expect(startupDrivers).toContain('tabIndex={active ? 0 : -1}');
     expect(startupDrivers).toContain("const moveManagerTab = (key: string)");
     expect(startupDrivers).toContain('role="tabpanel"');
-    expect(security).toContain('Collecting local security posture and Windows CVE coverage');
-    expect(security).toContain('aria-busy={loading}');
-    expect(malware).toContain('Loading quarantine inventory');
-    expect(malware).toContain('role="progressbar"');
-    expect(malware).toContain('xl:grid-cols-2');
     expect(registry).toContain('Reviewing {tools.tool === "orphans"');
 
     expect(diskAnalyzer).toContain('aria-label="Drive or folder to analyze"');

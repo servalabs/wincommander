@@ -11,7 +11,7 @@ import { beginOperation } from "../../context/OperationContext";
 import SovereigntyRadar from "../../components/dashboard/SovereigntyRadar";
 import ViewToggle from "../../components/dashboard/ViewToggle";
 import NeedsAttention from "../../components/dashboard/NeedsAttention";
-import type { ScanFinding } from "../../components/startup/WizardAnimations";
+import type { ScanFinding } from "@/lib/scanFindings";
 import { useDashboardRadar } from "../../hooks/useDashboardRadar";
 import { AnimatePresence, motion } from "framer-motion";
 import PrivacyTogglesCard from "../../components/dashboard/PrivacyTogglesCard";

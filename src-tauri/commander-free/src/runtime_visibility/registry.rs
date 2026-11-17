@@ -40,14 +40,165 @@ fn read_wide_lossy(buf: &[u16]) -> String {
     String::from_utf16_lossy(&buf[..end])
 }
 
+// ─── Resilient enumeration cursor ────────────────────────────────────────
+
+/// One step of a `RegEnumKeyExW` / `RegEnumValueW` call, already classified.
+pub(crate) enum EnumStep<T> {
+    Item(T),
+    /// `ERROR_MORE_DATA`; payload is the size the API reported (0 = unknown).
+    MoreData(usize),
+    /// `ERROR_NO_MORE_ITEMS` - the only condition that ends enumeration.
+    NoMoreItems,
+    /// Any other Win32 error: this index is skipped, enumeration continues.
+    Error(u32),
+}
+
+const ENUM_MAX_INDEX: u32 = 1_000_000;
+const ENUM_MAX_RETRIES: u32 = 4;
+const ENUM_MAX_CAP: usize = 1 << 20;
+/// A handle that fails permanently (e.g. closed) would otherwise spin through
+/// every index; give up after this many consecutive failures.
+const ENUM_MAX_CONSECUTIVE_ERRORS: u32 = 64;
+
+/// Drives an enumeration so one bad entry cannot hide the rest: retries an
+/// index with the size the API reported on `ERROR_MORE_DATA`, skips (and logs)
+/// an index that fails otherwise, and stops only on `NoMoreItems`.
+#[derive(Default)]
+pub(crate) struct EnumCursor {
+    index: u32,
+    consecutive_errors: u32,
+}
+
+impl EnumCursor {
+    /// `step(index, capacity_hint)`; `capacity_hint` is 0 on the first attempt
+    /// and the size to use on a retry after `MoreData`.
+    pub(crate) fn next<T>(
+        &mut self,
+        mut step: impl FnMut(u32, usize) -> EnumStep<T>,
+    ) -> Option<T> {
+        loop {
+            if self.index >= ENUM_MAX_INDEX
+                || self.consecutive_errors >= ENUM_MAX_CONSECUTIVE_ERRORS
+            {
+                return None;
+            }
+            let idx = self.index;
+            let mut cap = 0usize;
+            let mut tries = 0u32;
+            let outcome = loop {
+                match step(idx, cap) {
+                    EnumStep::Item(v) => break Ok(v),
+                    EnumStep::NoMoreItems => return None,
+                    EnumStep::Error(rc) => break Err(rc),
+                    EnumStep::MoreData(need) => {
+                        tries += 1;
+                        if tries > ENUM_MAX_RETRIES || need > ENUM_MAX_CAP {
+                            break Err(234); // ERROR_MORE_DATA
+                        }
+                        cap = if need > cap {
+                            need
+                        } else {
+                            cap.saturating_mul(2).max(1)
+                        };
+                    }
+                }
+            };
+            self.index += 1;
+            match outcome {
+                Ok(v) => {
+                    self.consecutive_errors = 0;
+                    return Some(v);
+                }
+                Err(rc) => {
+                    self.consecutive_errors += 1;
+                    crate::log::log_message(
+                        "warn",
+                        &format!("[Registry] enumeration skipped index {idx}: error {rc}"),
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// `RegEnumKeyExW` for one index. Key names are at most 255 characters, so a
+/// 256-wchar buffer is always sufficient.
+#[cfg(windows)]
+pub(crate) fn enum_key_name(
+    key: windows_sys::Win32::System::Registry::HKEY,
+    index: u32,
+) -> EnumStep<String> {
+    use windows_sys::Win32::Foundation::{ERROR_NO_MORE_ITEMS, ERROR_SUCCESS};
+    use windows_sys::Win32::System::Registry::RegEnumKeyExW;
+    let mut name = [0u16; 256];
+    let mut len = name.len() as u32;
+    let rc = unsafe {
+        RegEnumKeyExW(
+            key,
+            index,
+            name.as_mut_ptr(),
+            &mut len,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    match rc {
+        ERROR_SUCCESS => EnumStep::Item(String::from_utf16_lossy(&name[..(len as usize).min(256)])),
+        ERROR_NO_MORE_ITEMS => EnumStep::NoMoreItems,
+        other => EnumStep::Error(other),
+    }
+}
+
+/// `RegEnumValueW` for one index. The name buffer is the documented maximum
+/// (16,383 chars + NUL); the data buffer starts at 4 KiB and grows to the size
+/// the API reports on `ERROR_MORE_DATA`. Returns `(name, type, data)`.
+#[cfg(windows)]
+pub(crate) fn enum_value(
+    key: windows_sys::Win32::System::Registry::HKEY,
+    index: u32,
+    cap: usize,
+) -> EnumStep<(String, u32, Vec<u8>)> {
+    use windows_sys::Win32::Foundation::{ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS};
+    use windows_sys::Win32::System::Registry::RegEnumValueW;
+    let mut name = vec![0u16; 16_384];
+    let mut name_len = name.len() as u32;
+    let mut data = vec![0u8; if cap == 0 { 4096 } else { cap }];
+    let mut data_len = data.len() as u32;
+    let mut ty = 0u32;
+    let rc = unsafe {
+        RegEnumValueW(
+            key,
+            index,
+            name.as_mut_ptr(),
+            &mut name_len,
+            std::ptr::null_mut(),
+            &mut ty,
+            data.as_mut_ptr(),
+            &mut data_len,
+        )
+    };
+    match rc {
+        ERROR_SUCCESS => {
+            data.truncate((data_len as usize).min(data.len()));
+            let n = (name_len as usize).min(name.len());
+            EnumStep::Item((String::from_utf16_lossy(&name[..n]), ty, data))
+        }
+        ERROR_NO_MORE_ITEMS => EnumStep::NoMoreItems,
+        ERROR_MORE_DATA => EnumStep::MoreData(data_len as usize),
+        other => EnumStep::Error(other),
+    }
+}
+
 // ─── Run-key reads ───────────────────────────────────────────────────────
 
 #[cfg(windows)]
 pub fn read_run_values() -> Vec<RunValue> {
     use windows_sys::Win32::Foundation::ERROR_SUCCESS;
     use windows_sys::Win32::System::Registry::{
-        RegCloseKey, RegEnumValueW, RegOpenKeyExW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE,
-        KEY_READ, REG_EXPAND_SZ, REG_SZ,
+        RegCloseKey, RegOpenKeyExW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ,
+        REG_EXPAND_SZ, REG_SZ,
     };
 
     fn read(hive_name: &str, root: HKEY, subkey: &str, out: &mut Vec<RunValue>) {
@@ -57,39 +208,20 @@ pub fn read_run_values() -> Vec<RunValue> {
             if RegOpenKeyExW(root, wide.as_ptr(), 0, KEY_READ, &mut hkey) != ERROR_SUCCESS {
                 return;
             }
-            let mut index: u32 = 0;
-            loop {
-                let mut name_buf: [u16; 256] = [0; 256];
-                let mut name_len: u32 = name_buf.len() as u32;
-                let mut value_buf: [u8; 4096] = [0; 4096];
-                let mut value_len: u32 = value_buf.len() as u32;
-                let mut value_type: u32 = 0;
-
-                let rc = RegEnumValueW(
-                    hkey,
-                    index,
-                    name_buf.as_mut_ptr(),
-                    &mut name_len,
-                    std::ptr::null_mut(),
-                    &mut value_type,
-                    value_buf.as_mut_ptr(),
-                    &mut value_len,
-                );
-                if rc != ERROR_SUCCESS {
-                    break;
-                }
-                index += 1;
-
+            let mut cursor = EnumCursor::default();
+            while let Some((name, value_type, data)) =
+                cursor.next(|i, cap| enum_value(hkey, i, cap))
+            {
                 if value_type == REG_SZ || value_type == REG_EXPAND_SZ {
-                    let chars = (value_len as usize) / 2;
-                    let slice = std::slice::from_raw_parts(value_buf.as_ptr() as *const u16, chars);
-                    let cmd = read_wide_lossy(slice);
-                    let name = read_wide_lossy(&name_buf[..name_len as usize]);
+                    let units: Vec<u16> = data
+                        .chunks_exact(2)
+                        .map(|b| u16::from_le_bytes([b[0], b[1]]))
+                        .collect();
                     out.push(RunValue {
                         hive: hive_name.into(),
                         subkey: subkey.into(),
                         name,
-                        command: cmd,
+                        command: read_wide_lossy(&units),
                     });
                 }
             }
@@ -200,7 +332,7 @@ pub fn hkcu_rename_run_value(
 pub fn read_uninstall_entries() -> Vec<UninstallEntry> {
     use windows_sys::Win32::Foundation::ERROR_SUCCESS;
     use windows_sys::Win32::System::Registry::{
-        RegCloseKey, RegEnumKeyExW, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_CURRENT_USER,
+        RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_CURRENT_USER,
         HKEY_LOCAL_MACHINE, KEY_READ, REG_DWORD, REG_EXPAND_SZ, REG_SZ,
     };
 
@@ -259,26 +391,8 @@ pub fn read_uninstall_entries() -> Vec<UninstallEntry> {
             if RegOpenKeyExW(root, wide.as_ptr(), 0, KEY_READ, &mut base) != ERROR_SUCCESS {
                 return;
             }
-            let mut index: u32 = 0;
-            loop {
-                let mut name_buf: [u16; 512] = [0; 512];
-                let mut name_len: u32 = name_buf.len() as u32;
-                let rc = RegEnumKeyExW(
-                    base,
-                    index,
-                    name_buf.as_mut_ptr(),
-                    &mut name_len,
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut(),
-                );
-                if rc != ERROR_SUCCESS {
-                    break;
-                }
-                index += 1;
-
-                let child_name = read_wide_lossy(&name_buf[..name_len as usize]);
+            let mut cursor = EnumCursor::default();
+            while let Some(child_name) = cursor.next(|i, _| enum_key_name(base, i)) {
                 let full_subkey = format!("{}\\{}", base_subkey, child_name);
                 let full_wide = to_wide(&full_subkey);
                 let mut child: HKEY = std::ptr::null_mut();
@@ -707,4 +821,60 @@ pub fn hklm_create_app_path(
     _path_val: Option<&str>,
 ) -> Result<(), String> {
     Err("not implemented on non-Windows".into())
+}
+
+#[cfg(test)]
+mod enum_cursor_tests {
+    use super::*;
+
+    /// Simulated key: Some(Ok) = value, Err(MoreData(n)) = needs n bytes.
+    fn run(entries: Vec<Result<&'static str, u32>>, big_need: usize) -> Vec<&'static str> {
+        let mut cursor = EnumCursor::default();
+        let mut out = Vec::new();
+        while let Some(v) = cursor.next(|i, cap| match entries.get(i as usize) {
+            None => EnumStep::NoMoreItems,
+            Some(Ok(v)) => EnumStep::Item(*v),
+            Some(Err(0)) => {
+                if cap >= big_need {
+                    EnumStep::Item("big")
+                } else {
+                    EnumStep::MoreData(big_need)
+                }
+            }
+            Some(Err(rc)) => EnumStep::Error(*rc),
+        }) {
+            out.push(v);
+        }
+        out
+    }
+
+    #[test]
+    fn oversized_value_is_retried_and_later_entries_survive() {
+        let got = run(vec![Ok("a"), Err(0), Ok("c")], 10_000);
+        assert_eq!(got, vec!["a", "big", "c"]);
+    }
+
+    #[test]
+    fn other_error_skips_index_and_continues() {
+        let got = run(vec![Ok("a"), Err(5), Ok("c")], 0);
+        assert_eq!(got, vec!["a", "c"]);
+    }
+
+    #[test]
+    fn unsatisfiable_more_data_is_skipped_not_fatal() {
+        let got = run(vec![Err(0), Ok("b")], usize::MAX);
+        assert_eq!(got, vec!["b"]);
+    }
+
+    #[test]
+    fn only_no_more_items_ends_and_persistent_errors_are_bounded() {
+        let mut cursor = EnumCursor::default();
+        let mut calls = 0u32;
+        let r: Option<()> = cursor.next(|_, _| {
+            calls += 1;
+            EnumStep::Error(6)
+        });
+        assert!(r.is_none());
+        assert_eq!(calls, ENUM_MAX_CONSECUTIVE_ERRORS);
+    }
 }

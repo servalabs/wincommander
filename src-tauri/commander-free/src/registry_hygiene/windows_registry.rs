@@ -4,11 +4,6 @@ pub(super) fn wide(value: &str) -> Vec<u16> {
 }
 
 #[cfg(windows)]
-pub(super) fn read_wide(value: &[u16]) -> String {
-    String::from_utf16_lossy(value)
-}
-
-#[cfg(windows)]
 pub(super) fn read_default(
     root: windows_sys::Win32::System::Registry::HKEY,
     subkey: &str,

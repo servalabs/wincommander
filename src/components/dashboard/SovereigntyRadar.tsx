@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
-import type { ScanReport, ScanFinding } from "../startup/WizardAnimations";
+import type { ScanReport, ScanFinding } from "@/lib/scanFindings";
 import "./SovereigntyRadar.css";
 import AnimatedNumber from "../shared/AnimatedNumber";
 

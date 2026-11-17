@@ -531,32 +531,125 @@ fn decode_module(source: &[u8]) -> Result<String, String> {
     Ok(script.trim_start_matches('\u{FEFF}').to_string())
 }
 
+/// Validated, NUL-terminated UTF-16 inputs for the RDP credential write.
+/// Pure so the validation is unit-testable without touching the vault.
+fn rdp_credential_target_and_user(
+    hostname: &str,
+    username: &str,
+) -> Result<(Vec<u16>, Vec<u16>), String> {
+    let host = hostname.trim();
+    if host.is_empty() || host.contains('\0') || host.chars().any(|c| c.is_control()) {
+        return Err("Invalid RDP hostname".to_string());
+    }
+    if username.is_empty() || username.contains('\0') {
+        return Err("Invalid RDP username".to_string());
+    }
+    let target = format!("TERMSRV/{host}");
+    // CRED_MAX_GENERIC_TARGET_NAME_LENGTH = 32767, CRED_MAX_USERNAME_LENGTH = 513.
+    if target.encode_utf16().count() > 32_767 || username.encode_utf16().count() > 513 {
+        return Err("RDP hostname or username too long".to_string());
+    }
+    let wide = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
+    Ok((wide(&target), wide(username)))
+}
+
+#[cfg(windows)]
+fn write_rdp_credential(
+    target: &mut [u16],
+    username: &mut [u16],
+    password_utf16: &[u16],
+) -> Result<(), String> {
+    // Minimal CredWriteW binding: neither `windows` nor `windows-sys` has the
+    // Win32_Security_Credentials feature enabled in this crate.
+    #[repr(C)]
+    struct CredentialW {
+        flags: u32,
+        kind: u32,
+        target_name: *mut u16,
+        comment: *mut u16,
+        last_written: [u32; 2],
+        blob_size: u32,
+        blob: *mut u8,
+        persist: u32,
+        attribute_count: u32,
+        attributes: *mut core::ffi::c_void,
+        target_alias: *mut u16,
+        user_name: *mut u16,
+    }
+    #[link(name = "advapi32")]
+    extern "system" {
+        fn CredWriteW(credential: *const CredentialW, flags: u32) -> i32;
+    }
+    // Same semantics as the former `cmdkey /generic:TERMSRV/<host> /user /pass`:
+    // a generic credential, persisted for this logon on the local machine.
+    const CRED_TYPE_GENERIC: u32 = 1;
+    const CRED_PERSIST_LOCAL_MACHINE: u32 = 2;
+    // CRED_MAX_CREDENTIAL_BLOB_SIZE
+    const MAX_BLOB: usize = 5 * 512;
+
+    let blob_bytes = password_utf16.len() * 2;
+    if blob_bytes > MAX_BLOB {
+        return Err("RDP password is too long for the credential vault".to_string());
+    }
+    let mut blob: Vec<u8> = password_utf16
+        .iter()
+        .flat_map(|u| u.to_le_bytes())
+        .collect();
+    let cred = CredentialW {
+        flags: 0,
+        kind: CRED_TYPE_GENERIC,
+        target_name: target.as_mut_ptr(),
+        comment: std::ptr::null_mut(),
+        last_written: [0, 0],
+        blob_size: blob_bytes as u32,
+        blob: blob.as_mut_ptr(),
+        persist: CRED_PERSIST_LOCAL_MACHINE,
+        attribute_count: 0,
+        attributes: std::ptr::null_mut(),
+        target_alias: std::ptr::null_mut(),
+        user_name: username.as_mut_ptr(),
+    };
+    // SAFETY: all pointers reference live, NUL-terminated buffers owned by the
+    // caller / this frame for the duration of the call.
+    let ok = unsafe { CredWriteW(&cred, 0) };
+    let err = std::io::Error::last_os_error();
+    {
+        use zeroize::Zeroize;
+        blob.zeroize();
+    }
+    if ok == 0 {
+        return Err(format!("Failed to save credentials to Credential Manager: {err}"));
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn set_rdp_credentials(
     hostname: String,
     username: String,
     password: String,
 ) -> Result<(), String> {
-    // Save credentials to Windows vault (TERMSRV/<hostname>) for mstsc auto-login.
-    let mut cmdkey = Command::new("cmdkey");
-    cmdkey.args([
-        &format!("/generic:TERMSRV/{}", hostname),
-        &format!("/user:{}", username),
-        &format!("/pass:{}", password),
-    ]);
-
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        cmdkey.creation_flags(CREATE_NO_WINDOW);
-    }
-
-    let status = cmdkey.status().map_err(|e| e.to_string())?;
-    if !status.success() {
-        return Err("Failed to save credentials via cmdkey".to_string());
-    }
-    Ok(())
+    use zeroize::Zeroize;
+    // Save credentials to the Windows Credential Manager (TERMSRV/<hostname>)
+    // for mstsc auto-login. Uses CredWriteW directly: the password never
+    // appears on a process command line (cmdkey /pass:<pw> was visible to any
+    // process via its command line / process-creation auditing).
+    let mut password = password;
+    let prepared = rdp_credential_target_and_user(&hostname, &username);
+    let result = match prepared {
+        Err(e) => Err(e),
+        #[cfg(windows)]
+        Ok((mut target, mut user)) => {
+            let mut pw16: Vec<u16> = password.encode_utf16().collect();
+            let r = write_rdp_credential(&mut target, &mut user, &pw16);
+            pw16.zeroize();
+            r
+        }
+        #[cfg(not(windows))]
+        Ok(_) => Err("RDP credentials are only supported on Windows".to_string()),
+    };
+    password.zeroize();
+    result
 }
 
 #[tauri::command]
@@ -11198,4 +11291,27 @@ pub async fn open_event_log(log_name: String) -> Result<(), String> {
         .spawn()
         .map_err(|e| format!("Failed to open Event Viewer: {e}"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod rdp_credential_tests {
+    use super::rdp_credential_target_and_user;
+
+    #[test]
+    fn builds_termsrv_target_and_nul_terminated_buffers() {
+        let (t, u) = rdp_credential_target_and_user(" host1 ", "alice").unwrap();
+        assert_eq!(String::from_utf16_lossy(&t[..t.len() - 1]), "TERMSRV/host1");
+        assert_eq!(*t.last().unwrap(), 0);
+        assert_eq!(String::from_utf16_lossy(&u[..u.len() - 1]), "alice");
+    }
+
+    #[test]
+    fn rejects_empty_or_control_inputs() {
+        assert!(rdp_credential_target_and_user("", "a").is_err());
+        assert!(rdp_credential_target_and_user("h x", "a").is_err());
+        assert!(rdp_credential_target_and_user("h
+x", "a").is_err());
+        assert!(rdp_credential_target_and_user("h", "").is_err());
+        assert!(rdp_credential_target_and_user("h", &"u".repeat(514)).is_err());
+    }
 }

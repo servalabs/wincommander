@@ -48,7 +48,11 @@ incremental = true
 debug-assertions = false
 
 [profile.release]
-panic = "abort"
+# unwind (not abort): commander-svc catch_unwind, metrics_probe and JoinError
+# handling, and the desktop panic hook's log-only policy all depend on unwinding.
+# Cost: landing pads + unwind tables make binaries somewhat larger and slightly
+# limit inlining; no behavioural change on the non-panicking path.
+panic = "unwind"
 codegen-units = 1
 lto = "thin"
 opt-level = "s"

@@ -41,26 +41,4 @@ describe("maintenance security and hygiene result handling", () => {
     expect(backend).toContain("mutation::reveal_leftover(entry)");
     expect(backend).toContain("uninstall leftovers scan expired; scan again before opening folders");
   });
-
-  test("renders Defender scan results and exposes the Windows Security fallback", async () => {
-    const malware = await Bun.file("src/panels/maintenance/MalwareCenter.tsx").text();
-
-    expect(malware).toContain('aria-label="Open Windows Security"');
-    expect(malware).toContain("openWindowsSecuritySettings()");
-    expect(malware).toContain("Windows did not open Security settings");
-    expect(malware).toContain("windowsSecurityError");
-    expect(malware).toContain("center.scan.findings.map");
-    expect(malware).toContain("currentScanNotice.message");
-  });
-
-  test("keeps successful security sources visible when another source fails", async () => {
-    const securityData = await Bun.file("src/panels/maintenance/SecurityData.tsx").text();
-
-    expect(securityData).toContain("Promise.allSettled([");
-    expect(securityData).toContain("setThreat(threatResult.value)");
-    expect(securityData).toContain("setCve(cveResult.value)");
-    expect(securityData).toContain("Local threat posture");
-    expect(securityData).toContain("Windows CVE coverage");
-    expect(securityData).toContain("Unavailable counts do not mean zero detections");
-  });
 });

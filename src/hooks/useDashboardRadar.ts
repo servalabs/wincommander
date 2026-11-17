@@ -12,7 +12,7 @@
 import { useMemo } from 'react';
 import { useEffect, useState } from 'react';
 import { useAppState } from '../context/AppContext';
-import type { ScanReport } from '../components/startup/WizardAnimations';
+import type { ScanReport } from '@/lib/scanFindings';
 import { buildRadarReport, shouldProbeBrowserHardening, type ServiceProfileStatus } from '../lib/radarScan';
 import { isModuleEnabled } from '../types/modules';
 import { getPersona } from '../types/settings';

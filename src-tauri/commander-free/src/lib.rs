@@ -1678,6 +1678,8 @@ pub fn run() {
     // panic's stderr goes nowhere; without this a detector thread can unwind
     // silently while the user still believes protection is live. KT: log only,
     // never abort, so one monitor's panic can't tear down the whole app.
+    // This relies on `panic = "unwind"` in [profile.release] (workspace Cargo.toml);
+    // with `panic = "abort"` the process would die after the hook returns.
     {
         let default_hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {

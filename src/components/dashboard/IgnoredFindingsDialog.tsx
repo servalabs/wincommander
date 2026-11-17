@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { EyeOff, RotateCcw } from "lucide-react";
 import { CompatDialog, CompatDialogBody, CompatDialogFooter } from "../ui/compat-dialog";
-import type { ScanFinding } from "../startup/WizardAnimations";
+import type { ScanFinding } from "@/lib/scanFindings";
 
 export interface IgnoredFinding {
   id: string;

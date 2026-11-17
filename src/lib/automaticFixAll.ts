@@ -1,4 +1,4 @@
-import type { ScanFinding } from "../components/startup/WizardAnimations";
+import type { ScanFinding } from "@/lib/scanFindings";
 
 /**
  * Returns the findings that may be applied without a dashboard click.
