@@ -62,3 +62,6 @@ Remove an item when it has passed on the intended build.
    ([WEAKNESSES.md](WEAKNESSES.md#optional-third-party-components)).
 8. **Internal references.** Decide where the audit reports cited by finding ID
    in source comments live (they are not in this public repository).
+9. **Third-party licence notices.** `LICENSES/optimizerDuck-GPL-3.0.txt` is not
+   referenced by any attribution file, and there is no `THIRD_PARTY_NOTICES`.
+   Decide what it covers and add the notice ([OPEN_CORE.md](OPEN_CORE.md)).

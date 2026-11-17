@@ -20,6 +20,11 @@ Free is real open source in the OSI sense. You may fork, build, modify, and redi
 
 Pro is not open source. It lives in a private repository and is governed by the EULA. A paid entitlement authorizes use of the Pro binary; it does not grant source access.
 
+`LICENSES/optimizerDuck-GPL-3.0.txt` is the GPL-3.0 text for optimizerDuck
+(itsfatduck). This repository has no `THIRD_PARTY_NOTICES` file and no document
+that lists which files, if any, rely on that licence; see
+[USER-TASKS.md](USER-TASKS.md).
+
 ## Entitlement and feature boundary
 
 The Free app and Pro sidecar form one desktop experience. Paid actions require a signed entitlement verified by the backend, then cross an authenticated local IPC boundary to Pro. A locked control in the UI is only a usability cue — it is never the authorization boundary.

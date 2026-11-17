@@ -3,6 +3,11 @@
 Public release notes are published with each versioned
 [GitHub Release](https://github.com/servalabs/wincommander/releases).
 
+Git tags run up to `v3.6.7` (2026-11-03). Notes for tagged versions are in the
+GitHub Releases, not here. Everything under `Unreleased` is on `main` after
+`v3.6.7` (1145 commits between `v3.6.7` and `dc5722ba`, counted 2026-11-17) and
+lists only a selection of those changes.
+
 ## Unreleased
 
 - Add the typed service and Pro-gated UI integration for optional Vault cloud
