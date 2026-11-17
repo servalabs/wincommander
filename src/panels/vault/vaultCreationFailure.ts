@@ -1,9 +1,6 @@
 export function vaultCreationFailureDetail(cause: unknown): string {
   const message = cause instanceof Error ? cause.message : String(cause ?? "");
   const normalized = message.toLowerCase();
-  if (normalized.includes("encryption_driver_restart_required:")) {
-    return "Save your work and restart Windows to activate the updated encryption driver, then try creating the Vault again. You can still dismount existing vaults. Restarting WinCommander alone will not activate the update.";
-  }
   if (normalized.includes("vault_driver_unavailable")) {
     return "WinCommander's encrypted-volume driver could not be prepared by the installed service. Ask an administrator to repair WinCommander; no Vault was created.";
   }

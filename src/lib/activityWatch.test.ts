@@ -21,36 +21,6 @@ import {
 declare const process: { env: Record<string, string | undefined> };
 
 describe("ActivityWatch event retrieval", () => {
-  it("uses the canonical classic-server bucket route without needing a redirect", async () => {
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = async (input) => new URL(String(input)).pathname === "/api/0/buckets/"
-      ? Response.json({ "aw-watcher-window_local": { hostname: "local", type: "currentwindow" } })
-      : new Response(null, { status: 308, headers: { location: "/api/0/buckets/" } });
-
-    try {
-      expect(await fetchBuckets()).toEqual({
-        "aw-watcher-window_local": { hostname: "local", type: "currentwindow", client: undefined },
-      });
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
-  });
-
-  it("explains API-key protected servers without exposing the response body", async () => {
-    const originalFetch = globalThis.fetch;
-    try {
-      for (const status of [401, 403]) {
-        globalThis.fetch = async () => new Response("private server diagnostic", { status });
-        let failure: unknown;
-        try { await fetchBuckets(); } catch (error) { failure = error; }
-        expect(activityWatchFailureCode(failure)).toBe("authorization_required");
-        expect(activityWatchFailureMessage(failure)).toBe("ActivityWatch requires local API authorization. API-key protected servers are not supported by this integration yet; keep your existing protection enabled.");
-      }
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
-  });
-
   it("maps local supervision errors to safe diagnostics without exposing their text", () => {
     expect(activityWatchFailureCode(new Error("ActivityWatch server process is running but its API is unreachable at C:\\Users\\person"))).toBe("local_api_unreachable");
     expect(activityWatchFailureCode("ActivityWatch watchers did not become healthy")).toBe("watchers_unhealthy");

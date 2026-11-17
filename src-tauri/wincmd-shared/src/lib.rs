@@ -21,7 +21,6 @@
 // All payloads are one of {Hello, Request, Response, Error, Notification, Bye}.
 
 use serde::{Deserialize, Serialize};
-pub mod encvol_driver_activation;
 pub mod managed_deployment;
 pub mod vault_sync;
 
