@@ -47,7 +47,7 @@ impl FleetMachinePolicy {
         }
         let next = State {
             record: Some(Record {
-                trust: trust.clone(), hybrid_trust: Some(hybrid), hybrid_epoch_floor: 0,
+                trust: trust.clone(), hybrid_trust: Some(hybrid), hybrid_epoch_floor: 0, confirmed_generation: None,
                 hybrid_credential: None, hybrid_initial_pending: true, hybrid_unconfirmed: false,
                 policy: None, audit: vec![audit], contact: None, origins: allowed_origins,
                 transport_profile, credential: None, credential_revision: 0,

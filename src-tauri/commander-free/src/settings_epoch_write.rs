@@ -19,6 +19,9 @@ pub(super) struct Epoch {
     /// the protected service: lets this epoch be adopted below the recorded
     /// floor when the floor belongs to a different (or unrecorded) generation.
     pub floor_reset: bool,
+    /// With a floor reset: the only Shield transaction (by epoch signature
+    /// hash) that survives it. Any other belongs to the previous generation.
+    pub keep_transaction_hash: Option<String>,
 }
 
 pub(super) fn apply(epoch: &Epoch) -> Result<AppSettings, String> {
@@ -161,6 +164,25 @@ fn prepare_inner(current: &AppSettings, epoch: &Epoch, allow_equal_readback: boo
     candidate.policy.master_config_version = Some(epoch.version);
     if epoch.generation.is_some() {
         candidate.policy.master_config_generation = epoch.generation.clone();
+    }
+    // A floor reset starts a new generation's epoch numbering. A Shield
+    // transaction left by the previous generation counts epochs in a numbering
+    // that no longer applies, so it is voided in this same write (never later,
+    // where a crash would strand it above the new floor). A transaction for
+    // this very signed epoch carries crash-recovery data and is kept.
+    if below_floor_allowed && epoch.version < floor.saturating_add(1) {
+        let stale = candidate
+            .app
+            .fleet
+            .privacy_shield_policy_transaction
+            .as_ref()
+            .is_some_and(|transaction| {
+                epoch.keep_transaction_hash.as_deref()
+                    != Some(transaction.epoch_signature_hash.as_str())
+            });
+        if stale {
+            candidate.app.fleet.privacy_shield_policy_transaction = None;
+        }
     }
     candidate.policy.sync_mode = "managed".into();
     candidate.policy.managed = epoch.managed;

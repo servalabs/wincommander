@@ -2529,6 +2529,7 @@ pub fn run() {
                         const BASE_SECS: u64 = 60;
                         const MAX_SECS: u64 = 900; // 15 min
                         let mut fail_streak: u32 = 0;
+                        let mut last_pass = std::time::Instant::now();
 
                         loop {
                             // Compute next sleep: 60s normally; backed-off on failures.
@@ -2556,10 +2557,21 @@ pub fn run() {
                             // Normally the next 60 s tick, but freshly established
                             // trust or a Shield tick that finds the profile behind
                             // the signed epoch asks for a pass right away.
-                            tokio::select! {
-                                () = tokio::time::sleep(std::time::Duration::from_secs(sleep_secs)) => {}
-                                () = fleet_agent::epoch_adoption_requested() => {}
+                            // An early wake is not a licence to hammer a failing
+                            // sidecar: whatever woke the pass, keep at least 10 s
+                            // between passes (the failure back-off still governs
+                            // the normal cadence above).
+                            let woke_early = tokio::select! {
+                                () = tokio::time::sleep(std::time::Duration::from_secs(sleep_secs)) => false,
+                                () = fleet_agent::epoch_adoption_requested() => true,
+                            };
+                            if woke_early {
+                                let since = last_pass.elapsed();
+                                if since < std::time::Duration::from_secs(10) {
+                                    tokio::time::sleep(std::time::Duration::from_secs(10) - since).await;
+                                }
                             }
+                            last_pass = std::time::Instant::now();
 
                             let still_on = settings::read_settings()
                                 .map(|s| s.app.fleet.enabled && !s.app.fleet.server_url.is_empty())
@@ -2567,6 +2579,7 @@ pub fn run() {
                             if !still_on || license::require_service_feature("fleet").is_err() {
                                 // Not enrolled or unlicensed — reset streak and keep
                                 // checking at the normal cadence.
+                                fleet_agent::clear_epoch_adoption_issue();
                                 if fail_streak > 0 {
                                     fleet_agent::clear_sidecar_error();
                                 }

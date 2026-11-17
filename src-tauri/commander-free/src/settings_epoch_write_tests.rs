@@ -54,6 +54,7 @@ impl Fixture {
             managed: true,
             generation: None,
             floor_reset: false,
+            keep_transaction_hash: None,
         }
     }
     fn value(&self) -> Value {
@@ -347,4 +348,58 @@ fn a_floor_recorded_before_generations_were_tracked_can_be_reset_only_when_confi
     // Epoch 0 is never valid, even with a proven new generation.
     record_floor(Some(GENERATION_OLD));
     f.deny(&in_generation(&f, 0, GENERATION_NEW, true));
+}
+
+fn transaction_for(epoch_hash: &str) -> super::super::ShieldPolicyTransaction {
+    serde_json::from_value(json!({
+        "epochVersion": 10, "epochSignatureHash": epoch_hash, "resolutionRevision": 3,
+        "shieldRevision": 24, "attemptId": "attempt", "wasRunning": true,
+        "wasFleetOwned": true, "expectedHash": "tuning", "prePauseMode": "balanced",
+    }))
+    .unwrap()
+}
+
+#[test]
+fn a_floor_reset_voids_the_old_shield_transaction_in_the_same_write_but_keeps_this_epochs() {
+    let f = Fixture::new();
+    record_floor(Some(GENERATION_OLD));
+    SETTINGS_CACHE.lock().unwrap().as_mut().unwrap().app.fleet.privacy_shield_policy_transaction =
+        Some(transaction_for("old-generation-epoch"));
+    let mut reset = in_generation(&f, 1, GENERATION_NEW, true);
+    reset.keep_transaction_hash = Some("new-generation-epoch".into());
+    let adopted = apply_with(&reset, |settings| {
+        // The persisted candidate already has the stale transaction gone.
+        assert!(settings.app.fleet.privacy_shield_policy_transaction.is_none());
+        assert_eq!(settings.policy.master_config_version, Some(1));
+        Ok(())
+    })
+    .unwrap();
+    assert!(adopted.app.fleet.privacy_shield_policy_transaction.is_none());
+
+    // A transaction for the very epoch being adopted carries crash-recovery
+    // data (it was running and paused): it survives the same reset.
+    record_floor(Some(GENERATION_OLD));
+    {
+        let mut cache = SETTINGS_CACHE.lock().unwrap();
+        let settings = cache.as_mut().unwrap();
+        settings.policy.master_config_version = Some(10);
+        settings.app.fleet.privacy_shield_policy_transaction =
+            Some(transaction_for("new-generation-epoch"));
+    }
+    let mut reset = in_generation(&f, 1, GENERATION_NEW, true);
+    reset.keep_transaction_hash = Some("new-generation-epoch".into());
+    let kept = apply_with(&reset, |_| Ok(())).unwrap();
+    let transaction = kept.app.fleet.privacy_shield_policy_transaction.unwrap();
+    assert!(transaction.was_running);
+    assert_eq!(transaction.pre_pause_mode.as_deref(), Some("balanced"));
+}
+
+#[test]
+fn an_ordinary_epoch_never_touches_a_pending_shield_transaction() {
+    let f = Fixture::new();
+    record_floor(Some(GENERATION_OLD));
+    SETTINGS_CACHE.lock().unwrap().as_mut().unwrap().app.fleet.privacy_shield_policy_transaction =
+        Some(transaction_for("in-flight"));
+    let next = apply_with(&in_generation(&f, 11, GENERATION_OLD, false), |_| Ok(())).unwrap();
+    assert!(next.app.fleet.privacy_shield_policy_transaction.is_some());
 }
