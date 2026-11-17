@@ -107,6 +107,7 @@ mod licence_trial_intent;
 #[allow(dead_code)] // Service-owned activation is still disconnected.
 mod licence_machine_identity;
 mod shield_journal;
+mod system_paths;
 mod vault_access;
 
 #[cfg(windows)]

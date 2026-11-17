@@ -310,6 +310,31 @@ pub(crate) async fn handle_connection(
     let caller_has_interactive_session = peer
         .as_deref()
         .is_some_and(peer_has_active_interactive_session);
+    // Per-client-SID quota (administrators/SYSTEM have a separate allowance).
+    // The SID is only known after Hello + token capture, so the global slot
+    // already bounds the unauthenticated phase. Excess gets an explicit busy
+    // error, then the connection closes.
+    let _quota_permit = match peer.as_deref() {
+        Some(peer) => {
+            match crate::pipe_transport::client_quota()
+                .try_acquire(peer.caller_sid(), caller_privileged)
+            {
+                Some(permit) => Some(permit),
+                None => {
+                    let busy = Envelope::Error(ErrorReply {
+                        request_id: 0,
+                        kind: "busy".to_string(),
+                        message: "too many concurrent service connections for this account"
+                            .to_string(),
+                    });
+                    let _ = crate::pipe_transport::write_frame(&mut conn, &busy).await;
+                    return Ok(());
+                }
+            }
+        }
+        None => None,
+    };
+    let connection_started = std::time::Instant::now();
     let ack = Envelope::Hello(wincmd_shared::svc::hello_from_ui("svc-ack"));
     crate::pipe_transport::write_frame(&mut conn, &ack)
         .await
@@ -318,9 +343,27 @@ pub(crate) async fn handle_connection(
     // (b)/(c) Bound even continuously active clients; callers can reconnect.
     // This never interrupts a handler or discards its completed reply.
     for _ in 0..crate::pipe_transport::MAX_FRAMES_PER_CONNECTION {
-        let env = match crate::pipe_transport::read_frame(&mut conn).await {
+        let Some(remaining) = crate::pipe_transport::remaining_lifetime(
+            connection_started,
+            std::time::Instant::now(),
+            crate::pipe_transport::MAX_CONNECTION_LIFETIME,
+        ) else {
+            break;
+        };
+        let env = match crate::pipe_transport::read_frame_within(&mut conn, remaining).await {
             Ok(e) => e,
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => break,
+            Err(e)
+                if e.kind() == io::ErrorKind::TimedOut
+                    && crate::pipe_transport::remaining_lifetime(
+                        connection_started,
+                        std::time::Instant::now(),
+                        crate::pipe_transport::MAX_CONNECTION_LIFETIME,
+                    )
+                    .is_none() =>
+            {
+                break
+            }
             Err(e) => return Err(e.into()),
         };
 
@@ -366,6 +409,23 @@ pub(crate) async fn handle_connection(
             });
             crate::pipe_transport::write_frame(&mut conn, &reply).await?;
             continue;
+        }
+        // Every pid-based gate below re-resolves `client_pid`. Require the
+        // exact process captured at connect time to still be alive, so a
+        // recycled pid cannot inherit this connection's trust.
+        if capture_live_peer
+            && !peer
+                .as_deref()
+                .is_some_and(AuthenticatedPipePeer::pinned_process_is_live)
+        {
+            wincmd_shared::zeroize_json(&mut req.args);
+            let reply = Envelope::Error(ErrorReply {
+                request_id,
+                kind: "peer_exited".to_string(),
+                message: "pipe client process is no longer running".to_string(),
+            });
+            let _ = crate::pipe_transport::write_frame(&mut conn, &reply).await;
+            return Ok(());
         }
         let authorization = if matches!(
             req.feature_id.as_str(),
@@ -795,7 +855,11 @@ async fn dispatch_verb(
 
         "svc.clipboard.set_enabled" => handle_set_enabled(clipboard_state, args),
 
-        "svc.vault.get_policy" => vault_mount.with_exclusive_operation(|| {
+        // Served from `VaultAccessStore` snapshots only (each call takes its own
+        // short state lock; nothing here reads broker/mount state), so these
+        // ReadOnly verbs must not queue behind the global mount mutex. Writers
+        // still validate `expected_version` under the exclusive lock.
+        "svc.vault.get_policy" => (|| -> Result<serde_json::Value, VerbError> {
             require_vault_policy_read_available(vault_access, caller_privileged)?;
             serde_json::to_value(vault_policy_projection(
                 vault_access,
@@ -803,16 +867,16 @@ async fn dispatch_verb(
                 caller_privileged,
             ))
             .map_err(|_| vault_policy_state_unavailable())
-        }),
+        })(),
         "svc.vault.list_principals" => handle_vault_list_principals(vault_access, args, peer),
-        "svc.vault.get_status" => vault_mount.with_exclusive_operation(|| {
+        "svc.vault.get_status" => (|| -> Result<serde_json::Value, VerbError> {
             require_vault_policy_read_available(vault_access, caller_privileged)?;
             serde_json::to_value(vault_access.caller_status(
                 peer.map(AuthenticatedPipePeer::caller_sid).unwrap_or(""),
                 caller_privileged,
             ))
             .map_err(|_| vault_policy_state_unavailable())
-        }),
+        })(),
         // The historical whole-policy wire cannot safely be caller-scoped:
         // an owner would have to receive other owners' records or omission
         // would become deletion.  Keep it closed now that fragments exist.
@@ -5083,6 +5147,44 @@ mod tests {
         assert!(!super::RECOVERY_READMISSION_READY);
         assert!(super::handle_recovery_readmission(serde_json::json!({}),None).await.is_err());
     }
+    /// Drift guard: every verb the dispatcher handles must be reachable
+    /// (`is_known_verb`), and the verbs that previously fell to the
+    /// fail-closed `Privileged` default are classified explicitly.
+    #[test]
+    fn every_dispatched_verb_is_known_and_explicitly_classified() {
+        use super::{classify_verb, is_known_verb, CapabilityClass};
+        let source = include_str!("pipe.rs");
+        let start = source.find("\"svc.status\" => Ok(").expect("dispatch start");
+        let end = start
+            + source[start..]
+                .find("\"svc.vault.personal_status\" =>")
+                .expect("dispatch end");
+        let region = &source[start..end + 64];
+        let mut verbs: Vec<&str> = Vec::new();
+        for (index, _) in region.match_indices("\"svc.") {
+            let rest = &region[index + 1..];
+            let literal = &rest[..rest.find('"').unwrap()];
+            if literal.chars().all(|c| c.is_ascii_lowercase() || c == '.' || c == '_') {
+                verbs.push(literal);
+            }
+        }
+        verbs.extend([
+            super::APPLY_MACHINE_SETTING_VERB,
+            super::STORE_LICENSE_CACHE_VERB,
+            super::VERIFY_LICENSE_CACHE_VERB,
+            super::RENEW_HYBRID_LICENSE_VERB,
+            super::ENROL_HYBRID_LICENSE_VERB,
+            super::RELEASE_HYBRID_LICENSE_VERB,
+            super::ACTIVATE_HYBRID_LICENSE_VERB,
+        ]);
+        assert!(verbs.len() > 60, "dispatch scan found too few verbs");
+        for verb in &verbs {
+            assert!(is_known_verb(verb), "{verb} is dispatched but not known");
+        }
+        assert_eq!(classify_verb("svc.vault.personal_status"), CapabilityClass::ReadOnly);
+        assert_eq!(classify_verb("svc.fleet.recovery.readmission"), CapabilityClass::Privileged);
+        assert!(!is_known_verb("svc.not_a_verb"));
+    }
     #[cfg(not(feature="fleet-recovery-lab"))]
     #[tokio::test]
     #[allow(clippy::assertions_on_constants)] // asserts a build-time readiness flag stays off
@@ -5390,6 +5492,8 @@ mod tests {
                 session_id: 7,
                 caller_sid: sid.into(),
                 authentication_id: (1, 0),
+                process: std::ptr::null_mut(),
+                process_creation_time: 0,
             };
             if elevated {
                 let request = serde_json::json!({ "entry_id": "vault-1", "policy_id": "policy-1", "expected_version": 1 });

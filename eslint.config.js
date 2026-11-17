@@ -47,7 +47,6 @@ const LEGACY_RAW_INVOKE_FILES = [
   "src/components/Sidebar.tsx",
   "src/components/TitleBar.tsx",
   "src/components/UpdaterStatus.tsx",
-  "src/components/dashboard/DashboardSidePanel.tsx",
   "src/components/dashboard/HardwareSpecsCard.tsx",
   "src/components/dashboard/RadarControlStrip.tsx",
   "src/components/dashboard/RecentDownloadsCard.tsx",

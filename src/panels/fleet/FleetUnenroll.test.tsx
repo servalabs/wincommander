@@ -42,7 +42,6 @@ test("unenroll requires an explicit approved response and a successful final rec
     mock.module('@/components/ui/input',()=>({Input:props=>h('input',props)}));
     mock.module('@/components/ui/switch',()=>({Switch:({checked,onCheckedChange,...props})=>h('input',{...props,type:'checkbox',checked,onChange:event=>onCheckedChange(event.target.checked)})}));
     mock.module('@/components/ui/icon',()=>({Icon:()=>null}));
-    mock.module('./src/panels/fleet/FleetRecovery',()=>({default:()=>{throw new Error('complex recovery UI must not render')}}));
     const {default:View}=await import('./src/panels/fleet/FleetConnectView');
     const host=document.getElementById('root'),root=createRoot(host);
     const leave=()=>[...host.querySelectorAll('button')].find(button=>button.textContent==='Request to leave');

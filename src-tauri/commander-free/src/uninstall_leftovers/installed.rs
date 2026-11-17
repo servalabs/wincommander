@@ -17,9 +17,10 @@ pub(super) struct RunningAppEvidence {
 pub(super) fn installed_app_evidence() -> InstalledAppEvidence {
     use windows_sys::Win32::Foundation::ERROR_SUCCESS;
     use windows_sys::Win32::System::Registry::{
-        RegCloseKey, RegEnumKeyExW, RegOpenKeyExW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE,
-        KEY_READ, KEY_WOW64_32KEY, KEY_WOW64_64KEY,
+        RegCloseKey, RegOpenKeyExW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ,
+        KEY_WOW64_32KEY, KEY_WOW64_64KEY,
     };
+    use crate::runtime_visibility::registry::{enum_key_name, EnumCursor};
 
     let mut evidence = InstalledAppEvidence::default();
     let roots = [
@@ -41,26 +42,9 @@ pub(super) fn installed_app_evidence() -> InstalledAppEvidence {
                 {
                     continue;
                 }
-                for index in 0..4096u32 {
-                    let mut name = [0u16; 512];
-                    let mut length = name.len() as u32;
-                    if RegEnumKeyExW(
-                        key,
-                        index,
-                        name.as_mut_ptr(),
-                        &mut length,
-                        std::ptr::null_mut(),
-                        std::ptr::null_mut(),
-                        std::ptr::null_mut(),
-                        std::ptr::null_mut(),
-                    ) != ERROR_SUCCESS
-                    {
-                        break;
-                    }
-                    let subkey = format!(
-                        "{parent}\\{}",
-                        String::from_utf16_lossy(&name[..length as usize])
-                    );
+                let mut cursor = EnumCursor::default();
+                while let Some(child) = cursor.next(|i, _| enum_key_name(key, i)) {
+                    let subkey = format!("{parent}\\{child}");
                     if let Some(display_name) = read_value(root, &subkey, "DisplayName", view) {
                         add_name(&mut evidence.names, &display_name);
                     }

@@ -4,6 +4,7 @@ import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppState } from "../../context/AppContext";
 import { showSuccess, showError, showWarning } from "../../utils/toast";
+import { armBackend } from "../../hooks/armBackend";
 import useBackend from "../../hooks/useBackend";
 import { syncCalculatorShortcuts } from "./calculatorShortcuts";
 import { shortcutWarningsAfterReconciliation, syncSharedShortcutClaim } from "../../hooks/sharedShortcutClaims";
@@ -69,7 +70,7 @@ export default function StartupPinConfig() {
         const warning = await syncCalculatorShortcuts(setWinCommanderCalculatorShortcuts, true, shared.managed);
         const warnings = shortcutWarningsAfterReconciliation(warning ? [warning] : [], shared.warning);
         if (warnings.length) showWarning(`Calculator Lock is on, but shortcuts need attention: ${warnings.join(" ")}`);
-        await invoke("update_autostart_task_identity", { covered: true }).catch(() => {});
+        await armBackend("update_autostart_task_identity", { covered: true }, "Autostart task identity was not updated");
         try {
           await invoke("enter_calculator_mode");
         } catch (error) {
@@ -91,7 +92,7 @@ export default function StartupPinConfig() {
         const warnings = shortcutWarningsAfterReconciliation(warning ? [warning] : [], shared.warning);
         if (warnings.length) showWarning(`Calculator Lock is off, but shortcuts need attention: ${warnings.join(" ")}`);
       }
-      if (mode === "real") await invoke("update_autostart_task_identity", { covered: !!appSettings?.ideal?.identity?.hideWinCommander }).catch(() => {});
+      if (mode === "real") await armBackend("update_autostart_task_identity", { covered: !!appSettings?.ideal?.identity?.hideWinCommander }, "Autostart task identity was not updated");
     } catch (e) { showError(String(e)); }
   };
 

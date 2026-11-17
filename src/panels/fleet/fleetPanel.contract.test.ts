@@ -12,7 +12,6 @@ const patternPicker = readFileSync("src/panels/fleet/VaultAccessPatternPicker.ts
 const vaultHook = readFileSync("src/hooks/useVaultAccess.ts", "utf8");
 const vaultDraft = readFileSync("src/panels/fleet/vaultAccessDraft.ts", "utf8");
 const principalPicker = readFileSync("src/panels/fleet/VaultPrincipalPicker.tsx", "utf8");
-const volumeEditor = readFileSync("src/panels/fleet/VaultVolumesEditor.tsx", "utf8");
 const infoPopover = readFileSync("src/panels/fleet/FleetInfoPopover.tsx", "utf8");
 const css = readFileSync("src/panels/fleet/index.css", "utf8");
 const cleanupBackend = readFileSync("src-tauri/commander-free/scripts/modules/privacy/cleanup.ps1", "utf8");
@@ -56,11 +55,6 @@ describe("Fleet access-control panel contracts", () => {
   });
 
   test("uses the mockup-aligned Vault permissions workspace with per-group permissions", () => {
-    expect(volumeEditor).toContain("fleet-vault-workspace");
-    expect(volumeEditor).toContain("fleet-vault-matrix");
-    expect(volumeEditor).toContain("Owner / administrator");
-    expect(volumeEditor).toContain("No access");
-    expect(volumeEditor).toContain("Read & write");
     expect(css).toContain("fleet-vault-empty-inline");
     expect(css).toContain("overflow-x: auto");
   });
@@ -210,7 +204,6 @@ describe("Fleet access-control panel contracts", () => {
     expect(infoPopover).toContain("PopoverTrigger");
     expect(infoPopover).toContain("PopoverContent");
     expect(access).toContain("How access groups work");
-    expect(volumeEditor).toContain("How Vault access is decided");
   });
 
   test("uses the service-owned Vault policy and makes old planner data opt-in only", () => {

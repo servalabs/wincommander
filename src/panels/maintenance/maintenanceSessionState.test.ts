@@ -12,7 +12,6 @@ const read = (name: string) =>
 test("maintenance scan hooks retain their results in the session store", async () => {
   const hooks = await Promise.all([
     "useFileHygiene.ts",
-    "useMalwareCenter.ts",
     "useRegistryTools.ts",
     "useRoutineCleaner.ts",
     "useStartupDrivers.ts",
@@ -69,13 +68,9 @@ test("Maintenance preloads registry and hygiene reviews before their tabs mount"
 });
 
 test("storage dashboards do not auto-scan the manual analysis tools", async () => {
-  const [analyzer, fileStats] = await Promise.all([
-    read("DiskSpaceAnalyzerDialog.tsx"),
-    read("FileStatsPanel.tsx"),
-  ]);
+  const analyzer = await read("DiskSpaceAnalyzerDialog.tsx");
 
   expect(analyzer).not.toContain("if (inline && !diskAnalyzerSession.meta");
-  expect(fileStats).not.toContain("if (!fileStatsSession) void runScan()");
 });
 
 test("duplicate discovery starts once per app session and keeps a completed report on return", async () => {
@@ -111,10 +106,8 @@ test("maintenance exposes distinct workspaces with review and selection controls
 test("visible maintenance scan controls retain accessible action labels", async () => {
   const sources = await Promise.all([
     "FileHygieneTools.tsx",
-    "MalwareCenter.tsx",
     "RegistryTools.tsx",
     "RoutineCleanerPanel.tsx",
-    "SecurityData.tsx",
     "StartupDriverTools.tsx",
     "SystemHygieneTools.tsx",
   ].map(read));

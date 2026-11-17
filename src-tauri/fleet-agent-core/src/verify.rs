@@ -157,10 +157,12 @@ pub struct SignedCommand {
     /// `"duress_wipe"`, `"all_clear"`). Used by the agent to route the command
     /// to the right platform action after signature verification.
     ///
+    /// NOT part of the signed preimage, so it never selects the action: the
+    /// dispatcher routes only on the signed `catalog_id` and rejects a command
+    /// whose `scope` is non-empty and differs from `catalog_id`.
+    ///
     /// `#[serde(default)]`: the server's `fleet_proto::SignedCommand` does NOT
-    /// carry `scope` (for operator commands `scope == catalog_id`), so it
-    /// arrives empty and the dispatcher falls back to `catalog_id` — see
-    /// `dispatch::process_checkin`. Without this default, a non-empty `commands`
+    /// carry `scope`, so it arrives empty. Without this default, a non-empty `commands`
     /// array from the real server fails to deserialize (`missing field scope`),
     /// silently turning every command-carrying check-in into a network error.
     #[serde(default)]
@@ -188,10 +190,10 @@ pub fn decode_verifying_key(b64: &str) -> Result<VerifyingKey, String> {
 ///
 /// Checks (in order):
 /// 1. `signer_key` matches the pinned key (key-swap prevention).
-/// 2. Timestamp is within `max_skew_secs` of `now`.
+/// 2. Timestamp is present (non-zero) and within `max_skew_secs` of `now`.
 /// 3. ed25519 signature over `fleet_proto::canonical_command_bytes(…)` is valid
 ///    (verified via `fleet_proto::verify_signature_b64` — no local crypto).
-/// 4. Nonce has not been seen before (replay defence).
+/// 4. Nonce is present (non-empty) and has not been seen before (replay defence).
 pub fn verify_command(
     cmd: &SignedCommand,
     key: &VerifyingKey,
@@ -206,9 +208,13 @@ pub fn verify_command(
         return Err("fleet command signer_key does not match pinned pubkey".to_string());
     }
 
-    // 2. Timestamp freshness.
-    let skew = if cmd.ts != 0 { (now - cmd.ts).abs() } else { 0 };
-    if cmd.ts != 0 && skew > max_skew_secs {
+    // 2. Timestamp freshness. `ts` is mandatory: ts == 0 (absent) used to skip
+    //    the check, letting a captured command be replayed forever.
+    if cmd.ts == 0 {
+        return Err("fleet command missing timestamp (ts)".to_string());
+    }
+    let skew = (now - cmd.ts).abs();
+    if skew > max_skew_secs {
         return Err(format!(
             "fleet command timestamp skew {skew}s exceeds max {max_skew_secs}s"
         ));
@@ -236,15 +242,15 @@ pub fn verify_command(
         return Err("fleet command ed25519 signature invalid".to_string());
     }
 
-    // 4. Nonce replay defence.
-    //    Nonce may be empty for server implementations that don't set it;
-    //    only check replay when non-empty.
-    if !cmd.nonce.is_empty() {
-        if seen_nonces.contains_key(&cmd.nonce) {
-            return Err(format!("fleet command nonce '{}' replayed", cmd.nonce));
-        }
-        seen_nonces.insert(cmd.nonce.clone(), now);
+    // 4. Nonce replay defence. `nonce` is mandatory: an empty nonce used to
+    //    skip the replay check entirely.
+    if cmd.nonce.is_empty() {
+        return Err("fleet command missing nonce".to_string());
     }
+    if seen_nonces.contains_key(&cmd.nonce) {
+        return Err(format!("fleet command nonce '{}' replayed", cmd.nonce));
+    }
+    seen_nonces.insert(cmd.nonce.clone(), now);
 
     Ok(())
 }
@@ -823,6 +829,28 @@ mod tests {
         let wrong_vk = other_key.verifying_key();
         let mut seen = HashMap::new();
         assert!(verify_command(&cmd, &wrong_vk, now, 300, &mut seen).is_err());
+    }
+
+    #[test]
+    fn zero_timestamp_is_rejected() {
+        let key = test_signing_key();
+        let vk = key.verifying_key();
+        let cmd = make_cmd(&key, "all_clear", "nonce-ts0", 0);
+        let mut seen = HashMap::new();
+        let err = verify_command(&cmd, &vk, 1_700_000_000, 300, &mut seen).unwrap_err();
+        assert!(err.contains("missing timestamp"), "{err}");
+        assert!(seen.is_empty());
+    }
+
+    #[test]
+    fn empty_nonce_is_rejected() {
+        let key = test_signing_key();
+        let vk = key.verifying_key();
+        let now = 1_700_000_000_i64;
+        let cmd = make_cmd(&key, "all_clear", "", now);
+        let mut seen = HashMap::new();
+        let err = verify_command(&cmd, &vk, now, 300, &mut seen).unwrap_err();
+        assert!(err.contains("missing nonce"), "{err}");
     }
 
     // ── Seen-nonce TTL eviction test ──────────────────────────────────────────

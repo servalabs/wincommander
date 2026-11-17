@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { ScanFinding } from "@/components/startup/WizardAnimations";
+import type { ScanFinding } from "@/lib/scanFindings";
 import { dashboardFixFailure, type FindingFixAttempt } from "./fixVerification";
 import { showError } from "@/utils/toast";
 import { TOGGLE_REPAIR_VERIFIED_EVENT, type VerifiedToggleRepair } from "@/lib/autoHeal";

@@ -121,6 +121,133 @@ function Split-ListParam {
     return $stringValue -split '\s*,\s*' | Where-Object { $_ -ne '' }
 }
 
+# ── RAM-disk engine installer (shared by vault/ramdisks.ps1 and
+# dependencies/dependencies.ps1; both modules load independently, so the
+# shared code lives in core). ─────────────────────────────────────────────
+# Verifies that a downloaded installer carries a valid Authenticode signature
+# from the expected publisher. Returns $null when acceptable, otherwise a
+# user-facing error string. Fails closed on any problem.
+function Test-ImDiskInstallerSignature {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    # REQUIRED-OWNER-INPUT: confirm this subject pattern against the signer
+    # certificate of a real https://www.ltr-data.se/files/imdiskinst.exe
+    # download (Get-AuthenticodeSignature <file>).SignerCertificate.Subject.
+    # Until it matches, the installer is rejected (fail closed).
+    $expectedSignerPattern = '(?:^|,\s*)CN=Olof Lagerkvist(?:,|$)'
+
+    try {
+        $signature = Get-AuthenticodeSignature -FilePath $Path -ErrorAction Stop
+    } catch {
+        return "Could not verify the installer signature: $($_.Exception.Message)"
+    }
+    $signer = if ($signature.SignerCertificate) { $signature.SignerCertificate.Subject } else { '' }
+    if ($signature.Status -ne 'Valid' -or $signer -notmatch $expectedSignerPattern) {
+        return 'The downloaded RAM Disk Engine installer does not have a valid signature from the expected publisher. It was not run.'
+    }
+    return $null
+}
+
+# Downloads (HTTPS only), signature-verifies, and runs the upstream installer.
+# Returns @{ ok = $true } or @{ ok = $false; error = '<message>' }. The caller
+# decides how to report the result and polls for driver registration.
+function Install-ImDiskEngineFromUpstream {
+    $url = 'https://www.ltr-data.se/files/imdiskinst.exe'
+    $tmpExe = Join-Path $env:TEMP "rde_$([Guid]::NewGuid().ToString('N').Substring(0,8)).exe"
+    $tmpDir = Join-Path $env:TEMP "rde_x_$([Guid]::NewGuid().ToString('N').Substring(0,8))"
+    $lastError = $null
+
+    try {
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = `
+                [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
+        } catch {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        }
+
+        # Attempt A: Invoke-WebRequest (some upstream hosts gate on User-Agent).
+        try {
+            $oldPref = $ProgressPreference
+            $ProgressPreference = 'SilentlyContinue'
+            try {
+                Invoke-WebRequest -Uri $url -OutFile $tmpExe -UseBasicParsing `
+                    -MaximumRedirection 15 -UserAgent 'Wget/1.21.3' -TimeoutSec 600 -ErrorAction Stop
+            } finally { $ProgressPreference = $oldPref }
+        } catch { $lastError = $_.Exception.Message }
+
+        # Attempt B: BITS fallback for restrictive proxies.
+        if (-not (Test-Path -LiteralPath $tmpExe) -or (Get-Item -LiteralPath $tmpExe).Length -lt 100000) {
+            try {
+                Remove-Item -LiteralPath $tmpExe -Force -ErrorAction SilentlyContinue
+                Import-Module BitsTransfer -ErrorAction Stop
+                Start-BitsTransfer -Source $url -Destination $tmpExe -ErrorAction Stop
+            } catch { $lastError = $_.Exception.Message }
+        }
+
+        if (-not (Test-Path -LiteralPath $tmpExe)) {
+            return @{ ok = $false; error = "Could not download the RAM Disk Engine installer. Check internet connectivity or proxy settings.$(if ($lastError) { ' (' + $lastError + ')' })" }
+        }
+        $size = (Get-Item -LiteralPath $tmpExe).Length
+        if ($size -lt 100000) {
+            return @{ ok = $false; error = "Downloaded file too small ($size bytes)." }
+        }
+
+        # Authenticity gate: nothing below runs unless the signature is valid
+        # and from the expected publisher.
+        $sigError = Test-ImDiskInstallerSignature -Path $tmpExe
+        if ($sigError) { return @{ ok = $false; error = $sigError } }
+
+        # Verified: strip Mark-of-the-Web so SmartScreen does not block the
+        # now-trusted installer.
+        try {
+            Unblock-File -LiteralPath $tmpExe -ErrorAction SilentlyContinue
+            $adsPath = $tmpExe + ':Zone.Identifier'
+            if (Test-Path -LiteralPath $adsPath) {
+                Remove-Item -LiteralPath $adsPath -Force -ErrorAction SilentlyContinue
+            }
+        } catch {}
+
+        # IExpress self-extract without running the embedded command:
+        #   /T:<dir> extract destination, /C extract only, /Q quiet.
+        # Then run the payload's install.cmd with the args the GUI would use
+        # (/64 selects the 64-bit driver, /hide suppresses the window).
+        New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
+        $silentOk = $false
+        try {
+            $extractProc = Start-Process -FilePath $tmpExe `
+                -ArgumentList @("/T:$tmpDir", '/C', '/Q') `
+                -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
+            $installCmd = Join-Path $tmpDir 'install.cmd'
+            if ($extractProc.ExitCode -eq 0 -and (Test-Path -LiteralPath $installCmd)) {
+                $cmdProc = Start-Process -FilePath 'cmd.exe' `
+                    -ArgumentList @('/c', "`"$installCmd`"", '/64', '/hide') `
+                    -WorkingDirectory $tmpDir -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
+                if ($cmdProc.ExitCode -eq 0) { $silentOk = $true }
+                else { $lastError = "install.cmd exited with code $($cmdProc.ExitCode)" }
+            }
+        } catch {
+            $lastError = "Silent install failed: $($_.Exception.Message)"
+        }
+
+        # Fallback: launch the verified installer GUI (single small dialog).
+        if (-not $silentOk) {
+            try {
+                $proc = Start-Process -FilePath $tmpExe -Wait -PassThru -ErrorAction Stop
+                if ($proc.ExitCode -ne 0) {
+                    return @{ ok = $false; error = "Installer exited with code $($proc.ExitCode).$(if ($lastError) { ' Previous: ' + $lastError })" }
+                }
+            } catch {
+                return @{ ok = $false; error = "Installer could not start: $($_.Exception.Message)" }
+            }
+        }
+        return @{ ok = $true }
+    }
+    finally {
+        Remove-Item -LiteralPath $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $tmpExe -Force -ErrorAction SilentlyContinue
+    }
+}
+
 # Everything's Winget package installs the GUI/service only.  The search UI
 # talks to the publisher's separate ES command-line executable, which has no
 # Winget package. Keep an elevated copy in WinCommander's shared binary folder

@@ -4,6 +4,11 @@ This is the public, user-visible capability and entitlement summary. The public
 code is authoritative for Free behavior. Private implementation details,
 internal plans, and acceptance evidence are intentionally omitted.
 
+> **Reconciliation caveat:** this document was merged textually with the
+> 2026-11-16 `dev` merge (859 commits) and was not reconciled feature by feature
+> against them; see [STATUS.md](STATUS.md#the-2026-11-16-merge-of-dev). Treat rows for
+> features that arrived with that merge as unverified.
+
 ## Editions
 
 | Edition | Intended use | Source / access |

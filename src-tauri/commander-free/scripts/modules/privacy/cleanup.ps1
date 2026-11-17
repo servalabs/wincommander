@@ -2226,6 +2226,8 @@ function Get-BluetoothDevices {
     # PHASE 2: SYSTEM Task (If Phase 1 found nothing or for escalation)
     if ($devices.Count -eq 0) {
         $debugLog += "Phase 2: SYSTEM Task Escalation"
+        $workDir = $null
+        $btTaskName = 'SM-BS'
         try {
             $scriptContent = @'
 $res = @()
@@ -2258,8 +2260,20 @@ foreach ($p in $enumPaths) {
 }
 $res | ConvertTo-Json -Compress
 '@
-            $tempScript = "$env:TEMP\System_BtGet.ps1"
-            $outputFile = "$env:TEMP\System_BtOut.json"
+            # Private work directory: random name, SYSTEM + Administrators only,
+            # random file names. Removed on every path (finally below).
+            $workDir = Join-Path (Join-Path $env:ProgramData 'WinCommander') ("bt-" + [guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path $workDir -Force -ErrorAction Stop | Out-Null
+            $dirAcl = New-Object System.Security.AccessControl.DirectorySecurity
+            $dirAcl.SetAccessRuleProtection($true, $false)
+            foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) {
+                $dirAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+                    (New-Object System.Security.Principal.SecurityIdentifier($sid)),
+                    'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
+            }
+            Set-Acl -LiteralPath $workDir -AclObject $dirAcl -ErrorAction Stop
+            $tempScript = Join-Path $workDir ([guid]::NewGuid().ToString('N') + '.ps1')
+            $outputFile = Join-Path $workDir ([guid]::NewGuid().ToString('N') + '.json')
             $escapedScript = $scriptContent.Replace("'", "''")
             $wrapper = "[scriptblock]::Create('$escapedScript').Invoke() | Out-File -FilePath '$outputFile' -Encoding UTF8 -Force"
             $wrapper | Out-File -FilePath $tempScript -Encoding UTF8 -Force
@@ -2301,11 +2315,13 @@ $res | ConvertTo-Json -Compress
             else {
                 $debugLog += "Phase 2 Error: Task timeout or output file missing"
             }
-            Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
-            Invoke-7Erase -Path $tempScript -Type File
         }
         catch {
             $debugLog += "Phase 2 Error: $($_.Exception.Message)"
+        }
+        finally {
+            Unregister-ScheduledTask -TaskPath $script:SystemMaintenanceTaskPath -TaskName $btTaskName -Confirm:$false -ErrorAction SilentlyContinue
+            if ($workDir) { Remove-Item -LiteralPath $workDir -Recurse -Force -ErrorAction SilentlyContinue }
         }
     }
 

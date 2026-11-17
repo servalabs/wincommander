@@ -1,4 +1,4 @@
-import type { ScanFinding } from "@/components/startup/WizardAnimations";
+import type { ScanFinding } from "@/lib/scanFindings";
 import { DASHBOARD_POLICY_FIELDS } from "@/lib/dashboardPolicyObservation";
 
 interface FixReply {

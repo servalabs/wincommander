@@ -3,7 +3,7 @@ import {
   automaticFixAllCandidates,
   automaticFixAllFingerprint,
 } from "./automaticFixAll";
-import type { ScanFinding } from "../components/startup/WizardAnimations";
+import type { ScanFinding } from "@/lib/scanFindings";
 
 const finding = (id: string, partial: Partial<ScanFinding> = {}): ScanFinding => ({
   id,

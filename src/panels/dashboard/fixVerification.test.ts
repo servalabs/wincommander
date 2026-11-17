@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { assertDashboardFixSucceeded, dashboardFixFailure, retainUnverifiedFindings, verifyDashboardToggleFix, verifyDependencyInstall } from "./fixVerification";
 import { getToggleById } from "@/registry";
-import type { ScanFinding } from "@/components/startup/WizardAnimations";
+import type { ScanFinding } from "@/lib/scanFindings";
 
 const finding: ScanFinding = { id: "recallSnapshots", label: "Disable Recall", category: "privacy", severity: "warning", impact: "Policy is not configured" };
 const receipt = { success: true, data: { status: "disabled", verified: true } };

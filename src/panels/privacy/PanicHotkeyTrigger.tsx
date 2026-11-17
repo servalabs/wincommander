@@ -10,7 +10,7 @@
 // via the `update_panic_hotkey` Tauri command without an app restart.
 
 import { useCallback, useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { armBackend } from "../../hooks/armBackend";
 import { Icon } from "../../components/ui/icon";
 
 interface Props {
@@ -36,9 +36,10 @@ export default function PanicHotkeyTrigger({ hotkey, onSave, bare = false }: Pro
       parts.push(key);
       const combo = parts.join("+");
       setRecording(false);
-      onSave(combo);
-      invoke("update_panic_hotkey", { hotkey: combo }).catch(() => {
-        /* best-effort re-bind; settings are still saved */
+      // Persist only after the global shortcut is actually bound, so the
+      // displayed hotkey is never one that is unbound.
+      void armBackend("update_panic_hotkey", { hotkey: combo }, "Panic hotkey was not changed (could not bind shortcut)").then((ok) => {
+        if (ok) onSave(combo);
       });
     },
     [onSave],
@@ -46,7 +47,7 @@ export default function PanicHotkeyTrigger({ hotkey, onSave, bare = false }: Pro
 
   // Keep the global shortcut bound to the persisted value across sessions.
   useEffect(() => {
-    if (hotkey) invoke("update_panic_hotkey", { hotkey }).catch(() => { });
+    if (hotkey) void armBackend("update_panic_hotkey", { hotkey }, "Panic hotkey is NOT active (could not bind shortcut)");
   }, [hotkey]);
 
   return (

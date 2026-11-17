@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useState, type ReactNode } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { armBackend } from "../hooks/armBackend";
 
 export type AuthMode = "real" | "decoy";
 
@@ -19,8 +19,17 @@ export function AuthModeProvider({ children }: { children: ReactNode }) {
   // view is shown — otherwise a coerced session could persist over the real
   // configuration via a direct invoke().
   const setMode = useCallback((m: AuthMode) => {
-    invoke("set_decoy_mode", { on: m === "decoy" }).catch(() => {});
+    // The view switch itself stays immediate (fail closed: never fall back to
+    // the real view under duress). A failed backstop is logged and surfaced so
+    // it is not silently assumed to be armed.
     setModeState(m);
+    void armBackend(
+      "set_decoy_mode",
+      { on: m === "decoy" },
+      m === "decoy"
+        ? "Decoy protection could not be armed; real settings are NOT write-protected"
+        : "Decoy protection could not be disarmed",
+    );
   }, []);
   return (
     <AuthModeContext.Provider value={{ mode, setMode }}>

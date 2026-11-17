@@ -47,8 +47,8 @@ not been validated in the named environment. Acceptance work is tracked in
   rests on the SLSA attestation and SBOM published with each release. That the
   salt alone prevents identical rebuilds is inferred, not tested.
 - The root `latest.*.json` update manifests all record version `3.2.8` (dated
-  2026-08-06) while the app is `3.6.7`, and `latest.investigator.json` is
-  empty. No script in this repository reads them; who owns them is an open
+  2026-08-06) while the app is `3.6.7`. (`latest.investigator.json` holds a
+  signed payload that also records `3.2.8`.) No script in this repository reads them; who owns them is an open
   question ([USER-TASKS.md](USER-TASKS.md)).
 - The Markdown link check runs only when code paths change, because the CI
   path filters exclude `*.md`. Documentation-only changes are checked locally

@@ -359,11 +359,11 @@ mod tests {
 
     #[test]
     fn recognises_only_a_running_driver_service() {
-        let running = Command::new("cmd")
+        let running = Command::new(crate::system_paths::system_directory().unwrap().join("cmd.exe"))
             .args(["/c", "echo STATE : 4 RUNNING"])
             .output()
             .unwrap();
-        let stopped = Command::new("cmd")
+        let stopped = Command::new(crate::system_paths::system_directory().unwrap().join("cmd.exe"))
             .args(["/c", "echo STATE : 1 STOPPED"])
             .output()
             .unwrap();
@@ -393,11 +393,11 @@ mod tests {
 
     #[test]
     fn compatible_veracrypt_requires_a_running_service_and_open_control_device() {
-        let running = Command::new("cmd")
+        let running = Command::new(crate::system_paths::system_directory().unwrap().join("cmd.exe"))
             .args(["/c", "echo STATE : 4 RUNNING"])
             .output()
             .unwrap();
-        let stopped = Command::new("cmd")
+        let stopped = Command::new(crate::system_paths::system_directory().unwrap().join("cmd.exe"))
             .args(["/c", "echo STATE : 1 STOPPED"])
             .output()
             .unwrap();

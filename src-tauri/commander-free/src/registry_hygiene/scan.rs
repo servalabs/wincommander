@@ -3,12 +3,13 @@ use super::{CachedOrphan, RegistryCleanerScan, RegistryOrphan, CLSID_ROOT};
 
 #[cfg(windows)]
 pub(super) fn scan_orphans() -> Result<(RegistryCleanerScan, Vec<CachedOrphan>), String> {
-    use super::windows_registry::{read_default, read_wide, wide};
+    use super::windows_registry::{read_default, wide};
     use uuid::Uuid;
     use windows_sys::Win32::Foundation::ERROR_SUCCESS;
     use windows_sys::Win32::System::Registry::{
-        RegCloseKey, RegEnumKeyExW, RegOpenKeyExW, HKEY, HKEY_CURRENT_USER, KEY_READ,
+        RegCloseKey, RegOpenKeyExW, HKEY, HKEY_CURRENT_USER, KEY_READ,
     };
+    use crate::runtime_visibility::registry::{enum_key_name, EnumCursor};
     let mut entries = Vec::new();
     let mut skipped_entries = 0;
     unsafe {
@@ -29,25 +30,8 @@ pub(super) fn scan_orphans() -> Result<(RegistryCleanerScan, Vec<CachedOrphan>),
                 Vec::new(),
             ));
         }
-        let mut index = 0;
-        loop {
-            let mut name = [0u16; 64];
-            let mut length = name.len() as u32;
-            if RegEnumKeyExW(
-                root,
-                index,
-                name.as_mut_ptr(),
-                &mut length,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-            ) != ERROR_SUCCESS
-            {
-                break;
-            }
-            index += 1;
-            let class_id = read_wide(&name[..length as usize]);
+        let mut cursor = EnumCursor::default();
+        while let Some(class_id) = cursor.next(|i, _| enum_key_name(root, i)) {
             if !is_valid_clsid(&class_id) {
                 skipped_entries += 1;
                 continue;

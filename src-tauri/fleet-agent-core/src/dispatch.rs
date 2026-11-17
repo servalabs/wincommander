@@ -268,6 +268,10 @@ pub fn process_checkin(
                 },
                 cmd.catalog_id
             )),
+            Some(_) if !cmd.scope.is_empty() && cmd.scope != cmd.catalog_id => Err(format!(
+                "fleet command scope '{}' does not match signed catalog_id '{}'",
+                cmd.scope, cmd.catalog_id
+            )),
             Some(k) => verify_command(cmd, k, now, max_skew_secs, seen_nonces),
         };
         let outcome = match verify {
@@ -277,14 +281,11 @@ pub fn process_checkin(
             }
             Ok(()) => {
                 dispatch.record_trigger_source(FLEET_TRIGGER_SOURCE, crate::util::now_rfc3339());
-                // The server's `fleet_proto::SignedCommand` carries no `scope`
-                // field; for operator commands `scope == catalog_id`, so fall
-                // back to it when `scope` is absent/empty (the real server case).
-                let scope = if cmd.scope.is_empty() {
-                    cmd.catalog_id.as_str()
-                } else {
-                    cmd.scope.as_str()
-                };
+                // Route ONLY on the signed `catalog_id`. `scope` is outside the
+                // signed preimage so it must never select the action; a
+                // non-empty `scope` that differs from `catalog_id` is rejected
+                // above, before verification.
+                let scope = cmd.catalog_id.as_str();
                 match scope {
                     "raise_posture" => {
                         let level = cmd
@@ -410,7 +411,7 @@ pub(crate) mod tests {
             "cmd-test-server-uuid",
             "idem-test-key",
             "dev-test",
-            "lc.cascade",
+            scope,
             "irreversible",
             1,
         )
@@ -489,7 +490,7 @@ pub(crate) mod tests {
             "cmd-rp-server-uuid",
             "idem-rp-key",
             "dev-test",
-            "lc.raise_posture",
+            "raise_posture",
             "safe",
             1,
         );
@@ -571,9 +572,34 @@ pub(crate) mod tests {
             "signature": signed.signature,
             "signer_key": signed.signer_key,
         });
-        let cmd: SignedCommand =
-            serde_json::from_value(server_json).expect("9-field server command must deserialize");
+        let cmd: SignedCommand = serde_json::from_value(server_json.clone())
+            .expect("9-field server command must deserialize");
         assert!(cmd.scope.is_empty() && cmd.ts == 0 && cmd.nonce.is_empty());
+
+        // The bare 9-field shape carries no ts/nonce: freshness and replay
+        // defence are mandatory, so it must be rejected (AuthFailed).
+        let bare = CheckinResponse {
+            commands: vec![cmd],
+            ..Default::default()
+        };
+        let bare_dispatch = MockDispatch::default();
+        let bare_out = process_checkin(
+            &bare,
+            Some(&vk),
+            Some(&vk),
+            now,
+            300,
+            &mut HashMap::new(),
+            &bare_dispatch,
+        );
+        assert!(matches!(bare_out[0], FleetDispatchOutcome::AuthFailed(_)));
+        assert_eq!(*bare_dispatch.seal_calls.lock().unwrap(), 0);
+
+        // With ts + nonce supplied (scope still absent) it verifies and routes.
+        let mut with_fresh = server_json;
+        with_fresh["ts"] = serde_json::json!(now);
+        with_fresh["nonce"] = serde_json::json!("seal-nonce");
+        let cmd: SignedCommand = serde_json::from_value(with_fresh).unwrap();
 
         let resp = CheckinResponse {
             all_clear: false,
@@ -595,6 +621,54 @@ pub(crate) mod tests {
             1,
             "routed on catalog_id fallback when scope is absent"
         );
+    }
+
+    /// `scope` is unsigned: a server-signed command for an ordinary catalog
+    /// entry must not be able to select `duress_wipe` via `scope`.
+    #[test]
+    fn scope_mismatching_catalog_id_is_rejected() {
+        let key = test_signing_key();
+        let vk = key.verifying_key();
+        let now = 1_700_000_000_i64;
+        let cmd = make_signed_command(
+            &key,
+            "duress_wipe",
+            serde_json::json!({}),
+            now,
+            "scope-n1",
+            "c1",
+            "i1",
+            "d1",
+            "usb.storage.lockdown.enable",
+            "destructive",
+            1,
+        );
+        let resp = CheckinResponse {
+            commands: vec![cmd],
+            ..Default::default()
+        };
+        let d = MockDispatch::default();
+        let out = process_checkin(&resp, Some(&vk), Some(&vk), now, 300, &mut HashMap::new(), &d);
+        assert!(matches!(out[0], FleetDispatchOutcome::AuthFailed(_)));
+        assert_eq!(*d.wipe_calls.lock().unwrap(), 0);
+    }
+
+    #[test]
+    fn scope_equal_to_catalog_id_and_valid_command_pass() {
+        let key = test_signing_key();
+        let vk = key.verifying_key();
+        let now = 1_700_000_000_i64;
+        // make_cmd sets catalog_id == scope.
+        let cmd = make_cmd(&key, "duress_wipe", "scope-n2", now);
+        assert_eq!(cmd.scope, cmd.catalog_id);
+        let resp = CheckinResponse {
+            commands: vec![cmd],
+            ..Default::default()
+        };
+        let d = MockDispatch::default();
+        let out = process_checkin(&resp, Some(&vk), Some(&vk), now, 300, &mut HashMap::new(), &d);
+        assert!(matches!(out[0], FleetDispatchOutcome::Dispatched { .. }));
+        assert_eq!(*d.wipe_calls.lock().unwrap(), 1);
     }
 
     /// Security: dual-key routing is fixed and local. An operator-control

@@ -193,10 +193,11 @@ fn from_wide_nul(buf: &[u16]) -> String {
 
 #[cfg(windows)]
 fn read_registry_policy_windows() -> Vec<(String, serde_json::Value)> {
+    use crate::runtime_visibility::registry::{enum_value, EnumCursor};
     use windows_sys::Win32::Foundation::ERROR_SUCCESS;
     use windows_sys::Win32::System::Registry::{
-        RegCloseKey, RegEnumValueW, RegOpenKeyExW, HKEY, HKEY_LOCAL_MACHINE, KEY_READ, REG_DWORD,
-        REG_EXPAND_SZ, REG_SZ,
+        RegCloseKey, RegOpenKeyExW, HKEY, HKEY_LOCAL_MACHINE, KEY_READ, REG_DWORD, REG_EXPAND_SZ,
+        REG_SZ,
     };
 
     let mut out: Vec<(String, serde_json::Value)> = Vec::new();
@@ -216,43 +217,18 @@ fn read_registry_policy_windows() -> Vec<(String, serde_json::Value)> {
             return out;
         }
 
-        let mut index: u32 = 0;
-        loop {
-            let mut name_buf: [u16; 256] = [0u16; 256];
-            let mut name_len: u32 = name_buf.len() as u32;
-            // Use a generous data buffer; policy strings are short.
-            let mut data_buf: [u8; 4096] = [0u8; 4096];
-            let mut data_len: u32 = data_buf.len() as u32;
-            let mut value_type: u32 = 0;
-
-            let rc = RegEnumValueW(
-                hkey,
-                index,
-                name_buf.as_mut_ptr(),
-                &mut name_len,
-                std::ptr::null_mut(),
-                &mut value_type,
-                data_buf.as_mut_ptr(),
-                &mut data_len,
-            );
-            if rc != ERROR_SUCCESS {
-                break; // ERROR_NO_MORE_ITEMS (or error) — done.
-            }
-            index += 1;
-
-            let name = from_wide_nul(&name_buf[..name_len as usize]);
-
+        let mut cursor = EnumCursor::default();
+        while let Some((name, value_type, data)) = cursor.next(|i, cap| enum_value(hkey, i, cap)) {
             match value_type {
                 REG_SZ | REG_EXPAND_SZ => {
-                    let char_count = (data_len as usize) / 2;
-                    let slice =
-                        std::slice::from_raw_parts(data_buf.as_ptr() as *const u16, char_count);
-                    let s = from_wide_nul(slice);
-                    out.push((name, serde_json::Value::String(s)));
+                    let units: Vec<u16> = data
+                        .chunks_exact(2)
+                        .map(|b| u16::from_le_bytes([b[0], b[1]]))
+                        .collect();
+                    out.push((name, serde_json::Value::String(from_wide_nul(&units))));
                 }
-                REG_DWORD if data_len >= 4 => {
-                    let v =
-                        u32::from_le_bytes([data_buf[0], data_buf[1], data_buf[2], data_buf[3]]);
+                REG_DWORD if data.len() >= 4 => {
+                    let v = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
                     out.push((name, serde_json::Value::Number(v.into())));
                 }
                 _ => {

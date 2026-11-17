@@ -4,7 +4,7 @@ import { getPersona, type AppSettings } from "../types/settings";
 import { getByPath, resolveToggleText, type ToggleDef } from "../types/toggles";
 import { isModuleEnabled, type ModuleId } from "../types/modules";
 import { getMissingForensicTraceScheduleCategories, type AutoEraseScheduleSnapshot } from "../panels/cleanup/forensicSchedulePolicy";
-import type { ScanFinding, ScanReport } from "../components/startup/WizardAnimations";
+import type { ScanFinding, ScanReport } from "@/lib/scanFindings";
 
 interface RadarSystemInfo {
   cpuUsage?: number;

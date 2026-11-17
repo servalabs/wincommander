@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { ChevronDown, Zap, X, Loader2 } from "lucide-react";
-import type { ScanFinding } from "../startup/WizardAnimations";
+import type { ScanFinding } from "@/lib/scanFindings";
 import IgnoredFindingsDialog from "./IgnoredFindingsDialog";
 import "./NeedsAttention.css";
 

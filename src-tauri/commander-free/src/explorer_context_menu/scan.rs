@@ -54,8 +54,9 @@ fn enumerate_enabled(
     use uuid::Uuid;
     use windows_sys::Win32::Foundation::ERROR_SUCCESS;
     use windows_sys::Win32::System::Registry::{
-        RegCloseKey, RegEnumKeyExW, RegOpenKeyExW, HKEY, KEY_READ,
+        RegCloseKey, RegOpenKeyExW, HKEY, KEY_READ,
     };
+    use crate::runtime_visibility::registry::{enum_key_name, EnumCursor};
     unsafe {
         let mut key: HKEY = std::ptr::null_mut();
         if RegOpenKeyExW(root(hive), wide(shell_root).as_ptr(), 0, KEY_READ, &mut key)
@@ -63,25 +64,8 @@ fn enumerate_enabled(
         {
             return;
         }
-        let mut index = 0;
-        loop {
-            let mut name = [0u16; 256];
-            let mut length = name.len() as u32;
-            if RegEnumKeyExW(
-                key,
-                index,
-                name.as_mut_ptr(),
-                &mut length,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-            ) != ERROR_SUCCESS
-            {
-                break;
-            }
-            index += 1;
-            let label = String::from_utf16_lossy(&name[..length as usize]);
+        let mut cursor = EnumCursor::default();
+        while let Some(label) = cursor.next(|i, _| enum_key_name(key, i)) {
             let subkey = format!("{shell_root}\\{label}");
             let Some(command) = read_string(root(hive), &format!("{subkey}\\command"), "") else {
                 *skipped += 1;
@@ -111,8 +95,9 @@ fn enumerate_disabled(entries: &mut Vec<CachedVerb>, skipped: &mut usize) {
     use uuid::Uuid;
     use windows_sys::Win32::Foundation::ERROR_SUCCESS;
     use windows_sys::Win32::System::Registry::{
-        RegCloseKey, RegEnumKeyExW, RegOpenKeyExW, HKEY, HKEY_CURRENT_USER, KEY_READ,
+        RegCloseKey, RegOpenKeyExW, HKEY, HKEY_CURRENT_USER, KEY_READ,
     };
+    use crate::runtime_visibility::registry::{enum_key_name, EnumCursor};
     unsafe {
         let mut key: HKEY = std::ptr::null_mut();
         if RegOpenKeyExW(
@@ -125,25 +110,8 @@ fn enumerate_disabled(entries: &mut Vec<CachedVerb>, skipped: &mut usize) {
         {
             return;
         }
-        let mut index = 0;
-        loop {
-            let mut name = [0u16; 64];
-            let mut length = name.len() as u32;
-            if RegEnumKeyExW(
-                key,
-                index,
-                name.as_mut_ptr(),
-                &mut length,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-            ) != ERROR_SUCCESS
-            {
-                break;
-            }
-            index += 1;
-            let disabled_id = String::from_utf16_lossy(&name[..length as usize]);
+        let mut cursor = EnumCursor::default();
+        while let Some(disabled_id) = cursor.next(|i, _| enum_key_name(key, i)) {
             let base = format!("{DISABLED_ROOT}\\{disabled_id}");
             let hive = match read_string(HKEY_CURRENT_USER, &base, "OriginalHive").as_deref() {
                 Some("HKCU") => Hive::CurrentUser,

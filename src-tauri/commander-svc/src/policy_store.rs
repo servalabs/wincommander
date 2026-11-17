@@ -249,16 +249,57 @@ impl PolicyFs for WindowsPolicyFs {
     }
 
     fn atomic_write(&self, path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-        let tmp = path.with_extension("tmp");
-        std::fs::write(&tmp, bytes)?;
-        // `std::fs::rename` on Windows is implemented on top of
-        // `MoveFileExW(.., MOVEFILE_REPLACE_EXISTING)` — it is NOT
-        // "remove `path`, then create it fresh". There is never a moment
-        // where `path` doesn't exist between these two calls succeeding,
-        // which is exactly the atomicity plan §4.4 requires. This is why
-        // this module doesn't hand-roll the `ReplaceFileW`/`MoveFileEx` FFI
-        // call itself.
-        std::fs::rename(&tmp, path)
+        use std::io::Write;
+        use std::os::windows::ffi::OsStrExt;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use windows_sys::Win32::Storage::FileSystem::{
+            MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+        };
+        static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+
+        let parent = path
+            .parent()
+            .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+        let name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+        // Unique, unpredictable sibling name; `create_new` refuses to open (or
+        // follow a link at) any pre-existing entry with that name.
+        let tmp = parent.join(format!(
+            ".{name}.{}.{}.{}.tmp",
+            std::process::id(),
+            NEXT_TEMP.fetch_add(1, Ordering::Relaxed),
+            uuid::Uuid::new_v4().simple(),
+        ));
+        let result = (|| {
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&tmp)?;
+            file.write_all(bytes)?;
+            file.sync_all()?;
+            drop(file);
+            // Same-directory replace of the destination entry (a link at
+            // `path` is replaced, never written through), flushed to disk.
+            let from: Vec<u16> = tmp.as_os_str().encode_wide().chain(Some(0)).collect();
+            let to: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+            let moved = unsafe {
+                MoveFileExW(
+                    from.as_ptr(),
+                    to.as_ptr(),
+                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+                )
+            };
+            if moved == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        result
     }
 
     fn ensure_dir_secure(&self, dir: &Path) -> Result<(), PolicyStoreError> {

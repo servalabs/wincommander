@@ -9,6 +9,16 @@ use std::process::Command;
 
 use wincmd_shared::svc::{ApplyMachineSettingRequest, MachineSettingObserved, MachineSettingValue};
 
+/// Full System32 path for the fixed set of tools this module runs.
+fn system_program(program: &str) -> Result<std::path::PathBuf, ()> {
+    let system = crate::system_paths::system_directory().map_err(|_| ())?;
+    match program {
+        "netsh.exe" => Ok(system.join("netsh.exe")),
+        "powershell.exe" => Ok(system.join(r"WindowsPowerShell\v1.0\powershell.exe")),
+        _ => Err(()),
+    }
+}
+
 const TERMINAL_SERVICES_POLICY: &str =
     r"HKLM\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services";
 const RDP_LOCK_RULE_NAME: &str = "WC-LockRDP";
@@ -25,7 +35,9 @@ struct LiveWindowsState;
 
 impl LiveWindowsState {
     fn run(program: &str, args: &[&str]) -> Result<std::process::Output, ()> {
-        Command::new(program).args(args).output().map_err(|_| ())
+        // Never resolve a bare name through the SYSTEM service's search path.
+        let path = system_program(program)?;
+        Command::new(path).args(args).output().map_err(|_| ())
     }
 
     fn require_success(program: &str, args: &[&str]) -> Result<(), ()> {

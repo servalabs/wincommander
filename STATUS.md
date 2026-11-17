@@ -6,9 +6,10 @@ the change record is in [CHANGELOG.md](CHANGELOG.md). Open work is in
 [ROADMAP.md](ROADMAP.md), known limits in [WEAKNESSES.md](WEAKNESSES.md), and
 manual or owner-side work in [USER-TASKS.md](USER-TASKS.md).
 
-Written against `main` at `ddc01916` (after the 2026-11-16 merge of `dev`, section
-below). Update the commit reference whenever this file
-is revised.
+Written against local `main` at `dc5722ba` (2026-11-16, after the merge of `dev`
+described below). The remote `main` had moved on by 2026-11-17; changes after
+`dc5722ba` are not reflected here. Update the commit reference whenever this
+file is revised.
 
 ## What `main` is
 
@@ -22,8 +23,11 @@ is revised.
   security guardrails, `bun test`, generated-type drift, `cargo check`,
   `cargo test`, `cargo clippy -D warnings`, gitleaks, ESLint, cargo audit,
   cargo deny and the Free-binary forbidden-strings scan (blocking). Coverage
-  is report-only; a mutation job covers `wincmd-shared`. At the last
-  observation (2026-11-15) CI was green for the commit above.
+  is report-only; a mutation job covers `wincmd-shared`. For
+  `dc5722ba` the hosted `invariants` run (2026-11-16) concluded `success`, read
+  from the GitHub run list on 2026-11-17. Two later pushes to `main` had a
+  `failure` conclusion at that time and were not investigated; CI status for
+  the current head of `main` is unknown here.
 - Pro, Fleet server and Investigator are separate private products; this
   repository holds the Free client, shared contracts and neutral Fleet crates
   ([OPEN_CORE.md](OPEN_CORE.md)).
@@ -56,8 +60,9 @@ knowingly with failing gates. The lint and test failures were fixed the same day
   (fails only when `USERDOMAIN` does not match the real machine name, as in an
   SSH session where it is `WORKGROUP`; it passes with the real name).
 - `gen:types:check`, `lint:tiers`, `lint:quality` (against the previous
-  `main`), `lint:docs` and the security guardrail scripts pass. Hosted CI has
-  not been re-run.
+  `main`), `lint:docs` and the security guardrail scripts passed when run for commit
+  `27f22f4f` on Windows. Commits after it (including the `rusqlite` 0.42 update
+  in `dc5722ba`) were not re-checked locally by this file's author.
 - The changed-file size guard flagged 20 source files that arrived over its
   limits with the merge; they remain oversized and are listed in
   [WEAKNESSES.md](WEAKNESSES.md#code-health).
@@ -78,7 +83,8 @@ for those features. The owner decision still open is how to fix the gates
 ## How this was checked
 
 - Statements about code were checked, before the merge above, by reading source and tests on the previous `main` from
-  a Linux checkout. Windows-only tests (`#[cfg(windows)]`, PowerShell suites)
+  a Linux checkout; they were not re-verified after the merge except where a
+  section above says so. Windows-only tests (`#[cfg(windows)]`, PowerShell suites)
   were not executed there, and nothing was exercised on a live Windows
   machine, Server/RDS, physical USB, an installed service or a signed
   installer. Those gaps are in [WEAKNESSES.md](WEAKNESSES.md#validation-gaps).

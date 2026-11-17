@@ -4,6 +4,10 @@ This is the public disclosure policy, high-level threat model, and honest
 product-limit statement. Detailed internal designs, runbooks, vulnerability
 ledgers, and acceptance evidence are maintained privately.
 
+> **Reconciliation caveat:** the threat-model and limits sections were not
+> reconciled feature by feature against the 859 commits merged on 2026-11-16;
+> see [STATUS.md](STATUS.md#the-2026-11-16-merge-of-dev).
+
 ## Reporting a vulnerability
 
 Do not open a public issue, pull request, or Discussion for a vulnerability.

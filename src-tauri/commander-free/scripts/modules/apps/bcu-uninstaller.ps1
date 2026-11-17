@@ -352,27 +352,53 @@ function Invoke-BcuCleanupProgramFiles {
     }
 }
 
+# Validates an orphaned-folder path against the Program Files roots. Returns
+# the normalized full path, or throws with a user-facing reason. The path must
+# be a strict child of a root (never the root itself), contain no wildcard
+# characters, and neither it nor any parent below the root may be a reparse
+# point.
+function Resolve-BcuOrphanedFolderPath {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string[]]$Roots
+    )
+    if ([string]::IsNullOrWhiteSpace($Path) -or $Path.IndexOfAny([char[]]@('*', '?', '[', ']', '<', '>', '|', '"')) -ge 0 -or $Path.Contains([char]0)) {
+        throw 'Path contains characters that are not allowed.'
+    }
+    $full = [System.IO.Path]::GetFullPath($Path).TrimEnd('\')
+    foreach ($root in @($Roots | Where-Object { $_ })) {
+        $rootFull = [System.IO.Path]::GetFullPath($root).TrimEnd('\')
+        $prefix = $rootFull + '\'
+        if (-not $full.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+        if ($full.Length -le $prefix.Length) { continue }
+        $cursor = $full
+        while ($cursor.Length -gt $rootFull.Length) {
+            $item = Get-Item -LiteralPath $cursor -Force -ErrorAction SilentlyContinue
+            if ($item -and ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+                throw 'Path is or passes through a reparse point.'
+            }
+            $cursor = [System.IO.Path]::GetDirectoryName($cursor)
+            if (-not $cursor) { break }
+        }
+        return $full
+    }
+    throw 'Path is not within Program Files directories.'
+}
+
 function Remove-BcuOrphanedFolder {
     param(
         [Parameter(Mandatory = $true)][string]$Path
     )
     Assert-IsAdmin
     try {
-        $allowed = @($env:ProgramFiles, ${env:ProgramFiles(x86)}) | Where-Object { $_ }
-        $isAllowed = $false
-        foreach ($dir in $allowed) {
-            if ($Path.StartsWith($dir, [System.StringComparison]::OrdinalIgnoreCase)) {
-                $isAllowed = $true; break
-            }
-        }
-        if (-not $isAllowed) {
-            return @{ error = $true; message = "Path is not within Program Files directories." }
-        }
-        if (Test-Path $Path) {
-            Remove-Item -Path $Path -Recurse -Force -ErrorAction Stop
-            @{ status = "removed"; path = $Path }
+        $roots = @($env:ProgramFiles, ${env:ProgramFiles(x86)}) | Where-Object { $_ }
+        try { $resolved = Resolve-BcuOrphanedFolderPath -Path $Path -Roots $roots }
+        catch { return @{ error = $true; message = $_.Exception.Message } }
+        if (Test-Path -LiteralPath $resolved) {
+            Remove-Item -LiteralPath $resolved -Recurse -Force -ErrorAction Stop
+            @{ status = "removed"; path = $resolved }
         } else {
-            @{ status = "not_found"; path = $Path }
+            @{ status = "not_found"; path = $resolved }
         }
     }
     catch {
