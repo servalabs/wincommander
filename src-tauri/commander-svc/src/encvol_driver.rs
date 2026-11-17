@@ -207,7 +207,7 @@ fn confirm_running_activation(
         RunningAction::RestartRequired => Err(EnsureDriverError::RestartRequired),
         RunningAction::ConfirmActive => {
             if !record.is_some_and(|record| {
-                record.status == ActivationStatus::Active && record.boot_id == store.boot_id
+                record.status == ActivationStatus::Active && record.is_current_boot(&store.boot_id)
             }) {
                 store.write(DRIVER_SHA256, ActivationStatus::Active)?;
             }

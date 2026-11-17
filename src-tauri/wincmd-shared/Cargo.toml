@@ -6,8 +6,9 @@ authors = ["ServaLabs"]
 license = "AGPL-3.0-or-later"
 edition = "2021"
 
-# Pure data crate — no side effects, no platform deps. Both
-# commander-free and commander-pro link to it for IPC envelope shapes.
+# Shared data with an explicitly called, read-only Windows boot-identity probe;
+# no platform crate dependencies or system mutations. Free and Pro both use
+# its IPC envelope shapes and the same local activation-record contract.
 # Tokio is in here only for the AsyncRead/AsyncWrite bounds on the
 # framing helpers (`read_envelope` / `write_envelope`); no runtime is
 # spun up from this crate. Both consumers already pull tokio in for

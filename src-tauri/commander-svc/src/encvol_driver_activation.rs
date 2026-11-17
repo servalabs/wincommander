@@ -31,12 +31,12 @@ pub(super) fn running_action(
     match record {
         None => RunningAction::RecordPending,
         Some(record) if !record.sha256.eq_ignore_ascii_case(hash) => RunningAction::RecordPending,
-        Some(record)
-            if record.status == ActivationStatus::PendingReboot && record.boot_id == boot =>
-        {
-            RunningAction::RestartRequired
-        }
-        Some(_) => RunningAction::ConfirmActive,
+        Some(record) if record.is_current_boot(boot) => match record.status {
+            ActivationStatus::PendingReboot => RunningAction::RestartRequired,
+            ActivationStatus::Active => RunningAction::ConfirmActive,
+        },
+        Some(record) if record.confirms_later_boot(boot) => RunningAction::ConfirmActive,
+        Some(_) => RunningAction::RecordPending,
     }
 }
 
@@ -141,59 +141,9 @@ impl ActivationStore {
     }
 }
 
-#[repr(C)]
-#[derive(Default)]
-struct BootEnvironment {
-    data1: u32,
-    data2: u16,
-    data3: u16,
-    data4: [u8; 8],
-    firmware_type: u32,
-    boot_flags: u64,
-}
-
-#[link(name = "ntdll")]
-extern "system" {
-    fn NtQuerySystemInformation(
-        class: u32,
-        data: *mut core::ffi::c_void,
-        length: u32,
-        returned: *mut u32,
-    ) -> i32;
-}
-
 fn current_boot_id() -> Result<String, EnsureDriverError> {
-    let mut data = BootEnvironment::default();
-    let mut returned = 0;
-    // BootIdentifier is kernel-provided; wall-clock adjustments cannot clear a pending restart.
-    let status = unsafe {
-        NtQuerySystemInformation(
-            90,
-            (&mut data as *mut BootEnvironment).cast(),
-            std::mem::size_of::<BootEnvironment>() as u32,
-            &mut returned,
-        )
-    };
-    if status < 0 || returned < 20 {
-        return Err(EnsureDriverError::ActivationState);
-    }
-    let boot = format!(
-        "{:08x}-{:04x}-{:04x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        data.data1,
-        data.data2,
-        data.data3,
-        data.data4[0],
-        data.data4[1],
-        data.data4[2],
-        data.data4[3],
-        data.data4[4],
-        data.data4[5],
-        data.data4[6],
-        data.data4[7]
-    );
-    ActivationRecord::new(&"0".repeat(64), &boot, ActivationStatus::Active)
-        .map_err(|_| EnsureDriverError::ActivationState)?;
-    Ok(boot)
+    wincmd_shared::encvol_driver_activation::current_boot_id()
+        .map_err(|_| EnsureDriverError::ActivationState)
 }
 
 #[cfg(test)]
