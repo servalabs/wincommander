@@ -123,6 +123,8 @@ pub const DESTRUCTIVE_COMMANDS: &[(&str, DestructiveAction)] = &[
     ("full_lockdown", DestructiveAction::SelfDestruct),
     ("run_destruct_step", DestructiveAction::SelfDestruct),
     ("fleet_connect", DestructiveAction::FleetReenroll),
+    ("fleet_set_dispatch", DestructiveAction::FleetReenroll),
+    ("fleet_repair_machine_trust", DestructiveAction::FleetReenroll),
     ("disk_delete_item", DestructiveAction::DiskDelete),
     ("secure_shred", DestructiveAction::DiskDelete),
     ("search_shred_direct", DestructiveAction::DiskDelete),

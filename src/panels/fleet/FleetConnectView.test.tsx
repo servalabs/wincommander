@@ -23,7 +23,7 @@ test("another Windows profile sees active retry, terminal failure, then recovere
     globalThis.setInterval = (callback, delay) => { const id = ++nextTimer; timers.set(id, { callback, delay }); return id; };
     globalThis.clearInterval = id => timers.delete(id);
     let status = { connected: false, deviceId: 'device-123', serverUrl: 'https://fleet.example.test', lastEnrollAt: null, lastError: 'server temporarily unavailable', retrying: true };
-    const calls = []; const connectArgs = []; let connectError = null; let connectGate = null; let trustMatches = null; const dispatchCalls = [];
+    const calls = []; const connectArgs = []; let connectError = null; let connectGate = null; let trustMatches = null; let dispatchExtra = {}; const dispatchCalls = [];
     const savedFleet = () => ({ dispatch: true, signingKeyPub: 'KEY', serverUrl: '', enabled: false });
     let settingsFleet = savedFleet();
     mock.module('@tauri-apps/api/core', () => ({ invoke: async (command, args) => {
@@ -31,7 +31,7 @@ test("another Windows profile sees active retry, terminal failure, then recovere
       if (command === 'fleet_connect') { connectArgs.push(args); if (connectError) throw connectError; if (connectGate) await connectGate; return {}; }
       if (command === 'fleet_status') return { ...status };
       if (command === 'fleet_machine_trust_status') return { trustBound: true, shieldPolicyStatus: 'unverified', trustMatchesAgent: trustMatches };
-      if (command === 'fleet_set_dispatch') { dispatchCalls.push(args); return { dispatch: args.enabled, changed: true }; }
+      if (command === 'fleet_set_dispatch') { dispatchCalls.push(args); return { dispatch: args.enabled, changed: true, ...dispatchExtra }; }
       if (command === 'fleet_service_contact_status') return { observation: null };
       throw new Error('unexpected mutation: ' + command);
     } }));
@@ -79,7 +79,10 @@ test("another Windows profile sees active retry, terminal failure, then recovere
     const dispatchSwitch = () => host.querySelector('input[aria-label="Remote command dispatch"]');
     assert.match(host.textContent, /Remote command dispatch: ON/);
     assert.ok(dispatchSwitch().checked && !dispatchSwitch().disabled);
+    dispatchExtra = { agentReconfigured: false };
     await act(async () => { dispatchSwitch().click(); });
+    assert.match(host.textContent, /saved as OFF, but the running Fleet agent could not be updated/);
+    dispatchExtra = {};
     assert.deepEqual(dispatchCalls, [{ enabled: false }]);
     assert.match(host.textContent, /Remote command dispatch: OFF/);
     assert.match(host.textContent, /stay queued and are not executed/);
@@ -101,6 +104,14 @@ test("another Windows profile sees active retry, terminal failure, then recovere
     await poll();
     assert.match(host.textContent, /Service trust needs repair/);
     assert.match(host.textContent, /differs from the one this device's service trusts/);
+    // A non-repairable code is information only: no repair button.
+    status = { ...status, trustBridgeError: 'proof_timeout' };
+    await poll();
+    assert.match(host.textContent, /Service trust: The Fleet agent did not finish enrolling/);
+    assert.ok(![...host.querySelectorAll('button')].some(button => button.textContent === 'Repair machine trust'));
+    status = { ...status, trustBridgeError: 'binding_changed' };
+    await poll();
+    assert.match(host.textContent, /Service trust needs repair/);
     status = { ...status, trustBridgeError: null };
     await poll();
     status = { ...status, connected: false, retrying: true, lastError: 'connection unavailable' };

@@ -443,6 +443,8 @@ fn registry_covers_known_catastrophic_commands() {
         "full_lockdown",
         "run_destruct_step",
         "fleet_connect",
+        "fleet_set_dispatch",
+        "fleet_repair_machine_trust",
         "erase_encrypted_container",
     ] {
         assert!(

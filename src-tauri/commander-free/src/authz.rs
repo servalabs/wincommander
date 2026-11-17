@@ -42,7 +42,8 @@ pub(crate) use trusted::{
     toggle_trusted_lockdown,
 };
 pub use trusted::{
-    native_confirm_action, native_confirm_fleet_trust_repair, native_confirm_fleet_trust_replace,
+    native_confirm_action, native_confirm_fleet_dispatch_change, native_confirm_fleet_trust_change,
+    native_confirm_fleet_trust_repair,
 };
 
 #[tauri::command]

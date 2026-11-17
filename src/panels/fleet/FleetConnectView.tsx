@@ -14,7 +14,7 @@ import { useLicenseQuery } from "@/hooks/queries/useLicenseQuery";
 import { fleetLinkLabel, fleetLinkState, type FleetLinkStatus } from "./fleetLinkPresentation";
 import { fleetShieldProfileStatus } from "../../lib/fleetShieldProfileStatus";
 import { FleetSignedContact } from "./FleetSignedContact";
-import { describeFleetConnectError, describeTrustBridgeError, fleetAddressWarning, FLEET_HTTPS_HINT } from "./fleetConnectErrors";
+import { describeFleetConnectError, describeTrustBridgeError, fleetAddressWarning, FLEET_HTTPS_HINT, trustBridgeNeedsRepair } from "./fleetConnectErrors";
 
 interface FleetStatus extends FleetLinkStatus {
   // True while Pro's check-in loop is alive and self-healing (connected or
@@ -253,8 +253,12 @@ export default function FleetConnectView() {
     setError(null);
     setDispatchBusy(true);
     try {
-      await invoke("fleet_set_dispatch", { enabled: next });
+      const result = await invoke<{ agentReconfigured?: boolean }>("fleet_set_dispatch", { enabled: next });
       setDispatch(next);
+      if (result?.agentReconfigured === false) {
+        // Saved as requested, but the running agent could not be confirmed.
+        setError("Remote command dispatch is saved as OFF, but the running Fleet agent could not be updated and may keep running commands until it restarts. Restart WinCommander to be sure.");
+      }
     } catch (reason) {
       setError(typeof reason === "string" ? reason : "Could not change remote command dispatch.");
     } finally {
@@ -602,8 +606,11 @@ export default function FleetConnectView() {
                   </Button>
                 </div>
               )}
+              {wasEnrolled && !!status.trustBridgeError && !trustBridgeNeedsRepair(status.trustBridgeError) && trustMatchesAgent !== false && (
+                <p className="fleet-connect-enrolling" role="status">Service trust: {describeTrustBridgeError(status.trustBridgeError)}</p>
+              )}
               {wasEnrolled && status.deviceId === persistedDeviceId && machineTrustBound === true
-                && (trustMatchesAgent === false || !!status.trustBridgeError) && (
+                && (trustMatchesAgent === false || trustBridgeNeedsRepair(status.trustBridgeError)) && (
                 <div>
                   <p className="fleet-connect-error" role="alert">
                     <Icon icon="warning-sign" size={13} intent="danger" /> Service trust needs repair. {describeTrustBridgeError(status.trustBridgeError) ?? "The local service holds an older enrollment than this device's Fleet agent, so Shield policy cannot be verified."} An administrator can repair it with the same device identity; this does not request to leave Fleet.

@@ -116,12 +116,10 @@ pub async fn native_confirm_fleet_trust_repair(app: &tauri::AppHandle) -> bool {
     .await
 }
 
-pub async fn native_confirm_fleet_trust_replace(app: &tauri::AppHandle) -> bool {
-    native_confirm(
-        app,
-        "Replace this device's out-of-date machine trust record with its current Fleet enrollment? The same device, signing key and organization are kept; only the enrollment generation or server address is refreshed. This does not request to leave Fleet.",
-    )
-    .await
+/// Confirm replacing machine trust with caller-built text naming the old and
+/// new server, organization, device and enrollment.
+pub async fn native_confirm_fleet_trust_change(app: &tauri::AppHandle, detail: &str) -> bool {
+    native_confirm(app, detail).await
 }
 
 pub(super) async fn native_confirm(app: &tauri::AppHandle, detail: &str) -> bool {
@@ -172,6 +170,19 @@ pub(crate) async fn confirm_backend_dispatch(
                 details
             }
         ),
+    )
+    .await
+}
+
+/// Confirm changing whether this device executes remote Fleet commands.
+pub async fn native_confirm_fleet_dispatch_change(app: &tauri::AppHandle, enable: bool) -> bool {
+    native_confirm(
+        app,
+        if enable {
+            "Allow Fleet to run remote commands on this device? Commands signed by the saved Fleet signing key will execute here."
+        } else {
+            "Stop this device from running remote Fleet commands? Commands sent from Fleet will stay queued and will not execute."
+        },
     )
     .await
 }

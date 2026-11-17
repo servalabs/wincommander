@@ -949,7 +949,9 @@ impl FleetMachinePolicy {
         if current.trust != previous {
             return Err("binding_changed");
         }
-        if current.hybrid_trust.is_some() { return Err("hybrid_replacement_required"); }
+        // Classical replacement must not overwrite a record carrying ANY hybrid
+        // state (trust, epoch floor, credential, pending or unconfirmed).
+        if !classical_recovery_allowed(current) { return Err("hybrid_replacement_required"); }
         Self::verify_enrollment(&guard, &replacement, signature)?;
         let mut audit = current.audit.clone();
         if audit.len() >= 64 {
@@ -2616,6 +2618,27 @@ mod tests {
         assert_eq!(validate_trust(&binding), Err("invalid_binding"));
         binding.device_id = "x".repeat(129);
         assert_eq!(validate_trust(&binding), Err("invalid_binding"));
+    }
+
+    #[test]
+    fn classical_replacement_refuses_any_hybrid_residue_not_just_hybrid_trust() {
+        let store = store(MemoryFs::default());
+        provision(&store);
+        let mut next = trust();
+        next.enrollment_generation = "cccccccc-cccc-4ccc-8ccc-cccccccccccc".into();
+        let refused = |store: &FleetMachinePolicy| {
+            store.replace_trust(trust(), next.clone(), "forged", "S-1-5-18")
+        };
+        // Each hybrid remnant alone (no hybrid_trust) blocks classical replacement.
+        let set = |apply: &dyn Fn(&mut Record)| {
+            apply(store.state.lock().unwrap().record.as_mut().unwrap());
+        };
+        set(&|record| record.hybrid_epoch_floor = 3);
+        assert_eq!(refused(&store), Err("hybrid_replacement_required"));
+        set(&|record| { record.hybrid_epoch_floor = 0; record.hybrid_initial_pending = true; });
+        assert_eq!(refused(&store), Err("hybrid_replacement_required"));
+        set(&|record| { record.hybrid_initial_pending = false; record.hybrid_unconfirmed = true; });
+        assert_eq!(refused(&store), Err("hybrid_replacement_required"));
     }
 
     #[test]

@@ -281,28 +281,38 @@ fn verify_image(actual: &Path, expected: &Path) -> Result<(), PeerAuthError> {
         .share_mode(FILE_SHARE_READ)
         .open(actual)
         .map_err(|_| PeerAuthError::IdentityUnavailable)?;
-    // The same file compared with itself proves nothing, so the (88 MB debug)
-    // image is not hashed at all in that case; every caller passes one path.
-    if paths_equal(actual, expected) {
+    let mut expected_file = File::open(expected).map_err(|_| PeerAuthError::IdentityUnavailable)?;
+    // Two handles to one file (same volume and file index, whatever the path
+    // spelling or case) compare equal by construction, so the large image is
+    // not hashed at all in that case. Callers that name the same path rely on
+    // this; a different file is hashed (or served from the cache) and compared.
+    let (actual_id, expected_id) = (
+        acl::file_identity(&actual_file)?,
+        acl::file_identity(&expected_file)?,
+    );
+    if (actual_id.0, actual_id.1) == (expected_id.0, expected_id.1) {
         return Ok(());
     }
-    let mut expected_file = File::open(expected).map_err(|_| PeerAuthError::IdentityUnavailable)?;
     if file_digest(&mut actual_file, actual)? != file_digest(&mut expected_file, expected)? {
         return Err(PeerAuthError::PathNotAllowed);
     }
     Ok(())
 }
 
-/// SHA-256 of an open image, reused while its path, length, modification time
-/// and security descriptor are all unchanged.
+/// SHA-256 of an open image, reused only while its file ID, length, write and
+/// change times and security descriptor are all unchanged (see the cache).
 fn file_digest(file: &mut File, path: &Path) -> Result<Vec<u8>, PeerAuthError> {
     let metadata = file
         .metadata()
         .map_err(|_| PeerAuthError::IdentityUnavailable)?;
+    let (volume, file_index, change_time) = acl::file_identity(file)?;
     let identity = crate::peer_auth_digest_cache::ImageIdentity {
         path: path.to_path_buf(),
+        volume,
+        file_index,
         size: metadata.len(),
         modified: metadata.modified().ok(),
+        change_time,
         acl: acl::state_fingerprint(file)?,
     };
     crate::peer_auth_digest_cache::cached_digest(identity, || hash(file))

@@ -100,6 +100,41 @@ pub(crate) fn state_fingerprint(file: &std::fs::File) -> Result<[u8; 32], PeerAu
     }
 }
 
+/// Stable identity of an open file independent of its path: volume serial,
+/// file index, and the NTFS change time (which, unlike the last-write time,
+/// also moves on security-descriptor and metadata changes and cannot be set
+/// back by an ordinary writer).
+pub(crate) fn file_identity(file: &std::fs::File) -> Result<(u64, u64, i64), PeerAuthError> {
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileBasicInfo, GetFileInformationByHandle, GetFileInformationByHandleEx,
+        BY_HANDLE_FILE_INFORMATION, FILE_BASIC_INFO,
+    };
+    let handle = file.as_raw_handle();
+    // SAFETY: both structures are plain-old-data filled by the OS for a handle
+    // that `file` keeps open for the duration of the calls.
+    unsafe {
+        let mut info: BY_HANDLE_FILE_INFORMATION = std::mem::zeroed();
+        if GetFileInformationByHandle(handle, &mut info) == 0 {
+            return Err(PeerAuthError::IdentityUnavailable);
+        }
+        let mut basic: FILE_BASIC_INFO = std::mem::zeroed();
+        if GetFileInformationByHandleEx(
+            handle,
+            FileBasicInfo,
+            (&mut basic as *mut FILE_BASIC_INFO).cast(),
+            std::mem::size_of::<FILE_BASIC_INFO>() as u32,
+        ) == 0
+        {
+            return Err(PeerAuthError::IdentityUnavailable);
+        }
+        Ok((
+            u64::from(info.dwVolumeSerialNumber),
+            (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
+            basic.ChangeTime,
+        ))
+    }
+}
+
 struct Descriptor(*mut core::ffi::c_void);
 impl Drop for Descriptor {
     fn drop(&mut self) {

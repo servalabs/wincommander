@@ -327,6 +327,7 @@ pub async fn fleet_connect(
         None,
     )
     .await?;
+    request_shield_retry();
     Ok(outcome.status)
 }
 
@@ -411,27 +412,43 @@ pub async fn fleet_repair_machine_trust(
         &current.app.fleet.signing_key_pub,
         &hybrid,
     )?;
-    // Nothing below changes the service or settings until this is confirmed.
-    let confirmed = match &kind {
-        TrustRepairKind::Provision => crate::authz::native_confirm_fleet_trust_repair(&app).await,
-        TrustRepairKind::ReplaceStale(_) => {
-            crate::authz::native_confirm_fleet_trust_replace(&app).await
+    // Nothing in the closure below changes the service, settings or agent
+    // unless the native confirmation (built from the observed record) passes.
+    let new_origin = normalize_fleet_server_url(&current.app.fleet.server_url)?;
+    let confirm = {
+        let app = app.clone();
+        let kind_ref = &kind;
+        async move {
+            match kind_ref {
+                TrustRepairKind::Provision => {
+                    crate::authz::native_confirm_fleet_trust_repair(&app).await
+                }
+                TrustRepairKind::ReplaceStale(expected) => {
+                    let prompt = trust_change_prompt(
+                        &expected["trust"],
+                        expected.get("origins"),
+                        &[new_origin],
+                    );
+                    crate::authz::native_confirm_fleet_trust_change(&app, &prompt).await
+                }
+            }
         }
     };
-    refuse_unless_confirmed(confirmed)?;
-    let stale_trust = match kind {
+    let stale_trust = match &kind {
         TrustRepairKind::Provision => None,
-        TrustRepairKind::ReplaceStale(previous) => Some(previous),
+        TrustRepairKind::ReplaceStale(expected) => Some(expected.clone()),
     };
-    let outcome = fleet_connect_inner(
-        app,
-        current.app.fleet.server_url,
-        current.app.fleet.dispatch,
-        current.app.fleet.signing_key_pub,
-        None,
-        Some(plan.confirmation_binding()),
-        stale_trust,
-    )
+    let outcome = run_after_confirmation(confirm, || {
+        fleet_connect_inner(
+            app,
+            current.app.fleet.server_url,
+            current.app.fleet.dispatch,
+            current.app.fleet.signing_key_pub,
+            None,
+            Some(plan.confirmation_binding()),
+            stale_trust,
+        )
+    })
     .await?;
     // The lifecycle lease and connection gate were released when the connect
     // returned; the proof wait below must not hold them.
@@ -443,7 +460,22 @@ pub async fn fleet_repair_machine_trust(
             }
         }
     }
+    request_shield_retry();
     Ok(outcome.status)
+}
+
+/// Run `change` only after `confirm` resolves true; a refusal returns the
+/// cancellation error and never starts the change.
+async fn run_after_confirmation<T, F, Fut>(
+    confirm: impl std::future::Future<Output = bool>,
+    change: F,
+) -> Result<T, String>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<T, String>>,
+{
+    refuse_unless_confirmed(confirm.await)?;
+    change().await
 }
 
 /// Turn remote command dispatch on or off for this already-linked device
@@ -478,7 +510,11 @@ async fn fleet_set_dispatch_locked(
     app: tauri::AppHandle,
     enabled: bool,
 ) -> Result<serde_json::Value, String> {
-    crate::license::require_service_feature("fleet")?;
+    // Turning dispatch OFF must always be possible, even after the Fleet
+    // entitlement lapsed; only turning it ON needs the service feature.
+    if enabled {
+        crate::license::require_service_feature("fleet")?;
+    }
     let _connection = FLEET_CONNECT_GATE
         .try_lock()
         .map_err(|_| "A Fleet connection change is already in progress".to_string())?;
@@ -496,11 +532,11 @@ async fn fleet_set_dispatch_locked(
         enabled,
         current.app.fleet.signing_key_pub.clone(),
     )?;
-    let confirmed = if plan.needs_confirmation() {
-        if !crate::authz::native_confirm_action(&app, crate::authz::DestructiveAction::FleetReenroll)
-            .await
-        {
-            return Err("Changing managed dispatch requires native confirmation.".into());
+    // Enabling execution of remote commands, and any managed-policy change,
+    // needs an explicit native confirmation that says what is being changed.
+    let confirmed = if plan.needs_confirmation() || enabled {
+        if !crate::authz::native_confirm_fleet_dispatch_change(&app, enabled).await {
+            return Err("Changing remote command dispatch requires native confirmation.".into());
         }
         true
     } else {
@@ -511,19 +547,51 @@ async fn fleet_set_dispatch_locked(
     let origins = enrollment_origins(&server_url, mesh.as_deref());
     // "resume" keeps the existing enrollment identity; no new challenge or
     // explicit enrollment is requested.
-    let status = crate::sidecar::dispatch_paid_command(
-        "fleet_agent_configure",
-        serde_json::json!({
-            "serverUrl": committed.app.fleet.server_url,
-            "dispatch": committed.app.fleet.dispatch,
-            "signingKeyPub": committed.app.fleet.signing_key_pub,
-            "deviceId": committed.device_id,
-            "meshEndpoints": origins.iter().skip(1).collect::<Vec<_>>(),
-            "enrollmentIntent": "resume",
-        }),
-    )
-    .await?;
-    Ok(serde_json::json!({"dispatch": enabled, "changed": true, "status": status}))
+    let configure = |dispatch: bool| {
+        crate::sidecar::dispatch_paid_command(
+            "fleet_agent_configure",
+            serde_json::json!({
+                "serverUrl": committed.app.fleet.server_url,
+                "dispatch": dispatch,
+                "signingKeyPub": committed.app.fleet.signing_key_pub,
+                "deviceId": committed.device_id,
+                "meshEndpoints": origins.iter().skip(1).collect::<Vec<_>>(),
+                "enrollmentIntent": "resume",
+            }),
+        )
+    };
+    let mut applied = configure(enabled).await;
+    if applied.is_err() && !enabled {
+        // Safe direction: try again before reporting that the running agent
+        // may still be dispatching.
+        applied = configure(false).await;
+    }
+    match (applied, enabled) {
+        (Ok(status), _) => Ok(serde_json::json!({
+            "dispatch": enabled, "changed": true, "agentReconfigured": true, "status": status
+        })),
+        (Err(_), false) => {
+            crate::log_message_src(
+                "warn",
+                "core",
+                "[Fleet] dispatch saved OFF but the running agent could not be reconfigured",
+            );
+            // Saved OFF is authoritative (the next agent start honours it);
+            // the caller must tell the user the running agent is unconfirmed.
+            Ok(serde_json::json!({
+                "dispatch": false, "changed": true, "agentReconfigured": false
+            }))
+        }
+        (Err(error), true) => {
+            // Never leave "saved ON" with an agent that may not have it: roll
+            // the saved value back and make a best-effort OFF.
+            let _ = crate::settings::patch_settings(
+                serde_json::json!({"app": {"fleet": {"dispatch": false}}}),
+            );
+            let _ = configure(false).await;
+            Err(format!("Remote command dispatch was not enabled: {error}"))
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -531,7 +599,8 @@ enum TrustRepairKind {
     /// No machine trust record exists: provision it.
     Provision,
     /// A record exists for this device and signer but is stale (a different
-    /// enrollment generation and/or origin): replace exactly this record.
+    /// enrollment generation and/or origin): replace exactly this record and
+    /// origin set, `{"trust": .., "origins": [..]}`, as the user saw them.
     ReplaceStale(Value),
 }
 
@@ -562,7 +631,9 @@ fn plan_trust_repair(
     if hybrid.get("hybrid_trust").is_none_or(|value| !value.is_null()) {
         return Err("Machine Fleet trust uses hybrid enrollment and cannot be repaired here".into());
     }
-    Ok(TrustRepairKind::ReplaceStale(trust.clone()))
+    Ok(TrustRepairKind::ReplaceStale(
+        replace_expectation(Some(trust), Some(prior)).ok_or("Fleet service trust response is incomplete")?,
+    ))
 }
 
 fn refuse_unless_confirmed(confirmed: bool) -> Result<(), String> {
@@ -571,6 +642,46 @@ fn refuse_unless_confirmed(confirmed: bool) -> Result<(), String> {
     } else {
         Err("Machine trust repair was cancelled".into())
     }
+}
+
+/// Exactly what a confirmed replacement may supersede: the observed trust
+/// record together with the origin set bound to it.
+fn replace_expectation(trust: Option<&Value>, prior: Option<&Value>) -> Option<Value> {
+    let trust = trust?;
+    let origins = prior
+        .and_then(|reply| reply.get("origins"))
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!([]));
+    Some(serde_json::json!({"trust": trust, "origins": origins}))
+}
+
+/// Origins a trust replacement binds. The `FLEET_MESH_ENDPOINTS` environment
+/// is not covered by the enrollment proof or by the confirmation, so a
+/// replacement binds only the requested server origin.
+fn replacement_origins(primary: &str, mesh: Option<&str>, replacing: bool) -> Vec<String> {
+    if replacing {
+        vec![primary.to_string()]
+    } else {
+        enrollment_origins(primary, mesh)
+    }
+}
+
+/// Native prompt text naming what is replaced and what it is replaced by,
+/// built only from the observed service record and the requested origins.
+fn trust_change_prompt(previous: &Value, previous_origins: Option<&Value>, new_origins: &[String]) -> String {
+    let field = |name: &str| previous.get(name).and_then(Value::as_str).unwrap_or("unknown");
+    let generation: String = field("enrollment_generation").chars().take(8).collect();
+    let old_origins = previous_origins
+        .and_then(Value::as_array)
+        .map(|origins| origins.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", "))
+        .filter(|joined| !joined.is_empty())
+        .unwrap_or_else(|| "none recorded".to_string());
+    format!(
+        "Replace this machine's Fleet trust record?\n\nCurrently trusted: server {old_origins}; organization {org}; device {device}; enrollment {generation}\u{2026}\nReplaced by: server {new_origins}; the same device and signing key; a new enrollment issued by that server.\n\nIt is replaced only if the server reports the same organization ({org}); otherwise nothing is replaced. Your device is not asked to leave Fleet.",
+        org = field("org_id"),
+        device = field("device_id"),
+        new_origins = new_origins.join(", "),
+    )
 }
 
 /// Read-only machine trust visibility for the already-linked device card.
@@ -587,18 +698,23 @@ pub async fn fleet_machine_trust_status() -> Result<serde_json::Value, String> {
     // Comparing needs the privileged trust read and the agent's proof; either
     // may be unavailable (non-elevated dev app, agent not running), in which
     // case the answer is unknown rather than a mismatch.
-    let trust_matches_agent = if trust_bound {
-        let service = crate::svc_client::call("svc.fleet.get_trust", serde_json::json!({}))
-            .await
-            .ok();
-        let agent =
-            crate::sidecar::dispatch_paid_command("fleet_agent_enrollment_trust", Value::Null)
+    let trust_matches_agent = if trust_bound && crate::sidecar::fleet_agent_session_epoch() > 0 {
+        // Bounded, and only once this app has already started the agent: this
+        // 15 s status poll must neither hang on a slow service nor launch Pro.
+        let probe = async {
+            let service = crate::svc_client::call("svc.fleet.get_trust", serde_json::json!({}))
                 .await
-                .ok();
-        match (service, agent) {
-            (Some(service), Some(agent)) => trust_matches_agent_proof(&service, &agent),
-            _ => None,
-        }
+                .ok()?;
+            let agent =
+                crate::sidecar::dispatch_paid_command("fleet_agent_enrollment_trust", Value::Null)
+                    .await
+                    .ok()?;
+            trust_matches_agent_proof(&service, &agent)
+        };
+        tokio::time::timeout(SERVICE_ENROLLMENT_PROBE_TIMEOUT, probe)
+            .await
+            .ok()
+            .flatten()
     } else {
         None
     };
@@ -713,33 +829,10 @@ async fn fleet_connect_inner_locked(
     {
         return Err("Fleet identity changed during machine trust repair; retry".into());
     }
-    let confirmed = if plan.needs_confirmation() {
-        let confirmed = match confirmation.as_deref() {
-            Some(token) => crate::authz::consume(
-                token,
-                crate::authz::DestructiveAction::FleetReenroll,
-                &plan.confirmation_binding(),
-            )
-            .is_ok(),
-            None => {
-                crate::authz::native_confirm_action(
-                    &app,
-                    crate::authz::DestructiveAction::FleetReenroll,
-                )
-                .await
-            }
-        };
-        if !confirmed {
-            return Err("Re-enrolling this device or changing managed dispatch requires native confirmation.".into());
-        }
-        true
-    } else {
-        false
-    };
-    // A previously interrupted first enrollment can leave app settings
-    // committed while service trust is still absent. An elevated reconnect
-    // may finish that provision, but ordinary reconnect never replaces an
-    // established machine binding.
+    // Read the service's current trust record first, so any native prompt can
+    // name exactly what would be replaced. A previously interrupted first
+    // enrollment can leave app settings committed while service trust is
+    // still absent; an elevated reconnect may finish that provision.
     let prior = if repair_expected_binding.is_some() {
         Some(crate::svc_client::call("svc.fleet.get_trust", serde_json::json!({})).await?)
     } else {
@@ -763,19 +856,84 @@ async fn fleet_connect_inner_locked(
         .filter(|value| !value.is_null())
         .cloned();
     if repair_expected_binding.is_some() {
-        match (&stale_trust_to_replace, &previous_trust) {
+        let observed = replace_expectation(previous_trust.as_ref(), prior.as_ref());
+        match (&stale_trust_to_replace, &observed) {
             (None, Some(_)) => {
                 return Err("Machine Fleet trust changed during repair; retry".into())
             }
-            // The user confirmed replacing exactly this observed record.
+            // The user confirmed replacing exactly this observed record and
+            // origin set; anything else aborts before any change is made.
             (Some(expected), actual) if actual.as_ref() != Some(expected) => {
                 return Err("Machine Fleet trust changed during repair; retry".into())
             }
             _ => {}
         }
     }
+    // Replacing held trust: a stale-trust repair, or a Connect whose
+    // confirmed identity change (server or key) meets an existing record.
+    let replacing_trust = stale_trust_to_replace.is_some()
+        || (repair_expected_binding.is_none()
+            && previous_trust.is_some()
+            && plan.allows_trust_replacement());
     let mesh = std::env::var("FLEET_MESH_ENDPOINTS").ok();
-    let origins = enrollment_origins(&server_url, mesh.as_deref());
+    let origins = replacement_origins(&server_url, mesh.as_deref(), replacing_trust);
+    let confirmed = if plan.needs_confirmation() {
+        let confirmed = if replacing_trust && repair_expected_binding.is_none() {
+            // The generic re-enroll prompt never authorizes replacing SYSTEM
+            // machine trust: always show what is replaced, even when a
+            // confirmation token was also presented.
+            let token_ok = confirmation.as_deref().is_none_or(|token| {
+                crate::authz::consume(
+                    token,
+                    crate::authz::DestructiveAction::FleetReenroll,
+                    &plan.confirmation_binding(),
+                )
+                .is_ok()
+            });
+            let prompt = trust_change_prompt(
+                previous_trust.as_ref().unwrap_or(&Value::Null),
+                prior.as_ref().and_then(|reply| reply.get("origins")),
+                &origins,
+            );
+            token_ok && crate::authz::native_confirm_fleet_trust_change(&app, &prompt).await
+        } else {
+            match confirmation.as_deref() {
+                Some(token) => crate::authz::consume(
+                    token,
+                    crate::authz::DestructiveAction::FleetReenroll,
+                    &plan.confirmation_binding(),
+                )
+                .is_ok(),
+                None => {
+                    crate::authz::native_confirm_action(
+                        &app,
+                        crate::authz::DestructiveAction::FleetReenroll,
+                    )
+                    .await
+                }
+            }
+        };
+        if !confirmed {
+            return Err("Re-enrolling this device or changing managed dispatch requires native confirmation.".into());
+        }
+        true
+    } else {
+        false
+    };
+    if let (Some(expected), true) = (stale_trust_to_replace.as_ref(), repair_expected_binding.is_some()) {
+        // The agent already holds its enrollment: refuse a different
+        // organization, device or signer now, before settings or the agent
+        // change. (An ordinary Connect to a new server cannot know its
+        // organization yet; that is enforced before the service is changed.)
+        let held =
+            crate::sidecar::dispatch_paid_command("fleet_agent_enrollment_trust", Value::Null)
+                .await
+                .map_err(|_| "The Fleet agent has no enrollment to bind to machine trust; nothing was changed".to_string())?;
+        let held_trust = held.get("trust").filter(|trust| !trust.is_null()).ok_or(
+            "The Fleet agent has no enrollment to bind to machine trust; nothing was changed",
+        )?;
+        repair_replacement_allowed(&expected["trust"], held_trust)?;
+    }
     let transport_profile = enrollment_transport_profile();
     let origin_binding_matches = prior
         .as_ref()
@@ -881,7 +1039,7 @@ async fn fleet_connect_inner_locked(
                 || (repair_expected_binding.is_none()
                     && plan.allows_trust_replacement()
                     && confirmed),
-            same_org_required: stale_trust_to_replace.is_some(),
+            same_org_required: replacing_trust,
         };
         let bridge = spawn_trust_bridge(pending);
         if repair_expected_binding.is_some() {
@@ -921,6 +1079,9 @@ struct PendingTrust {
 /// closed-vocabulary code for the Fleet status, so a failed bridge is never
 /// silent.
 fn spawn_trust_bridge(pending: PendingTrust) -> tokio::task::JoinHandle<Result<(), String>> {
+    // Each attempt owns the error slot: a result from an older, superseded
+    // task must never overwrite what a newer attempt cleared or recorded.
+    let attempt = TRUST_BRIDGE_ATTEMPT.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
     set_trust_bridge_error(None);
     let handle = tokio::spawn(async move {
         let result = establish_service_enrollment_trust(
@@ -931,13 +1092,14 @@ fn spawn_trust_bridge(pending: PendingTrust) -> tokio::task::JoinHandle<Result<(
             pending.same_org_required,
         )
         .await;
-        record_trust_bridge_result(&result);
+        record_trust_bridge_result(attempt, &result);
         result
     });
     register_trust_bridge(handle.abort_handle());
     handle
 }
 
+static TRUST_BRIDGE_ATTEMPT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static TRUST_BRIDGE_ERROR: RwLock<Option<&'static str>> = RwLock::new(None);
 
 fn set_trust_bridge_error(code: Option<&'static str>) {
@@ -956,6 +1118,12 @@ fn trust_bridge_error_code(error: &str) -> &'static str {
         "identity_change_unconfirmed"
     } else if error.starts_with("Fleet machine trust replacement refused") {
         "replacement_refused"
+    } else if let Some(code) = error.strip_prefix(TRUST_REJECTED_PREFIX) {
+        SERVICE_TRUST_REJECTIONS
+            .iter()
+            .find(|known| **known == code)
+            .copied()
+            .unwrap_or("service_rejected")
     } else if error.starts_with("Fleet enrollment could not establish machine trust") {
         "proof_timeout"
     } else {
@@ -963,9 +1131,16 @@ fn trust_bridge_error_code(error: &str) -> &'static str {
     }
 }
 
-fn record_trust_bridge_result(result: &Result<(), String>) {
+fn record_trust_bridge_result(attempt: u64, result: &Result<(), String>) {
+    if TRUST_BRIDGE_ATTEMPT.load(std::sync::atomic::Ordering::SeqCst) != attempt {
+        return; // superseded by a newer attempt
+    }
     match result {
-        Ok(()) => set_trust_bridge_error(None),
+        Ok(()) => {
+            set_trust_bridge_error(None);
+            // Trust now matches the agent; do not wait out a long back-off.
+            request_shield_retry();
+        }
         Err(error) => {
             let code = trust_bridge_error_code(error);
             set_trust_bridge_error(Some(code));
@@ -1043,6 +1218,45 @@ fn service_enrollment_action(
     }
 }
 
+/// Closed set of reasons the service gives when it refuses a trust change.
+const SERVICE_TRUST_REJECTIONS: [&str; 11] = [
+    "binding_changed",
+    "generation_must_change",
+    "hybrid_replacement_required",
+    "already_provisioned",
+    "recovery_pending",
+    "not_provisioned",
+    "invalid_proof",
+    "enrollment_not_started",
+    "enrollment_binding_mismatch",
+    "invalid_origin",
+    "service_rejected",
+];
+/// Rejections no amount of waiting for the agent can change.
+const FINAL_TRUST_REJECTIONS: [&str; 6] = [
+    "binding_changed",
+    "generation_must_change",
+    "hybrid_replacement_required",
+    "already_provisioned",
+    "recovery_pending",
+    "not_provisioned",
+];
+const TRUST_REJECTED_PREFIX: &str = "Fleet service rejected machine trust: ";
+
+/// The service's refusal reason from a failed call, mapped into the closed
+/// set; `None` for transport failures (which are simply retried).
+fn service_trust_rejection(error: &str) -> Option<&'static str> {
+    let rest = error.strip_prefix("service rejected request: fleet_policy_rejected (")?;
+    let code = rest.split(')').next()?;
+    Some(
+        SERVICE_TRUST_REJECTIONS
+            .iter()
+            .find(|known| **known == code)
+            .copied()
+            .unwrap_or("service_rejected"),
+    )
+}
+
 async fn establish_service_enrollment_trust(
     device_id: &str,
     signer_key: &str,
@@ -1050,6 +1264,7 @@ async fn establish_service_enrollment_trust(
     confirmed_identity_change: bool,
     same_org_required: bool,
 ) -> Result<(), String> {
+    let mut last_rejection: Option<&'static str> = None;
     for _ in 0..TRUST_PROOF_ATTEMPTS {
         if let Ok(proof) =
             crate::sidecar::dispatch_paid_command("fleet_agent_enrollment_trust", Value::Null).await
@@ -1070,29 +1285,17 @@ async fn establish_service_enrollment_trust(
                     if let (true, Some(previous)) = (same_org_required, previous_trust.as_ref()) {
                         repair_replacement_allowed(previous, replacement)?;
                     }
-                    match service_enrollment_action(
+                    let call = match service_enrollment_action(
                         previous_trust.as_ref(),
                         replacement,
                         confirmed_identity_change,
                     )? {
-                        None => {
-                            if crate::svc_client::call("svc.fleet.bind_origins", proof.clone())
-                                .await
-                                .is_ok()
-                            {
-                                return Ok(());
-                            }
-                        }
+                        None => crate::svc_client::call("svc.fleet.bind_origins", proof.clone()).await,
                         Some("svc.fleet.provision_trust") => {
-                            if crate::svc_client::call("svc.fleet.provision_trust", proof.clone())
-                                .await
-                                .is_ok()
-                            {
-                                return Ok(());
-                            }
+                            crate::svc_client::call("svc.fleet.provision_trust", proof.clone()).await
                         }
                         Some("svc.fleet.replace_trust") => {
-                            if crate::svc_client::call(
+                            crate::svc_client::call(
                                 "svc.fleet.replace_trust",
                                 serde_json::json!({
                                     "previous": previous_trust,
@@ -1101,19 +1304,29 @@ async fn establish_service_enrollment_trust(
                                 }),
                             )
                             .await
-                            .is_ok()
-                            {
-                                return Ok(());
-                            }
                         }
                         Some(_) => unreachable!(),
+                    };
+                    match call {
+                        Ok(_) => return Ok(()),
+                        Err(error) => {
+                            if let Some(code) = service_trust_rejection(&error) {
+                                last_rejection = Some(code);
+                                if FINAL_TRUST_REJECTIONS.contains(&code) {
+                                    return Err(format!("{TRUST_REJECTED_PREFIX}{code}"));
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
-    Err("Fleet enrollment could not establish machine trust; retry after the agent connects".into())
+    match last_rejection {
+        Some(code) => Err(format!("{TRUST_REJECTED_PREFIX}{code}")),
+        None => Err("Fleet enrollment could not establish machine trust; retry after the agent connects".into()),
+    }
 }
 
 /// Query the running fleet agent's status (connected, deviceId, lastEnrollAt,
@@ -2475,7 +2688,7 @@ fn authoritative_shield_state(
         || handoff.get("resolutionRevision").and_then(Value::as_i64) != envelope.resolution_revision
     {
         return Err(
-            "Fleet Shield handoff does not match protected policy identity or revision".into(),
+            SHIELD_HANDOFF_MISMATCH.into(),
         );
     }
     let state_value = handoff
@@ -2510,6 +2723,7 @@ pub fn start_privacy_shield_policy_supervisor(app: tauri::AppHandle) {
         let reported_for_command = Arc::new(Mutex::new(std::collections::BTreeSet::new()));
         let mut agent_epoch = crate::sidecar::fleet_agent_session_epoch();
         let mut backoff = ShieldTickBackoff::default();
+        let mut retry_epoch = SHIELD_RETRY_EPOCH.load(std::sync::atomic::Ordering::SeqCst);
         loop {
             // Pro keeps its "ever reported" Shield state in memory only. After
             // the agent process restarts, local observations already sent must
@@ -2545,7 +2759,20 @@ pub fn start_privacy_shield_policy_supervisor(app: tauri::AppHandle) {
                     &format!("[FleetPrivacyShield] native refresh deferred: {error}"),
                 );
             }
-            tokio::time::sleep(backoff.next_delay(&tick)).await;
+            // Sleep in short slices so freshly established trust ends a long
+            // back-off at once instead of after up to five minutes.
+            let mut remaining = backoff.next_delay(&tick);
+            while !remaining.is_zero() {
+                let slice = remaining.min(SHIELD_TICK_INTERVAL);
+                tokio::time::sleep(slice).await;
+                remaining -= slice;
+                let latest = SHIELD_RETRY_EPOCH.load(std::sync::atomic::Ordering::SeqCst);
+                if latest != retry_epoch {
+                    retry_epoch = latest;
+                    backoff.reset();
+                    break;
+                }
+            }
         }
     });
 }
@@ -2554,11 +2781,41 @@ const SHIELD_TICK_INTERVAL: std::time::Duration = std::time::Duration::from_secs
 const SHIELD_TICK_MAX_BACKOFF: std::time::Duration = std::time::Duration::from_secs(300);
 const SHIELD_HANDOFF_MISMATCH: &str =
     "Fleet Shield handoff does not match protected policy identity or revision";
+const SHIELD_SESSION_UNCONFIRMED: &str = "Shield policy requires one confirmed Windows user session";
+
+/// Shield tick failures the supervisor treats differently.
+#[derive(Debug, PartialEq, Eq)]
+enum ShieldFailure {
+    /// Service trust and the agent's enrollment disagree; only a trust repair
+    /// or re-enrollment clears it.
+    HandoffMismatch,
+    /// More than one interactive session: one machine agent cannot be told
+    /// which session's detector to report.
+    SessionUnconfirmed,
+    Other,
+}
+
+fn classify_shield_failure(error: &str) -> ShieldFailure {
+    match error {
+        SHIELD_HANDOFF_MISMATCH => ShieldFailure::HandoffMismatch,
+        SHIELD_SESSION_UNCONFIRMED => ShieldFailure::SessionUnconfirmed,
+        _ => ShieldFailure::Other,
+    }
+}
+
+/// Bumped whenever trust was just (re)established, so the supervisor retries
+/// at the normal interval instead of waiting out a long back-off.
+static SHIELD_RETRY_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub(crate) fn request_shield_retry() {
+    SHIELD_RETRY_EPOCH.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+}
 
 /// A handoff generation mismatch cannot clear until trust is repaired or the
 /// agent re-enrolls, so retrying it every 5 s only loads the service. Back off
 /// exponentially (5 s, 10 s, ... capped at 5 min); any success, a different
-/// error, or a restarted agent resets to the normal interval.
+/// error, a restarted agent, or newly established trust resets to the normal
+/// interval.
 #[derive(Default)]
 struct ShieldTickBackoff {
     mismatches: u32,
@@ -2566,8 +2823,8 @@ struct ShieldTickBackoff {
 
 impl ShieldTickBackoff {
     fn next_delay(&mut self, result: &Result<(), String>) -> std::time::Duration {
-        match result {
-            Err(error) if error == SHIELD_HANDOFF_MISMATCH => {
+        match result.as_ref().map_err(|error| classify_shield_failure(error)) {
+            Err(ShieldFailure::HandoffMismatch) => {
                 self.mismatches = self.mismatches.saturating_add(1);
                 let factor = 1u32 << self.mismatches.min(6);
                 (SHIELD_TICK_INTERVAL * factor).min(SHIELD_TICK_MAX_BACKOFF)
@@ -2600,14 +2857,40 @@ fn local_observation_status(local: &serde_json::Value) -> Result<&'static str, S
 
 /// Read-only reporting: read the detector's own status and send the
 /// status-only observation. It applies no policy, starts or stops nothing and
-/// acknowledges no desired state, so it needs no protected-service trust.
+/// acknowledges no desired state, so it needs no protected-service trust. It
+/// takes the same machine lock as a policy transaction (so it never overlaps
+/// another session's Shield work) and reports nothing unless exactly one
+/// interactive session exists, because one machine agent cannot tell which
+/// session's detector a status would describe.
 async fn shield_status_only_observation(
     app: &tauri::AppHandle,
     reported: &Arc<Mutex<std::collections::BTreeSet<String>>>,
 ) -> Result<(), String> {
-    let local = privacy_shield_status(app).await?;
-    let status = local_observation_status(&local)?;
-    report_fleet_shield_local_observation(app.clone(), reported, status);
+    let runtime = tokio::runtime::Handle::current();
+    let app = app.clone();
+    let reported = Arc::clone(reported);
+    tokio::task::spawn_blocking(move || {
+        let _guard = crate::paths::acquire_machine_state_lock("fleet-shield-policy")?;
+        runtime.block_on(status_only_observation_with(
+            require_single_interactive_shield_session,
+            privacy_shield_status(&app),
+            |status| report_fleet_shield_local_observation(app.clone(), &reported, status),
+        ))
+    })
+    .await
+    .map_err(|error| format!("Shield observation worker failed: {error}"))?
+}
+
+/// The testable body of the status-only observation: guard, read, report.
+async fn status_only_observation_with<G, R, F>(guard: G, read: R, report: F) -> Result<(), String>
+where
+    G: FnOnce() -> Result<(), String>,
+    R: std::future::Future<Output = Result<serde_json::Value, String>>,
+    F: FnOnce(&'static str),
+{
+    guard()?;
+    let local = read.await?;
+    report(local_observation_status(&local)?);
     Ok(())
 }
 
@@ -2625,7 +2908,7 @@ where
         Ok(()) => return Ok(()),
         Err(error) => error,
     };
-    if fleet_linked {
+    if fleet_linked && classify_shield_failure(&error) != ShieldFailure::SessionUnconfirmed {
         if let Err(observe_error) = observe().await {
             crate::log_message(
                 "warn",
@@ -2720,7 +3003,7 @@ pub(crate) fn require_single_interactive_shield_session() -> Result<(), String> 
             if single_shield_session_matches(current, &active) {
                 Ok(())
             } else {
-                Err("Shield policy requires one confirmed Windows user session".into())
+                Err(SHIELD_SESSION_UNCONFIRMED.into())
             }
         };
         if !sessions.is_null() {
@@ -6860,12 +7143,12 @@ mod fleet_connect_v2_tests {
     #[test]
     fn stale_trust_repair_is_limited_to_the_same_device_and_signer() {
         let stored = trust("org-1", "device-1", "key-1", "gen-old");
-        let prior = serde_json::json!({ "trust": stored });
+        let prior = serde_json::json!({ "trust": stored, "origins": ["https://old.example"] });
         let no_hybrid = serde_json::json!({"trust": stored, "hybrid_trust": null});
         // Same device and signer, stale generation: replace exactly that record.
         assert_eq!(
             plan_trust_repair(&prior, "device-1", "key-1", &no_hybrid),
-            Ok(TrustRepairKind::ReplaceStale(stored.clone()))
+            Ok(TrustRepairKind::ReplaceStale(serde_json::json!({"trust": stored, "origins": ["https://old.example"]})))
         );
         // No record at all: provision as before.
         assert_eq!(
@@ -6901,15 +7184,22 @@ mod fleet_connect_v2_tests {
         }
     }
 
-    #[test]
-    fn cancelled_repair_confirmation_changes_nothing() {
-        // The repair command evaluates this before any begin_enrollment,
-        // settings write or sidecar call.
-        assert_eq!(
-            refuse_unless_confirmed(false).unwrap_err(),
-            "Machine trust repair was cancelled"
-        );
-        assert!(refuse_unless_confirmed(true).is_ok());
+    #[tokio::test]
+    async fn cancelled_repair_confirmation_changes_nothing() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        // The repair command runs its whole change (begin_enrollment, settings
+        // commit, agent configure) inside this closure; a refused
+        // confirmation must never start it.
+        let started = AtomicUsize::new(0);
+        let change = || async {
+            started.fetch_add(1, Ordering::SeqCst);
+            Ok::<_, String>("changed")
+        };
+        let refused = run_after_confirmation(async { false }, change).await;
+        assert_eq!(refused.unwrap_err(), "Machine trust repair was cancelled");
+        assert_eq!(started.load(Ordering::SeqCst), 0);
+        assert_eq!(run_after_confirmation(async { true }, change).await, Ok("changed"));
+        assert_eq!(started.load(Ordering::SeqCst), 1);
     }
 
     #[test]
@@ -6943,11 +7233,20 @@ mod fleet_connect_v2_tests {
         ] {
             assert_eq!(trust_bridge_error_code(text), code);
         }
-        record_trust_bridge_result(&Err(
-            "Fleet enrollment could not establish machine trust; retry".into(),
-        ));
+        let attempt = TRUST_BRIDGE_ATTEMPT.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        record_trust_bridge_result(
+            attempt,
+            &Err("Fleet enrollment could not establish machine trust; retry".into()),
+        );
         assert_eq!(trust_bridge_error(), Some("proof_timeout"));
-        record_trust_bridge_result(&Ok(()));
+        // A result from an older, superseded attempt never overwrites the slot.
+        let newer = TRUST_BRIDGE_ATTEMPT.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        set_trust_bridge_error(None);
+        record_trust_bridge_result(attempt, &Err(format!("{TRUST_REJECTED_PREFIX}binding_changed")));
+        assert_eq!(trust_bridge_error(), None);
+        record_trust_bridge_result(newer, &Err(format!("{TRUST_REJECTED_PREFIX}binding_changed")));
+        assert_eq!(trust_bridge_error(), Some("binding_changed"));
+        record_trust_bridge_result(newer, &Ok(()));
         assert_eq!(trust_bridge_error(), None);
     }
 
@@ -7018,6 +7317,163 @@ mod fleet_connect_v2_tests {
         let result =
             shield_tick_with(service_down(), true, || async { Err("status".to_string()) }).await;
         assert!(result.unwrap_err().contains("forbidden"));
+    }
+
+    #[tokio::test]
+    async fn status_only_observation_reports_one_session_only_and_acknowledges_nothing() {
+        use std::sync::Mutex as StdMutex;
+        let reports: StdMutex<Vec<&'static str>> = StdMutex::new(Vec::new());
+        let read_running = || async { Ok(serde_json::json!({"running": true})) };
+        // Single session: exactly the detector's own state is reported.
+        status_only_observation_with(|| Ok(()), read_running(), |status| {
+            reports.lock().unwrap().push(status)
+        })
+        .await
+        .unwrap();
+        assert_eq!(*reports.lock().unwrap(), vec!["running"]);
+        // Two interactive sessions: nothing is read or reported, whichever
+        // session's detector happens to be running.
+        let read_called = std::sync::atomic::AtomicBool::new(false);
+        let two_sessions = || Err::<(), String>(SHIELD_SESSION_UNCONFIRMED.to_string());
+        let error = status_only_observation_with(
+            two_sessions,
+            async {
+                read_called.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(serde_json::json!({"running": true}))
+            },
+            |status| reports.lock().unwrap().push(status),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(classify_shield_failure(&error), ShieldFailure::SessionUnconfirmed);
+        assert!(!read_called.load(std::sync::atomic::Ordering::SeqCst));
+        assert_eq!(reports.lock().unwrap().len(), 1);
+        // Unreadable native state reports nothing rather than a guess.
+        assert!(status_only_observation_with(|| Ok(()), async { Ok(serde_json::json!({})) }, |status| {
+            reports.lock().unwrap().push(status)
+        })
+        .await
+        .is_err());
+        assert_eq!(reports.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_session_conflict_skips_the_observation_without_logging_noise() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let observed = AtomicUsize::new(0);
+        let observe = || async {
+            observed.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        };
+        let conflict = async { Err::<(), String>(SHIELD_SESSION_UNCONFIRMED.to_string()) };
+        assert!(shield_tick_with(conflict, true, observe).await.is_err());
+        assert_eq!(observed.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn shield_failures_are_classified_from_the_same_strings_that_produce_them() {
+        assert_eq!(classify_shield_failure(SHIELD_HANDOFF_MISMATCH), ShieldFailure::HandoffMismatch);
+        assert_eq!(classify_shield_failure(SHIELD_SESSION_UNCONFIRMED), ShieldFailure::SessionUnconfirmed);
+        assert_eq!(classify_shield_failure("service connect failed"), ShieldFailure::Other);
+        // The producing sites use the constants, not copies of the text.
+        let source = include_str!("fleet_agent.rs").replace("\r\n", "\n");
+        let handoff = ["handoff does not match protected", " policy identity or revision"].concat();
+        assert_eq!(source.matches(&handoff).count(), 1);
+        let session = ["requires one confirmed", " Windows user session"].concat();
+        assert_eq!(source.matches(&session).count(), 1);
+    }
+
+    #[test]
+    fn replacement_prompt_names_old_and_new_origin_organization_device_and_enrollment() {
+        let previous = trust("org-1", "device-1", "key-1", "df372735-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+        let origins = serde_json::json!(["http://100.65.63.88:8787"]);
+        let prompt = trust_change_prompt(
+            &previous,
+            Some(&origins),
+            &["https://test-linux.leo-ordinal.ts.net:9443".to_string()],
+        );
+        for expected in [
+            "http://100.65.63.88:8787",
+            "https://test-linux.leo-ordinal.ts.net:9443",
+            "org-1",
+            "device-1",
+            "df372735",
+            "same organization (org-1)",
+        ] {
+            assert!(prompt.contains(expected), "{expected} missing from: {prompt}");
+        }
+        // Never the signing key.
+        assert!(!prompt.contains("key-1"));
+    }
+
+    #[test]
+    fn a_replacement_binds_only_the_confirmed_origin_not_the_mesh_environment() {
+        let mesh = Some("https://mesh-a.example;https://mesh-b.example");
+        assert_eq!(
+            replacement_origins("https://fleet.example", mesh, true),
+            vec!["https://fleet.example".to_string()]
+        );
+        assert_eq!(
+            replacement_origins("https://fleet.example", mesh, false),
+            vec![
+                "https://fleet.example".to_string(),
+                "https://mesh-a.example".to_string(),
+                "https://mesh-b.example".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_record_or_origin_changed_after_the_prompt_is_not_the_confirmed_expectation() {
+        let stored = trust("org-1", "device-1", "key-1", "gen-old");
+        let confirmed = replace_expectation(
+            Some(&stored),
+            Some(&serde_json::json!({"origins": ["https://old.example"]})),
+        );
+        let same = replace_expectation(
+            Some(&stored),
+            Some(&serde_json::json!({"origins": ["https://old.example"]})),
+        );
+        assert_eq!(confirmed, same);
+        // Different origin set or different record: no longer what was shown.
+        let moved_origin = replace_expectation(
+            Some(&stored),
+            Some(&serde_json::json!({"origins": ["https://other.example"]})),
+        );
+        assert_ne!(confirmed, moved_origin);
+        let changed_org = replace_expectation(
+            Some(&trust("org-2", "device-1", "key-1", "gen-old")),
+            Some(&serde_json::json!({"origins": ["https://old.example"]})),
+        );
+        assert_ne!(confirmed, changed_org);
+        // A proof from another organization is refused before anything changes.
+        assert!(repair_replacement_allowed(&stored, &trust("org-2", "device-1", "key-1", "gen-new")).is_err());
+    }
+
+    #[test]
+    fn service_refusals_become_closed_codes_and_only_waiting_ones_retry() {
+        let rejected = |code: &str| {
+            format!("service rejected request: fleet_policy_rejected ({code}) [operation 9]")
+        };
+        assert_eq!(service_trust_rejection(&rejected("binding_changed")), Some("binding_changed"));
+        assert_eq!(service_trust_rejection(&rejected("generation_must_change")), Some("generation_must_change"));
+        assert_eq!(service_trust_rejection(&rejected("something_new")), Some("service_rejected"));
+        assert_eq!(service_trust_rejection("service connect failed: pipe"), None);
+        assert!(FINAL_TRUST_REJECTIONS.contains(&"binding_changed"));
+        assert!(!FINAL_TRUST_REJECTIONS.contains(&"invalid_proof"));
+        for code in SERVICE_TRUST_REJECTIONS {
+            assert_eq!(
+                trust_bridge_error_code(&format!("{TRUST_REJECTED_PREFIX}{code}")),
+                code
+            );
+        }
+    }
+
+    #[test]
+    fn dispatch_changes_are_registered_as_destructive_for_the_cli() {
+        for name in ["fleet_set_dispatch", "fleet_repair_machine_trust"] {
+            assert!(crate::authz::action_for(name).is_some(), "{name}");
+        }
     }
 
     #[test]

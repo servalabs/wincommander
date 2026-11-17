@@ -401,3 +401,69 @@ fn managed_relay_keeps_per_session_path_verb_rate_limit() {
         .authorize_deployment_observation(&identity(3), APPLY, true, Path::new(IMAGE), || Ok(()))
         .is_ok());
 }
+
+fn scratch_image(contents: &[u8]) -> PathBuf {
+    let path = std::env::temp_dir().join(format!("wincmd-image-cache-{}.exe", uuid::Uuid::new_v4()));
+    std::fs::write(&path, contents).unwrap();
+    path
+}
+
+#[test]
+fn real_file_digest_is_reused_until_the_file_changes() {
+    let path = scratch_image(b"first image");
+    let digest = |path: &Path| file_digest(&mut File::open(path).unwrap(), path).unwrap();
+    let first = digest(&path);
+    assert_eq!(digest(&path), first, "unchanged file serves the same digest");
+    // A rewrite (different bytes, later change time) must be rehashed.
+    std::thread::sleep(std::time::Duration::from_millis(40));
+    std::fs::write(&path, b"other bytes").unwrap();
+    let second = digest(&path);
+    assert_ne!(second, first);
+    assert_eq!(second, Sha256::digest(b"other bytes").to_vec());
+    // Same length rewrite is still detected.
+    std::thread::sleep(std::time::Duration::from_millis(40));
+    std::fs::write(&path, b"OTHER BYTES").unwrap();
+    assert_eq!(digest(&path), Sha256::digest(b"OTHER BYTES").to_vec());
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn security_descriptor_changes_alter_the_cache_key_inputs() {
+    let path = scratch_image(b"image");
+    let file = File::open(&path).unwrap();
+    let before = acl::state_fingerprint(&file).unwrap();
+    assert_eq!(acl::state_fingerprint(&file).unwrap(), before);
+    let granted = std::process::Command::new("icacls.exe")
+        .arg(&path)
+        .args(["/grant", "*S-1-1-0:(R)"])
+        .output()
+        .unwrap();
+    assert!(granted.status.success(), "icacls could not change the test ACL");
+    let after = acl::state_fingerprint(&File::open(&path).unwrap()).unwrap();
+    assert_ne!(after, before, "a permission change must change the fingerprint");
+    drop(file);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn file_identity_is_per_file_not_per_path_spelling() {
+    let path = scratch_image(b"image");
+    let other = scratch_image(b"image");
+    let id = |path: &Path| acl::file_identity(&File::open(path).unwrap()).unwrap();
+    let upper = PathBuf::from(path.to_string_lossy().to_uppercase());
+    assert_eq!((id(&path).0, id(&path).1), (id(&upper).0, id(&upper).1));
+    assert_ne!((id(&path).0, id(&path).1), (id(&other).0, id(&other).1));
+    std::fs::remove_file(path).unwrap();
+    std::fs::remove_file(other).unwrap();
+}
+
+#[test]
+fn access_control_is_checked_on_every_call_even_with_a_warm_digest_cache() {
+    // A user-writable image fails the owner/DACL check whether or not its
+    // digest is already cached.
+    let path = scratch_image(b"image");
+    file_digest(&mut File::open(&path).unwrap(), &path).unwrap();
+    assert!(verify_image(&path, &path).is_err());
+    assert!(verify_image(&path, &path).is_err());
+    std::fs::remove_file(path).unwrap();
+}

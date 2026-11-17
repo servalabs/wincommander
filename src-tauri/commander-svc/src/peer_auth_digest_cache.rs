@@ -3,22 +3,31 @@
 //! re-read on every Fleet policy call.
 //!
 //! The digest is reused only while the file's identity is unchanged: same
-//! path, byte length, modification time and security-descriptor fingerprint.
-//! The caller still performs the full access-control verification on every
-//! call; this cache only skips re-reading file bytes that provably have not
-//! been written (any writer changes the length or modification time, and a
-//! permission change changes the fingerprint, each of which forces a rehash).
+//! path, file ID (volume + index), byte length, last-write time, NTFS change
+//! time and security-descriptor fingerprint. The caller still performs the
+//! full access-control verification on every call; this cache only skips
+//! re-reading file bytes that have not been written (a writer changes the
+//! length, write time or change time; a permission change alters the change
+//! time and the fingerprint; each forces a rehash).
 
 use crate::peer_auth::PeerAuthError;
-use std::{path::PathBuf, sync::Mutex, time::SystemTime};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+    time::SystemTime,
+};
 
 const MAX_ENTRIES: usize = 8;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ImageIdentity {
     pub(crate) path: PathBuf,
+    pub(crate) volume: u64,
+    pub(crate) file_index: u64,
     pub(crate) size: u64,
     pub(crate) modified: Option<SystemTime>,
+    pub(crate) change_time: i64,
     /// SHA-256 over the owner and DACL of the opened file.
     pub(crate) acl: [u8; 32],
 }
@@ -29,39 +38,81 @@ pub(crate) struct DigestCache {
 }
 
 impl DigestCache {
-    /// Return the remembered digest for exactly this identity, or compute,
-    /// remember and return it. A failed computation is never remembered.
-    pub(crate) fn get_or_compute(
-        &mut self,
-        identity: ImageIdentity,
-        compute: impl FnOnce() -> Result<Vec<u8>, PeerAuthError>,
-    ) -> Result<Vec<u8>, PeerAuthError> {
-        if let Some((_, digest)) = self.entries.iter().find(|(known, _)| *known == identity) {
-            return Ok(digest.clone());
-        }
-        let digest = compute()?;
+    pub(crate) fn lookup(&self, identity: &ImageIdentity) -> Option<Vec<u8>> {
+        self.entries
+            .iter()
+            .find(|(known, _)| known == identity)
+            .map(|(_, digest)| digest.clone())
+    }
+
+    pub(crate) fn insert(&mut self, identity: ImageIdentity, digest: Vec<u8>) {
         // A changed identity for a known path replaces its stale entry.
         self.entries.retain(|(known, _)| known.path != identity.path);
         if self.entries.len() >= MAX_ENTRIES {
             self.entries.remove(0);
         }
-        self.entries.push((identity, digest.clone()));
+        self.entries.push((identity, digest));
+    }
+
+    /// Return the remembered digest for exactly this identity, or compute,
+    /// remember and return it. A failed computation is never remembered.
+    #[cfg(test)]
+    pub(crate) fn get_or_compute(
+        &mut self,
+        identity: ImageIdentity,
+        compute: impl FnOnce() -> Result<Vec<u8>, PeerAuthError>,
+    ) -> Result<Vec<u8>, PeerAuthError> {
+        if let Some(digest) = self.lookup(&identity) {
+            return Ok(digest);
+        }
+        let digest = compute()?;
+        self.insert(identity, digest.clone());
         Ok(digest)
     }
 }
 
-static CACHE: Mutex<DigestCache> = Mutex::new(DigestCache { entries: Vec::new() });
+struct Shared {
+    cache: DigestCache,
+    /// One gate per image path: concurrent callers for the same image wait
+    /// for the first hash instead of repeating it, while the map lock itself
+    /// is never held during hashing.
+    gates: HashMap<PathBuf, Arc<Mutex<()>>>,
+}
+
+static SHARED: Mutex<Option<Shared>> = Mutex::new(None);
+
+fn with_shared<T>(action: impl FnOnce(&mut Shared) -> T) -> Option<T> {
+    let mut guard = SHARED.lock().ok()?;
+    let shared = guard.get_or_insert_with(|| Shared {
+        cache: DigestCache::default(),
+        gates: HashMap::new(),
+    });
+    Some(action(shared))
+}
 
 /// Process-wide lookup used by the pipe authorization path.
 pub(crate) fn cached_digest(
     identity: ImageIdentity,
     compute: impl FnOnce() -> Result<Vec<u8>, PeerAuthError>,
 ) -> Result<Vec<u8>, PeerAuthError> {
-    match CACHE.lock() {
-        Ok(mut cache) => cache.get_or_compute(identity, compute),
+    let Some(gate) = with_shared(|shared| {
+        if shared.gates.len() > 4 * MAX_ENTRIES {
+            shared.gates.clear();
+        }
+        Arc::clone(shared.gates.entry(identity.path.clone()).or_default())
+    }) else {
         // A poisoned cache is never trusted: hash directly.
-        Err(_) => compute(),
+        return compute();
+    };
+    let Ok(_serialized) = gate.lock() else {
+        return compute();
+    };
+    if let Some(Some(digest)) = with_shared(|shared| shared.cache.lookup(&identity)) {
+        return Ok(digest);
     }
+    let digest = compute()?;
+    with_shared(|shared| shared.cache.insert(identity, digest.clone()));
+    Ok(digest)
 }
 
 #[cfg(test)]
@@ -72,7 +123,10 @@ mod tests {
     fn identity() -> ImageIdentity {
         ImageIdentity {
             path: PathBuf::from(r"C:\ProgramData\WinCommander\dev-fleet\wincommander-free.exe"),
+            volume: 3,
+            file_index: 42,
             size: 88_000_000,
+            change_time: 500,
             modified: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(1_000)),
             acl: [7; 32],
         }
@@ -113,6 +167,50 @@ mod tests {
         // The superseded identities are gone: going back rehashes again.
         assert_eq!(digest(&mut cache, identity(), &runs, 5), vec![5; 32]);
         assert_eq!(runs.get(), 5);
+    }
+
+    #[test]
+    fn a_replaced_file_or_new_change_time_forces_a_rehash() {
+        let (mut cache, runs) = (DigestCache::default(), Cell::new(0));
+        digest(&mut cache, identity(), &runs, 1);
+        // Same path, contents "restored" to the same size and write time, but
+        // a different file object (index) or a later NTFS change time.
+        let mut swapped = identity();
+        swapped.file_index += 1;
+        assert_eq!(digest(&mut cache, swapped, &runs, 2), vec![2; 32]);
+        let mut retimed = identity();
+        retimed.change_time += 1;
+        assert_eq!(digest(&mut cache, retimed, &runs, 3), vec![3; 32]);
+        let mut other_volume = identity();
+        other_volume.volume += 1;
+        assert_eq!(digest(&mut cache, other_volume, &runs, 4), vec![4; 32]);
+        assert_eq!(runs.get(), 4);
+    }
+
+    #[test]
+    fn concurrent_callers_for_one_image_hash_it_once() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::Arc;
+        let runs = Arc::new(AtomicU32::new(0));
+        let mut each = identity();
+        each.path = PathBuf::from(r"C:\concurrent-image.exe");
+        let workers: Vec<_> = (0..6)
+            .map(|_| {
+                let (runs, each) = (Arc::clone(&runs), each.clone());
+                std::thread::spawn(move || {
+                    cached_digest(each, || {
+                        runs.fetch_add(1, Ordering::SeqCst);
+                        std::thread::sleep(Duration::from_millis(50));
+                        Ok(vec![9; 32])
+                    })
+                    .unwrap()
+                })
+            })
+            .collect();
+        for worker in workers {
+            assert_eq!(worker.join().unwrap(), vec![9; 32]);
+        }
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
     }
 
     #[test]
