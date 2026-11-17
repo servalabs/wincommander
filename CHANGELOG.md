@@ -21,9 +21,15 @@ lists only a selection of those changes.
   new server or key. Anything else is refused and reported with a fixed reason.
 - Bind the Fleet policy-epoch floor to the enrollment generation, so a first
   epoch from a user-confirmed new generation is adopted instead of being
-  refused as not newer. The protected service must confirm that generation;
-  same-generation rollback is still refused. Refusals name the failing
-  condition in the Fleet status.
+  refused as not newer. Every adoption now needs the protected service to
+  confirm that the epoch's signed generation is the one it trusts; a replayed
+  epoch from an older generation, and same-generation rollback, are refused.
+  Refusals name the failing condition in the Fleet status. The service now
+  persists a confirmed generation and returns it, with the trust generation,
+  through its session-helper `get_policy` reply, so the app no longer needs the
+  administrator-only trust read. The app and `commander-svc` must be updated
+  together: against a service that does not return these fields, adoption fails
+  closed.
 - Add a remote-command dispatch toggle to the connected Fleet panel (no
   re-enrollment). Turning it off is always allowed; if the running agent cannot
   be reconfigured the panel says so.

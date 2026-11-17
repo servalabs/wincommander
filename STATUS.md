@@ -46,7 +46,10 @@ Merged from `codex/fleet-connect-v2-20261117` with `origin/main` at `356e4b14`:
 the connect stack-overflow guard, https-only addresses with clear errors,
 stale-trust repair, the epoch floor bound to the enrollment generation (user
 confirmed, service-checked), the dispatch toggle and status-only Shield
-reporting ([CHANGELOG.md](CHANGELOG.md)). Open: no rollback anchor for the
+reporting ([CHANGELOG.md](CHANGELOG.md)). The app and `commander-svc` are
+coupled: epoch adoption relies on new `get_policy` fields (confirmed and trust
+generation) from the service and fails closed against an older one, so ship
+them together. Open: no rollback anchor for the
 persisted epoch state, recovery and re-admission disabled by design, commands
 still on the legacy check-in route, and old-database identity history not
 migrated ([WEAKNESSES.md](WEAKNESSES.md#fleet-connect)). Checked by automated

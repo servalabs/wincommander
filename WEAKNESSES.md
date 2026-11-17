@@ -28,8 +28,8 @@ vulnerability details (report those through [SECURITY.md](SECURITY.md)).
 
 - **Persistent-state rollback is not prevented.** The epoch floor and enrollment
   generation bound to it are persisted state with no independent anti-rollback
-  anchor; restoring an older copy of that state is not detected. Same-generation
-  epoch rollback is refused only against the state that is present.
+  anchor; restoring an older copy of that state is not detected. Replay and
+  same-generation rollback are refused only against the state that is present.
 - **Recovery and re-admission are disabled by design.** The panel does not offer
   them and the native commands refuse, so no recovery path ships
   ([ROADMAP.md](ROADMAP.md#2-wip)).
