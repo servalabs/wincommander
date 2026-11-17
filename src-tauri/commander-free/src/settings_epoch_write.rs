@@ -13,6 +13,12 @@ pub(super) struct Epoch {
     pub target_kind: Option<String>,
     pub target_id: Option<String>,
     pub managed: bool,
+    /// Enrollment generation this epoch was signed under, when known.
+    pub generation: Option<String>,
+    /// Set only by the caller that verified the new generation's trust with
+    /// the protected service: lets this epoch be adopted below the recorded
+    /// floor when the floor belongs to a different (or unrecorded) generation.
+    pub floor_reset: bool,
 }
 
 pub(super) fn apply(epoch: &Epoch) -> Result<AppSettings, String> {
@@ -95,8 +101,20 @@ fn prepare_inner(current: &AppSettings, epoch: &Epoch, allow_equal_readback: boo
             return Err("Fleet look-away delay must be an integer from 0 to 300 seconds".into());
         }
     }
-    if epoch.version < current.policy.master_config_version.unwrap_or(0)
-        || (!allow_equal_readback && epoch.version == current.policy.master_config_version.unwrap_or(0)) {
+    // Epoch numbers restart for each enrollment generation. Within one
+    // generation the floor is strictly monotonic. Below it, an epoch is
+    // accepted only for a different (or never-recorded) generation, and only
+    // when the caller proved that generation's trust with the protected
+    // service (`floor_reset`); the signature was verified against the pinned
+    // key above either way.
+    let floor = current.policy.master_config_version.unwrap_or(0);
+    let other_generation = epoch.generation.as_deref().is_some_and(|generation| {
+        current.policy.master_config_generation.as_deref() != Some(generation)
+    });
+    let below_floor_allowed = epoch.floor_reset && other_generation && epoch.version >= 1;
+    if !below_floor_allowed
+        && (epoch.version < floor || (!allow_equal_readback && epoch.version == floor))
+    {
         return Err("Config epoch is not newer than the committed policy".into());
     }
     // The signed config owns desired state, not local credentials, connection
@@ -141,6 +159,9 @@ fn prepare_inner(current: &AppSettings, epoch: &Epoch, allow_equal_readback: boo
     candidate.policy.locked_paths = epoch.locked_paths.clone();
     candidate.policy.last_synced_at = Some(super::now_iso8601());
     candidate.policy.master_config_version = Some(epoch.version);
+    if epoch.generation.is_some() {
+        candidate.policy.master_config_generation = epoch.generation.clone();
+    }
     candidate.policy.sync_mode = "managed".into();
     candidate.policy.managed = epoch.managed;
     Ok(candidate)

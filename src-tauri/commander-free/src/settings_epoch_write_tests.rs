@@ -52,6 +52,8 @@ impl Fixture {
             target_kind: Some("org".into()),
             target_id: None,
             managed: true,
+            generation: None,
+            floor_reset: false,
         }
     }
     fn value(&self) -> Value {
@@ -272,4 +274,77 @@ fn concurrent_identical_epochs_commit_at_most_once() {
     });
     assert_eq!(successes, 1);
     assert_eq!(writes.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+const GENERATION_OLD: &str = "df372735-0000-4000-8000-000000000001";
+const GENERATION_NEW: &str = "98455ed7-0000-4000-8000-000000000002";
+
+fn in_generation(f: &Fixture, version: u32, generation: &str, floor_reset: bool) -> Epoch {
+    let mut epoch = f.epoch(version, "merge");
+    epoch.generation = Some(generation.into());
+    epoch.floor_reset = floor_reset;
+    epoch
+}
+
+fn record_floor(generation: Option<&str>) {
+    SETTINGS_CACHE.lock().unwrap().as_mut().unwrap().policy.master_config_generation =
+        generation.map(str::to_owned);
+}
+
+#[test]
+fn a_lower_epoch_inside_the_same_generation_is_always_refused() {
+    let f = Fixture::new();
+    record_floor(Some(GENERATION_OLD));
+    // Floor 10 under the old generation: replaying older epochs of that very
+    // generation is a rollback, with or without the reset flag.
+    f.deny(&in_generation(&f, 3, GENERATION_OLD, false));
+    f.deny(&in_generation(&f, 3, GENERATION_OLD, true));
+    f.deny(&in_generation(&f, 10, GENERATION_OLD, true));
+}
+
+#[test]
+fn a_confirmed_new_generation_restarts_below_the_old_floor_then_floor_is_monotonic() {
+    let f = Fixture::new();
+    record_floor(Some(GENERATION_OLD));
+    let adopted = apply_with(&in_generation(&f, 1, GENERATION_NEW, true), |_| Ok(())).unwrap();
+    assert_eq!(adopted.policy.master_config_version, Some(1));
+    assert_eq!(adopted.policy.master_config_generation.as_deref(), Some(GENERATION_NEW));
+    *SETTINGS_CACHE.lock().unwrap() = Some(adopted);
+    // The floor now belongs to the new generation and only moves up.
+    f.deny(&in_generation(&f, 1, GENERATION_NEW, true));
+    f.deny(&in_generation(&f, 1, GENERATION_NEW, false));
+    let next = apply_with(&in_generation(&f, 2, GENERATION_NEW, false), |_| Ok(())).unwrap();
+    assert_eq!(next.policy.master_config_version, Some(2));
+    *SETTINGS_CACHE.lock().unwrap() = Some(next);
+    f.deny(&in_generation(&f, 1, GENERATION_NEW, true));
+    // The old generation's epochs are now the other generation: still below
+    // its own recorded floor of 2 only if the reset is proven again.
+    f.deny(&in_generation(&f, 1, GENERATION_OLD, false));
+}
+
+#[test]
+fn an_unconfirmed_or_unknown_generation_cannot_go_below_the_floor() {
+    let f = Fixture::new();
+    record_floor(Some(GENERATION_OLD));
+    // A different generation the service has not confirmed (no reset flag).
+    f.deny(&in_generation(&f, 1, GENERATION_NEW, false));
+    // No generation at all (an unbound epoch) never resets, even if flagged.
+    let mut unbound = f.epoch(1, "merge");
+    unbound.floor_reset = true;
+    f.deny(&unbound);
+    // A newer number in the new generation needs no reset.
+    let newer = apply_with(&in_generation(&f, 11, GENERATION_NEW, false), |_| Ok(())).unwrap();
+    assert_eq!(newer.policy.master_config_generation.as_deref(), Some(GENERATION_NEW));
+}
+
+#[test]
+fn a_floor_recorded_before_generations_were_tracked_can_be_reset_only_when_confirmed() {
+    let f = Fixture::new();
+    record_floor(None);
+    f.deny(&in_generation(&f, 1, GENERATION_NEW, false));
+    let adopted = apply_with(&in_generation(&f, 1, GENERATION_NEW, true), |_| Ok(())).unwrap();
+    assert_eq!(adopted.policy.master_config_generation.as_deref(), Some(GENERATION_NEW));
+    // Epoch 0 is never valid, even with a proven new generation.
+    record_floor(Some(GENERATION_OLD));
+    f.deny(&in_generation(&f, 0, GENERATION_NEW, true));
 }

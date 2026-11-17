@@ -63,3 +63,23 @@ const REPAIRABLE_TRUST_CODES = new Set([
 export function trustBridgeNeedsRepair(code: string | null | undefined): boolean {
   return !!code && REPAIRABLE_TRUST_CODES.has(code);
 }
+
+const EPOCH_ADOPTION_HINTS: Record<string, string> = {
+  epoch_generation_unconfirmed:
+    "Fleet policy from the new server needs adoption, but this device's service has not confirmed the new enrollment yet. Repair machine trust, then the policy applies automatically.",
+  epoch_below_service_floor:
+    "The Fleet policy from the new server is older than the policy this device's service already holds for it, so it was not adopted.",
+  epoch_rollback_refused:
+    "An older Fleet policy than the one already applied was refused (rollback protection).",
+};
+
+/** Closed-vocabulary hint for why a signed Fleet policy epoch was not adopted. */
+export function describeEpochAdoptionIssue(code: string | null | undefined): string | null {
+  if (!code) return null;
+  return EPOCH_ADOPTION_HINTS[code] ?? "A signed Fleet policy could not be adopted.";
+}
+
+/** Only an unconfirmed new enrollment is cleared by the trust repair. */
+export function epochIssueNeedsRepair(code: string | null | undefined): boolean {
+  return code === "epoch_generation_unconfirmed";
+}

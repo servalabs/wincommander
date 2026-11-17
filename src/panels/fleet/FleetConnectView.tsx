@@ -14,7 +14,7 @@ import { useLicenseQuery } from "@/hooks/queries/useLicenseQuery";
 import { fleetLinkLabel, fleetLinkState, type FleetLinkStatus } from "./fleetLinkPresentation";
 import { fleetShieldProfileStatus } from "../../lib/fleetShieldProfileStatus";
 import { FleetSignedContact } from "./FleetSignedContact";
-import { describeFleetConnectError, describeTrustBridgeError, fleetAddressWarning, FLEET_HTTPS_HINT, trustBridgeNeedsRepair } from "./fleetConnectErrors";
+import { describeEpochAdoptionIssue, describeFleetConnectError, describeTrustBridgeError, epochIssueNeedsRepair, fleetAddressWarning, FLEET_HTTPS_HINT, trustBridgeNeedsRepair } from "./fleetConnectErrors";
 
 interface FleetStatus extends FleetLinkStatus {
   // True while Pro's check-in loop is alive and self-healing (connected or
@@ -31,6 +31,8 @@ interface FleetStatus extends FleetLinkStatus {
   admissionFingerprint?: string | null;
   // Closed-vocabulary reason the service trust bridge last failed (null when none).
   trustBridgeError?: string | null;
+  // Closed-vocabulary reason a signed Fleet policy epoch was not adopted (null when none).
+  epochAdoptionIssue?: string | null;
   cleanupPending?: boolean;
 }
 
@@ -618,6 +620,19 @@ export default function FleetConnectView() {
                   <Button variant="outline" size="sm" disabled={busy} onClick={repairMachineTrust}>
                     {repairingTrust ? "Repairing…" : "Repair machine trust"}
                   </Button>
+                </div>
+              )}
+              {wasEnrolled && !!status.epochAdoptionIssue && (
+                <div>
+                  <p className="fleet-connect-error" role="alert">
+                    <Icon icon="warning-sign" size={13} intent="danger" /> {describeEpochAdoptionIssue(status.epochAdoptionIssue)}
+                  </p>
+                  {epochIssueNeedsRepair(status.epochAdoptionIssue)
+                    && !(trustMatchesAgent === false || trustBridgeNeedsRepair(status.trustBridgeError)) && (
+                    <Button variant="outline" size="sm" disabled={busy} onClick={repairMachineTrust}>
+                      {repairingTrust ? "Repairing…" : "Repair machine trust"}
+                    </Button>
+                  )}
                 </div>
               )}
               <div className="fleet-connect-toggle" data-testid="dispatch-toggle">

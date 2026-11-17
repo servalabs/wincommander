@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { describeFleetConnectError, describeTrustBridgeError, trustBridgeNeedsRepair, fleetAddressWarning, FLEET_ADDRESS_HINT, FLEET_HTTPS_HINT } from "./fleetConnectErrors";
+import { describeEpochAdoptionIssue, describeFleetConnectError, describeTrustBridgeError, epochIssueNeedsRepair, trustBridgeNeedsRepair, fleetAddressWarning, FLEET_ADDRESS_HINT, FLEET_HTTPS_HINT } from "./fleetConnectErrors";
 
 describe("Fleet connect error wording", () => {
   test("warns about plain http:// while typing and accepts https://", () => {
@@ -33,5 +33,14 @@ describe("Fleet connect error wording", () => {
       expect(trustBridgeNeedsRepair(code)).toBe(false);
     }
     expect(describeTrustBridgeError("binding_changed")).toContain("different enrollment");
+  });
+
+  test("epoch adoption refusals are explained from a closed vocabulary", () => {
+    expect(describeEpochAdoptionIssue(null)).toBeNull();
+    expect(describeEpochAdoptionIssue("epoch_generation_unconfirmed")).toContain("new server needs adoption");
+    expect(describeEpochAdoptionIssue("epoch_rollback_refused")).toContain("rollback protection");
+    expect(describeEpochAdoptionIssue("C:\secret")).toBe("A signed Fleet policy could not be adopted.");
+    expect(epochIssueNeedsRepair("epoch_generation_unconfirmed")).toBe(true);
+    expect(epochIssueNeedsRepair("epoch_rollback_refused")).toBe(false);
   });
 });

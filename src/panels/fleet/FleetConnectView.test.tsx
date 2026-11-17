@@ -112,6 +112,17 @@ test("another Windows profile sees active retry, terminal failure, then recovere
     status = { ...status, trustBridgeError: 'binding_changed' };
     await poll();
     assert.match(host.textContent, /Service trust needs repair/);
+    // A signed policy epoch from the new server that was not adopted is explained, not just logged.
+    status = { ...status, epochAdoptionIssue: 'epoch_generation_unconfirmed' };
+    await poll();
+    assert.match(host.textContent, /Fleet policy from the new server needs adoption/);
+    assert.ok([...host.querySelectorAll('button')].some(button => button.textContent === 'Repair machine trust'));
+    status = { ...status, epochAdoptionIssue: 'epoch_rollback_refused' };
+    await poll();
+    assert.match(host.textContent, /rollback protection/);
+    status = { ...status, epochAdoptionIssue: null };
+    await poll();
+    assert.ok(!host.textContent.includes('rollback protection'));
     status = { ...status, trustBridgeError: null };
     await poll();
     status = { ...status, connected: false, retrying: true, lastError: 'connection unavailable' };

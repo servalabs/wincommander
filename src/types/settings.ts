@@ -1727,6 +1727,8 @@ export interface PolicySettings {
   lockedPaths: string[];
   lastSyncedAt: string | null;
   masterConfigVersion: number | null;
+  /** Enrollment generation the epoch floor was recorded under (epoch numbers restart per generation). */
+  masterConfigGeneration?: string | null;
   organization: string | null;
   /** Base64 Ed25519 fleet signing key pinned at connect (P2). */
   fleetSigningKey?: string | null;

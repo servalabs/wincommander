@@ -2453,6 +2453,11 @@ pub struct PolicySettings {
     pub locked_paths: Vec<String>,
     pub last_synced_at: Option<String>,
     pub master_config_version: Option<u32>,
+    /// Enrollment generation the epoch floor above was recorded under. Epoch
+    /// numbers restart per enrollment generation, so a lower epoch is only
+    /// adoptable when it belongs to a different, confirmed generation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub master_config_generation: Option<String>,
     pub organization: Option<String>,
     /// Base64 Ed25519 public key of the Fleet server this device is managed by.
     /// When set, the device is "fleet-managed": every pushed config epoch MUST
@@ -2488,6 +2493,7 @@ impl Default for PolicySettings {
             locked_paths: Vec::new(),
             last_synced_at: None,
             master_config_version: None,
+            master_config_generation: None,
             organization: None,
             fleet_signing_key: None,
             managed: false,
@@ -3706,6 +3712,8 @@ fn verified_admin_epoch(
         target_kind,
         target_id,
         managed: managed.unwrap_or(false),
+        generation: None,
+        floor_reset: false,
     }
 }
 
@@ -3775,6 +3783,10 @@ pub(crate) fn apply_verified_admin_config(
         target_id,
         managed,
     );
+    commit_verified_epoch(epoch)
+}
+
+fn commit_verified_epoch(epoch: epoch_write::Epoch) -> Result<serde_json::Value, String> {
     let updated = epoch_write::apply(&epoch)?;
     crate::net_traffic_alert::reload_from_settings(&updated);
     // Never announce/relay an epoch that failed its local authority transaction.
@@ -3794,6 +3806,60 @@ pub(crate) fn apply_verified_admin_config(
         );
     }
     serde_json::to_value(&updated).map_err(|e| format!("Serialization error: {e}"))
+}
+
+/// The enrollment generation a signed epoch belongs to, and whether the
+/// caller has proved that generation's trust with the protected service
+/// (which permits adopting an epoch number below the recorded floor of an
+/// earlier generation).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct EpochGeneration {
+    pub generation: String,
+    pub floor_reset: bool,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn preview_verified_admin_config_in_generation(
+    config: serde_json::Value,
+    locked_paths: Vec<String>,
+    strategy: String,
+    config_version: u32,
+    signature: Option<String>,
+    signer_key: Option<String>,
+    target_kind: Option<String>,
+    target_id: Option<String>,
+    managed: Option<bool>,
+    binding: &EpochGeneration,
+) -> Result<AppSettings, String> {
+    let mut epoch = verified_admin_epoch(
+        config, locked_paths, strategy, config_version, signature, signer_key, target_kind,
+        target_id, managed,
+    );
+    epoch.generation = Some(binding.generation.clone());
+    epoch.floor_reset = binding.floor_reset;
+    epoch_write::preflight(&epoch)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn apply_verified_admin_config_in_generation(
+    config: serde_json::Value,
+    locked_paths: Vec<String>,
+    strategy: String,
+    config_version: u32,
+    signature: Option<String>,
+    signer_key: Option<String>,
+    target_kind: Option<String>,
+    target_id: Option<String>,
+    managed: Option<bool>,
+    binding: &EpochGeneration,
+) -> Result<serde_json::Value, String> {
+    let mut epoch = verified_admin_epoch(
+        config, locked_paths, strategy, config_version, signature, signer_key, target_kind,
+        target_id, managed,
+    );
+    epoch.generation = Some(binding.generation.clone());
+    epoch.floor_reset = binding.floor_reset;
+    commit_verified_epoch(epoch)
 }
 
 #[path = "settings_epoch_write.rs"]
