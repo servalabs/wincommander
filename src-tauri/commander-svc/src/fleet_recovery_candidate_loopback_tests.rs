@@ -129,6 +129,7 @@ async fn v2_candidate_proposal_is_signed_bound_and_never_treats_http_success_as_
             trust: trust.clone(),
             hybrid_trust: None,
             hybrid_epoch_floor: 0,
+            confirmed_generation: None,
             hybrid_credential: None,
             hybrid_initial_pending: false,
             hybrid_unconfirmed: false,

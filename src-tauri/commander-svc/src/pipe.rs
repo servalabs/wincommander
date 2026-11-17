@@ -4372,7 +4372,16 @@ fn handle_fleet_machine_policy(verb: &str, args: serde_json::Value, peer: Option
                 .map_err(|kind| VerbError::new("fleet_policy_unavailable", kind))?;
             #[cfg(debug_assertions)]
             crate::diagnostics::record_shield_policy_stage("store_end", trace_started);
-            Ok(serde_json::json!({"trust_bound": trust_bound, "policy": policy}))
+            let (trust_generation, trust_generation_confirmed) = store
+                .trust_generation_confirmation()
+                .map_err(|kind| VerbError::new("fleet_policy_unavailable", kind))?
+                .map_or((None, false), |(generation, confirmed)| (Some(generation), confirmed));
+            Ok(serde_json::json!({
+                "trust_bound": trust_bound,
+                "policy": policy,
+                "trust_generation": trust_generation,
+                "trust_generation_confirmed": trust_generation_confirmed,
+            }))
         }
         _ => Err(VerbError::new(
             "bad_request",

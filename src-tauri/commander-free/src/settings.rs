@@ -3714,6 +3714,7 @@ fn verified_admin_epoch(
         managed: managed.unwrap_or(false),
         generation: None,
         floor_reset: false,
+        keep_transaction_hash: None,
     }
 }
 
@@ -3816,6 +3817,10 @@ fn commit_verified_epoch(epoch: epoch_write::Epoch) -> Result<serde_json::Value,
 pub(crate) struct EpochGeneration {
     pub generation: String,
     pub floor_reset: bool,
+    /// SHA-256 of the epoch signature. On a floor reset, an unfinished Shield
+    /// transaction for any OTHER signed epoch is void and is cleared in the
+    /// same settings write that commits the epoch.
+    pub epoch_hash: Option<String>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3837,6 +3842,7 @@ pub(crate) fn preview_verified_admin_config_in_generation(
     );
     epoch.generation = Some(binding.generation.clone());
     epoch.floor_reset = binding.floor_reset;
+    epoch.keep_transaction_hash = binding.epoch_hash.clone();
     epoch_write::preflight(&epoch)
 }
 
@@ -3859,6 +3865,7 @@ pub(crate) fn apply_verified_admin_config_in_generation(
     );
     epoch.generation = Some(binding.generation.clone());
     epoch.floor_reset = binding.floor_reset;
+    epoch.keep_transaction_hash = binding.epoch_hash.clone();
     commit_verified_epoch(epoch)
 }
 

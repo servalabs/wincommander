@@ -69,8 +69,10 @@ const EPOCH_ADOPTION_HINTS: Record<string, string> = {
     "Fleet policy from the new server needs adoption, but this device's service could not be asked to confirm the new enrollment (the privileged service read was unavailable).",
   epoch_trust_generation_differs:
     "Fleet policy from the new server needs adoption, but this device's service still trusts a different enrollment. Repair machine trust, then the policy applies automatically.",
-  epoch_trust_audit_missing:
+  epoch_trust_unconfirmed:
     "Fleet policy from the new server needs adoption, but this device's service did not record a confirmed enrollment for it. Repair machine trust, then the policy applies automatically.",
+  epoch_envelope_required:
+    "A Fleet policy without a verified enrollment generation was refused because this device already tracks one (rollback protection).",
   epoch_version_invalid: "The Fleet policy from the new server carries an invalid epoch number and was not adopted.",
   epoch_below_service_floor:
     "The Fleet policy from the new server is older than the policy this device's service already holds for it, so it was not adopted.",
@@ -86,5 +88,5 @@ export function describeEpochAdoptionIssue(code: string | null | undefined): str
 
 /** Only a service trust that disagrees with the new enrollment is cleared by the trust repair. */
 export function epochIssueNeedsRepair(code: string | null | undefined): boolean {
-  return code === "epoch_trust_generation_differs" || code === "epoch_trust_audit_missing";
+  return code === "epoch_trust_generation_differs" || code === "epoch_trust_unconfirmed";
 }

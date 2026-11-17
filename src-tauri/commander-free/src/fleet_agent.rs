@@ -1619,7 +1619,12 @@ pub async fn fleet_apply_pending_epoch_typed() -> Result<serde_json::Value, Appl
     // end its back-off so the signed Shield state applies on the next tick.
     if result
         .as_ref()
-        .is_ok_and(|applied| applied.get("applied").and_then(Value::as_bool) == Some(true))
+        .is_ok_and(|applied| {
+            // An adopted epoch (it returns the new settings), not merely a
+            // remote-command update.
+            applied.get("applied").and_then(Value::as_bool) == Some(true)
+                && applied.get("settings").is_some()
+        })
     {
         request_shield_retry();
     }
@@ -1627,14 +1632,15 @@ pub async fn fleet_apply_pending_epoch_typed() -> Result<serde_json::Value, Appl
 }
 
 /// What the protected service says about the enrollment generation of an
-/// epoch that is below the profile's recorded floor.
+/// epoch, read from its session-helper `get_policy` (no secrets, and no
+/// administrator privilege needed).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct GenerationEvidence {
     /// Generation of the machine trust record.
     trust_generation: Option<String>,
-    /// That trust record's audit shows a privileged provision or re-enrollment
-    /// (the user-confirmed paths) for exactly the epoch's generation.
-    audit_confirms: bool,
+    /// A user-confirmed privileged provision or re-enrollment established
+    /// exactly that generation (a persistent service field, not an audit scan).
+    confirmed: bool,
     /// The newest policy the service holds for its current generation.
     service_policy_generation: Option<String>,
     service_policy_version: Option<i64>,
@@ -1647,16 +1653,24 @@ enum EpochFloorDecision {
     /// Keep the current epoch. `rollback` is an older epoch inside the same
     /// generation, as opposed to the adopted epoch simply being re-delivered.
     NotNewer { rollback: bool },
-    /// A lower epoch from another generation that the service has not
-    /// confirmed; the closed-vocabulary code says why.
+    /// The epoch is not adoptable; the closed-vocabulary code says which
+    /// condition failed.
     Refused(&'static str),
 }
 
-/// Epoch numbers restart per enrollment generation. Inside one generation the
-/// floor is strictly monotonic; below it only a different generation that the
-/// protected service holds trust for (via a privileged, confirmed
-/// provision/re-enrollment) may be adopted, and never below the policy the
-/// service already holds for that generation.
+/// Epoch numbers restart per enrollment generation.
+///
+/// * An epoch is adopted only if its signed generation IS the generation the
+///   protected service currently trusts. Anything else (an old generation
+///   replayed with a higher number, a mismatch after a later replace) is
+///   refused outright, whatever its number.
+/// * Once a generation is tracked, an epoch with no verified generation is
+///   refused (the unsigned epoch alone does not bind a generation).
+/// * Inside the recorded generation the floor is strictly monotonic.
+/// * Below the floor, only the first epoch of a different, user-confirmed
+///   generation is adopted, never below the policy the service already holds
+///   for it. Adopting records the generation, which is what makes the reset
+///   one-shot: the same generation can never reset the floor again.
 fn epoch_floor_decision(
     applied: i64,
     recorded_generation: Option<&str>,
@@ -1665,24 +1679,26 @@ fn epoch_floor_decision(
     evidence: Option<&GenerationEvidence>,
 ) -> EpochFloorDecision {
     use crate::settings::EpochGeneration;
-    let binding = |floor_reset| {
-        epoch_generation.map(|generation| EpochGeneration {
-            generation: generation.to_string(),
-            floor_reset,
-        })
+    let binding = |generation: &str, floor_reset| {
+        Some(EpochGeneration { generation: generation.to_string(), floor_reset, epoch_hash: None })
     };
-    if version > applied {
-        return EpochFloorDecision::Adopt(binding(false));
-    }
+    let newer = version > applied;
     let Some(generation) = epoch_generation else {
-        return EpochFloorDecision::NotNewer { rollback: version < applied };
+        if !newer {
+            return EpochFloorDecision::NotNewer { rollback: version < applied };
+        }
+        return if recorded_generation.is_some() {
+            EpochFloorDecision::Refused("epoch_envelope_required")
+        } else {
+            EpochFloorDecision::Adopt(None) // legacy profile: no generation tracked yet
+        };
     };
-    if recorded_generation == Some(generation) {
+    if !newer && recorded_generation == Some(generation) {
         return EpochFloorDecision::NotNewer { rollback: version < applied };
     }
-    // An epoch with the very same number as the floor is, absent proof, most
-    // likely the adopted epoch delivered again (a floor recorded before
-    // generations were tracked): hold quietly instead of flagging an error.
+    // The very same number as the floor is, absent proof, most likely the
+    // adopted epoch delivered again (a floor recorded before generations were
+    // tracked): hold quietly instead of flagging an error.
     let refuse = |code: &'static str| {
         if version == applied {
             EpochFloorDecision::NotNewer { rollback: false }
@@ -1690,24 +1706,33 @@ fn epoch_floor_decision(
             EpochFloorDecision::Refused(code)
         }
     };
-    let Some(evidence) = evidence else {
+    let trusted = evidence.filter(|evidence| evidence.trust_generation.is_some());
+    let Some(evidence) = trusted else {
+        // An untracked legacy profile keeps its old behaviour when the
+        // service cannot be asked; a tracked one fails closed.
+        if newer && recorded_generation.is_none() {
+            return EpochFloorDecision::Adopt(None);
+        }
         return refuse("epoch_service_evidence_unavailable");
     };
-    if version < 1 {
-        return refuse("epoch_version_invalid");
-    }
     if evidence.trust_generation.as_deref() != Some(generation) {
         return refuse("epoch_trust_generation_differs");
     }
-    if !evidence.audit_confirms {
-        return refuse("epoch_trust_audit_missing");
+    if newer {
+        return EpochFloorDecision::Adopt(binding(generation, false));
+    }
+    if version < 1 {
+        return refuse("epoch_version_invalid");
+    }
+    if !evidence.confirmed {
+        return refuse("epoch_trust_unconfirmed");
     }
     if evidence.service_policy_generation.as_deref() == Some(generation)
         && evidence.service_policy_version.is_some_and(|held| held > version)
     {
         return refuse("epoch_below_service_floor");
     }
-    EpochFloorDecision::Adopt(binding(true))
+    EpochFloorDecision::Adopt(binding(generation, true))
 }
 
 /// The enrollment generation of the signed envelope that carries `epoch`,
@@ -1730,46 +1755,30 @@ fn verified_epoch_generation(
     envelope.enrollment_generation.clone()
 }
 
-/// Ask the protected service which generation it trusts and what policy it
-/// holds. Needs the privileged trust read; `None` (fail closed) without it.
+/// Ask the protected service which generation it trusts, whether that was
+/// user-confirmed, and what policy it holds. `None` (fail closed) when the
+/// service cannot answer or predates these fields.
 async fn generation_evidence() -> Option<GenerationEvidence> {
-    let probe = async {
-        let trust = crate::svc_client::call("svc.fleet.get_trust", serde_json::json!({}))
-            .await
-            .ok()?;
-        let policy = crate::svc_client::call("svc.fleet.get_policy", serde_json::json!({}))
-            .await
-            .ok()?;
-        Some((trust, policy))
-    };
-    let (trust, policy) = tokio::time::timeout(std::time::Duration::from_secs(30), probe)
-        .await
-        .ok()
-        .flatten()?;
-    Some(generation_evidence_from(&trust, &policy))
+    let policy = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        crate::svc_client::call("svc.fleet.get_policy", serde_json::json!({})),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    Some(generation_evidence_from(&policy))
 }
 
-fn generation_evidence_from(trust: &Value, policy: &Value) -> GenerationEvidence {
-    let trust_generation = trust
-        .pointer("/trust/enrollment_generation")
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-    let audit_confirms = trust_generation.as_deref().is_some_and(|generation| {
-        trust
-            .get("audit")
-            .and_then(Value::as_array)
-            .is_some_and(|entries| {
-                entries.iter().any(|entry| {
-                    matches!(
-                        entry.get("action").and_then(Value::as_str),
-                        Some("provision" | "reenroll")
-                    ) && entry.get("generation").and_then(Value::as_str) == Some(generation)
-                })
-            })
-    });
+fn generation_evidence_from(policy: &Value) -> GenerationEvidence {
     GenerationEvidence {
-        trust_generation,
-        audit_confirms,
+        trust_generation: policy
+            .get("trust_generation")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        confirmed: policy
+            .get("trust_generation_confirmed")
+            .and_then(Value::as_bool)
+            == Some(true),
         service_policy_generation: policy
             .pointer("/policy/enrollment_generation")
             .and_then(Value::as_str)
@@ -1796,6 +1805,33 @@ fn set_epoch_adoption_issue(code: Option<&'static str>) {
 /// Closed vocabulary shown by the Fleet panel (never free text).
 pub(crate) fn epoch_adoption_issue() -> Option<&'static str> {
     EPOCH_ADOPTION_ISSUE.read().ok().and_then(|slot| *slot)
+}
+
+/// Fleet is off or unlicensed: a stale refusal must not outlive the link.
+pub(crate) fn clear_epoch_adoption_issue() {
+    set_epoch_adoption_issue(None);
+}
+
+/// The settings the Shield transaction is prepared from. After a confirmed
+/// generation change (`floor_reset`) a transaction belonging to any other
+/// signed epoch is void and is left out; one for this signed epoch stays.
+fn shield_transaction_basis(
+    settings: &crate::settings::AppSettings,
+    floor_reset: bool,
+    epoch_signature_hash: &str,
+) -> crate::settings::AppSettings {
+    let mut basis = settings.clone();
+    if floor_reset
+        && basis
+            .app
+            .fleet
+            .privacy_shield_policy_transaction
+            .as_ref()
+            .is_some_and(|transaction| transaction.epoch_signature_hash != epoch_signature_hash)
+    {
+        basis.app.fleet.privacy_shield_policy_transaction = None;
+    }
+    basis
 }
 
 /// The "keep the current epoch" outcome: still deliver verified command
@@ -1887,6 +1923,8 @@ async fn fleet_apply_pending_epoch_inner() -> Result<serde_json::Value, ApplyErr
         .cloned()
         .unwrap_or(serde_json::Value::Null);
     if epoch.is_null() {
+        // Nothing pending, so nothing is being refused.
+        set_epoch_adoption_issue(None);
         let remote_updates_applied = apply_remote_command_updates(&resp).await?;
         refresh_cached_service_shield_policy(&resp)
             .await
@@ -1912,10 +1950,12 @@ async fn fleet_apply_pending_epoch_inner() -> Result<serde_json::Value, ApplyErr
     // per generation. The generation comes from the signed envelope that
     // carries this exact epoch, never from the unsigned epoch itself.
     let epoch_generation = verified_epoch_generation(&settings, &resp, &epoch);
-    let evidence = if version <= applied
-        && epoch_generation.as_deref().is_some_and(|generation| {
-            settings.policy.master_config_generation.as_deref() != Some(generation)
-        }) {
+    // The service's word on the generation is needed whenever an epoch would
+    // be adopted or could reset the floor; the steady state (the recorded
+    // generation's own epoch redelivered) needs no service call.
+    let evidence = if epoch_generation.as_deref().is_some_and(|generation| {
+        version > applied || settings.policy.master_config_generation.as_deref() != Some(generation)
+    }) {
         generation_evidence().await
     } else {
         None
@@ -1947,11 +1987,11 @@ async fn fleet_apply_pending_epoch_inner() -> Result<serde_json::Value, ApplyErr
                     "warn",
                     "core",
                     &format!(
-                        "[FleetEpoch] refusal detail: epoch={version} floor={applied} epoch_generation={} recorded_generation={} service_trust_generation={} audit_confirms={} service_policy={}@{}",
+                        "[FleetEpoch] refusal detail: epoch={version} floor={applied} epoch_generation={} recorded_generation={} service_trust_generation={} service_confirmed={} service_policy={}@{}",
                         short(epoch_generation.as_deref()),
                         short(settings.policy.master_config_generation.as_deref()),
                         short(evidence.as_ref().and_then(|e| e.trust_generation.as_deref())),
-                        evidence.as_ref().is_some_and(|e| e.audit_confirms),
+                        evidence.as_ref().is_some_and(|e| e.confirmed),
                         short(evidence.as_ref().and_then(|e| e.service_policy_generation.as_deref())),
                         evidence.as_ref().and_then(|e| e.service_policy_version).map_or("none".to_string(), |v| v.to_string()),
                     ),
@@ -1961,6 +2001,16 @@ async fn fleet_apply_pending_epoch_inner() -> Result<serde_json::Value, ApplyErr
             return epoch_floor_hold(&operation_id, &resp, version, code).await;
         }
     };
+    // The binding names the signed epoch so a floor reset voids only the
+    // previous generation's Shield transaction, atomically with the commit.
+    let generation_binding = generation_binding.map(|mut binding| {
+        use sha2::Digest;
+        binding.epoch_hash = epoch
+            .get("signature")
+            .and_then(Value::as_str)
+            .map(|signed| hex::encode(sha2::Sha256::digest(signed.as_bytes())));
+        binding
+    });
 
     // Never apply unsigned/unpinned fleet policy.
     // KT: no pinned key is a reachable config state (device enrolled without key);
@@ -2103,16 +2153,17 @@ async fn fleet_apply_pending_epoch_inner() -> Result<serde_json::Value, ApplyErr
     } else {
         None
     };
-    // A Shield transaction left by the previous generation counted epochs in
-    // a numbering that no longer applies once a confirmed generation change
-    // reset the floor; it must not block the new generation's first epoch.
-    let transaction_basis = if generation_binding.as_ref().is_some_and(|binding| binding.floor_reset) {
-        let mut basis = settings.clone();
-        basis.app.fleet.privacy_shield_policy_transaction = None;
-        basis
-    } else {
-        settings.clone()
-    };
+    // On a confirmed generation change the previous generation's unfinished
+    // Shield transaction counted epochs in a numbering that no longer applies;
+    // it must not block the new generation's first epoch. A transaction for
+    // this very signed epoch is kept: it carries crash-recovery data (was it
+    // running, pre-pause options, owner session, a requested local stop).
+    // The settings commit clears the void one atomically (see epoch_write).
+    let transaction_basis = shield_transaction_basis(
+        &settings,
+        generation_binding.as_ref().is_some_and(|binding| binding.floor_reset),
+        &epoch_signature_hash,
+    );
     let mut shield_transaction = if shield_changed
         || settings
             .app
@@ -2201,13 +2252,6 @@ async fn fleet_apply_pending_epoch_inner() -> Result<serde_json::Value, ApplyErr
             return Err(ApplyError::PolicyError(error));
         }
     };
-    if shield_transaction.is_none()
-        && generation_binding.as_ref().is_some_and(|binding| binding.floor_reset)
-        && settings.app.fleet.privacy_shield_policy_transaction.is_some()
-    {
-        // The previous generation's unfinished transaction is void.
-        store_shield_policy_transaction(None).map_err(ApplyError::PolicyError)?;
-    }
     if let Some(transaction) = &mut shield_transaction {
         advance_shield_policy_progress(
             transaction,
@@ -2336,10 +2380,31 @@ async fn refresh_cached_service_shield_policy(resp: &Value) -> Result<(), String
             if let Some(epoch) = envelope.config.as_ref() {
                 crate::settings::relay_committed_content_epoch(epoch)?;
             }
+            note_installed_service_policy(&envelope);
             Ok(())
         },
     )
     .await
+}
+
+static INSTALLED_POLICY_KEY: Mutex<Option<String>> = Mutex::new(None);
+
+/// A policy the service did not hold before (the first one, or a new
+/// generation/revision) is what a back-off on "service Shield policy is
+/// unavailable" is waiting for: let the Shield tick retry at once.
+fn note_installed_service_policy(envelope: &wincmd_shared::fleet::PolicyEnvelope) {
+    let key = format!(
+        "{:?}/{:?}/{:?}/{}",
+        envelope.enrollment_generation,
+        envelope.config_revision,
+        envelope.resolution_revision,
+        envelope.shield_revision
+    );
+    let mut last = INSTALLED_POLICY_KEY.lock().unwrap_or_else(|p| p.into_inner());
+    if last.as_deref() != Some(key.as_str()) {
+        *last = Some(key);
+        request_shield_retry();
+    }
 }
 
 async fn refresh_cached_service_shield_policy_with<F, Fut>(
@@ -3058,10 +3123,13 @@ pub fn start_privacy_shield_policy_supervisor(app: tauri::AppHandle) {
                 }
             }
             if let Err(error) = report_pending_shield_refresh_observations(&app).await {
-                crate::log_message(
-                    "warn",
-                    &format!("[FleetPrivacyShield] native refresh deferred: {error}"),
-                );
+                // Stepping aside for the epoch apply is routine and silent.
+                if classify_shield_failure(&error) != ShieldFailure::Yielded {
+                    crate::log_message(
+                        "warn",
+                        &format!("[FleetPrivacyShield] native refresh deferred: {error}"),
+                    );
+                }
             }
             // Sleep in short slices so freshly established trust ends a long
             // back-off at once instead of after up to five minutes.
@@ -8026,29 +8094,29 @@ mod fleet_connect_v2_tests {
 
     const G_OLD: &str = "df372735-0000-4000-8000-000000000001";
     const G_NEW: &str = "98455ed7-0000-4000-8000-000000000002";
-
     fn confirmed(generation: &str) -> GenerationEvidence {
         GenerationEvidence {
             trust_generation: Some(generation.into()),
-            audit_confirms: true,
+            confirmed: true,
             service_policy_generation: Some(generation.into()),
             service_policy_version: Some(1),
         }
     }
 
+    fn adopt(generation: &str, floor_reset: bool) -> EpochFloorDecision {
+        EpochFloorDecision::Adopt(Some(crate::settings::EpochGeneration {
+            generation: generation.into(),
+            floor_reset,
+            epoch_hash: None,
+        }))
+    }
+
     #[test]
     fn epoch_floor_is_per_generation_and_never_rolls_back_within_one() {
-        use crate::settings::EpochGeneration;
-        let reset = |generation: &str| {
-            EpochFloorDecision::Adopt(Some(EpochGeneration {
-                generation: generation.into(),
-                floor_reset: true,
-            }))
-        };
         // The PARTH case: floor 10 recorded under the old generation (or never
-        // recorded), the new server's epoch is 1 and the service confirmed it.
-        assert_eq!(epoch_floor_decision(10, Some(G_OLD), 1, Some(G_NEW), Some(&confirmed(G_NEW))), reset(G_NEW));
-        assert_eq!(epoch_floor_decision(10, None, 1, Some(G_NEW), Some(&confirmed(G_NEW))), reset(G_NEW));
+        // recorded), the new server epoch is 1 and the service confirmed it.
+        assert_eq!(epoch_floor_decision(10, Some(G_OLD), 1, Some(G_NEW), Some(&confirmed(G_NEW))), adopt(G_NEW, true));
+        assert_eq!(epoch_floor_decision(10, None, 1, Some(G_NEW), Some(&confirmed(G_NEW))), adopt(G_NEW, true));
         // Same generation: a lower epoch is a rollback, an equal one is just
         // the adopted epoch delivered again. Evidence changes nothing.
         assert_eq!(
@@ -8059,14 +8127,60 @@ mod fleet_connect_v2_tests {
             epoch_floor_decision(10, Some(G_NEW), 10, Some(G_NEW), None),
             EpochFloorDecision::NotNewer { rollback: false }
         );
-        // A newer number adopts normally and records its generation.
-        assert_eq!(
-            epoch_floor_decision(10, Some(G_OLD), 11, Some(G_NEW), None),
-            EpochFloorDecision::Adopt(Some(EpochGeneration { generation: G_NEW.into(), floor_reset: false }))
-        );
-        // No generation bound to the epoch: plain monotonic rule.
+        // A legitimate same-generation increase still adopts (generation proven current).
+        assert_eq!(epoch_floor_decision(1, Some(G_NEW), 2, Some(G_NEW), Some(&confirmed(G_NEW))), adopt(G_NEW, false));
+        // A higher number in a new, current generation adopts and records it.
+        assert_eq!(epoch_floor_decision(10, Some(G_OLD), 11, Some(G_NEW), Some(&confirmed(G_NEW))), adopt(G_NEW, false));
+        // No generation bound to the epoch, nothing tracked: plain monotonic rule.
         assert_eq!(
             epoch_floor_decision(10, Some(G_OLD), 1, None, Some(&confirmed(G_NEW))),
+            EpochFloorDecision::NotNewer { rollback: true }
+        );
+        assert_eq!(epoch_floor_decision(1, None, 2, None, None), EpochFloorDecision::Adopt(None));
+        assert_eq!(epoch_floor_decision(1, None, 2, Some(G_NEW), None), EpochFloorDecision::Adopt(None));
+    }
+
+    #[test]
+    fn a_replayed_old_generation_epoch_is_refused_whatever_its_number() {
+        // Profile at the new generation (floor 1); a validly signed epoch of
+        // the OLD generation numbered 10 is replayed. Adopting it would record
+        // the old generation and open a rollback inside the new one.
+        let service = confirmed(G_NEW);
+        assert_eq!(
+            epoch_floor_decision(1, Some(G_NEW), 10, Some(G_OLD), Some(&service)),
+            EpochFloorDecision::Refused("epoch_trust_generation_differs")
+        );
+        // Also on a legacy profile that tracks nothing yet.
+        assert_eq!(
+            epoch_floor_decision(1, None, 10, Some(G_OLD), Some(&service)),
+            EpochFloorDecision::Refused("epoch_trust_generation_differs")
+        );
+        // And when the service cannot be asked, a tracked profile fails closed.
+        assert_eq!(
+            epoch_floor_decision(1, Some(G_NEW), 10, Some(G_OLD), None),
+            EpochFloorDecision::Refused("epoch_service_evidence_unavailable")
+        );
+    }
+
+    #[test]
+    fn an_envelope_less_higher_epoch_is_refused_once_a_generation_is_tracked() {
+        assert_eq!(
+            epoch_floor_decision(1, Some(G_NEW), 2, None, Some(&confirmed(G_NEW))),
+            EpochFloorDecision::Refused("epoch_envelope_required")
+        );
+        // An untracked legacy profile keeps its behaviour (and records nothing).
+        assert_eq!(epoch_floor_decision(1, None, 2, None, None), EpochFloorDecision::Adopt(None));
+    }
+
+    #[test]
+    fn the_floor_reset_is_one_shot_per_generation() {
+        let service = confirmed(G_NEW);
+        // First lower epoch of the confirmed new generation resets...
+        assert_eq!(epoch_floor_decision(10, Some(G_OLD), 1, Some(G_NEW), Some(&service)), adopt(G_NEW, true));
+        // ...which records the generation, so the same confirmation can never
+        // reset the floor again, however long the service keeps confirming it.
+        assert_eq!(
+            epoch_floor_decision(5, Some(G_NEW), 2, Some(G_NEW), Some(&service)),
             EpochFloorDecision::NotNewer { rollback: true }
         );
     }
@@ -8076,17 +8190,17 @@ mod fleet_connect_v2_tests {
         let refused = |evidence: Option<GenerationEvidence>| {
             epoch_floor_decision(10, Some(G_OLD), 1, Some(G_NEW), evidence.as_ref())
         };
-        // No service evidence (non-elevated, service down): fail closed.
+        // No service evidence (service down or older): fail closed.
         assert_eq!(refused(None), EpochFloorDecision::Refused("epoch_service_evidence_unavailable"));
-        // The service trusts a different generation than the epoch's.
+        // The service trusts a different generation than the epoch.
         assert_eq!(
             refused(Some(confirmed(G_OLD))),
             EpochFloorDecision::Refused("epoch_trust_generation_differs")
         );
         // Trust matches but was never established by a provision/re-enrollment.
-        let mut unaudited = confirmed(G_NEW);
-        unaudited.audit_confirms = false;
-        assert_eq!(refused(Some(unaudited)), EpochFloorDecision::Refused("epoch_trust_audit_missing"));
+        let mut unconfirmed = confirmed(G_NEW);
+        unconfirmed.confirmed = false;
+        assert_eq!(refused(Some(unconfirmed)), EpochFloorDecision::Refused("epoch_trust_unconfirmed"));
         // Epoch 0 is never an enrollment epoch.
         assert_eq!(
             epoch_floor_decision(10, Some(G_OLD), 0, Some(G_NEW), Some(&confirmed(G_NEW))),
@@ -8098,59 +8212,74 @@ mod fleet_connect_v2_tests {
         assert_eq!(refused(Some(ahead)), EpochFloorDecision::Refused("epoch_below_service_floor"));
     }
 
-    /// The device's real service record: provision for the old generation,
-    /// then the user-confirmed replace (`reenroll`) for the new one.
     #[test]
-    fn the_real_replace_audit_shape_confirms_the_new_generation() {
-        let trust = serde_json::json!({
-            "trust": {"org_id": "local", "device_id": "d", "signer_key": "k", "enrollment_generation": G_NEW},
-            "audit": [
-                {"action": "provision", "caller_sid": "S-1-5-21-1", "generation": G_OLD, "unix_time": 1793953115u64},
-                {"action": "reenroll", "caller_sid": "S-1-5-21-1", "generation": G_NEW, "unix_time": 1794920169u64},
-            ],
-            "origins": ["https://test-linux.leo-ordinal.ts.net:9443"],
-            "service_enabled": true,
+    fn evidence_is_read_from_the_unprivileged_get_policy_reply() {
+        // The real shape the service returns to the session-helper pinned path.
+        let policy = serde_json::json!({
+            "trust_bound": true,
+            "trust_generation": G_NEW,
+            "trust_generation_confirmed": true,
+            "policy": {"enrollment_generation": G_NEW, "config": {"version": 1}, "shield_revision": 2},
         });
-        let policy = serde_json::json!({"trust_bound": true, "policy": {
-            "enrollment_generation": G_NEW, "config": {"version": 1}, "shield_revision": 2}});
-        let evidence = generation_evidence_from(&trust, &policy);
+        let evidence = generation_evidence_from(&policy);
         assert_eq!(evidence, confirmed(G_NEW));
         assert!(matches!(
             epoch_floor_decision(10, None, 1, Some(G_NEW), Some(&evidence)),
             EpochFloorDecision::Adopt(Some(crate::settings::EpochGeneration { floor_reset: true, .. }))
         ));
-        // `bind_origins` records "origins"; that alone never confirms a generation.
-        let origins_only = serde_json::json!({
-            "trust": {"enrollment_generation": G_NEW},
-            "audit": [{"action": "origins", "caller_sid": "S-1-5-18", "generation": G_NEW, "unix_time": 1}],
-        });
-        assert!(!generation_evidence_from(&origins_only, &Value::Null).audit_confirms);
+        // A service that predates these fields cannot confirm anything.
+        let old_service = serde_json::json!({"trust_bound": true, "policy": null});
+        let evidence = generation_evidence_from(&old_service);
+        assert_eq!(evidence.trust_generation, None);
+        assert!(!evidence.confirmed);
+        assert_eq!(
+            epoch_floor_decision(10, Some(G_OLD), 1, Some(G_NEW), Some(&evidence)),
+            EpochFloorDecision::Refused("epoch_service_evidence_unavailable")
+        );
+        // Unconfirmed trust is reported as such.
+        let unconfirmed = serde_json::json!({"trust_generation": G_NEW, "trust_generation_confirmed": false});
+        assert!(!generation_evidence_from(&unconfirmed).confirmed);
     }
+
+    fn transaction(epoch_hash: &str) -> crate::settings::ShieldPolicyTransaction {
+        serde_json::from_value(serde_json::json!({
+            "epochVersion": 10, "epochSignatureHash": epoch_hash, "resolutionRevision": 3,
+            "shieldRevision": 24, "attemptId": "attempt", "wasRunning": true,
+            "wasFleetOwned": true, "expectedHash": "tuning", "localStopRequested": true,
+            "prePauseMode": "balanced",
+        }))
+        .unwrap()
+    }
+
     #[test]
-    fn evidence_is_read_from_the_service_trust_audit_and_policy() {
-        let trust = serde_json::json!({
-            "trust": {"enrollment_generation": G_NEW},
-            "audit": [
-                {"action": "provision", "caller_sid": "S-1-5-18", "generation": G_OLD, "unix_time": 1},
-                {"action": "reenroll", "caller_sid": "S-1-5-18", "generation": G_NEW, "unix_time": 2},
-            ],
-        });
-        let policy = serde_json::json!({"trust_bound": true, "policy": {
-            "enrollment_generation": G_NEW, "config": {"version": 1}}});
-        assert_eq!(generation_evidence_from(&trust, &policy), confirmed(G_NEW));
-        // An audit that only mentions the old generation does not confirm the new one.
-        let stale = serde_json::json!({
-            "trust": {"enrollment_generation": G_NEW},
-            "audit": [{"action": "provision", "caller_sid": "S-1-5-18", "generation": G_OLD, "unix_time": 1}],
-        });
-        assert!(!generation_evidence_from(&stale, &Value::Null).audit_confirms);
-        // Other audit actions never count.
-        let hybrid = serde_json::json!({
-            "trust": {"enrollment_generation": G_NEW},
-            "audit": [{"action": "hybrid_enrollment_begin", "caller_sid": "S-1-5-18", "generation": G_NEW, "unix_time": 1}],
-        });
-        assert!(!generation_evidence_from(&hybrid, &Value::Null).audit_confirms);
+    fn a_floor_reset_voids_only_other_epochs_shield_transactions() {
+        let mut settings = crate::settings::create_default_settings();
+        settings.app.fleet.privacy_shield_policy_transaction = Some(transaction("old-epoch"));
+        // A reset for a different signed epoch leaves the old one out...
+        assert!(shield_transaction_basis(&settings, true, "new-epoch")
+            .app
+            .fleet
+            .privacy_shield_policy_transaction
+            .is_none());
+        // ...but the transaction for this very signed epoch keeps its
+        // crash-recovery data (a paused Shield must still be restarted).
+        let mut same = crate::settings::create_default_settings();
+        same.app.fleet.privacy_shield_policy_transaction = Some(transaction("new-epoch"));
+        let kept = shield_transaction_basis(&same, true, "new-epoch")
+            .app
+            .fleet
+            .privacy_shield_policy_transaction
+            .unwrap();
+        assert!(kept.was_running && kept.local_stop_requested);
+        assert_eq!(kept.pre_pause_mode.as_deref(), Some("balanced"));
+        // Without a reset nothing is touched.
+        assert!(shield_transaction_basis(&settings, false, "new-epoch")
+            .app
+            .fleet
+            .privacy_shield_policy_transaction
+            .is_some());
     }
+
 
     #[test]
     fn adoption_refusals_are_reported_once_in_the_status_vocabulary() {
