@@ -213,15 +213,17 @@ export type VaultCloudBackupAttestationRequest = { personal: boolean, internal_d
 
 export type VaultCloudBackupConfiguration = { whole_vault: boolean, source_relative_paths: Array<string>, remote_folder_name: string, automatic: boolean, };
 
+export type VaultCloudBackupConfirmation = "remote_sample_matched" | "restored_sample_matched";
+
 export type VaultCloudBackupOutcome = "complete" | "partial" | "failed" | "interrupted" | "unknown";
 
 export type VaultCloudBackupPolicy = "owner_only" | "write_members";
 
-export type VaultCloudBackupReceipt = { run_id: string, outcome: VaultCloudBackupOutcome, started_at: string, finished_at: string | null, transferred_items: number, transferred_bytes: string, skipped_items: number, failed_items: number, };
+export type VaultCloudBackupReceipt = { action: VaultCloudBackupAction | null, remote_folder_name: string | null, restore_relative_path: string | null, confirmation: VaultCloudBackupConfirmation | null, checked_files: number, run_id: string, outcome: VaultCloudBackupOutcome, started_at: string, finished_at: string | null, transferred_items: number, transferred_bytes: string, skipped_items: number, failed_items: number, };
 
 export type VaultCloudBackupRequest = { personal: boolean, internal_drive: number, action: VaultCloudBackupAction, expected_mount_receipt: string | null, configuration: VaultCloudBackupConfiguration | null, restore_relative_path: string | null, };
 
-export type VaultCloudBackupResult = { mount_receipt: string | null, engine_ready: boolean, connected: boolean, configured: boolean, automatic: boolean, watching: boolean, running: boolean, can_configure: boolean, configuration: VaultCloudBackupConfiguration | null, last_run: VaultCloudBackupReceipt | null, reason_code: string | null, };
+export type VaultCloudBackupResult = { mount_receipt: string | null, engine_ready: boolean, connected: boolean, configured: boolean, automatic: boolean, watching: boolean, running: boolean, can_configure: boolean, configuration: VaultCloudBackupConfiguration | null, last_run: VaultCloudBackupReceipt | null, last_backup: VaultCloudBackupReceipt | null, last_verification: VaultCloudBackupReceipt | null, last_restore: VaultCloudBackupReceipt | null, reason_code: string | null, };
 
 export type VaultSyncAction = "enable" | "list" | "rename" | "remove";
 

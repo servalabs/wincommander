@@ -30,9 +30,10 @@ describe("Vault cloud backup setup", () => {
     expect(cloudBackupError("error: token=secret path=X:\\private")).not.toContain("secret");
     expect(cloudBackupError("cloud_backup_not_signed_in token=secret")).toContain("Reconnect Proton Drive");
     const base: VaultCloudBackupResult = { mount_receipt: null, engine_ready: true, connected: true, configured: true,
-      automatic: true, watching: true, running: false, can_configure: true, configuration, last_run: null, reason_code: null };
+      automatic: true, watching: true, running: false, can_configure: true, configuration, last_run: null,
+      last_backup: null, last_verification: null, last_restore: null, reason_code: null };
     expect(cloudBackupStateLabel(base)).toContain("Watching for changes");
-    expect(cloudBackupStateLabel({ ...base, running: true })).toContain("completion not yet confirmed");
+    expect(cloudBackupStateLabel({ ...base, running: true })).toBe("Backup operation running…");
     expect(cloudBackupStateLabel({ ...base, watching: false })).toBe("Automatic backup is paused");
     expect(cloudBackupStateLabel({ ...base, connected: false, watching: false, reason_code: "cloud_backup_sign_in_pending" })).toContain("Complete Proton sign-in in your browser");
   });

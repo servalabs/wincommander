@@ -18,6 +18,7 @@ test("slow backup status keeps setup editable and cannot overwrite a newer user 
     const React = await import('react'); const { act, createElement: h } = React;
     const { createRoot } = await import('react-dom/client');
     let tick; window.setInterval = callback => { tick = callback; return 1; };
+    let now = 0; Date.now = () => now;
     window.clearInterval = () => {};
     const base = { mount_receipt: 'a'.repeat(64), engine_ready: true, connected: false,
       configured: false, automatic: false, watching: false, running: false,
@@ -70,6 +71,11 @@ test("slow backup status keeps setup editable and cannot overwrite a newer user 
     await act(async () => waiting.shift()(connected));
     await act(async () => staleConnect(base));
     assert.equal(current.result.connected, true, 'late old status must be ignored');
+    const idleCalls = statusCalls;
+    now += 3000;
+    await act(async () => tick());
+    assert.equal(statusCalls, idleCalls, 'idle connections should not poll every three seconds');
+    now += 27000;
     await act(async () => tick());
     const stalePoll = waiting.shift();
     assert.equal(current.busy, false);
@@ -86,7 +92,13 @@ test("slow backup status keeps setup editable and cannot overwrite a newer user 
     assert.equal(current.result.configuration.remote_folder_name, 'Edited during refresh');
     await act(async () => stalePoll(base));
     assert.equal(current.result.configured, true);
-    await act(async () => waiting.shift()(current.result));
+    await act(async () => waiting.shift()({ ...current.result, running: true }));
+    const activeCalls = statusCalls;
+    now += 3000;
+    await act(async () => tick());
+    assert.equal(statusCalls, activeCalls + 1, 'active operation completion should refresh promptly');
+    assert.equal(current.busy, false, 'active status refresh must not disable controls');
+    await act(async () => waiting.shift()({ ...current.result, running: false }));
     await act(async () => root.unmount()); dom.window.close();
   `;
   const child = Bun.spawn([Bun.which("bun")!, "-e", script], { stdout: "pipe", stderr: "pipe" });

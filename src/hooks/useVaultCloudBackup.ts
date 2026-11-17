@@ -14,6 +14,7 @@ export default function useVaultCloudBackup(isOpen: boolean, personal: boolean, 
   const invalidated = useRef(false);
   const [result, setResult] = useState<VaultCloudBackupResult | null>(null);
   const latestResult = useRef(result); latestResult.current = result;
+  const lastPollAt = useRef(0);
   const [busy, setBusy] = useState(false);
   const [action, setAction] = useState<VaultCloudBackupAction | null>(null);
   const [error, setError] = useState("");
@@ -37,6 +38,7 @@ export default function useVaultCloudBackup(isOpen: boolean, personal: boolean, 
     if (inFlight.current) generation.current++;
     const epoch = generation.current;
     inFlight.current = true; activeOperation.current = operation;
+    if (operation === "status") lastPollAt.current = Date.now();
     setBusy(operation !== "status" || !latestResult.current); setAction(operation); setError("");
     const request: VaultCloudBackupRequest = {
       personal, internal_drive: internalDrive, action: operation, expected_mount_receipt: receipt.current,
@@ -76,8 +78,9 @@ export default function useVaultCloudBackup(isOpen: boolean, personal: boolean, 
     const timer = window.setInterval(() => {
       const current = latestResult.current;
       // Do not repeatedly interrupt setup while waiting for the user to connect.
-      if (!inFlight.current && current && (current.connected || current.reason_code === "cloud_backup_sign_in_pending")) void perform("status");
-    }, 30000);
+      if (!inFlight.current && current && (current.connected || current.reason_code === "cloud_backup_sign_in_pending")
+        && (current.running || current.reason_code === "cloud_backup_sign_in_pending" || Date.now() - lastPollAt.current >= 30000)) void perform("status");
+    }, 3000);
     return () => { invalidate(); window.clearInterval(timer); };
   }, [isOpen, personal, internalDrive, perform, invalidate]);
   return { result, busy, action, error, perform };

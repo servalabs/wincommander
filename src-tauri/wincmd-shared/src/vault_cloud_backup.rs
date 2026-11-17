@@ -2,7 +2,7 @@
 //! Bounded, provider-neutral requests and observations for mounted Vault backup.
 use serde::{Deserialize, Serialize};
 
-use crate::vault_sync::{valid_sync_folder_id, valid_sync_mount_receipt, valid_sync_path};
+use crate::vault_sync::{valid_sync_mount_receipt, valid_sync_path};
 
 /// Read-only service attestation for a caller that cannot query driver ownership.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -20,7 +20,10 @@ impl VaultCloudBackupAttestationRequest {
         self.internal_drive <= 25
             && !self.expected_engine_mount_identity.is_empty()
             && self.expected_engine_mount_identity.len() <= 192
-            && !self.expected_engine_mount_identity.chars().any(char::is_control)
+            && !self
+                .expected_engine_mount_identity
+                .chars()
+                .any(char::is_control)
     }
 }
 
@@ -156,33 +159,9 @@ pub enum VaultCloudBackupOutcome {
     Unknown,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
-#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "ipc.ts"))]
-#[serde(deny_unknown_fields)]
-pub struct VaultCloudBackupReceipt {
-    pub run_id: String,
-    pub outcome: VaultCloudBackupOutcome,
-    pub started_at: String,
-    pub finished_at: Option<String>,
-    pub transferred_items: u32,
-    pub transferred_bytes: String,
-    pub skipped_items: u32,
-    pub failed_items: u32,
-}
-
-impl VaultCloudBackupReceipt {
-    pub fn valid(&self) -> bool {
-        valid_sync_folder_id(&self.run_id)
-            && valid_observed_time(&self.started_at)
-            && self.finished_at.as_deref().is_none_or(valid_observed_time)
-            && self
-                .transferred_bytes
-                .parse::<u64>()
-                .is_ok_and(|value| value.to_string() == self.transferred_bytes)
-            && (self.outcome != VaultCloudBackupOutcome::Complete || self.failed_items == 0)
-    }
-}
+#[path = "vault_cloud_backup_receipt.rs"]
+mod receipt;
+pub use receipt::{VaultCloudBackupConfirmation, VaultCloudBackupReceipt};
 
 fn valid_observed_time(value: &str) -> bool {
     !value.is_empty() && value.len() <= 40 && !value.chars().any(char::is_control)
@@ -203,6 +182,12 @@ pub struct VaultCloudBackupResult {
     pub can_configure: bool,
     pub configuration: Option<VaultCloudBackupConfiguration>,
     pub last_run: Option<VaultCloudBackupReceipt>,
+    #[serde(default)]
+    pub last_backup: Option<VaultCloudBackupReceipt>,
+    #[serde(default)]
+    pub last_verification: Option<VaultCloudBackupReceipt>,
+    #[serde(default)]
+    pub last_restore: Option<VaultCloudBackupReceipt>,
     pub reason_code: Option<String>,
 }
 
@@ -221,6 +206,17 @@ impl VaultCloudBackupResult {
                 .as_ref()
                 .is_none_or(|config| self.automatic == config.automatic)
             && self.last_run.as_ref().is_none_or(|run| run.valid())
+            && self
+                .last_backup
+                .as_ref()
+                .is_none_or(|run| run.valid() && run.action == Some(VaultCloudBackupAction::Start))
+            && self
+                .last_verification
+                .as_ref()
+                .is_none_or(|run| run.valid() && run.action == Some(VaultCloudBackupAction::Verify))
+            && self.last_restore.as_ref().is_none_or(|run| {
+                run.valid() && run.action == Some(VaultCloudBackupAction::Restore)
+            })
             && (!self.running || (self.engine_ready && self.connected && self.configured))
             && (!self.watching
                 || (self.engine_ready && self.connected && self.configured && self.automatic))

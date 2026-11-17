@@ -114,6 +114,11 @@ fn rejects_false_running_state_and_receipt_with_failures_marked_complete() {
     assert!(!status.valid());
     status.running = false;
     status.last_run = Some(VaultCloudBackupReceipt {
+        action: None,
+        remote_folder_name: None,
+        restore_relative_path: None,
+        confirmation: None,
+        checked_files: 0,
         run_id: "run-1".into(),
         outcome: VaultCloudBackupOutcome::Complete,
         started_at: "2026-11-16T12:00:00Z".into(),
@@ -126,4 +131,41 @@ fn rejects_false_running_state_and_receipt_with_failures_marked_complete() {
     assert!(!status.valid());
     status.last_run.as_mut().unwrap().outcome = VaultCloudBackupOutcome::Partial;
     assert!(status.valid());
+}
+
+#[test]
+fn confirmation_requires_completed_matching_operation_and_destination() {
+    let mut run: VaultCloudBackupReceipt = serde_json::from_value(serde_json::json!({
+        "run_id":"run-1", "outcome":"complete", "started_at":"2026-11-17T12:00:00Z",
+        "finished_at":"2026-11-17T12:01:00Z", "transferred_items":1,
+        "transferred_bytes":"1", "skipped_items":0, "failed_items":0
+    }))
+    .unwrap();
+    assert!(run.valid());
+    assert!(run.action.is_none());
+    run.action = Some(VaultCloudBackupAction::Restore);
+    run.remote_folder_name = Some("Test backup".into());
+    run.restore_relative_path = Some("Restored check".into());
+    run.confirmation = Some(VaultCloudBackupConfirmation::RestoredSampleMatched);
+    run.checked_files = 1;
+    assert!(run.valid());
+    run.action = Some(VaultCloudBackupAction::Start);
+    assert!(!run.valid());
+    run.action = Some(VaultCloudBackupAction::Restore);
+    run.checked_files = 0;
+    assert!(!run.valid());
+    run.checked_files = 1;
+    run.finished_at = None;
+    assert!(!run.valid());
+    run.finished_at = Some("2026-11-17T12:01:00Z".into());
+    run.outcome = VaultCloudBackupOutcome::Partial;
+    assert!(!run.valid());
+    run.outcome = VaultCloudBackupOutcome::Complete;
+    let mut result = VaultCloudBackupResult {
+        last_restore: Some(run.clone()),
+        ..Default::default()
+    };
+    assert!(result.valid());
+    result.last_backup = Some(run);
+    assert!(!result.valid());
 }

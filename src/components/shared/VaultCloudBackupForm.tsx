@@ -29,7 +29,7 @@ export default function VaultCloudBackupForm({ configuration, disabled, canSave,
     if (!failure && consent) onSave(next);
   };
   return <section className="vault-cloud-backup__section" aria-labelledby={`${id}-title`}>
-    <h3 id={`${id}-title`}>Files and automatic backup</h3>
+    <h3 id={`${id}-title`}>Backup settings</h3>
     <fieldset disabled={disabled} className="vault-cloud-backup__fields">
       <legend className="sr-only">Backup sources</legend>
       <label><input type="radio" name={`${id}-source`} checked={wholeVault} onChange={() => setWholeVault(true)} /> Whole Vault</label>
@@ -37,12 +37,12 @@ export default function VaultCloudBackupForm({ configuration, disabled, canSave,
       {!wholeVault && <div><label htmlFor={`${id}-sources`}>Paths inside this Vault — one per line</label>
         <textarea id={`${id}-sources`} value={sources} onChange={event => setSources(event.target.value)} maxLength={8000} rows={4} placeholder={"Documents\nPhotos"} aria-describedby={`${id}-help`} />
       </div>}
-      <p id={`${id}-help`} className="vault-cloud-backup__muted">For example Documents or Work\Reports. Backup settings and Windows system folders are always excluded.</p>
+      <p id={`${id}-help`} className="vault-cloud-backup__muted">Use paths such as Documents. Backup settings and system folders are excluded.</p>
       <label htmlFor={`${id}-name`}>Proton backup folder name</label>
       <Input id={`${id}-name`} value={name} maxLength={128} onChange={event => setName(event.target.value)} />
-      <p className="vault-cloud-backup__muted">Saved in My files / WinCommander Vault Backups / {name || "your folder"}.</p>
-      <label><input type="checkbox" checked={automatic} onChange={event => setAutomatic(event.target.checked)} /> Automatically back up changes while this Vault is open</label>
-      <p className="vault-cloud-backup__muted">No schedule is needed. Backup catches up when you reopen the Vault and reuses your saved Proton session.</p>
+      <p className="vault-cloud-backup__muted">Destination: My files / WinCommander Vault Backups / {name || "your folder"}</p>
+      <label><input type="checkbox" checked={automatic} onChange={event => setAutomatic(event.target.checked)} /> Back up changes automatically while this Vault is open</label>
+      <p className="vault-cloud-backup__muted">Resumes when you reopen the Vault.</p>
       <label><input type="checkbox" checked={consent} onChange={event => setConsent(event.target.checked)} /> I agree to copy these files to my Proton Drive account.</label>
     </fieldset>
     {error && <p role="alert">{error}</p>}
