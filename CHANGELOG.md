@@ -10,6 +10,26 @@ lists only a selection of those changes.
 
 ## Unreleased
 
+- Fix Fleet Connect crashing the app with a stack overflow, and let the address
+  be corrected or retried while connected, offline, enrolling or waiting for
+  admin approval. Fleet addresses must use `https://`; the panel now says so.
+  Windows v2 enrollment is aligned with current Fleet servers; this is covered
+  by automated tests, and no live-server acceptance run is recorded here.
+- Add a stale-trust repair to the Fleet panel. After a native confirmation that
+  names the old and new server, organization and device, the machine's held
+  Fleet trust can be replaced when the same device and signer are linked to a
+  new server or key. Anything else is refused and reported with a fixed reason.
+- Bind the Fleet policy-epoch floor to the enrollment generation, so a first
+  epoch from a user-confirmed new generation is adopted instead of being
+  refused as not newer. The protected service must confirm that generation;
+  same-generation rollback is still refused. Refusals name the failing
+  condition in the Fleet status.
+- Add a remote-command dispatch toggle to the connected Fleet panel (no
+  re-enrollment). Turning it off is always allowed; if the running agent cannot
+  be reconfigured the panel says so.
+- Report Shield status to Fleet read-only (single interactive session, no policy
+  applied, nothing acknowledged) when the service or handoff check fails.
+
 - Add the typed service and Pro-gated UI integration for optional Vault cloud
   backup, with explicit consent and automatic uploads while mounted. Requires
   the paired Pro implementation; installed and real-account acceptance remain

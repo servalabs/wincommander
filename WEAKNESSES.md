@@ -24,6 +24,23 @@ vulnerability details (report those through [SECURITY.md](SECURITY.md)).
 - The clippy and unit-test failures that came with the 2026-11-16 merge of `dev`
   were fixed the same day; see [STATUS.md](STATUS.md#the-2026-11-16-merge-of-dev).
 
+## Fleet connect
+
+- **Persistent-state rollback is not prevented.** The epoch floor and enrollment
+  generation bound to it are persisted state with no independent anti-rollback
+  anchor; restoring an older copy of that state is not detected. Same-generation
+  epoch rollback is refused only against the state that is present.
+- **Recovery and re-admission are disabled by design.** The panel does not offer
+  them and the native commands refuse, so no recovery path ships
+  ([ROADMAP.md](ROADMAP.md#2-wip)).
+- **Commands still use the legacy check-in route**, not the v2 enrollment
+  path ([ROADMAP.md](ROADMAP.md#3-partial)).
+- **Identity history from an old Fleet database is not migrated.** There is no
+  safe migration procedure.
+- Trust repair, epoch adoption and dispatch changes are covered by automated
+  tests; they were not exercised on an installed service against a live Fleet
+  server.
+
 ## Validation gaps
 
 Behaviour below is covered by source review and automated tests at most; it has

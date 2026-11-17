@@ -40,6 +40,18 @@ file is revised.
 - Service placeholders: `commander-svc` starts idle `reconciler` and
   `command_worker` tasks ([ROADMAP.md](ROADMAP.md#3-partial)).
 
+## Fleet connect (2026-11-17)
+
+Merged from `codex/fleet-connect-v2-20261117` with `origin/main` at `356e4b14`:
+the connect stack-overflow guard, https-only addresses with clear errors,
+stale-trust repair, the epoch floor bound to the enrollment generation (user
+confirmed, service-checked), the dispatch toggle and status-only Shield
+reporting ([CHANGELOG.md](CHANGELOG.md)). Open: no rollback anchor for the
+persisted epoch state, recovery and re-admission disabled by design, commands
+still on the legacy check-in route, and old-database identity history not
+migrated ([WEAKNESSES.md](WEAKNESSES.md#fleet-connect)). Checked by automated
+tests only, not against a live Fleet server or an installed service.
+
 ## The 2026-11-16 merge of `dev`
 
 On the owner's decision, `main` was fast-forwarded to `dev` (859 commits) and the

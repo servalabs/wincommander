@@ -55,6 +55,10 @@ Consciously postponed, or blocked on an external dependency or decision.
 - **Obfuscated tunnel-style transport for Fleet check-in.** Only light traffic
   shaping exists in `src-tauri/fleet-agent-core/src/config.rs`; the tunnel tier
   is explicitly deferred.
+- **Fleet persistent-state rollback anchor.** The recorded epoch floor and
+  enrollment generation are persisted state; nothing independent yet protects
+  them against restoring an older copy. Unsolved (see
+  [WEAKNESSES.md](WEAKNESSES.md#fleet-connect)).
 - **Reproducible-build CI gate (build twice, compare SHA-256).** A job is
   drafted but commented out in `.github/workflows/invariants.yml`; it cannot
   pass while release builds embed a per-build random salt (see
@@ -98,7 +102,9 @@ Arrived on `main` with the 2026-11-16 merge of `dev` (see [STATUS.md](STATUS.md#
   index is not encrypted (see Full pending). The tree holds a disabled research
   design and prototype (design conclusions in RESEARCH.md).
 - **Fleet service-owned recovery/re-admission authority.** Test-only fixtures
-  and gated source; no production enablement.
+  and gated source; no production enablement. Disabled by design: the native
+  recovery commands refuse (`require_recovery_lab` in `fleet_agent.rs`) and the
+  Fleet panel no longer offers recovery.
 - **Experimental per-generation search leases.**
 
 ## 3. Partial
@@ -114,6 +120,11 @@ Partly implemented. What exists, and exactly what is missing.
   execution still run in the session-bound app (`useAutoHeal`, Pro sidecar), so
   sign-out, quit or crash interrupts them. Verification: installed service
   across sign-out and user switch.
+- **Fleet command transport.** Exists: v2 enrollment, stale-trust repair and the
+  generation-bound epoch floor (`fleet_agent.rs`, `settings_epoch_write.rs`).
+  Missing: device commands still use the legacy check-in route
+  (`fleet-agent-core/src/verify.rs`). Verification: paired Fleet server and
+  installed Windows device.
 - **CameraTrigger flows.** Exists: Privacy Shield now emits
   `privacy-shield-event` for gaze triggers (`backend.rs`), and the listener is
   in `flow_engine.rs`. Missing: `CameraTrigger` is still rejected in
