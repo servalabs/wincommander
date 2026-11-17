@@ -161,6 +161,9 @@ pub fn is_known_verb(feature_id: &str) -> bool {
             | "svc.fleet.recovery.execute_start"
             | "svc.fleet.recovery.leave_request" | "svc.fleet.recovery.leave_status" | "svc.fleet.recovery.execute_result"
             | "svc.fleet.recovery.resume"
+            // Hard-off: the handler returns `recovery_unavailable` while
+            // `RECOVERY_READMISSION_READY` is false (pipe.rs, with a test).
+            | "svc.fleet.recovery.readmission"
             | "svc.fleet.install_policy"
             | "svc.fleet.get_policy"
             | "svc.fleet.contact_observation"
@@ -403,7 +406,7 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         // the active ruleset — SessionHelper only says "a pinned, in-session
         // peer may call this verb", not "trust its payload".
         "svc.policy.install_epoch" => CapabilityClass::SessionHelper,
-        "svc.fleet.begin_enrollment" | "svc.fleet.provision_trust" | "svc.fleet.replace_trust" | "svc.fleet.bind_origins" | "svc.fleet.get_trust" | "svc.fleet.provision_hybrid_trust" | "svc.fleet.get_hybrid_trust" | "svc.fleet.begin_hybrid_enrollment" | "svc.fleet.cancel_hybrid_enrollment" | "svc.fleet.operator_key.pin" | "svc.fleet.recovery.stage" | "svc.fleet.recovery.handoff" | "svc.fleet.recovery.finish" | "svc.fleet.recovery.resolve_unknown" | "svc.fleet.recovery.resume" => CapabilityClass::Privileged,
+        "svc.fleet.begin_enrollment" | "svc.fleet.provision_trust" | "svc.fleet.replace_trust" | "svc.fleet.bind_origins" | "svc.fleet.get_trust" | "svc.fleet.provision_hybrid_trust" | "svc.fleet.get_hybrid_trust" | "svc.fleet.begin_hybrid_enrollment" | "svc.fleet.cancel_hybrid_enrollment" | "svc.fleet.operator_key.pin" | "svc.fleet.recovery.stage" | "svc.fleet.recovery.handoff" | "svc.fleet.recovery.finish" | "svc.fleet.recovery.resolve_unknown" | "svc.fleet.recovery.resume" | "svc.fleet.recovery.readmission" => CapabilityClass::Privileged,
         "svc.fleet.install_policy" | "svc.fleet.get_policy" | "svc.fleet.contact_observation" | "svc.fleet.read_hybrid_trust" | "svc.fleet.recovery.contact" | "svc.fleet.recovery.stop_poll" | "svc.fleet.recovery.stop_complete" | "svc.fleet.recovery.legacy_work_start" | "svc.fleet.recovery.legacy_work_complete" | "svc.fleet.recovery.upgrade_challenge" | "svc.fleet.recovery.upgrade_confirm" | "svc.fleet.recovery.execution_status" | "svc.fleet.recovery.execute_list" | "svc.fleet.recovery.execute_grant" | "svc.fleet.recovery.execute_start" | "svc.fleet.recovery.leave_request" | "svc.fleet.recovery.leave_status" | "svc.fleet.recovery.execute_result" => CapabilityClass::SessionHelper,
         "svc.shared_shortcuts.set_claim" => CapabilityClass::SessionHelper,
 
@@ -431,6 +434,9 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         // Policy reads remain caller-filtered so authorized users can mount.
         | "svc.vault.get_policy"
         | "svc.vault.get_status"
+        // Per-user status read: the handler keys the registration lookup on
+        // the authenticated pipe token's SID and accepts no SID selector.
+        | "svc.vault.personal_status"
         | "svc.vault.capabilities"
         | "svc.search.fence_capabilities" => CapabilityClass::ReadOnly,
 

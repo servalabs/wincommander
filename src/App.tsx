@@ -13,6 +13,7 @@ import {
 // KeySequenceTrigger now consumes events directly from the system-wide
 // keyboard hook in `services::keyboard_hook`.
 import { invoke } from "@tauri-apps/api/core";
+import { armBackend } from "./hooks/armBackend";
 import { rememberSearchHandoff } from "./lib/searchPrivacy";
 import { useSearchPrivacy } from "./hooks/useSearchPrivacy";
 import { listen } from "@tauri-apps/api/event";
@@ -943,12 +944,18 @@ function AppContent({ splashDone, onSplashComplete }: {
   // value in BOTH directions (not just `true`, not just once) so a change
   // pushed by the fleet (a ConfigEpoch that sets ideal.privacy.screenCapture.
   // protectWindow) takes effect on the running app immediately — enabling AND
-  // disabling — rather than only on the next restart. Best-effort: swallow
-  // errors (unlicensed / pre-19041) so startup never blocks.
+  // disabling — rather than only on the next restart. Failures (unlicensed /
+  // pre-19041) are logged and reported without blocking startup.
   useEffect(() => {
     const desired = appSettings?.ideal?.privacy?.screenCapture?.protectWindow;
     if (desired === undefined) return;
-    void invoke("set_capture_protection", { enabled: desired === true }).catch(() => {});
+    void armBackend(
+      "set_capture_protection",
+      { enabled: desired === true },
+      desired === true
+        ? "Screen-capture protection is NOT active (window may be captured)"
+        : "Screen-capture protection could not be turned off",
+    );
   }, [appSettings?.ideal?.privacy?.screenCapture?.protectWindow]);
 
   // Detection is also sidecar runtime state, so a saved ON preference must

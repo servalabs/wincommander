@@ -33,6 +33,7 @@ import { Icon, type IconName } from "@/components/ui/bp";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { showError, showSuccess, showWarning } from "../../utils/toast";
+import { armBackend, reportArmFailure } from "../../hooks/armBackend";
 import { syncCalculatorShortcuts } from "../privacy/calculatorShortcuts";
 import { shortcutWarningsAfterReconciliation, syncSharedShortcutClaim } from "../../hooks/sharedShortcutClaims";
 import VisibilityTable from "./VisibilityTable";
@@ -319,9 +320,22 @@ function LockDisguiseSection() {
             const warning = await syncCalculatorShortcuts(setWinCommanderCalculatorShortcuts, next, shared.managed);
             const warnings = shortcutWarningsAfterReconciliation(warning ? [warning] : [], shared.warning);
             if (warnings.length || shared.warning) showWarning(`Calculator Lock changed, but shortcuts need attention: ${[...warnings, shared.warning].filter(Boolean).join(" ")}`);
-            invoke("update_autostart_task_identity", { covered: next || isHideModeActive }).catch(() => {});
+            void armBackend("update_autostart_task_identity", { covered: next || isHideModeActive }, "Autostart task identity was not updated");
             if (next) {
-                await invoke("enter_calculator_mode").catch(() => {});
+                try {
+                    await invoke("enter_calculator_mode");
+                } catch (enterError) {
+                    // The lock did not actually arm: roll the persisted setting back
+                    // so the toggle never reads ON while no lock is in effect.
+                    reportArmFailure("enter_calculator_mode", "Calculator lock is NOT active", enterError);
+                    try {
+                        await invoke("set_startup_pin_enabled", { enabled: false });
+                    } catch (rollbackError) {
+                        reportArmFailure("set_startup_pin_enabled", "Calculator lock is saved as on but not active (rollback failed)", rollbackError);
+                    }
+                    await refreshSettings();
+                    return;
+                }
             }
             if (!warnings.length && !shared.warning) showSuccess(next
                 ? "Calculator lock on — calculator mode is active."
@@ -383,7 +397,7 @@ function LockDisguiseSection() {
 
     useEffect(() => {
         if (appSettings?.ideal?.identity?.hideWinCommander) {
-            invoke("update_hide_hotkey", { hotkey: hotkeyValue }).catch(() => {});
+            void armBackend("update_hide_hotkey", { hotkey: hotkeyValue }, "Hide shortcut is NOT active (could not bind shortcut)");
         }
     }, [hotkeyValue, appSettings?.ideal?.identity?.hideWinCommander]);
 
@@ -491,7 +505,7 @@ function LockDisguiseSection() {
                 }
                 await restartExplorer().catch(() => {});
                 await invoke("apply_wincommander_hide_mode", { hidden }).catch((error) => showWarning(`Hide shortcut recovery needs attention: ${String(error)}`));
-                await invoke("update_autostart_task_identity", { covered: hidden || lockArmed }).catch(() => {});
+                await armBackend("update_autostart_task_identity", { covered: hidden || lockArmed }, "Autostart task identity was not updated");
                 patchAppSettings({ ideal: { identity: { hideWinCommander: hidden } } }).catch(reportSettingsWriteFailure);
                 await refreshHardening();
                 const warnings = shortcutWarningsAfterReconciliation(result.data.warnings ?? [], shared.warning);

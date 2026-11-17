@@ -52,7 +52,17 @@
 //! moment we opened it" even if the PID is reused a moment later. It does
 //! **not** eliminate the window before that first `OpenProcess` call (the
 //! caller must pass a PID that was *just* derived from the live pipe, which
-//! is `pipe.rs`'s responsibility, not this module's), and it does not cover
+//! is `pipe.rs`'s responsibility, not this module's).
+//!
+//! Per-request re-resolution is closed by `service_peer_identity`: the
+//! connection's `AuthenticatedPipePeer` keeps an open handle to the exact
+//! client process captured after Hello (so the kernel cannot recycle its PID
+//! while the connection lives) plus its creation time, and `pipe.rs` requires
+//! `pinned_process_is_live()` before every request's pid-based authorization.
+//! If the original client exited, the request is refused (`peer_exited`) and
+//! the connection closes, so a fresh `wincommander-free.exe` that reuses the
+//! PID cannot inherit the old connection's pin. The remaining residual risk
+//! is the first-capture window (Hello is read before capture) and it does not cover
 //! the risk that a process able to replace an executable inside the protected
 //! install directory can inherit that filename's authorization. Packaging
 //! must therefore keep the service directory administrator/SYSTEM-writable
@@ -807,7 +817,7 @@ mod tests {
         // Directory junctions need no special privilege (unlike symlinks),
         // so this should succeed in any normal environment; if it doesn't,
         // skip rather than fail the whole suite on an environment quirk.
-        let status = std::process::Command::new("cmd")
+        let status = std::process::Command::new(crate::system_paths::system_directory().unwrap().join("cmd.exe"))
             .arg("/C")
             .arg("mklink")
             .arg("/J")

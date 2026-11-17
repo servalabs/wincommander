@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { armBackend } from "../../hooks/armBackend";
 import { Icon } from "../../components/ui/icon";
 import type { FileWatchRule, FileWatchTriggerSettings } from "../../types/settings";
 import "./LockdownTriggerControls.css";
@@ -29,24 +29,30 @@ export default function FileWatchTriggerSection({ settings, onPatch, bare = fals
     const [form, setForm] = useState({ ...EMPTY_FORM });
     const [formError, setFormError] = useState('');
 
-    const syncWatcher = useCallback((nextEnabled: boolean, nextRules: FileWatchRule[]) => {
-        if (disabled) return;
-        if (nextEnabled && nextRules.some(r => r.enabled)) {
-            invoke('start_file_watch_triggers', { rules: nextRules.filter(r => r.enabled) }).catch(() => {});
-        } else {
-            invoke('stop_file_watch_triggers').catch(() => {});
-        }
+    const [watchFailed, setWatchFailed] = useState(false);
+
+    const syncWatcher = useCallback(async (nextEnabled: boolean, nextRules: FileWatchRule[]): Promise<boolean> => {
+        if (disabled) return true;
+        const starting = nextEnabled && nextRules.some(r => r.enabled);
+        const ok = starting
+            ? await armBackend('start_file_watch_triggers', { rules: nextRules.filter(r => r.enabled) }, 'File watch triggers are NOT active')
+            : await armBackend('stop_file_watch_triggers', undefined, 'File watch triggers could not be stopped');
+        setWatchFailed(!ok && starting);
+        return ok;
     }, [disabled]);
 
     useEffect(() => {
-        syncWatcher(enabled, rules);
+        void syncWatcher(enabled, rules);
     }, [enabled, rules, syncWatcher]);
 
-    const toggleEnabled = () => {
+    const toggleEnabled = async () => {
         if (disabled) return;
         const next = !enabled;
+        // Enabling is persisted only once the watcher actually started, so the
+        // toggle never reads ON while nothing is watching.
+        const ok = await syncWatcher(next, rules);
+        if (next && !ok) return;
         onPatch({ enabled: next });
-        syncWatcher(next, rules);
     };
 
     const addRule = () => {
@@ -56,7 +62,7 @@ export default function FileWatchTriggerSection({ settings, onPatch, bare = fals
         const rule: FileWatchRule = { ...form, id: nanoid(), path: form.path.trim(), namePattern: form.namePattern.trim() };
         const next = [...rules, rule];
         onPatch({ rules: next });
-        syncWatcher(enabled, next);
+        void syncWatcher(enabled, next);
         setForm({ ...EMPTY_FORM });
         setShowAdd(false);
         setFormError('');
@@ -66,14 +72,14 @@ export default function FileWatchTriggerSection({ settings, onPatch, bare = fals
         if (disabled) return;
         const next = rules.filter(r => r.id !== id);
         onPatch({ rules: next });
-        syncWatcher(enabled, next);
+        void syncWatcher(enabled, next);
     };
 
     const toggleRule = (id: string) => {
         if (disabled) return;
         const next = rules.map(r => r.id === id ? { ...r, enabled: !r.enabled } : r);
         onPatch({ rules: next });
-        syncWatcher(enabled, next);
+        void syncWatcher(enabled, next);
     };
 
     const activeCount = rules.filter(r => r.enabled).length;
@@ -83,8 +89,11 @@ export default function FileWatchTriggerSection({ settings, onPatch, bare = fals
             <div className="lockdown-trigger-head">
                 <Icon icon="folder-open" size={14} className="lockdown-trigger-icon" />
                 <span className="lockdown-trigger-title">File Watch</span>
-                {enabled && activeCount > 0 && (
+                {enabled && activeCount > 0 && !watchFailed && (
                     <span className="lockdown-trigger-status">{activeCount} active</span>
+                )}
+                {watchFailed && (
+                    <span role="alert" className="lockdown-trigger-status" style={{ color: 'var(--color-danger)' }}>not active</span>
                 )}
                 <button
                     type="button"

@@ -647,6 +647,25 @@ jobs:
       # Upload immutable artifacts before the mutable latest.json pointer. A
       # client that sees a new manifest can therefore always fetch its setup and
       # minisign sidecar from the same R2 release.
+      - name: Install pinned rclone (no credentials)
+        shell: pwsh
+        env:
+          RCLONE_VERSION: v1.70.3
+          # SHA-256 from https://downloads.rclone.org/v1.70.3/SHA256SUMS (recorded 2026-11-17).
+          RCLONE_ZIP_SHA256: 1c75923b4d3f0b3d1faf16447a442b5aaed0cfc32997b3381eb96fd087603a30
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:RCLONE_ZIP_SHA256 -notmatch '^[0-9a-fA-F]{64}$') { throw 'RCLONE_ZIP_SHA256 is not a SHA-256 value.' }
+          $zip = Join-Path $env:RUNNER_TEMP 'rclone.zip'
+          $folder = Join-Path $env:RUNNER_TEMP 'rclone'
+          $uri = "https://downloads.rclone.org/$($env:RCLONE_VERSION)/rclone-$($env:RCLONE_VERSION)-windows-amd64.zip"
+          Invoke-WebRequest -Uri $uri -OutFile $zip
+          if ((Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash -ine $env:RCLONE_ZIP_SHA256) { throw 'rclone archive SHA-256 mismatch; refusing to use it.' }
+          Expand-Archive -Path $zip -DestinationPath $folder -Force
+          $rclone = Get-ChildItem $folder -Filter rclone.exe -Recurse | Select-Object -First 1
+          if (-not $rclone) { throw 'rclone.exe is unavailable.' }
+          "RCLONE_EXE=$($rclone.FullName)" | Add-Content $env:GITHUB_ENV
+
       - name: Publish signed Free release to R2
         shell: pwsh
         env:
@@ -660,12 +679,8 @@ jobs:
           RELEASE_SHA: ${{ needs.align-version.outputs.release_sha }}
         run: |
           $ErrorActionPreference = "Stop"
-          $rcloneZip = Join-Path $env:RUNNER_TEMP "rclone.zip"
-          $rcloneDir = Join-Path $env:RUNNER_TEMP "rclone"
-          Invoke-WebRequest "https://downloads.rclone.org/rclone-current-windows-amd64.zip" -OutFile $rcloneZip
-          Expand-Archive -Path $rcloneZip -DestinationPath $rcloneDir -Force
-          $rclone = (Get-ChildItem $rcloneDir -Filter "rclone.exe" -Recurse | Select-Object -First 1).FullName
-          if (-not $rclone) { throw "rclone.exe was not found after download." }
+          $rclone = $env:RCLONE_EXE
+          if (-not $rclone -or -not (Test-Path -LiteralPath $rclone)) { throw "Pinned rclone was not installed." }
 
           $remote = "r2:windows"
           $version = $env:RELEASE_TAG -replace '^(beta-)?v', ''

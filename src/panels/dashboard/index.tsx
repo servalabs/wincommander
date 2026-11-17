@@ -48,6 +48,7 @@ import {
 import { useTaskStatus } from "../../context/TaskStatusContext";
 import { Icon } from "../../components/ui/icon";
 import { showError, showInfo, showSuccess } from "../../utils/toast";
+import { armBackend } from "../../hooks/armBackend";
 import { getMaintenanceFailureMessage } from "../../utils/maintenance";
 import { assertDashboardFixSucceeded, retainUnverifiedFindings, verifyDashboardToggleFix, verifyDependencyInstall } from "./fixVerification";
 import { useFindingFixAttempts } from "./useFindingFixAttempts";
@@ -860,7 +861,7 @@ export default function DashboardPanel() {
   const startupPin = appSettings?.ideal?.privacy?.startupPin;
   const calculatorLockArmed = !!startupPin?.realHash && startupPin.enabled !== false && !borrowedActive;
   const handleLockToCalculator = useCallback(() => {
-    invoke("lock_to_calculator").catch(() => {});
+    void armBackend("lock_to_calculator", undefined, "Could not lock to calculator");
   }, []);
 
   const { presence: cameraPresence, blocked: cameraBlocked, refreshAccess: refreshCameraAccess, invalidateAccess: invalidateCameraAccess } = useCameraPresence();
