@@ -7767,7 +7767,6 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/hooks/monitorStatus.ts",
         "src/panels/privacy/AuthAnomalySection.tsx"
       ]
     },
@@ -8911,9 +8910,7 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": [
-        "src/hooks/useFleetRecovery.ts"
-      ]
+      "frontendReferences": []
     },
     {
       "id": "tauri:fleet_recovery_handoff",
@@ -8921,9 +8918,7 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": [
-        "src/hooks/useFleetRecovery.ts"
-      ]
+      "frontendReferences": []
     },
     {
       "id": "tauri:fleet_recovery_pin_operator_key",
@@ -8931,9 +8926,7 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": [
-        "src/hooks/useFleetRecovery.ts"
-      ]
+      "frontendReferences": []
     },
     {
       "id": "tauri:fleet_recovery_resume",
@@ -8941,9 +8934,7 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": [
-        "src/hooks/useFleetRecovery.ts"
-      ]
+      "frontendReferences": []
     },
     {
       "id": "tauri:fleet_recovery_stage",
@@ -8951,9 +8942,7 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": [
-        "src/hooks/useFleetRecovery.ts"
-      ]
+      "frontendReferences": []
     },
     {
       "id": "tauri:fleet_repair_machine_trust",
@@ -9488,9 +9477,7 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": [
-        "src/hooks/useMonitoringOverview.ts"
-      ]
+      "frontendReferences": []
     },
     {
       "id": "tauri:get_network_honeypot_bind_all_interfaces",
@@ -9866,9 +9853,7 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": [
-        "src/components/dashboard/DashboardSidePanel.tsx"
-      ]
+      "frontendReferences": []
     },
     {
       "id": "tauri:get_usb_autosandbox_recent",
@@ -9997,7 +9982,6 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/hooks/useDriverSecurity.ts",
         "src/panels/privacy/DriverHealthSection.tsx"
       ]
     },
@@ -10307,9 +10291,7 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": [
-        "src/panels/dashboard/index.tsx"
-      ]
+      "frontendReferences": []
     },
     {
       "id": "tauri:lockdown",
@@ -11344,7 +11326,6 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/hooks/monitorStatus.ts",
         "src/panels/privacy/SessionAssuranceSection.tsx"
       ]
     },
@@ -11375,7 +11356,6 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/App.tsx",
         "src/panels/privacy/useScreenCapture.ts"
       ]
     },
@@ -11395,9 +11375,7 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": [
-        "src/context/AuthModeContext.tsx"
-      ]
+      "frontendReferences": []
     },
     {
       "id": "tauri:set_decoy_read_audit_enabled",
@@ -11712,7 +11690,6 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/hooks/monitorStatus.ts",
         "src/hooks/useAuthAnomalyMonitor.ts"
       ]
     },
@@ -11753,9 +11730,7 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": [
-        "src/panels/privacy/FileWatchTriggerSection.tsx"
-      ]
+      "frontendReferences": []
     },
     {
       "id": "tauri:start_glasses_monitor",
@@ -11828,7 +11803,6 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/hooks/monitorStatus.ts",
         "src/panels/privacy/SessionAssuranceSection.tsx"
       ]
     },
@@ -11921,7 +11895,6 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/hooks/monitorStatus.ts",
         "src/hooks/useAuthAnomalyMonitor.ts"
       ]
     },
@@ -11961,9 +11934,7 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": [
-        "src/panels/privacy/FileWatchTriggerSection.tsx"
-      ]
+      "frontendReferences": []
     },
     {
       "id": "tauri:stop_glasses_monitor",
@@ -12038,7 +12009,6 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/hooks/monitorStatus.ts",
         "src/panels/privacy/SessionAssuranceSection.tsx"
       ]
     },
@@ -12278,10 +12248,7 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": [
-        "src/panels/privacy/StartupPinConfig.tsx",
-        "src/panels/secret/index.tsx"
-      ]
+      "frontendReferences": []
     },
     {
       "id": "tauri:update_current_state",
@@ -12307,9 +12274,7 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": [
-        "src/panels/privacy/PanicHotkeyTrigger.tsx"
-      ]
+      "frontendReferences": []
     },
     {
       "id": "tauri:update_search_hotkey",
