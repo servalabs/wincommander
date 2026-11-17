@@ -21,6 +21,7 @@
 // All payloads are one of {Hello, Request, Response, Error, Notification, Bye}.
 
 use serde::{Deserialize, Serialize};
+pub mod file_package;
 pub mod managed_deployment;
 pub mod vault_sync;
 
@@ -233,7 +234,7 @@ pub enum Envelope {
 /// couldn't reproduce identically — e.g. a settings-snapshot float that Free's
 /// and Pro's differing `ryu` versions formatted differently — which is exactly
 /// how large Flow-Sync-Rules / Flow-Ingest-Event frames hung Save for 120s.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
 #[cfg_attr(feature = "ts-codegen", ts(export, export_to = "ipc.ts"))]
 pub struct SignedEnvelope {
@@ -250,6 +251,21 @@ pub struct SignedEnvelope {
     /// internally-tagged (`tag = "kind"`) enum — it buffers, which RawValue
     /// rejects. `from_str(&inner)` reconstitutes the typed Envelope on demand.
     pub inner: String,
+}
+
+impl std::fmt::Debug for SignedEnvelope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SignedEnvelope")
+            .field("tag", &"[redacted]")
+            .field("inner", &"[redacted]")
+            .finish()
+    }
+}
+
+impl Drop for SignedEnvelope {
+    fn drop(&mut self) {
+        self.inner.zeroize();
+    }
 }
 
 impl Envelope {
@@ -288,13 +304,13 @@ impl Envelope {
     /// if the tag doesn't match.
     pub fn verify_and_unwrap(self, session_token: &str) -> Result<Envelope, &'static str> {
         match self {
-            Envelope::Signed(SignedEnvelope { tag, inner }) => {
-                let inner = Zeroizing::new(inner);
+            Envelope::Signed(mut signed) => {
+                let inner = Zeroizing::new(std::mem::take(&mut signed.inner));
                 // Verify against the EXACT bytes received on the wire (the inner
                 // JSON text, round-tripped byte-for-byte as a string) — never a
                 // re-serialization. Only parse the inner into a typed Envelope
                 // AFTER the tag checks out.
-                if verify_body(session_token, inner.as_bytes(), &tag) {
+                if verify_body(session_token, inner.as_bytes(), &signed.tag) {
                     serde_json::from_str::<Envelope>(&inner)
                         .map_err(|_| "inner envelope deserialisation failed")
                 } else {
@@ -782,6 +798,18 @@ mod tests {
             inner: raw.to_string(),
         });
         assert!(signed.verify_and_unwrap("tk").is_ok());
+    }
+
+    #[test]
+    fn signed_debug_does_not_expose_message_contents() {
+        let signed = Envelope::Signed(SignedEnvelope {
+            tag: "sensitive-tag".into(),
+            inner: "private-path-and-password".into(),
+        });
+        let debug = format!("{signed:?}");
+        assert!(!debug.contains("private-path-and-password"));
+        assert!(!debug.contains("sensitive-tag"));
+        assert!(debug.contains("[redacted]"));
     }
 
     #[test]

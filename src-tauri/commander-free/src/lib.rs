@@ -174,6 +174,11 @@ mod session_assurance;
 mod session_instance;
 mod settings;
 mod settings_transfer;
+mod file_package_grants;
+#[cfg(windows)]
+mod file_package_picker;
+#[cfg(windows)]
+mod file_package_identity;
 mod shared_shortcut_claim;
 mod shield_quota;
 mod shortcut_actions;

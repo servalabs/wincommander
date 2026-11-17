@@ -45,6 +45,7 @@ use tokio::process::{Child, Command};
 use tokio::sync::{oneshot, Mutex, Semaphore};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
+use zeroize::{Zeroize, Zeroizing};
 use wincmd_shared::{
     hello_from_free, read_envelope, write_envelope, Envelope, ErrorReply, Notification, Request,
     Response, PROTOCOL_VERSION,
@@ -405,6 +406,7 @@ struct PooledProSession {
 
 impl Drop for ProSession {
     fn drop(&mut self) {
+        self.session_token.zeroize();
         // Abort the reader task so it stops polling the read half once
         // the session goes away. Reader normally exits on its own when
         // the pipe closes (Bye + child kill in `close_pro_session`, or
@@ -480,7 +482,7 @@ fn fleet_forensic_projection_category(args: &serde_json::Value) -> Result<&'stat
 
 async fn respond_to_free_request(
     request: Request,
-    session_token: String,
+    session_token: Zeroizing<String>,
     writer: Arc<Mutex<WriteHalf<NamedPipeServer>>>,
 ) -> bool {
     let request_id = request.request_id;
@@ -561,7 +563,7 @@ async fn respond_to_free_request(
 async fn reader_loop<R>(
     mut read_half: R,
     inflight: InflightMap,
-    session_token: String,
+    session_token: Zeroizing<String>,
     on_notification: NotificationSink,
     free_forensic_writer: Option<Arc<Mutex<WriteHalf<NamedPipeServer>>>>,
     fleet_contact_allowed: bool,
@@ -1482,7 +1484,7 @@ async fn spawn_pro_session_unlocked(role: SessionRole) -> Result<ProSession, Str
     let reader = tokio::spawn(reader_loop(
         read_half,
         inflight.clone(),
-        token.clone(),
+        Zeroizing::new(token.clone()),
         on_notification,
         Some(write_half.clone()),
         role == SessionRole::FleetAgent,
@@ -1548,6 +1550,9 @@ async fn dispatch_request_open(
 
     let signed = Envelope::Request(req).sign(&session.session_token);
     let write_result = deadlines::write_frame(&session.write, &signed, WRITE_TIMEOUT).await;
+    // SignedEnvelope clears its serialized body on drop. Do not retain a
+    // password or selected path while waiting for a long-running reply.
+    drop(signed);
     if let Err(e) = write_result {
         // Take our sender back out — reader would otherwise hold a
         // dangling entry forever for this id (no reply will arrive).
@@ -2650,7 +2655,7 @@ mod tests {
         let reader_inflight = inflight.clone();
         let reader_token = token.to_string();
         let reader_task = tokio::spawn(async move {
-            reader_loop(free_side, reader_inflight, reader_token, sink, None, false).await;
+            reader_loop(free_side, reader_inflight, Zeroizing::new(reader_token), sink, None, false).await;
         });
 
         // Pro writes (in order):
@@ -2722,7 +2727,7 @@ mod tests {
         let reader_inflight = inflight.clone();
         let reader_token = token.to_string();
         let reader_task = tokio::spawn(async move {
-            reader_loop(free_side, reader_inflight, reader_token, sink, None, false).await;
+            reader_loop(free_side, reader_inflight, Zeroizing::new(reader_token), sink, None, false).await;
         });
 
         // Close Pro's side → reader hits EOF and exits.
@@ -2755,7 +2760,7 @@ mod tests {
         let reader_inflight = inflight.clone();
         let reader_token = token.to_string();
         let reader_task = tokio::spawn(async move {
-            reader_loop(free_side, reader_inflight, reader_token, sink, None, false).await;
+            reader_loop(free_side, reader_inflight, Zeroizing::new(reader_token), sink, None, false).await;
         });
 
         // First frame: unsigned Response — reader must drop and keep reading.

@@ -110,6 +110,38 @@ event: string,
  */
 payload: JsonValue, };
 
+export type PackageCarrier = "mp4" | "png";
+
+export type PackageCreateRequest = { plan_id: PackageToken, output_token: PackageToken, password: PackagePassword, };
+
+export type PackageEntry = { id: PackageToken, name: string, kind: PackageEntryKind, size_bytes: CanonicalDecimal, };
+
+export type PackageEntryKind = "file" | "directory";
+
+export type PackageErrorCode = "unsupported_carrier" | "capacity_exceeded" | "unsafe_path" | "source_changed" | "access_denied" | "insufficient_space" | "session_expired" | "unsupported_elevation" | "cancelled" | "incomplete_cleanup" | "unknown_outcome" | "authentication_or_damage" | "unsupported_version" | "legacy_vault" | "malformed_carrier";
+
+export type PackageExtractRequest = { session_id: PackageToken, destination_token: PackageToken, selection: PackageSelection, };
+
+export type PackageJobPhase = "queued" | "preparing" | "writing" | "finishing" | "opening" | "extracting";
+
+export type PackageJobProgress = { job_id: PackageToken, phase: PackageJobPhase, completed_bytes: CanonicalDecimal, total_bytes: CanonicalDecimal | null, };
+
+export type PackageListRequest = { session_id: PackageToken, folder_id: PackageToken | null, cursor: PackageToken | null, filter: string | null, limit: number, };
+
+export type PackageOpenRequest = { carrier_token: PackageToken, password: PackagePassword, };
+
+export type PackagePage = { entries: Array<PackageEntry>, next_cursor: PackageToken | null, };
+
+export type PackagePassword = string;
+
+export type PackagePrepareRequest = { source_tokens: Array<PackageToken>, cover_token: PackageToken, };
+
+export type PackagePrepared = { plan_id: PackageToken, carrier: PackageCarrier, entry_count: number, source_bytes: CanonicalDecimal, envelope_bytes: CanonicalDecimal, carrier_capacity_bytes: CanonicalDecimal | null, excluded_pixels: CanonicalDecimal | null, };
+
+export type PackageSelection = { "kind": "all" } | { "kind": "entries", ids: Array<PackageToken>, };
+
+export type PackageToken = string;
+
 /**
  * Free → Pro: invoke a paid feature.
  */
