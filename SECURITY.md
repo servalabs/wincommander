@@ -54,6 +54,15 @@ WinCommander does not claim to defend against a fully compromised Windows
 kernel/firmware, an attacker with equivalent Administrator/SYSTEM control, or
 physical attacks that operate before Windows enforcement begins.
 
+Optional Pro Vault cloud backup exports selected mounted file contents to the
+owner's Proton Drive account after explicit setup. Remote files are protected
+by that account and Proton's encryption, independently of the Vault password;
+local deletion or dismount does not delete remote backups. Saved CLI state is
+kept inside the Vault, but Windows, browser, memory/paging, crash and network
+traces may remain outside it. A mounted Vault and its saved session remain
+accessible to the account's programs and privileged administrators. Source
+implementation is separate from installed and real-account acceptance.
+
 ## Public security posture
 
 - Backend validation—not UI visibility—enforces tier, entitlement, arguments,

@@ -1,0 +1,17 @@
+.vault-cloud-backup { display: flex; flex-direction: column; overflow: hidden; }
+.vault-cloud-backup__body { min-height: 0; overflow-y: auto; }
+.vault-cloud-backup > :first-child, .vault-cloud-backup__footer { flex-shrink: 0; }
+.vault-cloud-backup__footer { flex-wrap: wrap; }
+.vault-cloud-backup__section { display: grid; gap: 10px; padding: 16px 0; border-bottom: 1px solid var(--border); }
+.vault-cloud-backup__section h3 { font-size: 14px; font-weight: 600; margin: 0; }
+.vault-cloud-backup__disclosure { padding: 12px; border: 1px solid var(--border); border-radius: var(--r); background: var(--surface-2); }
+.vault-cloud-backup__disclosure p { margin: 6px 0 0; }
+.vault-cloud-backup__fields { display: grid; gap: 10px; border: 0; padding: 0; margin: 0; min-width: 0; }
+.vault-cloud-backup__fields label { display: block; }
+.vault-cloud-backup__fields input[type="checkbox"], .vault-cloud-backup__fields input[type="radio"] { margin-right: 6px; }
+.vault-cloud-backup__fields textarea { display: block; width: 100%; margin-top: 6px; padding: 8px; border-radius: var(--r-sm); border: 1px solid var(--border); background: transparent; font: inherit; }
+.vault-cloud-backup__muted { color: var(--text-dim); font-size: 12px; margin: 0; }
+.vault-cloud-backup__summary { display: grid; grid-template-columns: minmax(7rem, auto) 1fr; gap: 6px 12px; margin: 0; font-size: 13px; }
+.vault-cloud-backup__summary dd { margin: 0; overflow-wrap: anywhere; }
+.vault-cloud-backup__actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.vault-cloud-backup__section > button { justify-self: start; }

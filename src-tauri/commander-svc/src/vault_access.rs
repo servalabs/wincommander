@@ -6211,6 +6211,7 @@ mod tests {
                 owner_account: "Admin".into(),
                 access_pattern: None,
                 syncthing_opt_in: None,
+                cloud_backup: None,
                 grants: vec![
                     wincmd_shared::vault_access::VaultGrantInput {
                         principal_name: "Admin".into(),

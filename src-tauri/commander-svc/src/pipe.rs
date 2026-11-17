@@ -877,6 +877,12 @@ async fn dispatch_verb(
             args,
             peer,
         ),
+        "svc.vault.setup_cloud_backup" | "svc.vault.manage_cloud_backup" => handle_vault_cloud_backup(
+            request_id, vault_access, vault_mount, args, peer,
+        ),
+        "svc.vault.attest_cloud_backup" => handle_vault_cloud_backup_attestation(
+            vault_access, vault_mount, args, peer,
+        ),
         "svc.vault.manage_personal_syncthing" => handle_personal_vault_syncthing_manage(
             request_id,
             vault_access,
@@ -3569,6 +3575,41 @@ fn handle_personal_vault_dismount(
     );
     serde_json::to_value(result)
         .map_err(|_| VerbError::new("vault_internal_error", "personal dismount unavailable"))
+}
+
+fn handle_vault_cloud_backup_attestation(
+    vault_access: &VaultAccessStore, vault_mount: &VaultMountBroker,
+    args: serde_json::Value, peer: Option<&AuthenticatedPipePeer>,
+) -> Result<serde_json::Value, VerbError> {
+    let request: wincmd_shared::vault_cloud_backup::VaultCloudBackupAttestationRequest =
+        serde_json::from_value(args).map_err(|_| VerbError::new("cloud_backup_invalid_request", "backup attestation is invalid"))?;
+    let peer = require_personal_mount_peer(peer)?;
+    let result = vault_mount.attest_cloud_backup(vault_access, &request, peer.token(), peer.session_id(), peer.caller_sid())
+        .map_err(|_| VerbError::new("cloud_backup_mount_changed", "backup mount could not be attested"))?;
+    Ok(serde_json::Value::Bool(result))
+}
+
+fn handle_vault_cloud_backup(
+    request_id: u64, vault_access: &VaultAccessStore, vault_mount: &VaultMountBroker,
+    args: serde_json::Value, peer: Option<&AuthenticatedPipePeer>,
+) -> Result<serde_json::Value, VerbError> {
+    let started = std::time::Instant::now();
+    let request: wincmd_shared::vault_cloud_backup::VaultCloudBackupRequest = serde_json::from_value(args)
+        .map_err(|_| VerbError::new("cloud_backup_invalid_request", "backup request is invalid"))?;
+    if !request.valid() { return Err(VerbError::new("cloud_backup_invalid_request", "backup request is invalid")); }
+    let peer = require_personal_mount_peer(peer)?;
+    let result = vault_mount.manage_cloud_backup(vault_access, request_id, &request, peer.token(), peer.session_id(), peer.caller_sid())
+        .map_err(|reason| {
+            crate::diagnostics::record_vault_failure(&format!("VLT-{request_id}"), "backup", "VLT.BACKUP.FAILED", "review_backup_status", false, started);
+            let code = match reason {
+                wincmd_shared::vault_access::VaultMountReason::NotAuthorized | wincmd_shared::vault_access::VaultMountReason::CallerAccessDenied => "cloud_backup_not_permitted",
+                wincmd_shared::vault_access::VaultMountReason::MountStateUnknown => "cloud_backup_mount_changed",
+                wincmd_shared::vault_access::VaultMountReason::EntitlementDenied => "cloud_backup_entitlement_denied",
+                _ => "cloud_backup_unavailable",
+            };
+            VerbError::new(code, "backup operation could not be confirmed")
+        })?;
+    serde_json::to_value(result).map_err(|_| VerbError::new("cloud_backup_unavailable", "backup result unavailable"))
 }
 
 fn handle_personal_vault_syncthing_manage(

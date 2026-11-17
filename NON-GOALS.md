@@ -13,6 +13,8 @@ roadmap owns future paid work.
 - **Local-first, not default cloud telemetry.** Free keeps operational state on
   the device. Fleet reporting occurs only after explicit enrollment into an
   organization and uses documented, bounded contracts.
+  Optional Pro cloud backup requires explicit setup and uses the owner's own
+  third-party account; Free does not acquire a cloud-account requirement.
 - **Open core, not an entirely open product.** Free is AGPL-3.0; Pro remains a
   separately licensed proprietary sidecar. Public code must never contain or
   reconstruct private Pro implementation.

@@ -37,6 +37,7 @@ function isVaultAccessPolicy(value: unknown): value is VaultAccessPolicy {
     && (entry.container_identity === undefined || entry.container_identity === null || typeof entry.container_identity === "string")
     && typeof entry.owner_account === "string"
     && (entry.access_pattern === undefined || entry.access_pattern === null || entry.access_pattern === "private" || entry.access_pattern === "shared-read" || entry.access_pattern === "shared-write")
+    && (entry.cloud_backup === undefined || entry.cloud_backup === null || entry.cloud_backup === "owner_only" || entry.cloud_backup === "write_members")
     && Array.isArray(entry.grants)
     && entry.grants.every(grant => (
       !!grant

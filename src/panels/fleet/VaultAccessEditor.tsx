@@ -153,6 +153,20 @@ export default function VaultAccessEditor({ entry, entryIndex, directory, ownerP
       <small>Save this Vault policy before using its cloud button. You can turn it off later; existing synced files are not deleted.</small>
     </Field>}
 
+    <Field label="Cloud backup" help="Permit explicit backup to each user's own Proton Drive account. Files already uploaded cannot be recalled by removing this permission.">
+      <label className="flex items-start gap-2 text-sm">
+        <input type="checkbox" aria-label={`Enable cloud backup for Vault ${vaultNumber}`} checked={entry.cloud_backup != null}
+          onChange={event => onEntryChange({ cloud_backup: event.target.checked ? "owner_only" : null })} />
+        <span>Allow cloud backup for this Vault</span>
+      </label>
+      {entry.cloud_backup != null && <select aria-label={`Who may back up Vault ${vaultNumber}`} value={entry.cloud_backup}
+        onChange={event => onEntryChange({ cloud_backup: event.target.value as "owner_only" | "write_members" })}>
+        <option value="owner_only">Owner only</option>
+        {accessPreset !== "private" && <option value="write_members">Owner and members with write access</option>}
+      </select>}
+      <small>Save this policy before opening Cloud backup. Read-only members cannot configure a backup.</small>
+    </Field>
+
     <div className="fleet-vault-grants">
       <strong>Who can access this vault</strong>
       {accessPreset === "private" ? <div className="fleet-vault-grant-row" role="group" aria-label="Owner permission">

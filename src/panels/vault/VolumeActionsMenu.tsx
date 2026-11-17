@@ -7,6 +7,7 @@ import { showSuccess, showError } from "../../utils/toast";
 import { vaultOperationError } from "@/lib/vaultOperationFeedback";
 import PersonalVaultSyncDialog from "@/components/shared/PersonalVaultSyncDialog";
 import VaultOperationNotice from "@/components/shared/VaultOperationNotice";
+import VaultCloudBackupButton from "@/components/shared/VaultCloudBackupButton";
 import './VolumeActionsMenu.css';
 
 interface VolumeActionsMenuProps {
@@ -122,6 +123,9 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = tru
           aria-label={`View properties for ${driveLabel}`}
         />
       </Tooltip>
+
+      <VaultCloudBackupButton compact driveLabel={driveLabel} internalDrive={internalDrive}
+        disabled={!accessible || Boolean(statusError) || internalDrive === undefined} />
 
       <TierGate tier="paid" featureLabel="Encrypted volumes">
         <Tooltip content="Manage sync folders in this personal Vault" position="top">

@@ -2,6 +2,10 @@
 
 WinCommander is for people who want a visible, controllable privacy and hardening posture on Windows instead of opaque optimizer software or disconnected scripts.
 
+Free remains usable without a cloud account. Optional Pro Vault cloud backup
+is explicitly configured to the owner's own Proton account; local-first does
+not mean that an enabled export remains only on the device.
+
 ## Who it is for
 
 - Privacy-conscious Windows power users, security researchers, journalists, and operators.

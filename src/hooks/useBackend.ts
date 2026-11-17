@@ -10,6 +10,7 @@ import { afterVaultMutation } from "../lib/vaultChangeEvents";
 import type { VaultSyncWarning } from "../lib/vaultSyncWarning";
 import type { PersonalVaultSyncEnrollment, VaultSyncRecoveryAction } from "../lib/vaultSyncRecovery";
 import type { VaultSyncAction, VaultSyncManagementResult } from "../types/generated/ipc";
+import type { VaultCloudBackupRequest, VaultCloudBackupResult } from "../types/generated/ipc";
 import { cleanupScanFailure } from "../panels/cleanup/cleanupScanFailure";
 
 // Types for backend responses
@@ -2017,6 +2018,10 @@ export function useBackend(retainCleanupScanErrors = false) {
       const call = () => invoke<VaultSyncManagementResult>("vault_manage_personal_syncthing", { internalDrive, action, relativePath, folderLabel, folderId, expectedMountReceipt });
       return action === "list" ? call() : afterVaultMutation(call);
     },
+    setupVaultCloudBackup: (request: VaultCloudBackupRequest) =>
+      invoke<VaultCloudBackupResult>("vault_setup_cloud_backup", { request }),
+    manageVaultCloudBackup: (request: VaultCloudBackupRequest) =>
+      invoke<VaultCloudBackupResult>("vault_manage_cloud_backup", { request }),
     dismountAllVolumes: (force = false) => afterVaultMutation(() => execute(commandId("Dismount-", "All", "Encryption", "Volumes"), { Force: force })),
     createVolume: (params: CreateVolumeParams) =>
       execute("Create-EncryptionVolume", {

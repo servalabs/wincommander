@@ -5,6 +5,11 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Add the typed service and Pro-gated UI integration for optional Vault cloud
+  backup, with explicit consent and automatic uploads while mounted. Requires
+  the paired Pro implementation; installed and real-account acceptance remain
+  pending before release.
+
 - Merge the `dev` branch into `main` (859 commits) and fix the clippy and unit-test
   failures that came with it. The standard-user evidence-storage regression and
   oversized files are recorded in

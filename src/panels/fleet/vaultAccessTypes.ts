@@ -118,6 +118,7 @@ export interface VaultAccessEntry {
   /** Explicit consent for Syncthing to manage this personal Vault. Missing is
    * a pre-control policy and is discovered safely once by the service. */
   syncthing_opt_in?: boolean | null;
+  cloud_backup?: "owner_only" | "write_members" | null;
   /** Service-derived UI capability only. It is stripped from every write. */
   can_edit_policy?: boolean;
   /** An outsider administrator may remove an unmounted policy without gaining edit access. */
@@ -314,6 +315,7 @@ export function newVaultEntry(kind: "shared" | "private" = "private"): VaultAcce
     // drive. It must not silently grant a generic local account write access.
     access_pattern: shared ? "shared-write" : "private",
     syncthing_opt_in: false,
+    cloud_backup: null,
     grants: [{ principal_name: "", access: "write" }],
     mount: { presentation: shared ? "machine" : "per-user" },
   };
@@ -341,6 +343,7 @@ export function normalizeVaultAccessPolicy(policy: VaultAccessPolicy): VaultAcce
       const { volume_kind: _legacyVolumeKind, access_pattern, ...normalized } = legacy;
       return {
         ...normalized,
+        cloud_backup: normalized.cloud_backup ?? null,
         container_kind: legacy.container_kind ?? legacy.volume_kind ?? "standard",
         ...(access_pattern === "private" || access_pattern === "shared-read" || access_pattern === "shared-write"
           ? { access_pattern }

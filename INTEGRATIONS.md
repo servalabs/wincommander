@@ -36,6 +36,7 @@ endpoint in the Free client.
 | ActivityWatch | Reads the user's local ActivityWatch over loopback HTTP when installed and enabled; productivity view only. |
 | Tailscale / ProtonVPN | The VPN kill-switch polls `tailscale.exe ip` and `netsh interface`; no account access. |
 | Syncthing, VeraCrypt (Pro Vault) | Driven locally by the paid component and service; Syncthing device pairing stays the user's action ([FEATURES.md](FEATURES.md#pro)). |
+| Proton Drive CLI (optional Pro Vault backup) | Owner-configured, one-way backup of selected files inside a mounted Vault to the owner's Proton account. WinCommander supplies automatic change detection; the official CLI is an uploader. CLI state and the saved session live inside the Vault. Real-account and installed acceptance remain pending. |
 | BleachBit | Used by the self-destruct cleanup step (`run_bleachbit_clean`); browsers are excluded there. |
 | Windows Task Scheduler, WMI/CIM, Windows policy providers | The mechanism for scheduled cleanup, USB history, Bluetooth policy and similar controls. |
 

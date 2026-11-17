@@ -146,6 +146,12 @@ const BROKER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 fn broker_timeout_for(feature_id: &str) -> std::time::Duration {
     if feature_id == "managed.deployment.apply" {
         std::time::Duration::from_secs(300)
+    } else if matches!(feature_id, "vault.backup.manage" | "vault.backup.resume") {
+        std::time::Duration::from_secs(180)
+    } else if feature_id.starts_with("vault.backup.") {
+        // Includes verified image hashing, standard-user startup and entitlement
+        // before dispatch; the measured startup alone can consume five seconds.
+        std::time::Duration::from_secs(15)
     } else if feature_id == "vault.syncthing.prepare" {
         // First use can download the verified prerequisite before starting its profile.
         std::time::Duration::from_secs(180)
@@ -913,6 +919,15 @@ fn spawn_pro_for_presentation(
 ) -> Result<windows_sys::Win32::Foundation::HANDLE, &'static str> {
     use wincmd_shared::vault_access::VaultPresentation;
 
+    if feature_id.starts_with("vault.backup.") {
+        return match caller_token {
+            Some(caller_token) => spawn_pro_as_authenticated_user_token(
+                caller_token, caller_authentication_id, session_id, caller_sid, pipe, token,
+            ),
+            None if feature_id == "vault.backup.stop" => spawn_pro_as_session_user(session_id, caller_sid, pipe, token),
+            None => Err("broker_rejected"),
+        };
+    }
     match presentation {
         // Machine mounts stay in the SYSTEM service context. Their Mount
         // Manager presentation must not depend on a user's desktop token.

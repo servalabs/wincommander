@@ -252,6 +252,15 @@ The UI redesign moved visibility from five overlapping axes to one resolver. `Vi
 
 ## Data flow
 
+Optional Pro Vault cloud backup routes typed desktop requests through the
+authenticated service, which derives the caller and current mounted identity.
+The paid component runs the pinned official Proton Drive CLI as that caller,
+keeps its persistent session/state inside the Vault, and watches selected
+sources for additive uploads. A service supervisor rechecks mount and policy
+authority; dismount cancels the runner. This source integration requires
+separate installed and authenticated-provider acceptance. It does not upload
+closed container files or mirror remote deletions.
+
 ### Preview-first maintenance boundary
 
 The Maintenance panel (`src/panels/maintenance/`) uses a capability-style
