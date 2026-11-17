@@ -9,9 +9,11 @@ export default function useVaultCloudBackup(isOpen: boolean, personal: boolean, 
   const latest = useRef(backend); latest.current = backend;
   const generation = useRef(0);
   const inFlight = useRef(false);
+  const activeOperation = useRef<VaultCloudBackupAction | null>(null);
   const receipt = useRef<string | null>(null);
   const invalidated = useRef(false);
   const [result, setResult] = useState<VaultCloudBackupResult | null>(null);
+  const latestResult = useRef(result); latestResult.current = result;
   const [busy, setBusy] = useState(false);
   const [action, setAction] = useState<VaultCloudBackupAction | null>(null);
   const [error, setError] = useState("");
@@ -24,13 +26,18 @@ export default function useVaultCloudBackup(isOpen: boolean, personal: boolean, 
     setResult(incoming);
   }, []);
   const perform = useCallback(async (operation: VaultCloudBackupAction, configuration?: VaultCloudBackupConfiguration, restoreRelativePath?: string) => {
-    if (inFlight.current) return false;
+    if (inFlight.current) {
+      if (activeOperation.current !== "status" || operation === "status") return false;
+      // A background status request must never prevent an explicit action.
+      generation.current++;
+    }
     if (invalidated.current) { setError(cloudBackupError("cloud_backup_mount_changed")); return false; }
     if (operation !== "status" && !receipt.current) {
       setError(cloudBackupError("cloud_backup_mount_changed")); return false;
     }
     const epoch = generation.current;
-    inFlight.current = true; setBusy(true); setAction(operation); setError("");
+    inFlight.current = true; activeOperation.current = operation;
+    setBusy(operation !== "status" || !latestResult.current); setAction(operation); setError("");
     const request: VaultCloudBackupRequest = {
       personal, internal_drive: internalDrive, action: operation, expected_mount_receipt: receipt.current,
       configuration: configuration ?? null, restore_relative_path: restoreRelativePath ?? null,
@@ -55,7 +62,7 @@ export default function useVaultCloudBackup(isOpen: boolean, personal: boolean, 
       }
       return false;
     } finally {
-      if (epoch === generation.current) { inFlight.current = false; setBusy(false); setAction(null); }
+      if (epoch === generation.current) { inFlight.current = false; activeOperation.current = null; setBusy(false); setAction(null); }
     }
   }, [internalDrive, personal, observe]);
   useEffect(() => {
@@ -63,7 +70,11 @@ export default function useVaultCloudBackup(isOpen: boolean, personal: boolean, 
     setResult(null); setBusy(false); setAction(null); setError("");
     if (!isOpen) return;
     void perform("status");
-    const timer = window.setInterval(() => { if (!inFlight.current) void perform("status"); }, 5000);
+    const timer = window.setInterval(() => {
+      const current = latestResult.current;
+      // Do not repeatedly interrupt setup while waiting for the user to connect.
+      if (!inFlight.current && current && (current.connected || current.reason_code === "cloud_backup_sign_in_pending")) void perform("status");
+    }, 30000);
     return () => { invalidate(); window.clearInterval(timer); };
   }, [isOpen, personal, internalDrive, perform, invalidate]);
   return { result, busy, action, error, perform };
