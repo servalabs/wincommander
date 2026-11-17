@@ -935,6 +935,8 @@ mod tests {
 
 pub mod command_strings;
 pub mod diagnostics;
+/// Pure Shannon-entropy helpers (not yet wired into the live ransomware monitor).
+pub mod entropy;
 
 /// Fleet wire types — shared with `commander-pro/fleet-server` and the desktop
 /// Fleet admin panel (via ts-rs). Extracted into the standalone `fleet-proto`

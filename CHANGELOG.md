@@ -35,6 +35,15 @@ lists only a selection of those changes.
   be reconfigured the panel says so.
 - Report Shield status to Fleet read-only (single interactive session, no policy
   applied, nothing acknowledged) when the service or handoff check fails.
+- Add pure Shannon-entropy and entropy-delta helpers to `wincmd-shared` for a
+  future ransomware-monitor signal. They are not connected to the live monitor.
+
+- Consolidate the two Switch components into `ui/switch.tsx` (Radix, with a
+  `size` option for dense rows) and remove `shared/WCSwitch`. The compact
+  switches now use the standard track colours.
+
+- Bound the Everything search bar's result-icon cache with the existing
+  `FileIconCache` (entry, 8 MiB and age limits) instead of an unbounded map.
 
 - Add the typed service and Pro-gated UI integration for optional Vault cloud
   backup, with explicit consent and automatic uploads while mounted. Requires
