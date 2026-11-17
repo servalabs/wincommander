@@ -9004,6 +9004,16 @@
       ]
     },
     {
+      "id": "tauri:fleet_set_dispatch",
+      "name": "fleet_set_dispatch",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/panels/fleet/FleetConnectView.tsx"
+      ]
+    },
+    {
       "id": "tauri:fleet_status",
       "name": "fleet_status",
       "transport": "tauri",

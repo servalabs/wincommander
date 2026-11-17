@@ -24,3 +24,19 @@ export function describeFleetConnectError(message: string): string {
   if (/valid http\(s\) origin/i.test(message)) return FLEET_ADDRESS_HINT;
   return message;
 }
+
+const TRUST_BRIDGE_HINTS: Record<string, string> = {
+  identity_change_unconfirmed:
+    "The Fleet server's enrollment differs from the one this device's service trusts, and the change was not confirmed.",
+  replacement_refused:
+    "The Fleet server's enrollment belongs to a different device, key or organization than the service trusts, so it was not replaced.",
+  proof_timeout:
+    "The Fleet agent did not finish enrolling in time for the service to record its trust.",
+  other: "The service could not record this device's enrollment.",
+};
+
+/** Closed-vocabulary hint for a failed service trust bridge; null for no failure. */
+export function describeTrustBridgeError(code: string | null | undefined): string | null {
+  if (!code) return null;
+  return TRUST_BRIDGE_HINTS[code] ?? TRUST_BRIDGE_HINTS.other;
+}

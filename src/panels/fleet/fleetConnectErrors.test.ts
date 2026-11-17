@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { describeFleetConnectError, fleetAddressWarning, FLEET_ADDRESS_HINT, FLEET_HTTPS_HINT } from "./fleetConnectErrors";
+import { describeFleetConnectError, describeTrustBridgeError, fleetAddressWarning, FLEET_ADDRESS_HINT, FLEET_HTTPS_HINT } from "./fleetConnectErrors";
 
 describe("Fleet connect error wording", () => {
   test("warns about plain http:// while typing and accepts https://", () => {
@@ -15,5 +15,13 @@ describe("Fleet connect error wording", () => {
     expect(describeFleetConnectError("Fleet requires an https:// address (an HTTPS server). Change http:// to https://")).toBe(FLEET_HTTPS_HINT);
     expect(describeFleetConnectError("Fleet server URL must be a valid http(s) origin.")).toBe(FLEET_ADDRESS_HINT);
     expect(describeFleetConnectError("A Fleet connection change is already in progress")).toBe("A Fleet connection change is already in progress");
+  });
+
+  test("trust bridge failures map to closed-vocabulary hints", () => {
+    expect(describeTrustBridgeError(null)).toBeNull();
+    expect(describeTrustBridgeError("identity_change_unconfirmed")).toContain("not confirmed");
+    expect(describeTrustBridgeError("proof_timeout")).toContain("did not finish enrolling");
+    // An unknown or hostile code never reaches the screen verbatim.
+    expect(describeTrustBridgeError("C:\secret\path")).toBe(describeTrustBridgeError("other"));
   });
 });

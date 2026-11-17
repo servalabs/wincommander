@@ -41,7 +41,9 @@ fn request_timeout_for(feature_id: &str) -> std::time::Duration {
         // Debug service authorization hashes the protected debug executable;
         // unoptimized hashing can exceed the normal release reply deadline.
         #[cfg(debug_assertions)]
-        "svc.fleet.get_policy" => std::time::Duration::from_secs(30),
+        "svc.fleet.get_policy" | "svc.fleet.install_policy" | "svc.fleet.read_hybrid_trust" => {
+            std::time::Duration::from_secs(30)
+        }
         // Reconciliation verifies shortcut identity and security metadata and
         // commits a durable recovery journal before returning its read-back.
         "svc.shared_shortcuts.set_claim" => std::time::Duration::from_secs(30),
@@ -693,7 +695,9 @@ mod tests {
         } else {
             SVC_TRANSPORT_TIMEOUT
         };
-        assert_eq!(request_timeout_for("svc.fleet.get_policy"), expected);
+        for verb in ["svc.fleet.get_policy", "svc.fleet.install_policy", "svc.fleet.read_hybrid_trust"] {
+            assert_eq!(request_timeout_for(verb), expected, "{verb}");
+        }
         assert_eq!(
             request_timeout_for("svc.vault.get_policy"),
             SVC_TRANSPORT_TIMEOUT

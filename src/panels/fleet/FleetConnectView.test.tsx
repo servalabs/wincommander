@@ -23,16 +23,19 @@ test("another Windows profile sees active retry, terminal failure, then recovere
     globalThis.setInterval = (callback, delay) => { const id = ++nextTimer; timers.set(id, { callback, delay }); return id; };
     globalThis.clearInterval = id => timers.delete(id);
     let status = { connected: false, deviceId: 'device-123', serverUrl: 'https://fleet.example.test', lastEnrollAt: null, lastError: 'server temporarily unavailable', retrying: true };
-    const calls = []; const connectArgs = []; let connectError = null; let connectGate = null;
+    const calls = []; const connectArgs = []; let connectError = null; let connectGate = null; let trustMatches = null; const dispatchCalls = [];
+    const savedFleet = () => ({ dispatch: true, signingKeyPub: 'KEY', serverUrl: '', enabled: false });
+    let settingsFleet = savedFleet();
     mock.module('@tauri-apps/api/core', () => ({ invoke: async (command, args) => {
       calls.push(command);
       if (command === 'fleet_connect') { connectArgs.push(args); if (connectError) throw connectError; if (connectGate) await connectGate; return {}; }
       if (command === 'fleet_status') return { ...status };
-      if (command === 'fleet_machine_trust_status') return { trustBound: true, shieldPolicyStatus: 'unverified' };
+      if (command === 'fleet_machine_trust_status') return { trustBound: true, shieldPolicyStatus: 'unverified', trustMatchesAgent: trustMatches };
+      if (command === 'fleet_set_dispatch') { dispatchCalls.push(args); return { dispatch: args.enabled, changed: true }; }
       if (command === 'fleet_service_contact_status') return { observation: null };
       throw new Error('unexpected mutation: ' + command);
     } }));
-    mock.module('@/hooks/useSettings', () => ({ getSettingsOnce: async () => ({ app: {}, deviceId: '' }) }));
+    mock.module('@/hooks/useSettings', () => ({ getSettingsOnce: async () => ({ app: { fleet: settingsFleet }, deviceId: 'device-123' }) }));
     mock.module('@/hooks/queries/useLicenseQuery', () => ({ useLicenseQuery: () => ({ data: { valid: true, features: ['fleet'] }, isLoading: false }) }));
     mock.module('@/components/ui/button', () => ({ Button: ({ children, variant, size, ...props }) => h('button', props, children) }));
     mock.module('@/components/ui/input', () => ({ Input: props => h('input', props) }));
@@ -72,6 +75,34 @@ test("another Windows profile sees active retry, terminal failure, then recovere
     await poll();
     assert.match(host.textContent, /fingerprint is unavailable/);
     assert.ok(calls.every(command => ['fleet_status', 'fleet_machine_trust_status', 'fleet_service_contact_status'].includes(command)));
+    // Dispatch is visible and switchable without re-enrolling.
+    const dispatchSwitch = () => host.querySelector('input[aria-label="Remote command dispatch"]');
+    assert.match(host.textContent, /Remote command dispatch: ON/);
+    assert.ok(dispatchSwitch().checked && !dispatchSwitch().disabled);
+    await act(async () => { dispatchSwitch().click(); });
+    assert.deepEqual(dispatchCalls, [{ enabled: false }]);
+    assert.match(host.textContent, /Remote command dispatch: OFF/);
+    assert.match(host.textContent, /stay queued and are not executed/);
+    assert.ok(!calls.includes('fleet_connect'), 'toggling dispatch must not enroll again');
+    await act(async () => { dispatchSwitch().click(); });
+    assert.deepEqual(dispatchCalls, [{ enabled: false }, { enabled: true }]);
+    assert.match(host.textContent, /Remote command dispatch: ON/);
+    // A service trust that disagrees with the agent, or a failed bridge, shows a repair path.
+    const refreshTrust = async () => act(async () => { [...timers.values()].find(timer => timer.delay === 15000).callback(); });
+    assert.ok(!host.textContent.includes('Service trust needs repair'));
+    trustMatches = false;
+    await refreshTrust();
+    assert.match(host.textContent, /Service trust needs repair/);
+    assert.ok([...host.querySelectorAll('button')].some(button => button.textContent === 'Repair machine trust'));
+    trustMatches = null;
+    await refreshTrust();
+    assert.ok(!host.textContent.includes('Service trust needs repair'));
+    status = { ...status, trustBridgeError: 'identity_change_unconfirmed' };
+    await poll();
+    assert.match(host.textContent, /Service trust needs repair/);
+    assert.match(host.textContent, /differs from the one this device's service trusts/);
+    status = { ...status, trustBridgeError: null };
+    await poll();
     status = { ...status, connected: false, retrying: true, lastError: 'connection unavailable' };
     await poll();
     await act(async () => { [...host.querySelectorAll('button')].find(button => button.textContent === 'Change Fleet server').click(); });
@@ -83,6 +114,8 @@ test("another Windows profile sees active retry, terminal failure, then recovere
     await act(async () => { connect().click(); });
     assert.equal(connectArgs.length, 1);
     assert.equal(connectArgs[0].serverUrl, 'https://fleet.example.test:9443');
+    assert.equal(connectArgs[0].dispatch, true, 'Connect preserves the saved dispatch value');
+    assert.equal(connectArgs[0].signingKeyPub, 'KEY', 'Connect sends the saved signing key');
     status = { ...status, retrying: false, lastError: 'enroll rejected: HTTP 403 Forbidden' };
     await act(async () => { [...timers.values()].find(timer => timer.delay === 1000).callback(); });
     assert.match(host.textContent, /Last agent error \(may be from an earlier attempt\): enroll rejected: HTTP 403 Forbidden/);
@@ -127,6 +160,15 @@ test("another Windows profile sees active retry, terminal failure, then recovere
     assert.ok(!host.textContent.includes('Waiting for admin approval'));
     assert.match(host.textContent, /check-in timed out/);
     await act(async () => { root.unmount(); });
+    // With no saved signing key, dispatch cannot be enabled and says why.
+    settingsFleet = { ...savedFleet(), dispatch: false, signingKeyPub: '' };
+    status = { ...status, connected: true, retrying: true, pendingApproval: false, lastError: null };
+    const second = createRoot(host);
+    await act(async () => { second.render(h(View)); });
+    assert.match(host.textContent, /Remote command dispatch: OFF/);
+    assert.match(host.textContent, /Dispatch needs the Fleet signing key/);
+    assert.ok(dispatchSwitch().disabled);
+    await act(async () => { second.unmount(); });
     assert.equal(timers.size, 0);
     dom.window.close();
   `;

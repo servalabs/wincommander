@@ -47,6 +47,12 @@ incremental = true
 # enabled while silencing this dependency's terminal spam in dev.
 debug-assertions = false
 
+[profile.dev.package.sha2]
+# Debug-build service authorization hashes the ~88 MB protected executable.
+# Unoptimized SHA-256 made that take seconds and tripped reply deadlines.
+# Dependency-only (never our crates); release profiles are unchanged.
+opt-level = 3
+
 [profile.release]
 panic = "abort"
 codegen-units = 1

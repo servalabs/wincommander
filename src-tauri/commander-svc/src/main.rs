@@ -32,6 +32,8 @@ mod managed_deployment;
 #[cfg(windows)]
 mod peer_auth_deployment_acl;
 #[cfg(windows)]
+mod peer_auth_digest_cache;
+#[cfg(windows)]
 mod personal_settings;
 mod settings_host;
 #[cfg(windows)]

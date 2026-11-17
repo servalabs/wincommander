@@ -3303,6 +3303,7 @@ pub fn run() {
             fleet_agent::fleet_recovery_finish,
             fleet_agent::fleet_recovery_resume,
             fleet_agent::fleet_repair_machine_trust,
+            fleet_agent::fleet_set_dispatch,
             fleet_agent::fleet_machine_trust_status,
             fleet_agent::fleet_disconnect,
             fleet_agent::fleet_status,

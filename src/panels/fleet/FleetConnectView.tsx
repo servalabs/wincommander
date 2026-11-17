@@ -14,7 +14,7 @@ import { useLicenseQuery } from "@/hooks/queries/useLicenseQuery";
 import { fleetLinkLabel, fleetLinkState, type FleetLinkStatus } from "./fleetLinkPresentation";
 import { fleetShieldProfileStatus } from "../../lib/fleetShieldProfileStatus";
 import { FleetSignedContact } from "./FleetSignedContact";
-import { describeFleetConnectError, fleetAddressWarning, FLEET_HTTPS_HINT } from "./fleetConnectErrors";
+import { describeFleetConnectError, describeTrustBridgeError, fleetAddressWarning, FLEET_HTTPS_HINT } from "./fleetConnectErrors";
 
 interface FleetStatus extends FleetLinkStatus {
   // True while Pro's check-in loop is alive and self-healing (connected or
@@ -29,6 +29,8 @@ interface FleetStatus extends FleetLinkStatus {
   // "Enrolled" while this holds.
   pendingApproval?: boolean;
   admissionFingerprint?: string | null;
+  // Closed-vocabulary reason the service trust bridge last failed (null when none).
+  trustBridgeError?: string | null;
   cleanupPending?: boolean;
 }
 
@@ -83,6 +85,9 @@ export default function FleetConnectView() {
   const [busy, setBusy] = useState(false);
   const [repairingTrust, setRepairingTrust] = useState(false);
   const [machineTrustBound, setMachineTrustBound] = useState<boolean | null>(null);
+  // Does the service-held trust describe the enrollment the agent holds? null = unknown.
+  const [trustMatchesAgent, setTrustMatchesAgent] = useState<boolean | null>(null);
+  const [dispatchBusy, setDispatchBusy] = useState(false);
   const [shieldPolicyStatus, setShieldPolicyStatus] = useState<"verified" | "effective_config_unavailable" | "unverified" | null>(null);
   // enrolling: true between a successful connect() call and first connected=true poll.
   const [enrolling, setEnrolling] = useState(false);
@@ -209,14 +214,15 @@ export default function FleetConnectView() {
     let requestSequence = 0;
     const refresh = () => {
       const sequence = ++requestSequence;
-      void invoke<{ trustBound: unknown; shieldPolicyStatus?: unknown }>("fleet_machine_trust_status")
+      void invoke<{ trustBound: unknown; shieldPolicyStatus?: unknown; trustMatchesAgent?: unknown }>("fleet_machine_trust_status")
         .then((result) => {
           if (cancelled || sequence !== requestSequence) return;
           if (typeof result?.trustBound !== "boolean") throw new Error("Malformed Fleet trust status");
           setMachineTrustBound(result.trustBound);
+          setTrustMatchesAgent(typeof result.trustMatchesAgent === "boolean" ? result.trustMatchesAgent : null);
           setShieldPolicyStatus(fleetShieldProfileStatus(result));
         })
-        .catch(() => { if (!cancelled && sequence === requestSequence) { setMachineTrustBound(null); setShieldPolicyStatus("unverified"); } });
+        .catch(() => { if (!cancelled && sequence === requestSequence) { setMachineTrustBound(null); setTrustMatchesAgent(null); setShieldPolicyStatus("unverified"); } });
     };
     refresh();
     const timer = setInterval(refresh, 15_000);
@@ -230,6 +236,7 @@ export default function FleetConnectView() {
     try {
       await invoke("fleet_repair_machine_trust");
       setMachineTrustBound(true);
+      setTrustMatchesAgent(null);
       setShieldPolicyStatus("unverified");
       startSteadyPoll();
     } catch (reason) {
@@ -237,6 +244,21 @@ export default function FleetConnectView() {
     } finally {
       setRepairingTrust(false);
       setBusy(false);
+    }
+  }
+
+  // Remote command dispatch can be switched without enrolling again; the
+  // backend applies the same entitlement/confirmation rules as Connect.
+  async function changeDispatch(next: boolean) {
+    setError(null);
+    setDispatchBusy(true);
+    try {
+      await invoke("fleet_set_dispatch", { enabled: next });
+      setDispatch(next);
+    } catch (reason) {
+      setError(typeof reason === "string" ? reason : "Could not change remote command dispatch.");
+    } finally {
+      setDispatchBusy(false);
     }
   }
 
@@ -580,6 +602,35 @@ export default function FleetConnectView() {
                   </Button>
                 </div>
               )}
+              {wasEnrolled && status.deviceId === persistedDeviceId && machineTrustBound === true
+                && (trustMatchesAgent === false || !!status.trustBridgeError) && (
+                <div>
+                  <p className="fleet-connect-error" role="alert">
+                    <Icon icon="warning-sign" size={13} intent="danger" /> Service trust needs repair. {describeTrustBridgeError(status.trustBridgeError) ?? "The local service holds an older enrollment than this device's Fleet agent, so Shield policy cannot be verified."} An administrator can repair it with the same device identity; this does not request to leave Fleet.
+                  </p>
+                  <Button variant="outline" size="sm" disabled={busy} onClick={repairMachineTrust}>
+                    {repairingTrust ? "Repairing…" : "Repair machine trust"}
+                  </Button>
+                </div>
+              )}
+              <div className="fleet-connect-toggle" data-testid="dispatch-toggle">
+                <div>
+                  <span className="fleet-connect-toggle-label">Remote command dispatch: {dispatch ? "ON" : "OFF"}</span>
+                  <p className="fleet-connect-toggle-sub">
+                    {!signingKeyPub.trim() && !dispatch
+                      ? "Dispatch needs the Fleet signing key, and none is saved for this connection. Use Change Fleet server to reconnect with the key."
+                      : dispatch
+                        ? "This device executes commands from Fleet that its signing key verifies."
+                        : "Commands sent from Fleet to this device stay queued and are not executed."}
+                  </p>
+                </div>
+                <Switch
+                  checked={dispatch}
+                  onCheckedChange={(next: boolean) => { void changeDispatch(next); }}
+                  disabled={dispatchBusy || busy || (!dispatch && !signingKeyPub.trim())}
+                  aria-label="Remote command dispatch"
+                />
+              </div>
               {!unenrollInfo && <Button variant="outline" size="sm" disabled={busy} onClick={() => setEditingConnection(true)}>Change Fleet server</Button>}{" "}
               <Button variant="outline" size="sm" disabled={busy} onClick={disconnect}>
                 {busy && !repairingTrust

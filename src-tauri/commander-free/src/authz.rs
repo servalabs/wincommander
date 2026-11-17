@@ -41,7 +41,9 @@ pub(crate) use trusted::{
     confirm_backend_dispatch, execute_trusted_lockdown, schedule_trusted_lockdown,
     toggle_trusted_lockdown,
 };
-pub use trusted::{native_confirm_action, native_confirm_fleet_trust_repair};
+pub use trusted::{
+    native_confirm_action, native_confirm_fleet_trust_repair, native_confirm_fleet_trust_replace,
+};
 
 #[tauri::command]
 pub async fn request_destructive_confirmation(

@@ -116,6 +116,14 @@ pub async fn native_confirm_fleet_trust_repair(app: &tauri::AppHandle) -> bool {
     .await
 }
 
+pub async fn native_confirm_fleet_trust_replace(app: &tauri::AppHandle) -> bool {
+    native_confirm(
+        app,
+        "Replace this device's out-of-date machine trust record with its current Fleet enrollment? The same device, signing key and organization are kept; only the enrollment generation or server address is refreshed. This does not request to leave Fleet.",
+    )
+    .await
+}
+
 pub(super) async fn native_confirm(app: &tauri::AppHandle, detail: &str) -> bool {
     use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
     // The dialog is a control only because a human answers it. The CLI runtime's

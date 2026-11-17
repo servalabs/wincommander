@@ -1142,6 +1142,15 @@ enum SessionRole {
     FleetAgent,
 }
 
+/// Incremented each time a Fleet-agent Pro process is started. Pro keeps its
+/// "ever reported" Shield state in memory only, so a changed epoch tells the
+/// Shield supervisor that status it already sent must be sent again.
+static FLEET_AGENT_SESSION_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub(crate) fn fleet_agent_session_epoch() -> u64 {
+    FLEET_AGENT_SESSION_EPOCH.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 async fn spawn_pro_session() -> Result<ProSession, String> {
     spawn_pro_session_with_role(SessionRole::Worker).await
 }
@@ -1349,6 +1358,9 @@ async fn spawn_pro_session_unlocked(role: SessionRole) -> Result<ProSession, Str
                 "core",
                 "[Sidecar] spawn_pro_session: handshake verified, session live",
             );
+            if role == SessionRole::FleetAgent {
+                FLEET_AGENT_SESSION_EPOCH.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
             h.vault_runtime_version
         }
         Envelope::Hello(_) => {

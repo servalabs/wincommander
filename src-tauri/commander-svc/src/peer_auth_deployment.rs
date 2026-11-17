@@ -52,7 +52,8 @@ fn dev_helper_matches(path: &Path) -> bool {
     let Ok(mut file) = File::open(&expected) else {
         return false;
     };
-    hash(&mut file).is_ok_and(|current| dev_pin_digest_matches(path, &expected, &current, pin))
+    file_digest(&mut file, &expected)
+        .is_ok_and(|current| dev_pin_digest_matches(path, &expected, &current, pin))
 }
 
 pub(crate) fn deployment_session_is_permitted(
@@ -273,17 +274,38 @@ fn verify_image(actual: &Path, expected: &Path) -> Result<(), PeerAuthError> {
     use std::os::windows::fs::OpenOptionsExt;
     use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
     // Pin both the executable and its containing directories against unprivileged replacement.
+    // This check runs on every call; only the file's byte hash may be remembered.
     acl::verify_path(expected)?;
     let mut actual_file = std::fs::OpenOptions::new()
         .read(true)
         .share_mode(FILE_SHARE_READ)
         .open(actual)
         .map_err(|_| PeerAuthError::IdentityUnavailable)?;
+    // The same file compared with itself proves nothing, so the (88 MB debug)
+    // image is not hashed at all in that case; every caller passes one path.
+    if paths_equal(actual, expected) {
+        return Ok(());
+    }
     let mut expected_file = File::open(expected).map_err(|_| PeerAuthError::IdentityUnavailable)?;
-    if hash(&mut actual_file)? != hash(&mut expected_file)? {
+    if file_digest(&mut actual_file, actual)? != file_digest(&mut expected_file, expected)? {
         return Err(PeerAuthError::PathNotAllowed);
     }
     Ok(())
+}
+
+/// SHA-256 of an open image, reused while its path, length, modification time
+/// and security descriptor are all unchanged.
+fn file_digest(file: &mut File, path: &Path) -> Result<Vec<u8>, PeerAuthError> {
+    let metadata = file
+        .metadata()
+        .map_err(|_| PeerAuthError::IdentityUnavailable)?;
+    let identity = crate::peer_auth_digest_cache::ImageIdentity {
+        path: path.to_path_buf(),
+        size: metadata.len(),
+        modified: metadata.modified().ok(),
+        acl: acl::state_fingerprint(file)?,
+    };
+    crate::peer_auth_digest_cache::cached_digest(identity, || hash(file))
 }
 
 fn hash(file: &mut File) -> Result<Vec<u8>, PeerAuthError> {

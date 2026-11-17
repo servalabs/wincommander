@@ -67,6 +67,39 @@ pub(crate) fn verify_file_handle(file: &std::fs::File) -> Result<(), PeerAuthErr
     unsafe { verify(file.as_raw_handle()) }
 }
 
+/// SHA-256 over the opened file's owner and DACL (its self-relative security
+/// descriptor). Any permission or ownership change yields a different value.
+pub(crate) fn state_fingerprint(file: &std::fs::File) -> Result<[u8; 32], PeerAuthError> {
+    use sha2::{Digest, Sha256};
+    use windows_sys::Win32::Security::GetSecurityDescriptorLength;
+    let mut descriptor = std::ptr::null_mut();
+    // SAFETY: the handle is owned by `file`; the returned descriptor is freed
+    // by the guard and only read for its reported length.
+    unsafe {
+        if GetSecurityInfo(
+            file.as_raw_handle(),
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut descriptor,
+        ) != 0
+            || descriptor.is_null()
+        {
+            return Err(PeerAuthError::PathNotAllowed);
+        }
+        let _descriptor = Descriptor(descriptor);
+        let length = GetSecurityDescriptorLength(descriptor) as usize;
+        if length == 0 {
+            return Err(PeerAuthError::PathNotAllowed);
+        }
+        let bytes = std::slice::from_raw_parts(descriptor.cast::<u8>(), length);
+        Ok(Sha256::digest(bytes).into())
+    }
+}
+
 struct Descriptor(*mut core::ffi::c_void);
 impl Drop for Descriptor {
     fn drop(&mut self) {
