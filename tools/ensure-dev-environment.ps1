@@ -159,6 +159,8 @@ $components = Get-TomlStringArray -Toml $toolchainToml -Key "components"
 $targets = Get-TomlStringArray -Toml $toolchainToml -Key "targets"
 
 Ensure-Bun | Out-Null
+. (Join-Path $PSScriptRoot 'dev-perl.ps1')
+Ensure-DevPerl | Out-Null
 $rustup = Ensure-Rustup
 $hostToolchain = "$channel-x86_64-pc-windows-msvc"
 $installedToolchains = @(& $rustup toolchain list | ForEach-Object { ($_ -split "\s+")[0] })

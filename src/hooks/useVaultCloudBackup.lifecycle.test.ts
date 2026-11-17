@@ -1,0 +1,98 @@
+import { expect, test } from "bun:test";
+
+declare const Bun: {
+  which(name: string): string | null;
+  spawn(args: string[], options: { stdout: "pipe"; stderr: "pipe" }): {
+    stderr: ReadableStream<Uint8Array>; exited: Promise<number>; kill(): void;
+  };
+};
+
+test("slow backup status keeps setup editable and cannot overwrite a newer user action", async () => {
+  const script = String.raw`
+    import { mock } from 'bun:test';
+    import { strict as assert } from 'node:assert';
+    import { JSDOM } from 'jsdom';
+    const dom = new JSDOM('<div id="root"></div>', { url: 'http://localhost' });
+    globalThis.window = dom.window; globalThis.document = dom.window.document;
+    globalThis.navigator = dom.window.navigator; globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+    const React = await import('react'); const { act, createElement: h } = React;
+    const { createRoot } = await import('react-dom/client');
+    let tick; window.setInterval = callback => { tick = callback; return 1; };
+    window.clearInterval = () => {};
+    const base = { mount_receipt: 'a'.repeat(64), engine_ready: true, connected: false,
+      configured: false, automatic: false, watching: false, running: false,
+      can_configure: true, configuration: null, last_run: null, reason_code: null };
+    const pending = { ...base, reason_code: 'cloud_backup_sign_in_pending' };
+    const connected = { ...base, connected: true };
+    let statusCalls = 0; const waiting = []; const setups = [];
+    const backend = {
+      manageVaultCloudBackup: async request => {
+        if (request.action === 'stop') return { ...base, engine_ready: false };
+        assert.equal(request.action, 'status'); statusCalls++;
+        if (statusCalls === 1) return base;
+        return new Promise(resolve => waiting.push(resolve));
+      },
+      setupVaultCloudBackup: async request => {
+        setups.push(request.action);
+        return request.action === 'connect' ? pending : { ...connected, configured: true, configuration: request.configuration };
+      },
+    };
+    mock.module('./src/hooks/useBackend', () => ({ default: () => backend }));
+    mock.module('@/components/ui/bp', () => ({ Button: ({ children, onClick, disabled }) => h('button', { onClick, disabled }, children) }));
+    mock.module('@/components/ui/input', () => ({ Input: props => h('input', props) }));
+    const { default: useBackup } = await import('./src/hooks/useVaultCloudBackup');
+    const { default: Form } = await import('./src/components/shared/VaultCloudBackupForm');
+    let current;
+    function Harness() {
+      current = useBackup(true, true, 4);
+      return h(React.Fragment, null,
+        h('button', { disabled: current.busy, onClick: () => void current.perform('connect') }, 'Connect'),
+        h('button', { disabled: current.busy, onClick: () => void current.perform('stop') }, 'Stop'),
+        current.result && h(Form, { configuration: current.result.configuration,
+          disabled: current.busy || !current.result.can_configure,
+          canSave: current.result.connected, onSave: config => void current.perform('configure', config) }));
+    }
+    const host = document.getElementById('root'); const root = createRoot(host);
+    const button = text => [...host.querySelectorAll('button')].find(item => item.textContent === text);
+    await act(async () => root.render(h(Harness)));
+    assert.equal(current.busy, false);
+    await act(async () => tick());
+    assert.equal(statusCalls, 1, 'disconnected setup must not poll');
+    await act(async () => button('Connect').click());
+    assert.deepEqual(setups, ['connect']);
+    assert.equal(current.busy, false, 'follow-up status must not block controls');
+    assert.equal(current.result.reason_code, 'cloud_backup_sign_in_pending');
+    assert.equal(host.querySelector('fieldset').disabled, false);
+    assert.equal(button('Stop').disabled, false);
+    const staleConnect = waiting.shift();
+    await act(async () => button('Stop').click());
+    assert.equal(current.busy, false);
+    await act(async () => waiting.shift()(connected));
+    await act(async () => staleConnect(base));
+    assert.equal(current.result.connected, true, 'late old status must be ignored');
+    await act(async () => tick());
+    const stalePoll = waiting.shift();
+    assert.equal(current.busy, false);
+    assert.equal(host.querySelector('fieldset').disabled, false);
+    const name = host.querySelector('input[maxlength="128"]');
+    const setValue = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    await act(async () => { setValue.call(name, 'Edited during refresh'); name.dispatchEvent(new window.Event('input', { bubbles: true })); });
+    const checkboxes = host.querySelectorAll('input[type="checkbox"]');
+    await act(async () => checkboxes[checkboxes.length - 1].click());
+    assert.equal(button('Save backup setup').disabled, false);
+    await act(async () => button('Save backup setup').click());
+    assert.deepEqual(setups, ['connect', 'configure']);
+    assert.equal(current.result.configured, true);
+    assert.equal(current.result.configuration.remote_folder_name, 'Edited during refresh');
+    await act(async () => stalePoll(base));
+    assert.equal(current.result.configured, true);
+    await act(async () => waiting.shift()(current.result));
+    await act(async () => root.unmount()); dom.window.close();
+  `;
+  const child = Bun.spawn([Bun.which("bun")!, "-e", script], { stdout: "pipe", stderr: "pipe" });
+  const timer = setTimeout(() => child.kill(), 30_000);
+  try {
+    const stderr = await new Response(child.stderr).text();
+    expect({ code: await child.exited, stderr }).toEqual({ code: 0, stderr: "" });
+  } finally { clearTimeout(timer); }
+}, 40_000);

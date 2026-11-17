@@ -35,7 +35,7 @@
 
 .encrypted-volumes-table th:first-child { width: 64px; }
 .encrypted-volumes-table th:nth-child(2) { width: 112px; }
-.encrypted-volumes-table th:last-child { width: 128px; }
+.encrypted-volumes-table th:last-child { width: 156px; }
 
 .encrypted-volumes-table .path-cell {
   max-width: none;
@@ -67,18 +67,32 @@
 }
 
 .encrypted-volumes-table .actions-cell > .vol-actions-group > div {
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: flex-end;
+  gap: 2px;
 }
 
-@container vault-volumes (max-width: 420px) {
-  .encrypted-volumes-table th:first-child { width: 52px; }
+.encrypted-volumes-table .vol-actions-group button {
+  flex-shrink: 0;
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  padding: 4px !important;
+}
+
+@container vault-volumes (max-width: 560px) {
+  .encrypted-volumes-table th:first-child { width: 48px; }
   .encrypted-volumes-table th:nth-child(2) { width: 88px; }
-  .encrypted-volumes-table th:last-child { width: 112px; }
 
   .encrypted-volumes-table th,
   .encrypted-volumes-table td {
     padding-left: 6px;
     padding-right: 6px;
+  }
+
+  .encrypted-volumes-table .truncate-path {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 }

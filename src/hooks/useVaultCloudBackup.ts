@@ -28,13 +28,13 @@ export default function useVaultCloudBackup(isOpen: boolean, personal: boolean, 
   const perform = useCallback(async (operation: VaultCloudBackupAction, configuration?: VaultCloudBackupConfiguration, restoreRelativePath?: string) => {
     if (inFlight.current) {
       if (activeOperation.current !== "status" || operation === "status") return false;
-      // A background status request must never prevent an explicit action.
-      generation.current++;
     }
     if (invalidated.current) { setError(cloudBackupError("cloud_backup_mount_changed")); return false; }
     if (operation !== "status" && !receipt.current) {
       setError(cloudBackupError("cloud_backup_mount_changed")); return false;
     }
+    // Ignore a superseded status response without cancelling the user's action.
+    if (inFlight.current) generation.current++;
     const epoch = generation.current;
     inFlight.current = true; activeOperation.current = operation;
     setBusy(operation !== "status" || !latestResult.current); setAction(operation); setError("");
@@ -48,6 +48,9 @@ export default function useVaultCloudBackup(isOpen: boolean, personal: boolean, 
       if (epoch !== generation.current) return false;
       const operationReason = response.reason_code;
       if (operation !== "status") {
+        // Mutations return state too. Only Stop returns an acknowledgement.
+        if (operation !== "stop") observe(response);
+        activeOperation.current = "status"; setBusy(false); setAction("status");
         response = await latest.current.manageVaultCloudBackup({ ...request, action: "status", configuration: null, restore_relative_path: null });
         if (epoch !== generation.current) return false;
       }
