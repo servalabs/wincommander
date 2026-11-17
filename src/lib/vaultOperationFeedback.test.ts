@@ -2,6 +2,16 @@ import { expect, test } from "bun:test";
 import { confirmedBulkDismountMessage, confirmedMountObservationError, isAuthorizedBulkDismountReceipt, selectableDriveLetters, vaultOperationError } from "./vaultOperationFeedback";
 import type { EncryptionStatus } from "@/hooks/useBackend";
 
+test("pending driver activation gives Windows restart guidance before generic repair advice", () => {
+  const error = "vault_driver_unavailable (encryption_driver_restart_required: C:\\private\\container.hc secret-value)";
+  const message = vaultOperationError(new Error(error));
+  expect(message).toContain("restart Windows");
+  expect(message).toContain("still dismount existing vaults");
+  expect(message).toContain("Restarting WinCommander alone will not activate");
+  for (const raw of ["repair", "private", "secret-value"]) expect(message).not.toContain(raw);
+  expect(vaultOperationError("vault_driver_unavailable")).toContain("repair WinCommander");
+});
+
 test("pre-request service failures identify their stage without restart advice or raw context", () => {
   for (const [code, stage] of [
     ["vault_service_unavailable", "connection"],
