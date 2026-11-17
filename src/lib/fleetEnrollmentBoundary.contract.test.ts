@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 
 const source = await Bun.file("src-tauri/commander-free/src/fleet_agent.rs").text();
-const connect = source.slice(source.indexOf("pub async fn fleet_connect("), source.indexOf("pub async fn fleet_status("));
+const connectRegion = source.slice(source.indexOf("pub async fn fleet_connect("), source.indexOf("pub async fn fleet_status("));
+// fleet_set_dispatch is a separate command whose ON-failure rollback legitimately patches settings.
+const setDispatchStart = connectRegion.indexOf("pub async fn fleet_set_dispatch(");
+const setDispatchEnd = connectRegion.indexOf("pub async fn fleet_machine_trust_status(");
+const connect = connectRegion.slice(0, setDispatchStart) + connectRegion.slice(setDispatchEnd);
 
 describe("native Fleet enrollment boundary", () => {
   test("authority reads fail closed before a plan is created", () => {
