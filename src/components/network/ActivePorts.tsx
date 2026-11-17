@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import useBackend, { type NetworkPortRow, type NetworkPortsResult } from "../../hooks/useBackend";
 import SectionCard from "../shared/SectionCard";
-import WCSwitch from "../shared/WCSwitch";
+import { Switch } from "../ui/switch";
 import { showError, showSuccess } from "../../utils/toast";
 import { formatNetworkSnapshotReport } from "./networkSnapshotReport";
 import { SampledNetworkHistory } from "./sampledNetworkHistory";
@@ -473,13 +473,13 @@ export default function ActivePorts() {
                     />
                 </div>
 
-                {/* Consistent toggle row — one control style (WCSwitch) for all
+                {/* Consistent toggle row — one control style (Switch) for all
                     three on/off filter behaviors, each self-explanatory about
                     what it applies to.
                     Each row is itself the accessible switch (role="switch" +
                     aria-checked + keyboard support), matching the ToggleTile
                     pattern: the visible text IS the control's label, and the
-                    nested WCSwitch is a purely visual echo whose own onClick
+                    nested Switch is a purely visual echo whose own onClick
                     stops propagation so a click never double-toggles. */}
                 <div className="active-ports-toggle-bar">
                     <div
@@ -496,7 +496,7 @@ export default function ActivePorts() {
                             }
                         }}
                     >
-                        <WCSwitch checked={showWindowsProcesses} onChange={setShowWindowsProcesses} size="sm" />
+                        <Switch checked={showWindowsProcesses} onCheckedChange={setShowWindowsProcesses} size="sm" stopClickPropagation />
                         <span>Show Windows System Processes</span>
                     </div>
                     <div
@@ -513,7 +513,7 @@ export default function ActivePorts() {
                             }
                         }}
                     >
-                        <WCSwitch checked={hideLoopback} onChange={setHideLoopback} size="sm" />
+                        <Switch checked={hideLoopback} onCheckedChange={setHideLoopback} size="sm" stopClickPropagation />
                         <span>Hide Loopback Connections</span>
                     </div>
                     <div
@@ -530,7 +530,7 @@ export default function ActivePorts() {
                             }
                         }}
                     >
-                        <WCSwitch checked={paused} onChange={changePause} size="sm" />
+                        <Switch checked={paused} onCheckedChange={changePause} size="sm" stopClickPropagation />
                         <span>Pause Port Monitoring</span>
                     </div>
                 </div>

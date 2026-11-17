@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { memo, useCallback, useEffect, useState } from "react";
 import { playSound } from "../../utils/sound";
 import { showInfo } from "../../utils/toast";
-import WCSwitch from "./WCSwitch";
+import { Switch } from "../ui/switch";
 import "./ToggleTile.css";
 
 /** Domain → CSS variable for icon colour */
@@ -123,7 +123,7 @@ function ToggleTile({
     if (isInteractive) handleChange(!checked);
   }, [isAction, managedByOrg, isInteractive, handleChange, checked]);
 
-  // WCSwitch fires onChange directly (it only self-gates on its own `disabled`
+  // Switch fires onCheckedChange directly (it only self-gates on its own `disabled`
   // prop, which doesn't know about managedByOrg/isAction). Wrap it so the
   // switch short-circuits with the SAME gating order as the card body's
   // handleActivate — clicking the switch and clicking the rest of the tile
@@ -226,12 +226,13 @@ function ToggleTile({
           ) : loading ? (
             <Spinner size={16} />
           ) : (
-            <WCSwitch
+            <Switch
               checked={checked}
-              onChange={handleSwitchChange}
+              onCheckedChange={handleSwitchChange}
+              stopClickPropagation
               size={size === "compact" ? "sm" : "md"}
               disabled={disabled}
-              label={label}
+              aria-label={label}
             />
           )}
         </div>

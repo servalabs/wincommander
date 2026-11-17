@@ -12,7 +12,7 @@ describe("deep panel control accessibility", () => {
     ]);
 
     expect(source).not.toContain('role="switch"');
-    expect(source).toContain("<WCSwitch");
+    expect(source).toContain("<Switch");
     expect(source).toContain("label={label}");
     expect(bp).toContain('"aria-label": ariaLabel');
     expect(bp).toContain("aria-label={ariaLabel}");

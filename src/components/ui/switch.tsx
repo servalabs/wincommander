@@ -5,17 +5,36 @@ import { cn } from "../../lib/utils"
 import { SPRING } from "../shared/motion"
 import useMotionPreference from "../../hooks/useMotionPreference"
 
-// TODO (call-site consolidation): This Radix-backed Switch and WCSwitch share
-// identical spring-knob motion now. A future application phase should pick one
-// as the canonical implementation and migrate all call sites to it.
+// Canonical switch for the whole app (the former shared/WCSwitch was folded in).
+// Radix provides role="switch", aria-checked and Space/Enter keyboard handling.
+
+type SwitchProps = React.ComponentProps<typeof SwitchPrimitive.Root> & {
+  /** `md` = 46x27 (default), `sm` = 38x22 for dense rows. */
+  size?: "md" | "sm";
+  /**
+   * Stop click bubbling so a switch nested in a clickable card/row does not
+   * also fire the parent's onClick (double-toggle).
+   */
+  stopClickPropagation?: boolean;
+};
+
+// Track/knob geometry per size. Knob travel keeps a 3px inset on both ends.
+const SIZES = {
+  md: { track: "h-[27px] w-[46px]", knob: "size-5", off: 3, on: 22 },
+  sm: { track: "h-[22px] w-[38px]", knob: "size-4", off: 3, on: 19 },
+} as const;
 
 function Switch({
   className,
   checked,
   defaultChecked,
   onCheckedChange,
+  size = "md",
+  stopClickPropagation = false,
+  onClick,
   ...props
-}: React.ComponentProps<typeof SwitchPrimitive.Root>) {
+}: SwitchProps) {
+  const dims = SIZES[size];
   const pref = useMotionPreference();
 
   // Mirror the Radix checked state so we can drive framer-motion from it.
@@ -43,6 +62,10 @@ function Switch({
         setIsOn(next);
         onCheckedChange?.(next);
       }}
+      onClick={(e) => {
+        if (stopClickPropagation) e.stopPropagation();
+        onClick?.(e);
+      }}
       className={cn(
         // Track crossfade uses CSS var tokens (SSOT: v2-theme.css --dur-normal).
         // transition-colors replaced with explicit property list so we don't
@@ -50,22 +73,24 @@ function Switch({
         // overflow-hidden: SPRING.knob is underdamped by design (physical
         // overshoot) — clip the track so the thumb never pokes out past the
         // pill edge mid-animation.
-        "inline-flex h-[27px] w-[46px] shrink-0 items-center overflow-hidden rounded-full border border-[var(--switch-off-border)] bg-[var(--switch-off-bg)] [transition:background_var(--dur-normal,200ms)_var(--ease),border-color_var(--dur-normal,200ms)_var(--ease),filter_var(--dur-fast,150ms)_var(--ease)] data-[state=checked]:bg-[var(--accent)] data-[state=checked]:border-[var(--accent-line)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-line)] hover:brightness-110 disabled:opacity-50 disabled:pointer-events-none cursor-pointer",
+        dims.track,
+        "inline-flex shrink-0 items-center overflow-hidden rounded-full border border-[var(--switch-off-border)] bg-[var(--switch-off-bg)] [transition:background_var(--dur-normal,200ms)_var(--ease),border-color_var(--dur-normal,200ms)_var(--ease),filter_var(--dur-fast,150ms)_var(--ease)] data-[state=checked]:bg-[var(--accent)] data-[state=checked]:border-[var(--accent-line)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-line)] hover:brightness-110 disabled:opacity-50 disabled:pointer-events-none cursor-pointer",
         className
       )}
       {...props}
     >
       {/* SwitchPrimitive.Thumb is purely visual (no a11y role). We replace it
           with a motion.span so framer drives translateX with SPRING.knob.
-          This gives the same spring-knob feel as WCSwitch. */}
+           */}
       <motion.span
         data-slot="switch-thumb"
         aria-hidden
         className={cn(
-          "block size-5 rounded-full shadow [transition:background-color_var(--dur-normal,200ms)_var(--ease)]",
+          dims.knob,
+          "block rounded-full shadow [transition:background-color_var(--dur-normal,200ms)_var(--ease)]",
           isOn ? "bg-[var(--accent-contrast)]" : "bg-[var(--switch-off-thumb)]"
         )}
-        animate={{ x: isOn ? 22 : 3 }}
+        animate={{ x: isOn ? dims.on : dims.off }}
         transition={knobTransition}
         style={{ willChange: "transform" }}
       />

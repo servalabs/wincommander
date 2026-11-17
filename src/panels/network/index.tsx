@@ -12,7 +12,7 @@ import SectionCard from "../../components/shared/SectionCard";
 import UniversalCallout from "../../components/shared/UniversalCallout";
 import UniversalToggle from "../../components/shared/UniversalToggle";
 import ActivePorts from "../../components/network/ActivePorts";
-import WCSwitch from "../../components/shared/WCSwitch";
+import { Switch } from "../../components/ui/switch";
 import PortGuardSection from "./PortGuardSection";
 import IpFirewallCard from "./IpFirewallCard";
 import WifiGuardSection from "./WifiGuardSection";
@@ -690,12 +690,12 @@ function NetworkAdaptersCard({ embedded = false }: { embedded?: boolean } = {}) 
                         <span className="dns-toggle-cluster">
                             {needsElevation && <span className="text-[10px] text-[var(--warn)]">Requires an administrator</span>}
                             <span className="recommended-pill__label">Recommended</span>
-                            <WCSwitch
+                            <Switch
                                 checked={effectiveDns}
-                                onChange={(next) => handleDnsToggle(next)}
+                                onCheckedChange={(next) => handleDnsToggle(next)}
                                 disabled={secureDNS === null || dnsBusy || needsElevation}
                                 size="sm"
-                                label="Encrypted DNS"
+                                aria-label="Encrypted DNS"
                             />
                         </span>
                         <button
@@ -756,12 +756,12 @@ function NetworkAdaptersCard({ embedded = false }: { embedded?: boolean } = {}) 
                                         <span className="dns-provider-grid__count">
                                             {controldFilters.size} of {DNS_CATEGORIES.length} active
                                         </span>
-                                        <WCSwitch
+                                        <Switch
                                             checked={allRecommendedActive}
-                                            onChange={toggleRecommendedCategories}
+                                            onCheckedChange={toggleRecommendedCategories}
                                             size="sm"
                                             disabled={dnsBusy || isAdvancedProviderActive}
-                                            label="Apply recommended DNS Firewall categories"
+                                            aria-label="Apply recommended DNS Firewall categories"
                                         />
                                     </div>
                                 </div>
@@ -1134,12 +1134,12 @@ function NetworkSecurityControls() {
                             {group1.length > 0 && (
                                 <div className="recommended-pill">
                                     <span className="recommended-pill__label">Recommended</span>
-                                    <WCSwitch
+                                    <Switch
                                         checked={allApplied}
-                                        onChange={(next) => handleSelectAll(next)}
+                                        onCheckedChange={(next) => handleSelectAll(next)}
                                         size="sm"
                                         disabled={isScanning || anyLoading || needsElevation}
-                                        label="Apply recommended protection"
+                                        aria-label="Apply recommended protection"
                                     />
                                 </div>
                             )}

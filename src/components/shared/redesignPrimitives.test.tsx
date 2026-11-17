@@ -1,36 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import AdaptiveCard from "./AdaptiveCard";
 import StatusPill from "./StatusPill";
 import SystemRadar from "./SystemRadar";
 import TraceDetailDialog from "./TraceDetailDialog";
-import WCSwitch from "./WCSwitch";
 import { ALL_CATEGORIES, type CleanupCategory } from "../../panels/cleanup/cleanupCategories";
 import { CleanupDisplayProvider } from "../../panels/cleanup/cleanupDisplay";
-import { AppProvider } from "../../context/AppContext";
-import { AuthModeProvider } from "../../context/AuthModeContext";
-import { LiveMetricsProvider } from "../../context/LiveMetricsContext";
-import { MotionPreferenceProvider } from "../../hooks/useMotionPreference";
-
-// WCSwitch reads useMotionPreference(), which in turn reads useAppState() (and
-// useAuthMode()) — so a static render needs the real provider stack, mirroring
-// main.tsx's nesting (QueryClientProvider > AuthModeProvider > AppProvider).
-function renderWithProviders(ui: ReactElement): string {
-  const queryClient = new QueryClient();
-  return renderToStaticMarkup(
-    <QueryClientProvider client={queryClient}>
-      <AuthModeProvider>
-        <LiveMetricsProvider>
-          <AppProvider>
-            <MotionPreferenceProvider>{ui}</MotionPreferenceProvider>
-          </AppProvider>
-        </LiveMetricsProvider>
-      </AuthModeProvider>
-    </QueryClientProvider>
-  );
-}
 
 const category: CleanupCategory = {
   id: "sample",
@@ -141,10 +116,4 @@ describe("redesign shared primitives", () => {
     expect(html).toContain("Network");
   });
 
-  test("WCSwitch renders explicit off-state contrast hooks", () => {
-    const html = renderWithProviders(<WCSwitch checked={false} label="Sample" />);
-
-    expect(html).toContain("wc-switch");
-    expect(html).not.toContain("is-on");
-  });
 });

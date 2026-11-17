@@ -5,7 +5,7 @@ import useBackend from "../../hooks/useBackend";
 import { useAppState } from "../../context/AppContext";
 import { getDisplayBranding } from "../../lib/branding";
 import { showError } from "../../utils/toast";
-import WCSwitch from "../shared/WCSwitch";
+import { Switch } from "../ui/switch";
 
 /**
  * WinCommander right-click integrations: Shred (secure single-pass
@@ -210,12 +210,12 @@ export default function ContextMenuIntegrationCard({
                                             Show a Windows progress window while Safe Copy scrubs files. Turn off to run silently.
                                         </span>
                                     </div>
-                                    <WCSwitch
+                                    <Switch
                                         checked={safeCopyNotificationsEnabled}
-                                        onChange={handleSafeCopyNotificationsToggle}
+                                        onCheckedChange={handleSafeCopyNotificationsToggle}
                                         disabled={savingSafeCopyNotifications}
                                         size="sm"
-                                        label="Show Safe Copy progress window"
+                                        aria-label="Show Safe Copy progress window"
                                     />
                                 </div>
                             )}

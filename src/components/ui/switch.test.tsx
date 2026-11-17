@@ -43,4 +43,30 @@ describe("Switch", () => {
 
     expect(html).toContain("--switch-off-bg");
   });
+
+  test("exposes switch semantics and the accessible label", () => {
+    const html = renderWithProviders(<Switch checked aria-label="Encrypted DNS" />);
+
+    expect(html).toContain('role="switch"');
+    expect(html).toContain('aria-checked="true"');
+    expect(html).toContain('aria-label="Encrypted DNS"');
+    expect(html).toContain('data-state="checked"');
+  });
+
+  test("is a native button so Space/Enter activate it", () => {
+    const html = renderWithProviders(<Switch checked={false} disabled />);
+
+    expect(html).toMatch(/^<button type="button"/);
+    expect(html).toContain("disabled");
+    expect(html).toContain('aria-checked="false"');
+  });
+
+  test("size sm renders the compact track", () => {
+    const md = renderWithProviders(<Switch checked={false} />);
+    const sm = renderWithProviders(<Switch checked={false} size="sm" />);
+
+    expect(md).toContain("w-[46px]");
+    expect(sm).toContain("w-[38px]");
+    expect(sm).not.toContain("w-[46px]");
+  });
 });

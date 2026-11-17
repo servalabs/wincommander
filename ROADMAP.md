@@ -156,5 +156,4 @@ Not started.
   capability.
 - **Audit record for confirmed irreversible actions.** The confirmation dialog
   only logs to the console (`ConfirmIrreversibleDialog.tsx`).
-- **UI polish.** Consolidate the two Switch components (`ui/switch.tsx`,
-  `shared/WCSwitch.tsx`); sliding tab indicator (`ui/bp.tsx`).
+- **UI polish.** Sliding tab indicator (`ui/bp.tsx`).

@@ -91,7 +91,6 @@ not been validated in the named environment. Acceptance work is tracked in
   (about 11,000 lines), `commander-svc/src/vault_access.rs` (about 9,700) and
   `commander-svc/src/pipe.rs` (about 6,600). The quality guard only blocks new
   large files and growth of small ones, so existing giants stay.
-- Two Switch components (`ui/switch.tsx`, `shared/WCSwitch.tsx`) coexist.
 - Some source comments cite internal audit finding IDs (for example F-1, F-3)
   whose reports are not in this repository.
 - One runtime message (`flow_capabilities.rs`) still says CameraTrigger is

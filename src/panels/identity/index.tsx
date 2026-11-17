@@ -9,7 +9,7 @@ import { PersonalSettingsRecoveryDetails } from "../../components/startup/Person
 import UniversalCallout from "../../components/shared/UniversalCallout";
 import UniversalToggle from "../../components/shared/UniversalToggle";
 import TierGate from "../../components/shared/TierGate";
-import WCSwitch from "../../components/shared/WCSwitch";
+import { Switch } from "../../components/ui/switch";
 import { Icon } from "@/components/ui/bp";
 import PanelHeader from "../../components/shared/PanelHeader";
 import ActivationPanel from "./components/ActivationPanel";
@@ -291,12 +291,12 @@ export default function IdentityPanel() {
                                 {censorshipDebounce.status === 'failed' && 'Failed'}
                             </span>
                         )}
-                        <WCSwitch
+                        <Switch
                             checked={effectiveCensorship}
-                            onChange={handleCensorshipToggle}
+                            onCheckedChange={handleCensorshipToggle}
                             disabled={!dnsOn || censorshipBusy}
                             size="sm"
-                            label="Censorship protection"
+                            aria-label="Censorship protection"
                         />
                     </div>
                     {censorshipError && (
