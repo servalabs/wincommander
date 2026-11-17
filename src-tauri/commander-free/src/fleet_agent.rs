@@ -328,6 +328,7 @@ pub async fn fleet_connect(
     )
     .await?;
     request_shield_retry();
+    request_epoch_adoption();
     Ok(outcome.status)
 }
 
@@ -461,6 +462,7 @@ pub async fn fleet_repair_machine_trust(
         }
     }
     request_shield_retry();
+    request_epoch_adoption();
     Ok(outcome.status)
 }
 
@@ -1140,6 +1142,7 @@ fn record_trust_bridge_result(attempt: u64, result: &Result<(), String>) {
             set_trust_bridge_error(None);
             // Trust now matches the agent; do not wait out a long back-off.
             request_shield_retry();
+            request_epoch_adoption();
         }
         Err(error) => {
             let code = trust_bridge_error_code(error);
@@ -1595,13 +1598,28 @@ pub async fn fleet_apply_pending_epoch_typed() -> Result<serde_json::Value, Appl
     // transaction, and release on the same blocking thread. This serializes
     // epoch commit with the Shield supervisor across Free processes.
     let runtime = tokio::runtime::Handle::current();
-    tokio::task::spawn_blocking(move || {
-        let _guard = crate::paths::acquire_machine_state_lock("fleet-shield-policy")
+    // This pass is the only writer of the profile's adopted epoch, so it has
+    // priority over the background Shield tick: the tick yields while this is
+    // waiting for or holding the lock, and this waits long enough to outlast
+    // a tick that already held it.
+    let priority = EpochApplyPriority::claim();
+    let result = tokio::task::spawn_blocking(move || {
+        let _guard = crate::paths::acquire_machine_state_lock_for("fleet-shield-policy", 30_000)
             .map_err(ApplyError::PolicyError)?;
         runtime.block_on(fleet_apply_pending_epoch_inner())
     })
     .await
-    .map_err(|error| ApplyError::PolicyError(format!("Shield policy worker failed: {error}")))?
+    .map_err(|error| ApplyError::PolicyError(format!("Shield policy worker failed: {error}")))?;
+    drop(priority);
+    // A newly adopted epoch is what the Shield tick has been waiting for:
+    // end its back-off so the signed Shield state applies on the next tick.
+    if result
+        .as_ref()
+        .is_ok_and(|applied| applied.get("applied").and_then(Value::as_bool) == Some(true))
+    {
+        request_shield_retry();
+    }
+    result
 }
 
 async fn fleet_apply_pending_epoch_inner() -> Result<serde_json::Value, ApplyError> {
@@ -2391,11 +2409,11 @@ fn verify_shield_profile_against_service(
         .filter(|key| !key.is_empty())
         .ok_or("this Windows profile lacks the machine Fleet signing key")?;
     if settings.policy.master_config_version.unwrap_or(0) == 0 {
-        return Err("this Windows profile lacks the current Fleet epoch".into());
+        return Err(SHIELD_EPOCH_MISSING.into());
     }
     let envelope: wincmd_shared::fleet::PolicyEnvelope =
         serde_json::from_value(response.get("policy").cloned().unwrap_or(Value::Null))
-            .map_err(|_| "service Shield policy is unavailable".to_string())?;
+            .map_err(|_| SHIELD_POLICY_UNAVAILABLE.to_string())?;
     if envelope.signer_key != pinned
         || envelope.device_id.0 != settings.device_id
         || envelope.enrollment_generation.is_none()
@@ -2411,7 +2429,7 @@ fn verify_shield_profile_against_service(
         return Err("protected Fleet Shield configuration is unavailable".into());
     };
     if epoch.version != i64::from(settings.policy.master_config_version.unwrap_or(0)) {
-        return Err("this Windows profile has not adopted the current Fleet epoch".into());
+        return Err(SHIELD_EPOCH_NOT_ADOPTED.into());
     }
     let Some(signed_shield) = epoch.config_json.pointer("/privacy/privacyShield") else {
         return Ok(());
@@ -2746,12 +2764,16 @@ pub fn start_privacy_shield_policy_supervisor(app: tauri::AppHandle) {
             )
             .await;
             if let Err(error) = &tick {
-                // Fleet may not be configured yet while Pro is starting.  This
-                // is retried; never claim an unobserved local state to Fleet.
-                crate::log_message(
-                    "warn",
-                    &format!("[FleetPrivacyShield] policy tick deferred: {error}"),
-                );
+                note_shield_deferral(error);
+                // Stepping aside for the epoch apply or another lock holder is
+                // routine and silent. Anything else is retried; never claim an
+                // unobserved local state to Fleet.
+                if classify_shield_failure(error) != ShieldFailure::Yielded {
+                    crate::log_message(
+                        "warn",
+                        &format!("[FleetPrivacyShield] policy tick deferred: {error}"),
+                    );
+                }
             }
             if let Err(error) = report_pending_shield_refresh_observations(&app).await {
                 crate::log_message(
@@ -2782,6 +2804,11 @@ const SHIELD_TICK_MAX_BACKOFF: std::time::Duration = std::time::Duration::from_s
 const SHIELD_HANDOFF_MISMATCH: &str =
     "Fleet Shield handoff does not match protected policy identity or revision";
 const SHIELD_SESSION_UNCONFIRMED: &str = "Shield policy requires one confirmed Windows user session";
+const SHIELD_EPOCH_NOT_ADOPTED: &str = "this Windows profile has not adopted the current Fleet epoch";
+const SHIELD_EPOCH_MISSING: &str = "this Windows profile lacks the current Fleet epoch";
+const SHIELD_POLICY_UNAVAILABLE: &str = "service Shield policy is unavailable";
+const SHIELD_YIELDED: &str = "Shield policy yielded to the Fleet epoch apply";
+const SHIELD_BUSY: &str = "Shield policy is busy in another operation";
 
 /// Shield tick failures the supervisor treats differently.
 #[derive(Debug, PartialEq, Eq)]
@@ -2789,16 +2816,27 @@ enum ShieldFailure {
     /// Service trust and the agent's enrollment disagree; only a trust repair
     /// or re-enrollment clears it.
     HandoffMismatch,
+    /// The profile has not adopted the signed Fleet epoch the service holds;
+    /// only the epoch apply pass clears it, so request one and back off.
+    EpochNotAdopted,
+    /// The service holds no readable Shield policy yet.
+    PolicyUnavailable,
     /// More than one interactive session: one machine agent cannot be told
     /// which session's detector to report.
     SessionUnconfirmed,
+    /// The tick stepped aside for the epoch apply pass or another holder of
+    /// the machine lock. No service call was made.
+    Yielded,
     Other,
 }
 
 fn classify_shield_failure(error: &str) -> ShieldFailure {
     match error {
         SHIELD_HANDOFF_MISMATCH => ShieldFailure::HandoffMismatch,
+        SHIELD_EPOCH_NOT_ADOPTED | SHIELD_EPOCH_MISSING => ShieldFailure::EpochNotAdopted,
+        SHIELD_POLICY_UNAVAILABLE => ShieldFailure::PolicyUnavailable,
         SHIELD_SESSION_UNCONFIRMED => ShieldFailure::SessionUnconfirmed,
+        SHIELD_YIELDED | SHIELD_BUSY => ShieldFailure::Yielded,
         _ => ShieldFailure::Other,
     }
 }
@@ -2811,33 +2849,98 @@ pub(crate) fn request_shield_retry() {
     SHIELD_RETRY_EPOCH.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 }
 
-/// A handoff generation mismatch cannot clear until trust is repaired or the
-/// agent re-enrolls, so retrying it every 5 s only loads the service. Back off
-/// exponentially (5 s, 10 s, ... capped at 5 min); any success, a different
-/// error, a restarted agent, or newly established trust resets to the normal
-/// interval.
+/// The epoch apply pass (the only writer of the profile's adopted epoch) is
+/// waiting for or holding the Shield machine lock. The background Shield tick
+/// must not take that lock, or make service calls under it, meanwhile.
+static EPOCH_APPLY_PRIORITY: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+struct EpochApplyPriority;
+
+impl EpochApplyPriority {
+    fn claim() -> Self {
+        EPOCH_APPLY_PRIORITY.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Self
+    }
+}
+
+impl Drop for EpochApplyPriority {
+    fn drop(&mut self) {
+        EPOCH_APPLY_PRIORITY.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+fn epoch_apply_priority_active() -> bool {
+    EPOCH_APPLY_PRIORITY.load(std::sync::atomic::Ordering::SeqCst) > 0
+}
+
+static EPOCH_ADOPTION: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+/// Ask the epoch apply loop to run now instead of at its next 60 s tick. A
+/// request made while the loop is busy is remembered (one permit).
+pub(crate) fn request_epoch_adoption() {
+    EPOCH_ADOPTION.notify_one();
+}
+
+/// Resolves when an adoption pass has been requested.
+pub(crate) async fn epoch_adoption_requested() {
+    EPOCH_ADOPTION.notified().await;
+}
+
+/// The Shield tick's way into the machine lock: never behind, or ahead of,
+/// the epoch apply pass, and never queued. A refusal means "try next tick".
+fn acquire_tick_shield_lock() -> Result<crate::paths::MachineStateLock, String> {
+    if epoch_apply_priority_active() {
+        return Err(SHIELD_YIELDED.into());
+    }
+    crate::paths::try_acquire_machine_state_lock("fleet-shield-policy").map_err(|error| {
+        if error == "machine-state operation is busy; retry shortly" {
+            SHIELD_BUSY.to_string()
+        } else {
+            error
+        }
+    })
+}
+
+/// Reactions to a failed tick that do not depend on the next one.
+fn note_shield_deferral(error: &str) {
+    if classify_shield_failure(error) == ShieldFailure::EpochNotAdopted {
+        // Adoption is the only thing that clears this: run the apply pass now.
+        request_epoch_adoption();
+    }
+}
+
+/// A handoff generation mismatch, an unadopted epoch or a missing service
+/// policy cannot clear by retrying every 5 s, which only loads the service.
+/// Back off exponentially (5 s, 10 s, ... capped at 5 min); a success, an
+/// unrelated error, a restarted agent, or newly established trust resets to
+/// the normal interval. A tick that merely yielded changes nothing.
 #[derive(Default)]
 struct ShieldTickBackoff {
-    mismatches: u32,
+    deferrals: u32,
 }
 
 impl ShieldTickBackoff {
     fn next_delay(&mut self, result: &Result<(), String>) -> std::time::Duration {
         match result.as_ref().map_err(|error| classify_shield_failure(error)) {
-            Err(ShieldFailure::HandoffMismatch) => {
-                self.mismatches = self.mismatches.saturating_add(1);
-                let factor = 1u32 << self.mismatches.min(6);
+            Err(
+                ShieldFailure::HandoffMismatch
+                | ShieldFailure::EpochNotAdopted
+                | ShieldFailure::PolicyUnavailable,
+            ) => {
+                self.deferrals = self.deferrals.saturating_add(1);
+                let factor = 1u32 << self.deferrals.min(6);
                 (SHIELD_TICK_INTERVAL * factor).min(SHIELD_TICK_MAX_BACKOFF)
             }
+            Err(ShieldFailure::Yielded) => SHIELD_TICK_INTERVAL,
             _ => {
-                self.mismatches = 0;
+                self.deferrals = 0;
                 SHIELD_TICK_INTERVAL
             }
         }
     }
 
     fn reset(&mut self) {
-        self.mismatches = 0;
+        self.deferrals = 0;
     }
 }
 
@@ -2870,7 +2973,7 @@ async fn shield_status_only_observation(
     let app = app.clone();
     let reported = Arc::clone(reported);
     tokio::task::spawn_blocking(move || {
-        let _guard = crate::paths::acquire_machine_state_lock("fleet-shield-policy")?;
+        let _guard = acquire_tick_shield_lock()?;
         runtime.block_on(status_only_observation_with(
             require_single_interactive_shield_session,
             privacy_shield_status(&app),
@@ -2908,7 +3011,12 @@ where
         Ok(()) => return Ok(()),
         Err(error) => error,
     };
-    if fleet_linked && classify_shield_failure(&error) != ShieldFailure::SessionUnconfirmed {
+    if fleet_linked
+        && !matches!(
+            classify_shield_failure(&error),
+            ShieldFailure::SessionUnconfirmed | ShieldFailure::Yielded
+        )
+    {
         if let Err(observe_error) = observe().await {
             crate::log_message(
                 "warn",
@@ -2934,7 +3042,7 @@ async fn apply_fleet_privacy_shield_policy_locked(
     let app = app.clone();
     let reported = Arc::clone(reported);
     tokio::task::spawn_blocking(move || {
-        let _guard = crate::paths::acquire_machine_state_lock("fleet-shield-policy")?;
+        let _guard = acquire_tick_shield_lock()?;
         runtime.block_on(apply_fleet_privacy_shield_policy(&app, &reported))
     })
     .await
@@ -3961,7 +4069,7 @@ async fn sample_shield_refresh_observation_locked(
     let runtime = tokio::runtime::Handle::current();
     let app = app.clone();
     tokio::task::spawn_blocking(move || {
-        let _guard = crate::paths::acquire_machine_state_lock("fleet-shield-policy")?;
+        let _guard = acquire_tick_shield_lock()?;
         runtime.block_on(sample_shield_refresh_observation(&app))
     })
     .await
@@ -7520,5 +7628,96 @@ mod fleet_connect_v2_tests {
         assert!(dispatch_change_precheck(&settings, false).is_ok());
         settings.app.fleet.signing_key_pub = "key".into();
         assert!(dispatch_change_precheck(&settings, true).is_ok());
+    }
+
+    #[test]
+    fn every_deferral_that_only_adoption_or_repair_clears_backs_off() {
+        for reason in [
+            SHIELD_EPOCH_NOT_ADOPTED,
+            SHIELD_EPOCH_MISSING,
+            SHIELD_POLICY_UNAVAILABLE,
+            SHIELD_HANDOFF_MISMATCH,
+        ] {
+            let failing: Result<(), String> = Err(reason.into());
+            let mut backoff = ShieldTickBackoff::default();
+            let secs: Vec<u64> = (0..7).map(|_| backoff.next_delay(&failing).as_secs()).collect();
+            assert_eq!(secs, vec![10, 20, 40, 80, 160, 300, 300], "{reason}");
+        }
+        // Yielding changes nothing: it neither starts nor clears a back-off.
+        let mut backoff = ShieldTickBackoff::default();
+        let epoch: Result<(), String> = Err(SHIELD_EPOCH_NOT_ADOPTED.into());
+        assert_eq!(backoff.next_delay(&epoch).as_secs(), 10);
+        assert_eq!(backoff.next_delay(&Err(SHIELD_YIELDED.into())).as_secs(), 5);
+        assert_eq!(backoff.next_delay(&epoch).as_secs(), 20);
+        assert_eq!(
+            classify_shield_failure(SHIELD_BUSY),
+            ShieldFailure::Yielded
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unadopted_epoch_requests_an_adoption_pass_and_nothing_else_does() {
+        let _serial = GLOBAL_TRUST_STATE.lock().await;
+        let pending = || async {
+            tokio::time::timeout(std::time::Duration::from_millis(100), epoch_adoption_requested())
+                .await
+                .is_ok()
+        };
+        while pending().await {} // drain permits left by other tests
+        // The deferral the PARTH tick reported triggers the apply pass at once.
+        note_shield_deferral(SHIELD_EPOCH_NOT_ADOPTED);
+        assert!(pending().await);
+        assert!(!pending().await, "one request is one pass");
+        // Unrelated deferrals never trigger one.
+        for other in [SHIELD_BUSY, SHIELD_YIELDED, SHIELD_HANDOFF_MISMATCH, "service connect failed"] {
+            note_shield_deferral(other);
+        }
+        assert!(!pending().await);
+        // Established trust asks for adoption and ends the tick's back-off.
+        let before = SHIELD_RETRY_EPOCH.load(std::sync::atomic::Ordering::SeqCst);
+        record_trust_bridge_result(TRUST_BRIDGE_ATTEMPT.load(std::sync::atomic::Ordering::SeqCst), &Ok(()));
+        assert!(pending().await);
+        assert!(SHIELD_RETRY_EPOCH.load(std::sync::atomic::Ordering::SeqCst) > before);
+        while pending().await {}
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn the_shield_tick_yields_to_the_epoch_apply_and_never_queues_for_the_lock() {
+        let _serial = GLOBAL_TRUST_STATE.lock().await;
+        // While the epoch apply waits for or holds the lock, the tick takes
+        // nothing and makes no service call.
+        {
+            let _priority = EpochApplyPriority::claim();
+            assert_eq!(acquire_tick_shield_lock().err().as_deref(), Some(SHIELD_YIELDED));
+        }
+        // Otherwise it takes the lock without waiting, and releases it when
+        // the tick returns (the back-off sleep happens after that, lock-free).
+        let tick = tokio::task::spawn_blocking(|| acquire_tick_shield_lock().map(drop))
+            .await
+            .unwrap();
+        assert!(tick.is_ok());
+        let held = tokio::task::spawn_blocking(|| crate::paths::acquire_machine_state_lock("fleet-shield-policy"))
+            .await
+            .unwrap();
+        // (acquired and dropped on that thread; now a second holder blocks a tick)
+        drop(held);
+        let (release, hold) = std::sync::mpsc::channel::<()>();
+        let (taken, wait_taken) = std::sync::mpsc::channel::<()>();
+        let holder = std::thread::spawn(move || {
+            let _guard = crate::paths::acquire_machine_state_lock("fleet-shield-policy").unwrap();
+            taken.send(()).unwrap();
+            hold.recv().unwrap();
+        });
+        wait_taken.recv().unwrap();
+        let started = std::time::Instant::now();
+        let blocked = tokio::task::spawn_blocking(|| acquire_tick_shield_lock().err())
+            .await
+            .unwrap();
+        assert_eq!(blocked.as_deref(), Some(SHIELD_BUSY));
+        assert!(started.elapsed() < std::time::Duration::from_secs(1), "the tick must not queue");
+        release.send(()).unwrap();
+        holder.join().unwrap();
+        assert_eq!(EPOCH_APPLY_PRIORITY.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 }

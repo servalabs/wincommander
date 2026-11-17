@@ -2551,7 +2551,13 @@ pub fn run() {
                                 };
                                 capped + jitter
                             };
-                            tokio::time::sleep(std::time::Duration::from_secs(sleep_secs)).await;
+                            // Normally the next 60 s tick, but freshly established
+                            // trust or a Shield tick that finds the profile behind
+                            // the signed epoch asks for a pass right away.
+                            tokio::select! {
+                                () = tokio::time::sleep(std::time::Duration::from_secs(sleep_secs)) => {}
+                                () = fleet_agent::epoch_adoption_requested() => {}
+                            }
 
                             let still_on = settings::read_settings()
                                 .map(|s| s.app.fleet.enabled && !s.app.fleet.server_url.is_empty())

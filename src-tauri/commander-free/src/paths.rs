@@ -424,6 +424,18 @@ pub fn acquire_machine_state_lock(resource: &str) -> Result<MachineStateLock, St
     acquire_machine_state_lock_with_timeout(resource, MACHINE_STATE_LOCK_TIMEOUT_MS)
 }
 
+/// Take the machine lock only if it is free right now. Background supervisors
+/// use this so they yield to whoever holds it instead of queueing behind (and
+/// re-taking it ahead of) a higher-priority operation.
+pub(crate) fn try_acquire_machine_state_lock(resource: &str) -> Result<MachineStateLock, String> {
+    acquire_machine_state_lock_with_timeout(resource, 0)
+}
+
+/// Like [`acquire_machine_state_lock`] with a caller-chosen wait.
+pub(crate) fn acquire_machine_state_lock_for(resource: &str, timeout_ms: u32) -> Result<MachineStateLock, String> {
+    acquire_machine_state_lock_with_timeout(resource, timeout_ms)
+}
+
 pub(crate) fn acquire_shield_action_lock() -> Result<MachineStateLock, String> {
     acquire_machine_state_lock_with_timeout("fleet-shield-policy", 45_000).map_err(|error| {
         if error == "machine-state operation is busy; retry shortly" {
@@ -830,6 +842,25 @@ mod tests {
         drop(held);
         finished.recv_timeout(Duration::from_secs(1)).unwrap();
         shared.join().unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn try_acquire_yields_immediately_while_held_and_succeeds_once_released() {
+        let name = format!("shield-try-{}", uuid::Uuid::new_v4().simple());
+        let held = super::acquire_machine_state_lock(&name).unwrap();
+        let contender = name.clone();
+        let started = std::time::Instant::now();
+        let busy = std::thread::spawn(move || super::try_acquire_machine_state_lock(&contender))
+            .join()
+            .unwrap();
+        assert_eq!(busy.err().as_deref(), Some("machine-state operation is busy; retry shortly"));
+        assert!(started.elapsed() < std::time::Duration::from_millis(500), "must not queue");
+        drop(held);
+        let contender = name.clone();
+        assert!(std::thread::spawn(move || super::try_acquire_machine_state_lock(&contender).is_ok())
+            .join()
+            .unwrap());
     }
 
     #[cfg(windows)]
