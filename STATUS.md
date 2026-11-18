@@ -58,7 +58,7 @@ tests only, not against a live Fleet server or an installed service.
 
 ## The 2026-11-16 merge of `dev`
 
-On the owner's decision, `main` was fast-forwarded to `dev` (859 commits) and the
+On the owner's decision, `main` was fast-forwarded to `dev` (859 commits, the figure recorded for the merge and not recomputed here; [CHANGELOG.md](CHANGELOG.md) counts 1145 from `v3.6.7`, a different baseline) and the
 `dev` branch was then deleted, so `main` is the only branch. The merge was made
 knowingly with failing gates. The lint and test failures were fixed the same day
 (commit `27f22f4f`):

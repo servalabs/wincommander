@@ -55,6 +55,17 @@ not been validated in the named environment. Acceptance work is tracked in
 - Windows-only automated tests (`#[cfg(windows)]` Rust tests and PowerShell
   suites) do not run on Linux or macOS; contributors without Windows cannot
   reproduce them locally.
+- Irreversible actions leave no audit record of their own. The confirmation
+  dialogs for secure shred (`src/components/ShredConfirmationDialog.tsx`),
+  crypto-erase (`src/panels/vault/CryptoEraseConfirmDialog.tsx`) and the
+  network-maintenance resets (`src/panels/network/DangerConfirmDialog.tsx`)
+  call no evidence-ledger write, and no backend code outside the optional
+  developer tools and the paid-sidecar bridge writes to the ledger. The user
+  sees a result in the dialog; no ledger entry records that the action was
+  confirmed or run. The local operation history is a clearable
+  display aid, not an audit log ([SECURITY.md](SECURITY.md)). Checked by
+  reading the source; not exercised on Windows.
+
 
 ## Build and release
 

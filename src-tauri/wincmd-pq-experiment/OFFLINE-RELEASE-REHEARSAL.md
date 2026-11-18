@@ -98,7 +98,9 @@ store, production signing ceremony, publishing, revocation or rollback.
 A previously signed record can be checked locally with
 `release-free.ps1 -Version 3.7.0 -StageOnly -SkipBuild -HybridSignedRecord <path>`.
 This requires approved release trust and possession proofs in the local release
-environment and verifies the record and existing installer offline before SBOM
+environment (`wincmd-pq-trust-check` verifies them from the
+`WINCMD_PQ_LIC_*`, `WINCMD_PQ_FREE_*` and `WINCMD_PQ_PRO_*` environment
+variables) and verifies the record and existing installer offline before SBOM
 generation. It does not prove which keys an existing installer embeds or
 provide release provenance. Free publication remains blocked until the hybrid
 record is published and the installed update path is qualified.

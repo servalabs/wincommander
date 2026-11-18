@@ -79,6 +79,9 @@ implementation, commercial work, and acceptance records live in
 - `src-tauri/wincmd-search/` — public local content-search engine
 - `src-tauri/fleet-proto/` and `src-tauri/fleet-agent-core/` — neutral shared
   fleet wire types and client primitives
+- `src-tauri/` also holds the SYSTEM service, helper executables and shared
+  crates; [ARCHITECTURE.md](ARCHITECTURE.md) lists the workspace members and
+  `src-tauri/Cargo.toml` is authoritative
 - `tools/` — public build, encryption, code-generation, tier, and release checks
 
 The private sibling provides paid implementations. Never copy private source,

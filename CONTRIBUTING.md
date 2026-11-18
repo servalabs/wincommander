@@ -46,8 +46,10 @@ context for contributors.
 Prerequisites:
 
 - Windows 11 (Admin account)
-- Visual Studio Build Tools 2026 with **Desktop development with C++**,
-  **MSVC v143**, and **Windows 11 SDK (10.0.26100)**
+- Visual Studio Build Tools with **Desktop development with C++**, an MSVC
+  toolset, and a **Windows 11 SDK** (10.0.26100 is the version the
+  maintainers use). No repository script or CI job pins these versions, and
+  the setup script does not install them.
 - Git submodules: `git submodule update --init --recursive -- assets`
 - Optional: Python 3.12 if you're touching the AI / Privacy Shield
   features (`tools/install_python_deps.ps1`)

@@ -6,7 +6,7 @@
 
 ## Tier classification
 
-<!-- Tick exactly one. -->
+<!-- Tick exactly one. The full command list is in AGENTS.md#working-here. -->
 
 - [ ] **Free-only** — change touches only `commander-free` /
       `wincmd-shared` / frontend Free behaviour
@@ -20,7 +20,10 @@
 - [ ] `bun run lint` passes (ESLint, `--max-warnings=0`)
 - [ ] `bun run lint:tiers` passes (tier + risk invariants)
 - [ ] `bun run lint:docs` passes if I touched Markdown
+- [ ] `bun run lint:quality` and `bun run lint:strings-free` pass
+- [ ] `bun run gen:types:check` passes
 - [ ] `cd src-tauri && cargo check --all-targets` passes
+- [ ] `cd src-tauri && cargo test --workspace` passes
 - [ ] `cd src-tauri && cargo clippy --workspace --all-targets -- -D warnings` passes
 - [ ] If I edited any `.ps1` under
       `src-tauri/commander-free/scripts/modules/`, I ran
