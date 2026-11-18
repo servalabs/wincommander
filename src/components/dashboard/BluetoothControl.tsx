@@ -6,37 +6,31 @@ import { MACHINE_SCOPE_ELEVATION_MESSAGE } from "../../lib/machineScopeElevation
 
 export default function BluetoothControl() {
   const { systemInfo } = useAppState();
-  const { status, busy, refreshing, verified, change, refresh } = useBluetoothControl(systemInfo?.isAdmin);
-  // A retained result makes page-to-page navigation visually stable, but it
-  // never enables a mutation until the new dashboard mount rechecks Windows.
-  const canChange = verified && canChangeBluetooth(status, systemInfo?.isAdmin);
+  const { status, busy, change } = useBluetoothControl(systemInfo?.isAdmin);
+  const canChange = canChangeBluetooth(status, systemInfo?.isAdmin);
   const nextBlocked = !status?.blocked;
-  const description = systemInfo?.isAdmin !== true
+  const description = status && (systemInfo?.isAdmin !== true
     ? MACHINE_SCOPE_ELEVATION_MESSAGE
-    : !verified
-      ? refreshing
-        ? "Checking the current Bluetooth policy. The control remains unavailable until Windows confirms it."
-        : "Windows could not confirm the Bluetooth policy. Select to check again."
-      : bluetoothControlDescription(status);
-  // Keep this paired dashboard control the same stable width as Internet.
-  // The full state remains in the accessible title; unresolved policy states
-  // are not presented as a misleading ON/OFF value.
-  const label = verified && !busy && (status?.state === "allowed" || status?.state === "blocked")
+    : status.state === "pending" ? undefined : bluetoothControlDescription(status));
+  const action = nextBlocked
+    ? "Click to apply the Bluetooth block policy for all Windows accounts."
+    : "Click to release WinCommander’s Bluetooth policy restriction.";
+  const title = canChange ? [description, action].filter(Boolean).join(" ") : description ?? undefined;
+  const label = !busy && (status?.state === "allowed" || status?.state === "blocked")
     ? bluetoothControlLabel(status)
-    : !verified && !refreshing ? "Bluetooth check" : "Bluetooth";
-  const canRetry = systemInfo?.isAdmin === true && !verified && !refreshing;
+    : "Bluetooth";
 
   return (
     <button
       type="button"
-      className={`killswitch-toggle bluetooth-control focus-visible:outline-2 focus-visible:outline-offset-2 ${verified && status?.state === "blocked" ? "cut" : verified && status?.state === "allowed" ? "live" : ""}`}
-      disabled={busy || (!canChange && !canRetry)}
+      className={`killswitch-toggle bluetooth-control focus-visible:outline-2 focus-visible:outline-offset-2 ${status?.state === "blocked" ? "cut" : status?.state === "allowed" ? "live" : ""}`}
+      disabled={busy || !canChange}
       aria-label={label}
-      aria-busy={busy || refreshing}
-      title={canChange ? `${description} ${nextBlocked ? "Click to apply the Bluetooth block policy for all Windows accounts." : "Click to release WinCommander’s Bluetooth policy restriction."}` : description}
-      onClick={() => { if (canRetry) void refresh(); else void change(nextBlocked); }}
+      aria-busy={busy}
+      title={title}
+      onClick={() => void change(nextBlocked)}
     >
-      {verified && status?.state === "blocked" ? <BluetoothOff size={13} aria-hidden="true" /> : <Bluetooth size={13} aria-hidden="true" />}
+      {status?.state === "blocked" ? <BluetoothOff size={13} aria-hidden="true" /> : <Bluetooth size={13} aria-hidden="true" />}
       {label.replace("Bluetooth", "BT")}
     </button>
   );

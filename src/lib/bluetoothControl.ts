@@ -48,14 +48,6 @@ export function bluetoothControlDescription(status: BluetoothControlStatus | nul
   }
 }
 
-export function bluetoothControlIssue(status: BluetoothControlStatus | null): { key: string; message: string } | null {
-  if (!status) return { key: "unavailable", message: bluetoothControlDescription(null) };
-  if (status.state !== "allowed" && status.state !== "blocked") {
-    return { key: status.state, message: bluetoothControlDescription(status) };
-  }
-  return null;
-}
-
 export function canChangeBluetooth(status: BluetoothControlStatus | null, isAdmin: boolean | null | undefined): boolean {
   return isAdmin === true && status?.canChange === true && !LOCKED_STATES.has(status.state);
 }

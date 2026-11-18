@@ -7,24 +7,25 @@ declare const Bun: {
   };
 };
 
-test("Bluetooth retries a failed verification without changing cached policy", async () => {
+test("Bluetooth retries failed verification silently and restores the confirmed control", async () => {
   const script = String.raw`
     import { mock } from 'bun:test';
     import { strict as assert } from 'node:assert';
     import { JSDOM } from 'jsdom';
 
-    const dom = new JSDOM('<div id="root"></div>', { url: 'http://localhost' });
+    const dom = new JSDOM('<div id="root"></div>', { url: 'http://localhost', pretendToBeVisual: true });
     globalThis.window = dom.window;
     globalThis.document = dom.window.document;
     globalThis.IS_REACT_ACT_ENVIRONMENT = true;
-    // Drive each read manually, without a background poll racing the assertions.
-    window.setInterval = () => 1;
+    let poll;
+    window.setInterval = (callback) => { poll = callback; return 1; };
     const { act, createElement } = await import('react');
     const { createRoot } = await import('react-dom/client');
     const allowed = { schemaVersion: 2, blocked: false, state: 'allowed', canChange: true, message: '' };
     const reads = [];
     const commands = [];
     const confirmations = [];
+    const notifications = [];
     mock.module('@tauri-apps/api/core', () => ({
       invoke: (command) => {
         commands.push(command);
@@ -36,33 +37,43 @@ test("Bluetooth retries a failed verification without changing cached policy", a
     mock.module('./src/components/shared/AppConfirmDialog', () => ({
       useAppConfirm: () => async () => { confirmations.push(true); return false; },
     }));
-    mock.module('./src/utils/toast', () => ({ showWarning: async () => {}, showError: async () => {} }));
+    mock.module('./src/utils/toast', () => ({
+      showWarning: async (message) => notifications.push(message),
+      showError: async (message) => notifications.push(message),
+    }));
     const { default: BluetoothControl } = await import('./src/components/dashboard/BluetoothControl');
     const host = document.getElementById('root');
     const button = () => host.querySelector('button');
-    let root = createRoot(host);
+    const assertQuiet = () => {
+      assert.equal(button().textContent, 'BT');
+      assert.equal(button().getAttribute('aria-label'), 'Bluetooth');
+      assert.equal(button().getAttribute('aria-busy'), 'false');
+      assert.equal(button().hasAttribute('title'), false);
+      assert.equal(button().disabled, true);
+      assert.deepEqual(notifications, []);
+    };
+    const root = createRoot(host);
     try {
       await act(async () => root.render(createElement(BluetoothControl)));
+      assertQuiet();
       await act(async () => reads.shift().resolve(allowed));
       assert.equal(button().getAttribute('aria-label'), 'Bluetooth ON');
-      await act(async () => root.unmount());
-
-      root = createRoot(host);
-      await act(async () => root.render(createElement(BluetoothControl)));
-      assert.equal(button().disabled, true);
-      await act(async () => { button().click(); reads.shift().reject(new Error('service offline')); });
-      assert.equal(button().getAttribute('aria-label'), 'Bluetooth check');
       assert.equal(button().disabled, false);
 
+      await act(async () => poll());
+      await act(async () => reads.shift().reject(new Error('service offline')));
+      assertQuiet();
       await act(async () => button().click());
-      assert.equal(button().disabled, true);
-      assert.equal(button().getAttribute('aria-busy'), 'true');
-      await act(async () => button().click());
+      assert.equal(commands.length, 2);
+
+      await act(async () => poll());
+      assertQuiet();
       await act(async () => reads.shift().resolve({ ...allowed, blocked: true, state: 'blocked' }));
       assert.equal(button().getAttribute('aria-label'), 'Bluetooth OFF');
       assert.equal(button().disabled, false);
       assert.deepEqual(commands, Array(3).fill('bluetooth_control_status'));
       assert.deepEqual(confirmations, []);
+      assert.deepEqual(notifications, []);
     } finally {
       await act(async () => root.unmount());
       dom.window.close();

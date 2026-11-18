@@ -22,8 +22,10 @@ lists only a selection of those changes.
 - Disable the dashboard camera button when no camera is detected. When a
   camera is detected and permissions are known, show Camera On or Camera Off.
   Privacy Shield shares the manual camera recheck with the dashboard.
-- Explain drive letter reservations, Bluetooth policy checks, mobile broadband
-  requirements, and incomplete process details in their respective controls.
+- Retry Bluetooth policy checks silently on the dashboard. The control shows
+  On or Off once Windows confirms the policy.
+- Explain drive letter reservations, mobile broadband requirements, and
+  incomplete process details in their respective controls.
 
 - Fix Fleet Connect crashing the app with a stack overflow, and let the address
   be corrected or retried while connected, offline, enrolling or waiting for

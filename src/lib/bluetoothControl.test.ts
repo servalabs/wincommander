@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { bluetoothControlDescription, bluetoothControlIssue, bluetoothControlLabel, canChangeBluetooth, describeBluetoothFailure, parseBluetoothControlStatus, type BluetoothControlStatus } from "./bluetoothControl";
+import { bluetoothControlDescription, bluetoothControlLabel, canChangeBluetooth, describeBluetoothFailure, parseBluetoothControlStatus, type BluetoothControlStatus } from "./bluetoothControl";
 
 const allowed: BluetoothControlStatus = {
   schemaVersion: 2, blocked: false, state: "allowed", canChange: true, message: "",
@@ -65,16 +65,6 @@ describe("Bluetooth machine policy presentation", () => {
     const status = { ...allowed, message: "PRIVATE PATH OR IDENTITY" };
     expect(bluetoothControlDescription(status)).not.toContain(status.message);
     expect(bluetoothControlLabel(status)).not.toContain(status.message);
-  });
-
-  it("reports actionable issue episodes while leaving confirmed policy states quiet", () => {
-    expect(bluetoothControlIssue(allowed)).toBeNull();
-    expect(bluetoothControlIssue({ ...allowed, blocked: true, state: "blocked" })).toBeNull();
-    expect(bluetoothControlIssue(null)?.key).toBe("unavailable");
-    expect(bluetoothControlIssue(null)?.message).toContain("retry automatically");
-    expect(bluetoothControlIssue({ ...allowed, state: "pending" })?.key).toBe("pending");
-    expect(bluetoothControlIssue({ ...allowed, state: "unsupported", canChange: false })?.key).toBe("unsupported");
-    expect(bluetoothControlIssue({ ...allowed, state: "legacy_recovery_required", canChange: false })?.message).toContain("administrator review");
   });
 
   it("maps only current policy failure tokens to bounded safe next actions", () => {
