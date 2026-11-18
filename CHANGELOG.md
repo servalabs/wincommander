@@ -19,9 +19,9 @@ lists only a selection of those changes.
 - Start the verified Everything client when WinCommander opens and wait for
   its filename index during the first search if it is still loading. File
   Search shows filename and content index failures separately.
-- Show camera hardware and access separately on the dashboard, and share a
-  manual camera recheck with Privacy Shield. Windows Server can report no
-  local camera while redirected camera status is still unconfirmed.
+- Disable the dashboard camera button when no camera is detected. When a
+  camera is detected and permissions are known, show Camera On or Camera Off.
+  Privacy Shield shares the manual camera recheck with the dashboard.
 - Explain drive letter reservations, Bluetooth policy checks, mobile broadband
   requirements, and incomplete process details in their respective controls.
 

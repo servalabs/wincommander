@@ -35,36 +35,32 @@ export default function PrivacyTogglesCard({
   onToggleInternet,
 }: PrivacyTogglesCardProps) {
   const cameraState = cameraDisplayState(cameraPresence, cameraBlocked);
-  const cameraPresenceLabel = cameraPresence === "absent" ? "NO CAM" : cameraPresence === "host_absent" ? "NO HOST CAM" : null;
-  const cameraPresenceDescription = {
-    present: "Camera detected",
-    absent: "No camera detected",
-    host_absent: "No camera detected on this computer. Windows could not verify other video sources",
-    unknown: "Camera presence could not be confirmed",
-  }[cameraPresence];
+  const canToggleCamera = (cameraState === "allowed" || cameraState === "blocked")
+    && onCapabilityToggle !== undefined && capabilityPending !== "webcam";
+  const cameraLabel = { absent: "NO CAM", unknown: "CAM", allowed: "CAM ON", blocked: "CAM OFF" }[cameraState];
+  const cameraDescription = {
+    absent: cameraPresence === "host_absent"
+      ? "No camera detected on this computer. Windows could not verify redirected cameras."
+      : "No camera detected.",
+    unknown: cameraPresence === "unknown" ? "Camera presence could not be confirmed." : "Camera access could not be confirmed.",
+    allowed: cameraMixed ? "Camera access is on. Permissions may differ by app." : "Camera access is on.",
+    blocked: "Camera access is off.",
+  }[cameraState];
   return (
     <div className="privacy-toggles-card">
       <div className="ptc-toggles">
         <div className="ptc-title">PRIVACY</div>
         <div className="dashboard-capability-toggles">
-          {cameraState === "unknown" ? (
-            <button type="button" className="dashboard-capability-toggle no-device" disabled
-              title={`Camera access could not be confirmed. ${cameraPresenceDescription}.`}>
-              <Camera size={12} /> {cameraPresenceLabel ?? "CAM CHECK"}
-            </button>
-          ) : (
-            <button
-              type="button"
-              className={`dashboard-capability-toggle ${cameraBlocked ? "active" : ""}`}
-              onClick={() => onCapabilityToggle?.("webcam", !cameraBlocked)}
-              disabled={!onCapabilityToggle || capabilityPending === "webcam"}
-              title={`${cameraBlocked ? "Camera access blocked. Select to allow" : cameraMixed ? "Camera permissions differ between apps. Select to block" : "Camera access allowed. Select to block"}. ${cameraPresenceDescription}.`}
-            >
-              {cameraBlocked ? <CameraOff size={12} /> : <Camera size={12} />}
-              CAM {cameraBlocked ? "OFF" : cameraMixed ? "MIXED" : "ON"}
-              {cameraPresenceLabel && <span> · {cameraPresenceLabel}</span>}
-            </button>
-          )}
+          <button
+            type="button"
+            className={`dashboard-capability-toggle whitespace-nowrap ${cameraState === "blocked" ? "active" : cameraState === "absent" ? "no-device" : ""}`}
+            onClick={canToggleCamera ? () => onCapabilityToggle?.("webcam", cameraState === "allowed") : undefined}
+            disabled={!canToggleCamera}
+            title={cameraDescription}
+          >
+            {cameraState === "blocked" || cameraState === "absent" ? <CameraOff size={12} /> : <Camera size={12} />}
+            {cameraLabel}
+          </button>
           <button
             type="button"
             className={`dashboard-capability-toggle ${microphoneBlocked ? "active" : ""}`}

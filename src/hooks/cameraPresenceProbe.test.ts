@@ -3,10 +3,11 @@ import { cameraAccessState, cameraDisplayState, createCameraPresenceProbe, creat
 
 describe("dashboard camera presence", () => {
   test("separates missing hardware, unknown probes, and camera permissions", () => {
-    expect(cameraDisplayState("absent", false)).toBe("allowed");
-    expect(cameraDisplayState("absent", true)).toBe("blocked");
-    expect(cameraDisplayState("unknown", false)).toBe("allowed");
-    expect(cameraDisplayState("unknown", true)).toBe("blocked");
+    expect(cameraDisplayState("absent", false)).toBe("absent");
+    expect(cameraDisplayState("absent", true)).toBe("absent");
+    expect(cameraDisplayState("absent", null)).toBe("absent");
+    expect(cameraDisplayState("unknown", false)).toBe("unknown");
+    expect(cameraDisplayState("unknown", true)).toBe("unknown");
     expect(cameraDisplayState("present", null)).toBe("unknown");
     expect(cameraDisplayState("present", true)).toBe("blocked");
     expect(cameraDisplayState("present", false)).toBe("allowed");
@@ -27,8 +28,8 @@ describe("dashboard camera presence", () => {
     store.publish(await read(), store.epoch());
     expect(store.get()).toBe("host_absent");
     expect(hasNoDetectedCamera(store.get())).toBe(true);
-    expect(cameraDisplayState("host_absent", false)).toBe("allowed");
-    expect(cameraDisplayState("host_absent", true)).toBe("blocked");
+    expect(cameraDisplayState("host_absent", false)).toBe("absent");
+    expect(cameraDisplayState("host_absent", true)).toBe("absent");
     store.reset();
     expect(hasNoDetectedCamera(store.get())).toBe(false);
   });

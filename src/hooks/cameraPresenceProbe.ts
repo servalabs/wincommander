@@ -34,8 +34,9 @@ export function createCameraPresenceProbe(read: () => Promise<unknown>, timeoutM
   };
 }
 
-export function cameraDisplayState(_presence: CameraPresence, blocked: boolean | null): "absent" | "unknown" | "allowed" | "blocked" {
-  if (blocked === null) return "unknown";
+export function cameraDisplayState(presence: CameraPresence, blocked: boolean | null): "absent" | "unknown" | "allowed" | "blocked" {
+  if (hasNoDetectedCamera(presence)) return "absent";
+  if (presence === "unknown" || blocked === null) return "unknown";
   return blocked ? "blocked" : "allowed";
 }
 
