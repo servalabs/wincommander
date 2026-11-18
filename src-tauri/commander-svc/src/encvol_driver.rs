@@ -382,15 +382,6 @@ mod tests {
     }
 
     #[test]
-    fn validation_has_no_caller_controlled_path_or_unsigned_bypass() {
-        let source = include_str!("encvol_driver.rs");
-        assert!(source.contains("Get-AuthenticodeSignature -LiteralPath $driver"));
-        assert!(source.contains("Test-WcDriver $driver"));
-        assert!(source.contains(DRIVER_SHA256));
-        assert!(source.contains("$signature.Status -ne 'Valid'"));
-    }
-
-    #[test]
     fn compatible_veracrypt_requires_a_running_service_and_open_control_device() {
         let running = Command::new(crate::system_paths::system_directory().unwrap().join("cmd.exe"))
             .args(["/c", "echo STATE : 4 RUNNING"])

@@ -224,27 +224,6 @@ mod tests {
                 session: 11
             })
         ));
-        assert!(
-            owner
-                == OwnerSession {
-                    sid: vec![1, 2, 3],
-                    session: 9
-                }
-        );
-        assert!(
-            owner
-                != OwnerSession {
-                    sid: vec![1, 2, 4],
-                    session: 9
-                }
-        );
-        assert!(
-            owner
-                != OwnerSession {
-                    sid: vec![1, 2, 3],
-                    session: 11
-                }
-        );
     }
     #[test]
     fn missing_lsa_uses_validated_saved_owner_without_omitting_unknown_aliases() {

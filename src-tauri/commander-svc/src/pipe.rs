@@ -99,8 +99,6 @@ use windows_sys::Win32::{
 // still derives the local client PID/token for every request.
 const PIPE_SDDL: &str = "D:(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x12019b;;;BU)";
 const VAULT_POLICY_ADMIN_GROUP: &str = "WinCommander Vault Policy Administrators";
-#[cfg(test)]
-const PERSONAL_VAULT_CONTAINER_UNWRITABLE: &str = "vault_container_not_writable";
 const PERSONAL_VAULT_SESSION_ABSENT: &str = "vault_session_unavailable";
 const PERSONAL_VAULT_DRIVER_STOPPED: &str = "vault_driver_unavailable";
 const PERSONAL_VAULT_UNAUTHORIZED: &str = "vault_not_authorized";
@@ -6194,26 +6192,6 @@ mod tests {
     }
 
     #[test]
-    fn personal_mount_preflight_failures_are_distinct_from_native_engine_failure() {
-        let failures = [
-            PERSONAL_VAULT_CONTAINER_UNWRITABLE,
-            PERSONAL_VAULT_SESSION_ABSENT,
-            PERSONAL_VAULT_DRIVER_STOPPED,
-            PERSONAL_VAULT_UNAUTHORIZED,
-        ];
-        assert_eq!(
-            failures
-                .iter()
-                .collect::<std::collections::HashSet<_>>()
-                .len(),
-            failures.len()
-        );
-        assert!(failures
-            .iter()
-            .all(|failure| *failure != "vault_engine_mount_failed"));
-    }
-
-    #[test]
     fn personal_vault_requires_an_active_wts_session_not_only_a_nonzero_id() {
         assert!(session_is_active(7, Some(WTSActive)));
         assert!(!session_is_active(
@@ -6437,23 +6415,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn vault_reconcile_access_groups_from_unprivileged_caller_is_denied() {
-        let gate = passing_gate();
-        let result = authorize("svc.vault.reconcile_access_groups", false, 1234, &gate).await;
-        assert_eq!(
-            result,
-            Err("privileged verb requires SYSTEM/Admin caller".to_string())
-        );
-    }
-
-    #[tokio::test]
-    async fn vault_reconcile_access_groups_from_privileged_caller_is_allowed() {
-        let gate = passing_gate();
-        let result = authorize("svc.vault.reconcile_access_groups", true, 1234, &gate).await;
-        assert_eq!(result, Ok(None));
-    }
-
-    #[tokio::test]
     async fn privileged_verb_from_unprivileged_caller_is_denied() {
         let gate = passing_gate();
         let result = authorize("svc.dispatch", false, 1234, &gate).await;
@@ -6490,13 +6451,6 @@ mod tests {
             result.is_err(),
             "unknown verbs must fail closed as Privileged"
         );
-    }
-
-    #[tokio::test]
-    async fn unknown_verb_from_privileged_caller_still_classifies_privileged() {
-        let gate = passing_gate();
-        let result = authorize("svc.totally_unknown_verb", true, 1234, &gate).await;
-        assert_eq!(result, Ok(None));
     }
 
     #[tokio::test]

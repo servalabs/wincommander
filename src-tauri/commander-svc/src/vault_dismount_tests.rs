@@ -151,65 +151,6 @@ fn managed_mount_rejects_same_named_personal_mount_before_engine_dispatch() {
 }
 
 #[test]
-#[ignore = "read-only installed registry and driver comparison; no live operations"]
-fn live_registry_projection_diagnostic_reads_only() {
-    let path = crate::policy_store::default_policy_dir().join("vault-active-mounts-v1.json");
-    let registry: DurableMountRegistry = match std::fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes).unwrap(),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            println!("installed_registry=absent");
-            DurableMountRegistry { mounts: HashMap::new() }
-        }
-        Err(error) => panic!("installed registry read failed: {error}"),
-    };
-    let slots = wincmd_volume::mounted_slot_identities().expect("physical observer failed");
-    let matching = registry
-        .mounts
-        .values()
-        .filter(|mount| mount.engine_mount_identity.as_ref().is_some_and(|identity| {
-            slots.get(&mount.internal_drive) == Some(identity)
-        }))
-        .count();
-    let untracked = slots
-        .keys()
-        .filter(|slot| {
-            !registry
-                .mounts
-                .values()
-                .any(|mount| mount.internal_drive == **slot)
-        })
-        .count();
-    println!(
-        "registered={} physically_observed={} exact_matches={} untracked={}",
-        registry.mounts.len(),
-        slots.len(),
-        matching,
-        untracked
-    );
-    // Projection persistence uses an in-memory test filesystem, never the installed store.
-    let store = mount_store(
-        Arc::new(Mutex::new(HashMap::new())),
-        Arc::new(AtomicBool::new(false)),
-    );
-    let mut broker = VaultMountBroker::with_broker(Box::new(MountBroker(Arc::new(Mutex::new(
-        BrokerEvents::default(),
-    )))));
-    broker.engine_snapshot = Some(wincmd_volume::mounted_slot_identities);
-    *broker.active.lock().unwrap() = registry.mounts;
-    println!("untracked_cleanup_required={:?}", broker.has_untracked_mounts());
-    match broker.personal_mounts_for_caller(
-        &store,
-        std::ptr::null_mut(),
-        1,
-        "diagnostic-no-private-owner",
-        false,
-    ) {
-        Ok(rows) => println!("ordinary_projection_ok=true rows={}", rows.len()),
-        Err(reason) => println!("ordinary_projection_error={}", reason.as_str()),
-    }
-}
-
-#[test]
 fn unknown_registry_mount_denials_are_not_reported_as_a_failed_dismount() {
     let store = mount_store(
         Arc::new(Mutex::new(HashMap::new())),

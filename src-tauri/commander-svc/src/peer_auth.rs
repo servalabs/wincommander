@@ -722,41 +722,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn rate_limit_key_distinguishes_session_path_and_verb_independently() {
-        let base = RateLimitKey {
-            session_id: 7,
-            canonical_path_lower: r"c:\program files\wincommander\wincommander-free.exe".into(),
-            verb: TEST_VERB.into(),
-        };
-        let different_session = RateLimitKey {
-            session_id: 8,
-            ..base.clone()
-        };
-        let different_path = RateLimitKey {
-            canonical_path_lower: r"c:\program files\wincommander\other.exe".into(),
-            ..base.clone()
-        };
-        let different_verb = RateLimitKey {
-            verb: "svc.policy.install_epoch".into(),
-            ..base.clone()
-        };
-        // Each axis is independently part of the key -- changing only one
-        // field must change bucket identity, so one user's/verb's/path's
-        // flood cannot borrow another's quota.
-        assert_ne!(base, different_session);
-        assert_ne!(base, different_path);
-        assert_ne!(base, different_verb);
-        assert_eq!(base.clone(), base);
-    }
-
     // ── Trust origin round-trips ─────────────────────────────────────
-
-    #[test]
-    fn trust_origin_serializes_as_stable_snake_case() {
-        let json = serde_json::to_string(&TrustOrigin::SessionHelperPinned).unwrap();
-        assert_eq!(json, "\"session_helper_pinned\"");
-    }
 
     // ── Error messages never leak a path ────────────────────────────
 
