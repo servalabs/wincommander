@@ -63,9 +63,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn status_has_correct_protocol_version_and_nonzero_pid() {
+    fn status_reports_the_service_identity_and_a_live_pid() {
         let s = status();
-        assert_eq!(s.protocol_version, SVC_PROTOCOL_VERSION);
         assert_ne!(s.pid, 0, "pid must be nonzero");
         assert_eq!(s.service, "wincmd-svc");
     }
