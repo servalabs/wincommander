@@ -3665,15 +3665,21 @@ fn handle_vault_cloud_backup(
     let result = vault_mount.manage_cloud_backup(vault_access, request_id, &request, peer.token(), peer.session_id(), peer.caller_sid())
         .map_err(|reason| {
             crate::diagnostics::record_vault_failure(&format!("VLT-{request_id}"), "backup", "VLT.BACKUP.FAILED", "review_backup_status", false, started);
-            let code = match reason {
-                wincmd_shared::vault_access::VaultMountReason::NotAuthorized | wincmd_shared::vault_access::VaultMountReason::CallerAccessDenied => "cloud_backup_not_permitted",
-                wincmd_shared::vault_access::VaultMountReason::MountStateUnknown => "cloud_backup_mount_changed",
-                wincmd_shared::vault_access::VaultMountReason::EntitlementDenied => "cloud_backup_entitlement_denied",
-                _ => "cloud_backup_unavailable",
-            };
+            let code = cloud_backup_reason_code(reason);
             VerbError::new(code, "backup operation could not be confirmed")
         })?;
     serde_json::to_value(result).map_err(|_| VerbError::new("cloud_backup_unavailable", "backup result unavailable"))
+}
+
+fn cloud_backup_reason_code(reason: wincmd_shared::vault_access::VaultMountReason) -> &'static str {
+    use wincmd_shared::vault_access::VaultMountReason;
+    match reason {
+        VaultMountReason::NotAuthorized | VaultMountReason::CallerAccessDenied => "cloud_backup_not_permitted",
+        VaultMountReason::MountStateUnknown => "cloud_backup_mount_changed",
+        VaultMountReason::PresentationRejected => "cloud_backup_presentation_unavailable",
+        VaultMountReason::EntitlementDenied => "cloud_backup_entitlement_denied",
+        _ => "cloud_backup_unavailable",
+    }
 }
 
 fn handle_personal_vault_syncthing_manage(
@@ -5120,6 +5126,14 @@ mod test_support {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cloud_backup_reports_unavailable_presentation_separately_from_denial() {
+        use wincmd_shared::vault_access::VaultMountReason;
+        assert_eq!(super::cloud_backup_reason_code(VaultMountReason::PresentationRejected), "cloud_backup_presentation_unavailable");
+        assert_eq!(super::cloud_backup_reason_code(VaultMountReason::CallerAccessDenied), "cloud_backup_not_permitted");
+        assert_eq!(super::cloud_backup_reason_code(VaultMountReason::NotAuthorized), "cloud_backup_not_permitted");
+        assert_eq!(super::cloud_backup_reason_code(VaultMountReason::MountStateUnknown), "cloud_backup_mount_changed");
+    }
     #[test]
     #[allow(clippy::assertions_on_constants)] // asserts a build-time readiness flag stays off
     fn recovery_verbs_remain_disabled_until_signed_v2_admission_is_ready() {

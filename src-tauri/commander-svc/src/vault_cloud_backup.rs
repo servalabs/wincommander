@@ -178,15 +178,13 @@ impl VaultMountBroker {
         if active.authentication_id.is_none() || self.owner_logon_ended(&active) {
             return Err(VaultMountReason::SessionUnavailable);
         }
-        match (self.caller_mount_attestor)(
+        backup_presentation_result((self.caller_mount_attestor)(
             caller_token,
             &active.drive_letter,
             active.internal_drive,
             true,
-        ) {
-            CallerPresentationAttestation::Available => Ok((entry_id, active)),
-            _ => Err(VaultMountReason::CallerAccessDenied),
-        }
+        ))?;
+        Ok((entry_id, active))
     }
 
     pub(super) fn queue_cloud_backup_resume(
@@ -214,6 +212,16 @@ impl VaultMountBroker {
         store: std::sync::Arc<VaultAccessStore>,
     ) {
         supervisor::start(std::sync::Arc::clone(self), store);
+    }
+}
+
+fn backup_presentation_result(attestation: CallerPresentationAttestation) -> Result<(), VaultMountReason> {
+    match attestation {
+        CallerPresentationAttestation::Available => Ok(()),
+        CallerPresentationAttestation::RootAccessDenied
+        | CallerPresentationAttestation::RootWriteAccessDenied => Err(VaultMountReason::CallerAccessDenied),
+        CallerPresentationAttestation::MappingUnavailable
+        | CallerPresentationAttestation::RootReadFailed => Err(VaultMountReason::PresentationRejected),
     }
 }
 

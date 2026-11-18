@@ -31,13 +31,14 @@ export function acceptsCloudBackupReceipt(current: string | null, incoming: unkn
   return typeof incoming === "string" && /^[a-f0-9]{64}$/.test(incoming) && (!current || current === incoming);
 }
 const MESSAGES: Record<string, string> = {
-  cloud_backup_not_permitted: "This Windows account cannot back up this Vault. Ask its owner to review your access.",
+  cloud_backup_not_permitted: "Access to this Vault could not be confirmed. Make sure it is still mounted and your Windows account has access, then refresh.",
   cloud_backup_policy_disabled: "Cloud backup is not enabled for this Vault by its owner. Enable it in Vault permissions and save the policy first.",
   cloud_backup_read_only_access: "Cloud backup requires write access to save its protected settings inside this Vault.",
   cloud_backup_acl_unavailable: "This Vault cannot protect the saved Proton session with Windows permissions. Use an NTFS Vault.",
   cloud_backup_not_signed_in: "Reconnect Proton Drive to resume backup. Opening the Vault does not normally require another sign-in.",
   cloud_backup_sign_in_timeout: "Proton sign-in did not finish in time. Choose Connect Proton Drive to try again.",
   cloud_backup_mount_changed: "This Vault was closed or its mounted identity changed. Close this window and reopen Cloud backup for the current Vault.",
+  cloud_backup_presentation_unavailable: "The mounted Vault is not accessible in this Windows session. Reopen it and try again.",
   cloud_backup_source_unsafe: "A selected source is unavailable or contains a link, junction or unsupported path. Review the selected folders.",
   cloud_backup_source_overlap: "Backup sources overlap with protected settings or another configured folder. Choose separate source folders.",
   cloud_backup_already_running: "A backup is already active for this Vault. Refresh to see its current state.",

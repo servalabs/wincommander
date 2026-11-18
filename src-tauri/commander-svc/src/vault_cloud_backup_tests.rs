@@ -2,6 +2,17 @@
 use super::*;
 
 #[test]
+fn backup_presentation_distinguishes_unavailable_drive_from_denied_access() {
+    assert_eq!(backup_presentation_result(CallerPresentationAttestation::Available), Ok(()));
+    for attestation in [CallerPresentationAttestation::MappingUnavailable, CallerPresentationAttestation::RootReadFailed] {
+        assert_eq!(backup_presentation_result(attestation), Err(VaultMountReason::PresentationRejected));
+    }
+    for attestation in [CallerPresentationAttestation::RootAccessDenied, CallerPresentationAttestation::RootWriteAccessDenied] {
+        assert_eq!(backup_presentation_result(attestation), Err(VaultMountReason::CallerAccessDenied));
+    }
+}
+
+#[test]
 fn mount_attestation_requires_a_live_authenticated_caller_before_inspection() {
     use wincmd_shared::vault_cloud_backup::VaultCloudBackupAttestationRequest;
     let broker = crate::vault_mount::policy_edit_test_broker("test-backup", "test-identity");

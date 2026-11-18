@@ -29,6 +29,8 @@ describe("Vault cloud backup setup", () => {
   test("does not echo backend secrets or pretend an unknown response succeeded", () => {
     expect(cloudBackupError("error: token=secret path=X:\\private")).not.toContain("secret");
     expect(cloudBackupError("cloud_backup_not_signed_in token=secret")).toContain("Reconnect Proton Drive");
+    expect(cloudBackupError("cloud_backup_not_permitted")).toContain("Make sure it is still mounted");
+    expect(cloudBackupError("cloud_backup_presentation_unavailable")).toBe("The mounted Vault is not accessible in this Windows session. Reopen it and try again.");
     const base: VaultCloudBackupResult = { mount_receipt: null, engine_ready: true, connected: true, configured: true,
       automatic: true, watching: true, running: false, can_configure: true, configuration, last_run: null,
       last_backup: null, last_verification: null, last_restore: null, reason_code: null };
