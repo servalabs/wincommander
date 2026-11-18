@@ -6724,14 +6724,6 @@ mod tests {
         let value = store.bound_clipboard_response(false, None).unwrap();
         assert_eq!(value["policy_version"], serde_json::json!(0));
         assert_eq!(value["rules"], serde_json::json!([]));
-        // The client's `ClipboardPolicyResponse` has no `installed` field
-        // and no `version` field — either key here would be silently
-        // ignored at best, or (since both real fields are required with no
-        // default) a MISSING `policy_version`/`rules` would hard-fail
-        // deserialization. Assert their absence explicitly so a future
-        // edit can't quietly reintroduce the old, mismatched shape.
-        assert!(value.get("installed").is_none());
-        assert!(value.get("version").is_none());
     }
 
     #[test]

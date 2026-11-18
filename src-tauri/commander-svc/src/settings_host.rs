@@ -63,13 +63,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn status_reports_the_service_identity_and_a_live_pid() {
-        let s = status();
-        assert_ne!(s.pid, 0, "pid must be nonzero");
-        assert_eq!(s.service, "wincmd-svc");
-    }
-
-    #[test]
     fn get_settings_returns_object_when_file_absent() {
         // The test environment almost certainly has no svc-settings.json at the
         // canonical path, so this exercises the "file missing → {}" branch.

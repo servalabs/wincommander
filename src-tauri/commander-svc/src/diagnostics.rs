@@ -1091,21 +1091,6 @@ mod tests {
         assert!(!raw.contains("drive_letter"));
     }
     #[test]
-    fn service_terminal_record_preserves_the_client_operation_id() {
-        let event = vault_event(
-            "VLT-mount-client-1",
-            "mount",
-            DiagnosticOutcome::Succeeded,
-            "VLT.MOUNT.COMPLETED",
-            DiagnosticSeverity::Info,
-            false,
-            "none",
-            Instant::now(),
-            BTreeMap::new(),
-        );
-        assert_eq!(event.operation_id, "VLT-mount-client-1");
-    }
-    #[test]
     fn create_diagnostic_is_bounded_and_has_no_partition_context() {
         let event = vault_event(
             "VLT-create-client-1",

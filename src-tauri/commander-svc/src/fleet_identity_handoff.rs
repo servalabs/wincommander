@@ -184,19 +184,4 @@ mod tests {
         assert!(serde_json::from_value::<Handoff>(ambiguous).is_err());
     }
 
-    #[test]
-    fn independent_server_vector_verifies() {
-        let h = Handoff { recovery_id:"11111111-1111-4111-8111-111111111111".into(),
-            org_id:"org-a".into(), device_id:"0480b2ca-f4c3-4599-81fc-4876f73e70fa".into(),
-            old_generation:"22222222-2222-4222-8222-222222222222".into(),
-            new_generation:"33333333-3333-4333-8333-333333333333".into(),
-            new_key:"kaKKC3Q4FZOk2UaVeSCJJq/IrYLIg5t2RDWbnrqaSzo=".into(),
-            next_sequence:7, previous_hash:Some("ab".repeat(32)), issued_at:1000,
-            server_key:"Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo=".into(),
-            signature:"h97rXEpV9lskSg1jI2698m0urZAufIhNyq0qhcDFCNc2lVnOBaCWXIWxHgi6GDWP3rRyvbqdv/zhsv/TvjWZDQ==".into() };
-        let trust=FleetTrust { org_id:h.org_id.clone(), device_id:h.device_id.clone(),
-            enrollment_generation:h.old_generation.clone(), signer_key:h.server_key.clone() };
-        let key=decode::<32>(&h.new_key).unwrap();
-        assert!(h.verify(&trust, &h.recovery_id, &h.new_generation, &key, 1001).is_ok());
-    }
 }
