@@ -29,8 +29,10 @@ Remove an item when it has passed on the intended build.
 7. **Flows and Privacy Shield**: confirm gaze triggers fire from real camera
    events end to end before enabling CameraTrigger.
 8. **Performance baseline**: capture the scenarios in
-   [PERFORMANCE.md](PERFORMANCE.md) on named Windows machines and run
-   `bun run startup:benchmark`; publish the report there.
+   [PERFORMANCE.md](PERFORMANCE.md) on named Windows machines, summarize the
+   samples with `bun run startup:benchmark samples.json report.json
+   --require-complete` (it does not launch the app), and publish the report
+   there.
 
 ## Decisions and owner actions
 
@@ -57,8 +59,9 @@ Remove an item when it has passed on the intended build.
 6. **Docs check on documentation-only changes.** Decide whether the cost of
    running the invariants workflow on `*.md` changes is acceptable, or add a
    separate lightweight docs-only workflow.
-7. **Third-party download hardening.** Decide whether to pin or sign-check the
-   ImDisk installer, Privacy Shield models and Firefox extensions
+7. **Third-party download hardening.** Confirm the ImDisk signer subject
+   against a real installer and pin it (thumbprint or hash); decide whether to
+   pin or sign-check Privacy Shield models and Firefox extensions
    ([WEAKNESSES.md](WEAKNESSES.md#optional-third-party-components)).
 8. **Internal references.** Decide where the audit reports cited by finding ID
    in source comments live (they are not in this public repository).

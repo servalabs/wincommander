@@ -10,7 +10,7 @@
 
 - [ ] **Free-only** — change touches only `commander-free` /
       `wincmd-shared` / frontend Free behaviour
-- [ ] **Pro-only** — change touches only `commander-pro` (paid sidecar)
+- [ ] **Pro-only** — change belongs in the private Pro repository (not reviewable here)
 - [ ] **Both** — Free + Pro both change (e.g. new shared IPC type)
 - [ ] **Tooling / docs / CI** — no runtime tier impact
 
@@ -36,10 +36,10 @@
 ## Defender / AV impact
 
 <!-- Required if Defender-flagged or otherwise AV-noisy. Free crate must stay
-clean. If the answer is "this MUST live in commander-pro", confirm it does. -->
+clean. If the answer is "this MUST live in the private Pro repository", confirm it does. -->
 
 - [ ] No Defender / AV impact
-- [ ] Lives in `commander-pro` (not `commander-free`)
+- [ ] Lives in the private Pro repository (not `commander-free`)
 - [ ] N/A
 
 ## Screenshots / clips
@@ -48,7 +48,7 @@ clean. If the answer is "this MUST live in commander-pro", confirm it does. -->
 
 ## Related
 
-<!-- Issues, prior PRs, docs/ references you read while writing this. -->
+<!-- Issues, prior PRs, root documents you read while writing this. -->
 
 ## Contributor License Agreement
 

@@ -103,12 +103,15 @@ navigate into the bundled application's custom-protocol origins. The configured
 development application origin is also excluded from external views.
 
 The local service admits at most 32 concurrent connection tasks. Its initial
-frame is limited to 16 KiB and five seconds; subsequent frame reads have a
-30-second deadline, and writes have a ten-second deadline. The shared frame
+frame is limited to 4 KiB and five seconds; subsequent frame reads have a
+30-second deadline, and writes have a five-second deadline. The shared frame
 ceiling remains 16 MiB. A transport timeout closes the connection rather than
 resuming a partially consumed frame. These deadlines do not cancel an already
 executing machine operation or replace Windows peer authorization. They bound
 specific resources; they are not a claim of complete denial-of-service immunity.
+The 32-connection limit is global and is taken before the client authenticates,
+so a local process can hold slots for up to the five-second Hello deadline;
+per-account quotas apply only after Hello.
 
 Before sending even the Hello frame, clients verify the pipe server against the
 running dedicated LocalSystem service, its configured executable and its actual

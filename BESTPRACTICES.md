@@ -319,7 +319,7 @@ Two tiers. Every repo gets the **Core** set. The five products additionally get 
 | File | Role |
 | :--- | :--- |
 | `POSITIONING.md` | Target audience, value proposition, positioning vs alternatives, design philosophy, why it exists. Opinionated framing is fine and wanted. |
-| `ROADMAP.md` | Direction: Shipped / In progress / Planned / Considering. Date or version-tag where possible. Aspirational items clearly marked as not committed. |
+| `ROADMAP.md` (the public wincommander repo has none; it tracks open work in its private sibling) | Direction: Shipped / In progress / Planned / Considering. Date or version-tag where possible. Aspirational items clearly marked as not committed. |
 
 **Optional OSS-hygiene layer** (add when actually publishing): `LICENSE`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`.
 

@@ -6,10 +6,11 @@ the change record is in [CHANGELOG.md](CHANGELOG.md). Open work is in
 the private open-work ledger, known limits in [WEAKNESSES.md](WEAKNESSES.md), and
 manual or owner-side work in [USER-TASKS.md](USER-TASKS.md).
 
-Written against local `main` at `dc5722ba` (2026-11-16, after the merge of `dev`
-described below). The remote `main` had moved on by 2026-11-17; changes after
-`dc5722ba` are not reflected here. Update the commit reference whenever this
-file is revised.
+Reviewed against `main` at `e18afcd4` (2026-11-18) for versions, CI wiring and
+the facts marked as re-read from source. Statements about the 2026-11-16 merge
+were checked at `dc5722ba`, and Fleet connect at `356e4b14`; those were not
+re-run at `e18afcd4`. No builds or tests were run for this revision. Update the
+commit reference whenever this file is revised.
 
 ## What `main` is
 
@@ -21,13 +22,13 @@ file is revised.
 - CI (`.github/workflows/invariants.yml`) gates: TypeScript schema, tier and
   risk invariants plus the Markdown link check, changed-file quality guards,
   security guardrails, `bun test`, generated-type drift, `cargo check`,
-  `cargo test`, `cargo clippy -D warnings`, gitleaks, ESLint, cargo audit,
-  cargo deny and the Free-binary forbidden-strings scan (blocking). Coverage
-  is report-only; a mutation job covers `wincmd-shared`. For
+  `cargo test`, `cargo clippy -D warnings`, gitleaks, ESLint, cargo audit
+  and the Free-binary forbidden-strings scan (blocking). cargo deny runs
+  report-only (`continue-on-error`). Coverage is report-only; a mutation job covers `wincmd-shared`. For
   `dc5722ba` the hosted `invariants` run (2026-11-16) concluded `success`, read
   from the GitHub run list on 2026-11-17. Two later pushes to `main` had a
   `failure` conclusion at that time and were not investigated; CI status for
-  the current head of `main` is unknown here.
+  the current head of `main` (`e18afcd4`) was not checked.
 - Pro, Fleet server and Investigator are separate private products; this
   repository holds the Free client, shared contracts and neutral Fleet crates
   ([OPEN_CORE.md](OPEN_CORE.md)).

@@ -41,7 +41,8 @@ unimplemented, unshipped work.
   user what to do; it does not suspend or kill automatically, because acting
   without process attribution risks stopping the wrong process. Reading file
   contents before and after every write to compute an entropy delta was judged
-  too heavy for an always-on monitor (still open).
+  too heavy for an always-on monitor; pure entropy helpers exist in
+  `wincmd-shared` but the monitor does not use them (still open).
 - **Parent-directory pinning on Windows (dev notes).** In a restricted-token
   fixture test on one machine (2026-11-06), a directory pinned with read access
   and delete sharing denied could still be turned into a junction. This was not

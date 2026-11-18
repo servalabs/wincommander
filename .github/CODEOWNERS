@@ -19,9 +19,6 @@ src-tauri/commander-free/capabilities/          @servalabs
 # CI/CD workflows — any change here affects the release pipeline and supply chain.
 .github/workflows/                              @servalabs
 
-# Licence worker — revenue-critical backend.
-cloudflare-license-worker/                      @servalabs
-
 # natsec P1 (2026-07): shared crypto/IPC crates consumed as path deps by both
 # wincommander-pro (fleet-server) and TuxCommander (tc-agent) — this is the
 # SSOT, so a compromise here propagates to every downstream consumer.

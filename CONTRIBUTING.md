@@ -6,7 +6,7 @@ Thanks for your interest in contributing. WinCommander uses a
 - **Free tier** (`commander-free`, `wincmd-shared`, frontend):
   [GNU Affero General Public License v3.0](LICENSE) — OSI-approved
   open source with copyleft + network-use clause.
-- **Pro / Cleanup tier** (`commander-pro`): governed by the
+- **Pro / Cleanup tier** (private Pro repository): governed by the
   [WinCommander EULA](https://servalabs.com/eula) — private repo,
   proprietary; paid to run.
 
@@ -30,7 +30,7 @@ and [OPEN_CORE.md](OPEN_CORE.md).
 - Every new toggle or backend command must declare `tier`, `needsAdmin`,
   `irreversible`, `reducesSecurity`, `defenderFlagged`. The tier-invariant
   linter (`bun run lint:tiers`) blocks PRs that violate the matrix.
-- Defender-flagged *execution logic* MUST live in `commander-pro` only —
+- Defender-flagged *execution logic* MUST live in the private Pro repository only —
   the Free binary ships no security-reducing operations. The strings-clean
   goal is checked by `bun run lint:strings-free` (run it locally; the CI
   `strings-grep-free` job runs the same scan as a **blocking** gate).
@@ -120,17 +120,17 @@ type-check + invariants verify code shape, not user-visible behaviour.
 
 ## Testing Pro features as an external contributor
 
-The Free crate compiles and runs without any licence material. The
-Pro crate compiles too, but features it gates need a paid entitlement
-to actually run. Two paths for contributors:
+The Free crate compiles and runs without licence material. Pro is built
+from a private repository that external contributors do not have; paid
+actions need a development licence. Two paths for contributors:
 
-1. **Dev mode auto-unlock.** When the licensing env vars
-   (`WINCMD_LICENSE_API_BASE`, `WINCMD_LICENSE_PUBLIC_KEY`) are
-   unset *and* the build is `cfg!(debug_assertions)`, the licence
-   layer returns a synthetic `["all"]` entitlement
-   ([commander-free/src/license.rs](src-tauri/commander-free/src/license.rs))
-   so paid panels unlock for development. Don't ship release builds
-   with this path.
+1. **Free-only development.** Without a Pro workspace, `tools/dev.ps1`
+   runs Free-only (`WINCOMMANDER_DEV_FREE_ONLY=1`); paid actions stay
+   locked. In debug builds the licence API base and public key may be
+   overridden from the environment or `.env` (`WINCMD_LICENSE_API_BASE`,
+   `WINCMD_LICENSE_PUBLIC_KEY`; see
+   [commander-free/src/license.rs](src-tauri/commander-free/src/license.rs));
+   release builds ignore them.
 2. **Dev licence.** Email security@servalabs.com if you need to test
    release behaviour — we'll issue a development licence bound to
    your device hash.
@@ -147,8 +147,8 @@ Common tasks:
 
 | Task | Read first | Then read |
 |---|---|---|
-| Tier classification + paid-vs-free | [ARCHITECTURE.md — Executable open-core model](ARCHITECTURE.md#executable-open-core-model) | [src/types/toggles.ts](src/types/toggles.ts), [src/registry/](src/registry/) |
-| New paid command in Pro | [ARCHITECTURE.md — Executable open-core model](ARCHITECTURE.md#executable-open-core-model) | Request Pro contributor access; Free-side tiering is in [src-tauri/commander-free/src/backend.rs](src-tauri/commander-free/src/backend.rs). |
+| Tier classification + paid-vs-free | [ARCHITECTURE.md — Tier & risk model](ARCHITECTURE.md#tier--risk-model) | [src/types/toggles.ts](src/types/toggles.ts), [src/registry/](src/registry/) |
+| New paid command in Pro | [ARCHITECTURE.md — Free ↔ Pro IPC](ARCHITECTURE.md#free--pro-ipc) and [Tier & risk model](ARCHITECTURE.md#tier--risk-model) | Request Pro contributor access; Free-side tiering is in [src-tauri/commander-free/src/backend.rs](src-tauri/commander-free/src/backend.rs). |
 | IPC wire format / pipe transport | [ARCHITECTURE.md — Free ↔ Pro IPC](ARCHITECTURE.md#free--pro-ipc) | [src-tauri/wincmd-shared/src/lib.rs](src-tauri/wincmd-shared/src/lib.rs), [src-tauri/commander-free/src/sidecar.rs](src-tauri/commander-free/src/sidecar.rs) |
 | UI / styling / components | [ARCHITECTURE.md — Components](ARCHITECTURE.md#components) | the source itself: [src/](src/) and [src/styles/](src/styles/) |
 | New panel / panel refactor | [src/types/panels.ts](src/types/panels.ts) | [FEATURES.md](FEATURES.md), [ARCHITECTURE.md — Components](ARCHITECTURE.md#components) |
@@ -183,7 +183,7 @@ No human waits on a non-danger change.
   capabilities / workflows / licence-worker files. Everything else
   merges on green checks alone.
 - **Secrets never live in the agent's environment.** The agent uses the
-  debug auto-unlock / dev licences locally; production signing and
+  development licences locally; production signing and
   deploy keys live only in the tag-gated release pipeline (Actions
   secrets / OIDC / Cloudflare Worker secrets). See [SECURITY.md](SECURITY.md).
 
@@ -223,7 +223,7 @@ Sign once via the CLA-assistant bot the first time you open a PR, or
 paste the acceptance line from [CLA.md](CLA.md) into your PR
 description if the bot isn't wired up yet.
 
-Contributions to `commander-pro/` are governed by the
+Contributions to the private Pro repository are governed by the
 [WinCommander EULA](https://servalabs.com/eula) — private repo,
 proprietary. By submitting changes to the
 Pro crate you still keep your copyright; the CLA grants ServaLabs the
@@ -231,6 +231,5 @@ right to ship your contribution as part of the paid binary.
 
 Substantial PRs that materially change the licence-gating logic
 (`commander-free/src/license.rs`,
-`commander-free/src/backend.rs::run_backend_script`,
-`cloudflare-license-worker/`) get an extra review pass — they're
+`commander-free/src/backend.rs::run_backend_script`) get an extra review pass — they're
 load-bearing for the open-core model.

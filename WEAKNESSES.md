@@ -82,14 +82,15 @@ not been validated in the named environment. Acceptance work is tracked in
   `commander-free/src/disk_tree_delete.rs` (about 1,700). The guard only
   inspects additions since its base, so it passes for new changes; splitting
   these files by responsibility is open work.
-- About 26 items are marked `#[allow(dead_code)]` (mostly in `license.rs`,
-  `licence_release_guard.rs` and the duplicate finder) because they are unused in
+- More than 100 items across about 65 files are marked `#[allow(dead_code)]`
+  (most in `license.rs`, then `licence_release_guard.rs`, `settings.rs` and
+  `explorer_context.rs`) because they are unused in
   some feature or build combinations; they should be gated with `cfg` or removed
   when those paths settle.
 - Several legacy files are far above the 300-line guideline in
   [AGENTS.md](AGENTS.md), for example `commander-free/src/backend.rs`
   (about 11,000 lines), `commander-svc/src/vault_access.rs` (about 9,700) and
-  `commander-svc/src/pipe.rs` (about 6,600). The quality guard only blocks new
+  `commander-svc/src/pipe.rs` (about 7,400). The quality guard only blocks new
   large files and growth of small ones, so existing giants stay.
 - Some source comments cite internal audit finding IDs (for example F-1, F-3)
   whose reports are not in this repository.
@@ -102,9 +103,15 @@ not been validated in the named environment. Acceptance work is tracked in
 Components fetched on demand are not all pinned or verified by WinCommander
 ([INTEGRATIONS.md](INTEGRATIONS.md)):
 
-- ImDisk installer: downloaded from a third-party host, including an `http://`
-  fallback URL in `dependencies.ps1` and `ramdisks.ps1`; only a minimum-size and
-  `MZ` header check was found before it is run.
+- ImDisk installer: downloaded over HTTPS from a third-party host and
+  Authenticode-checked before it runs (`core/utils.ps1`,
+  `Test-ImDiskInstallerSignature`). The expected signer subject is unconfirmed,
+  so the check currently rejects the real installer (fails closed); no
+  certificate-thumbprint or hash pin exists.
+- The ransomware monitor counts write events only; the pure entropy helpers
+  in `wincmd-shared/src/entropy.rs` are not yet used by it.
+- Privacy Shield Python packages (`pip` itself, mediapipe, numpy, protobuf and
+  related) are installed by `dependencies.ps1` without version or hash pins.
 - Privacy Shield detector models are fetched from Google's public model
   storage; only a minimum-size check was found, no hash pinning.
 - Firefox extensions are installed by add-on slug through Firefox policy;
