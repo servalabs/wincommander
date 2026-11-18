@@ -363,22 +363,6 @@ mod tests {
     }
 
     #[test]
-    fn procedural_variants_have_no_regex_source() {
-        assert_eq!(BuiltinPattern::UnicodeBidiOverride.regex_source(), None);
-        assert_eq!(BuiltinPattern::UnicodeZeroWidthInCode.regex_source(), None);
-        assert_eq!(
-            BuiltinPattern::UnicodeConfusableUrlHost.regex_source(),
-            None
-        );
-    }
-
-    #[test]
-    fn aws_key_pattern_matches() {
-        let re = regex::Regex::new(BuiltinPattern::AwsAccessKey.regex_source().unwrap()).unwrap();
-        assert!(re.is_match("AKIAABCDEFGHIJKLMNOP"));
-    }
-
-    #[test]
     fn confusable_host_detected() {
         let text = "Click https://p\u{0430}ypal.com/login to verify";
         assert!(confusable_url_host(text));

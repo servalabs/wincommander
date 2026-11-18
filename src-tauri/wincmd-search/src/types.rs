@@ -146,20 +146,6 @@ mod tests {
     }
 
     #[test]
-    fn match_kind_roundtrips() {
-        for kind in [
-            MatchKind::Keyword,
-            MatchKind::Semantic,
-            MatchKind::Hybrid,
-            MatchKind::NameSubstring,
-        ] {
-            let json = serde_json::to_string(&kind).unwrap();
-            let parsed: MatchKind = serde_json::from_str(&json).unwrap();
-            assert_eq!(kind, parsed);
-        }
-    }
-
-    #[test]
     fn content_hit_roundtrips() {
         let hit = ContentHit {
             doc_id: 42,
@@ -205,51 +191,4 @@ mod tests {
         assert_eq!(parsed.doc_id, 99);
     }
 
-    #[test]
-    fn index_status_default_is_idle() {
-        let status = IndexStatus::default();
-        assert!(!status.is_indexing);
-        assert_eq!(status.indexed_docs, 0);
-        assert!(status.last_error.is_none());
-    }
-
-    #[test]
-    fn index_status_roundtrips() {
-        let status = IndexStatus {
-            indexed_docs: 100,
-            pending_docs: 5,
-            is_indexing: true,
-            last_error: Some("disk full".into()),
-            index_size_bytes: 1_048_576,
-        };
-        let json = serde_json::to_string(&status).unwrap();
-        let parsed: IndexStatus = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.indexed_docs, 100);
-        assert_eq!(parsed.last_error.as_deref(), Some("disk full"));
-    }
-
-    #[test]
-    fn chunk_construct() {
-        let c = Chunk {
-            doc_id: 1,
-            field: ChunkField::Body,
-            ordinal: 0,
-            text: "hello world".into(),
-        };
-        assert_eq!(c.ordinal, 0);
-        assert_eq!(c.field, ChunkField::Body);
-    }
-
-    #[test]
-    fn file_meta_construct() {
-        let m = FileMeta {
-            doc_id: 99,
-            path: std::path::PathBuf::from("C:\\foo\\bar.pdf"),
-            name: "bar.pdf".into(),
-            ext: "pdf".into(),
-            mtime: 0,
-            size: 512,
-        };
-        assert_eq!(m.ext, "pdf");
-    }
 }

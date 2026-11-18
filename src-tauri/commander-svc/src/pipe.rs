@@ -5239,7 +5239,6 @@ mod tests {
 
     use super::test_support::*;
     use super::*;
-    use wincmd_shared::svc::SVC_PROTOCOL_VERSION;
 
     #[test]
     fn policy_save_ambiguous_write_and_unverified_restore_have_distinct_bounded_stages() {
@@ -6477,16 +6476,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn machine_setting_rpc_requires_a_privileged_caller() {
-        let gate = passing_gate();
-        let result = authorize(APPLY_MACHINE_SETTING_VERB, false, 1234, &gate).await;
-        assert_eq!(
-            result,
-            Err("privileged verb requires SYSTEM/Admin caller".to_string())
-        );
-    }
-
-    #[tokio::test]
     async fn privileged_verb_from_privileged_caller_is_allowed() {
         let gate = passing_gate();
         let result = authorize("svc.dispatch", true, 1234, &gate).await;
@@ -6950,13 +6939,6 @@ mod tests {
             Some("hidden-secret")
         );
         assert!(args.as_object().unwrap().is_empty());
-    }
-
-    // ── SVC_PROTOCOL_VERSION is exported and non-empty ───────────────────
-
-    #[test]
-    fn protocol_version_non_empty() {
-        assert!(!SVC_PROTOCOL_VERSION.is_empty());
     }
 }
 

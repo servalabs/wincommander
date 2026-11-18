@@ -7,7 +7,7 @@ use windows_sys::Win32::Security::{
     Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW, CreateRestrictedToken,
     CreateWellKnownSid, EqualSid, GetAce, ImpersonateLoggedOnUser, RevertToSelf,
     SetKernelObjectSecurity, WinBuiltinAdministratorsSid, ACCESS_ALLOWED_ACE,
-    DISABLE_MAX_PRIVILEGE, SID_AND_ATTRIBUTES, TOKEN_DUPLICATE,
+    DISABLE_MAX_PRIVILEGE, OWNER_SECURITY_INFORMATION, SID_AND_ATTRIBUTES, TOKEN_DUPLICATE,
 };
 
 fn inspect_exact_grant_and_add_deny(process: HANDLE, sid: *mut core::ffi::c_void) {
@@ -191,7 +191,9 @@ fn exact_account_grant_allows_identity_query_but_not_process_control() {
         .lines()
         .any(|line| line.unwrap().contains("metadata-fixture-ready")));
     let handle = helper.0.as_raw_handle();
-    let sddl: Vec<u16> = "D:P(A;;GA;;;SY)(A;;GA;;;BA)"
+    // Administrators own the helper so the account running the test (which owns
+    // new objects by default on Windows Server) gains no implicit READ_CONTROL.
+    let sddl: Vec<u16> = "O:BAD:P(A;;GA;;;SY)(A;;GA;;;BA)"
         .encode_utf16()
         .chain(Some(0))
         .collect();
@@ -209,7 +211,11 @@ fn exact_account_grant_allows_identity_query_but_not_process_control() {
     );
     let _descriptor = LocalAllocation(descriptor);
     assert_ne!(
-        unsafe { SetKernelObjectSecurity(handle, DACL_SECURITY_INFORMATION, descriptor) },
+        unsafe { SetKernelObjectSecurity(
+                handle,
+                DACL_SECURITY_INFORMATION | OWNER_SECURITY_INFORMATION,
+                descriptor,
+            ) },
         0
     );
     let pid = helper.0.id();

@@ -7,9 +7,49 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Windows Server defaults new objects to the creating user as owner, which
+/// the service's trusted-owner check rightly rejects. Production creates these
+/// objects as SYSTEM, so make this test process create Administrators-owned
+/// objects regardless of the machine's default-owner policy.
+fn create_administrators_owned_objects() {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::Security::{
+        CreateWellKnownSid, SetTokenInformation, TokenOwner, WinBuiltinAdministratorsSid,
+        TOKEN_ADJUST_DEFAULT, TOKEN_OWNER,
+    };
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| unsafe {
+        let mut sid = [0u32; 17];
+        let mut size = std::mem::size_of_val(&sid) as u32;
+        let mut token = std::ptr::null_mut();
+        if CreateWellKnownSid(
+            WinBuiltinAdministratorsSid,
+            std::ptr::null_mut(),
+            sid.as_mut_ptr().cast(),
+            &mut size,
+        ) != 0
+            && OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_DEFAULT, &mut token) != 0
+        {
+            let owner = TOKEN_OWNER {
+                Owner: sid.as_mut_ptr().cast(),
+            };
+            // Not elevated: the default owner is already Administrators.
+            let _ = SetTokenInformation(
+                token,
+                TokenOwner,
+                std::ptr::addr_of!(owner).cast(),
+                std::mem::size_of::<TOKEN_OWNER>() as u32,
+            );
+            CloseHandle(token);
+        }
+    });
+}
+
 struct ProtectedDir(PathBuf);
 impl ProtectedDir {
     fn new() -> Self {
+        create_administrators_owned_objects();
         let path =
             std::env::temp_dir().join(format!("wincmd-fleet-owner-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&path).unwrap();
@@ -223,6 +263,13 @@ fn protect_file(lock: &Path) {
         .output()
         .unwrap();
     assert!(owner.status.success());
+    // A creator-owner account in the token's default DACL must not survive.
+    let reset = Command::new("icacls.exe")
+        .arg(lock)
+        .arg("/reset")
+        .output()
+        .unwrap();
+    assert!(reset.status.success());
     let grant = Command::new("icacls.exe")
         .arg(lock)
         .arg("/inheritance:r")

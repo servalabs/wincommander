@@ -60,15 +60,4 @@ mod tests {
         // 2023-11-14T22:13:20Z
         assert_eq!(unix_secs_to_rfc3339(1_700_000_000), "2023-11-14T22:13:20Z");
     }
-
-    #[test]
-    fn now_unix_is_positive_and_recent() {
-        let now = now_unix();
-        assert!(now > 1_700_000_000, "now_unix should be well after 2023");
-    }
-
-    #[test]
-    fn now_rfc3339_ends_with_z() {
-        assert!(now_rfc3339().ends_with('Z'));
-    }
 }

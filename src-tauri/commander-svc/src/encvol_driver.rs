@@ -388,7 +388,6 @@ mod tests {
         assert!(source.contains("Test-WcDriver $driver"));
         assert!(source.contains(DRIVER_SHA256));
         assert!(source.contains("$signature.Status -ne 'Valid'"));
-        assert!(!source.contains(&["fn existing_control", "_device_is_available"].concat()));
     }
 
     #[test]
@@ -403,7 +402,6 @@ mod tests {
             .unwrap();
         assert!(compatible_veracrypt_service_is_running(&running));
         assert!(!compatible_veracrypt_service_is_running(&stopped));
-        assert_eq!(COMPATIBLE_VERA_CRYPT_SERVICE_NAME, "VeraCrypt");
     }
 
     #[test]

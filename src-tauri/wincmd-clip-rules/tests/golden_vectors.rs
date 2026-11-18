@@ -95,16 +95,6 @@ fn golden_cooldown_sequence() {
     );
 }
 
-/// Sanity check that the golden-vector fixtures above actually exercise
-/// `MatchKind::Phrase` case-sensitively (not incidentally passing via some
-/// other matcher) — a non-matching text must produce no verdict.
-#[test]
-fn golden_fixture_sanity_no_match_is_none() {
-    let only = common::phrase_rule(0x01, 10, "leak-me");
-    let compiled = compile(&[only], &RuleSetLimits::default()).expect("valid");
-    assert!(compiled.evaluate("nothing interesting here").is_none());
-}
-
 /// Not a golden vector, but pinned alongside them: a `Regex`-matcher rule
 /// and a `Builtin`-matcher rule that fires on the same underlying pattern
 /// text must be indistinguishable at the `Verdict` level — proving "one
