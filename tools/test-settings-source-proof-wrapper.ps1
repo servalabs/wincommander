@@ -16,7 +16,7 @@ fn main() {
     std::process::exit(std::env::var("WINCMD_TEST_EXIT").ok().and_then(|s| s.parse().ok()).unwrap_or(0));
 }
 '@ | Set-Content -LiteralPath $source -Encoding ascii
-& rustc.exe +1.99.1 --edition 2021 $source -o $helper
+& rustc.exe +1.100.0 --edition 2021 $source -o $helper
 if ($LASTEXITCODE -ne 0) { throw 'Synthetic proof helper did not compile.' }
 $wrapper = (Resolve-Path (Join-Path $PSScriptRoot '../src-tauri/commander-free/nsis/install-settings-generation.ps1')).Path
 $stdout = Join-Path $work 'stdout.txt'; $stderr = Join-Path $work 'stderr.txt'

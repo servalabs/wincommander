@@ -32,6 +32,22 @@ describe("development launcher hardening", () => {
     expect(devServer).toContain('vaultState?.state !== "free"');
   });
 
+  test("a plain tauri dev starts Vite before the long native preparation", () => {
+    const tauriConfig = readFileSync("src-tauri/commander-free/tauri.conf.json", "utf8");
+    // The raw hook installs missing tools first (setup:dev), then must reach Vite
+    // inside Tauri's fixed frontend wait.
+    expect(tauriConfig).toMatch(/"beforeDevCommand":\s*"[^"]*bun run setup:dev[^"]*dev:server --precleaned --vite-first"/);
+    expect(devServer).toContain('process.argv.includes("--vite-first")');
+    // Vite starts before the Pro build/service sync, never frees its own port,
+    // and is stopped if preparation fails.
+    expect(devServer.indexOf("earlyVite = startVite()")).toBeGreaterThan(0);
+    expect(devServer.indexOf("earlyVite = startVite()")).toBeLessThan(devServer.indexOf("tools/build-pro.ts"));
+    expect(devServer).toContain("policy.releasePort && !earlyVite");
+    expect(devServer).toContain("failAfterStoppingVite(buildProResult)");
+    // The supported prepared launcher keeps its own vite-only hook.
+    expect(readFileSync("src-tauri/commander-free/tauri.prepared-dev.conf.json", "utf8")).toContain("--vite-only");
+  });
+
   test("a fresh checkout builds in debug without generated .enc release artifacts", () => {
     const buildRs = readFileSync("src-tauri/commander-free/build.rs", "utf8");
     const call = buildRs.indexOf("ensure_debug_resource_placeholders();");

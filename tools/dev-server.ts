@@ -60,6 +60,18 @@ const PRESERVE_WINCOMMANDER = MULTI_USER || process.argv.includes("--preserve-wi
 const FRONTEND_ONLY = process.argv.includes("--frontend-only");
 const PREPARE_ONLY = process.argv.includes("--prepare-only");
 const VITE_ONLY = process.argv.includes("--vite-only");
+// A plain `bun x tauri dev` has no separate preparation step, and Tauri gives
+// up waiting for the frontend after a fixed deadline that a cold Pro/service
+// build exceeds. `--vite-first` starts Vite as soon as the quick installs are
+// done and runs the long native preparation behind it, so the dev server is
+// reachable in time. tools/dev.ps1 does not need it (it prepares first).
+const VITE_FIRST = process.argv.includes("--vite-first");
+let earlyVite: ReturnType<typeof spawn> | null = null;
+
+function failAfterStoppingVite(code: number): never {
+  earlyVite?.kill();
+  process.exit(code);
+}
 
 function windowsPowerShellEnv(): NodeJS.ProcessEnv {
   // Bun and PowerShell 7 leave their module path in the process environment.
@@ -195,6 +207,11 @@ async function main(): Promise<void> {
     }
   }
 
+  if (VITE_FIRST && !PREPARE_ONLY) {
+    console.log("[dev-server] starting vite first so Tauri's frontend wait is met; native preparation continues behind it.");
+    earlyVite = startVite();
+  }
+
   if (!frontendOnly) {
   console.log(
     PRESERVE_WINCOMMANDER
@@ -208,7 +225,7 @@ async function main(): Promise<void> {
     const buildProResult = await run("[build:pro]", "bun", ["run", "tools/build-pro.ts"]);
     if (buildProResult !== 0) {
       console.error(`[dev-server] build:pro failed (exit ${buildProResult}).`);
-      process.exit(buildProResult);
+      failAfterStoppingVite(buildProResult);
     }
   }
 
@@ -219,7 +236,8 @@ async function main(): Promise<void> {
     ? "[dev-server] SYSTEM settings service verified — native preparation ready."
     : "[dev-server] SYSTEM settings service verified — starting vite.");
 
-  if (policy.releasePort) freeVitePort();
+  // Never release the port when this process already owns it through Vite.
+  if (policy.releasePort && !earlyVite) freeVitePort();
   }
 
   if (PREPARE_ONLY) {
@@ -227,10 +245,10 @@ async function main(): Promise<void> {
     return;
   }
 
-  startVite();
+  if (!earlyVite) startVite();
 }
 
-function startVite(): void {
+function startVite(): ReturnType<typeof spawn> {
   // vite is long-running/foreground — its exit code becomes this script's.
   const vite = spawn("bun", ["x", "vite"], { cwd: ROOT, env: process.env, stdio: "inherit", shell: false });
 
@@ -248,9 +266,10 @@ function startVite(): void {
   vite.on("exit", (code) => {
     process.exit(code ?? 0);
   });
+  return vite;
 }
 
 main().catch((err) => {
   console.error("[dev-server] fatal:", err);
-  process.exit(1);
+  failAfterStoppingVite(1);
 });

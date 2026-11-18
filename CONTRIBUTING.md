@@ -75,6 +75,15 @@ mounted or unverifiable Vault state stops native preparation, and
 the desktop launcher for native testing; a browser-only session does not load
 new native code.
 
+A plain `bun x tauri dev` also works on a fresh checkout. Its `beforeDevCommand`
+installs anything missing (Bun, the pinned Rust toolchain and the native Perl
+used by the vendored OpenSSL build), then starts Vite first (`--vite-first`) so
+Tauri's fixed frontend wait is met while the Pro and service preparation runs
+behind it. Cargo finds Perl through `src-tauri/.cargo/config.toml`, and debug
+builds create empty placeholders for the generated `scripts/**/*.enc` bundle
+resources. Prefer `tools/dev.ps1` for native testing. Set
+`WINCOMMANDER_DEV_DEBUG_PORT=9223` to expose a loopback WebView2 debugging port.
+
 ### Free-only development (no Pro checkout)
 
 With no sibling Pro workspace, `tools/dev.ps1` starts the Free-only app

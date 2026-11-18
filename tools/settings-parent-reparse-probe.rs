@@ -1,7 +1,7 @@
 // Run (elevated Windows terminal, from the repository root). The named temporary
 // directory must already exist, with at least 5 GiB free on D: and 12 GiB on C::
 //   $env:TEMP = 'D:\_cargo-target\settings-actual-user-temp-20261106'; $env:TMP = $env:TEMP
-//   rustc +1.99.1 --edition 2021 tools/settings-parent-reparse-probe.rs -o "$env:TEMP\settings-parent-reparse-probe.exe"
+//   rustc +1.100.0 --edition 2021 tools/settings-parent-reparse-probe.rs -o "$env:TEMP\settings-parent-reparse-probe.exe"
 //   $fixture = Join-Path $env:TEMP ('reparse-fixture-' + [Guid]::NewGuid().ToString('N'))
 //   & "$env:TEMP\settings-parent-reparse-probe.exe" $fixture --restricted
 // For the no-write-sharing comparison use a new unique fixture path and add --deny-write.
