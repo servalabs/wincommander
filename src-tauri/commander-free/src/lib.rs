@@ -1778,6 +1778,13 @@ pub fn run() {
     {
         let cli_args: Vec<String> = std::env::args().collect();
         if !cli_mode
+            && startup_elevation::should_handoff_existing_instance(&cli_args)
+            && !startup_elevation::is_current_process_elevated()
+        {
+            // An unsuccessful runas child must leave the original launch alone.
+            std::process::exit(1);
+        }
+        if !cli_mode
             && !session_instance::is_background_duplicate(&cli_args)
             && startup_elevation::should_offer_startup_elevation(cli_mode, &cli_args, false)
         {
@@ -1796,7 +1803,7 @@ pub fn run() {
                 &cli_args,
                 startup.calculator_lock_active,
             ) && startup_elevation::offer_startup_elevation(&cli_args)
-                == startup_elevation::StartupElevationResult::ElevatedCopyStarted
+                == startup_elevation::StartupElevationResult::UseElevatedDesktop
             {
                 std::process::exit(0);
             }

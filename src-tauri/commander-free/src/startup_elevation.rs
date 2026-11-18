@@ -1,4 +1,4 @@
-//! Optional Windows elevation at an interactive launch.
+//! Request Windows administrator consent for a foreground split-token launch.
 //!
 //! The executable manifest deliberately remains `asInvoker`: a standard user
 //! must always be able to open WinCommander. For a foreground launch made by
@@ -14,21 +14,19 @@
 pub enum StartupElevationResult {
     /// No prompt was appropriate, or Windows declined/cancelled the request.
     ContinueNormally,
-    /// Windows accepted the elevation request and the original process should exit.
-    ElevatedCopyStarted,
+    /// A verified elevated desktop owns or will take over this launch.
+    UseElevatedDesktop,
 }
 
 const ELEVATED_RELAUNCH_FLAG: &str = "--elevated-relaunch";
-const ELEVATED_LAUNCH_TASK: &str = "SM-EL";
-const ELEVATED_LAUNCH_TASK_PATH: &str = r"\System Maintenance\";
-
-#[cfg(windows)]
-#[path = "startup_elevation_wait.rs"]
-mod handoff_wait;
 
 /// Only foreground launches may request consent. Scheduler already chooses
 /// the account's highest available token for the automatic sign-in task.
-pub fn should_offer_startup_elevation(cli_mode: bool, args: &[String], calculator_lock_active: bool) -> bool {
+pub fn should_offer_startup_elevation(
+    cli_mode: bool,
+    args: &[String],
+    calculator_lock_active: bool,
+) -> bool {
     if cli_mode || calculator_lock_active || args.iter().any(|arg| arg == ELEVATED_RELAUNCH_FLAG) {
         return false;
     }
@@ -64,14 +62,14 @@ pub fn is_elevated_relaunch(args: &[String]) -> bool {
 
 #[cfg(windows)]
 pub fn is_current_process_elevated() -> bool {
-    (unsafe { windows_sys::Win32::UI::Shell::IsUserAnAdmin() }) != 0
+    crate::process_privileges::current_process_elevation() == Ok(true)
 }
 
 /// A UAC-filtered Administrator token is not elevated, so IsUserAnAdmin()
 /// returns false. TokenElevationTypeLimited is the Windows-supported way to
 /// distinguish that account from a standard account without parsing localized
-/// group names or invoking a shell command. This only decides whether to try
-/// the installer-owned elevated launcher; it grants no authority.
+/// group names or invoking a shell command. This only decides whether to ask
+/// Windows for consent; it grants no authority.
 #[cfg(windows)]
 fn current_user_has_split_admin_token() -> bool {
     use windows_sys::Win32::{
@@ -98,7 +96,9 @@ fn current_user_has_split_admin_token() -> bool {
             &mut bytes_returned,
         ) != 0;
         CloseHandle(token);
-        read_ok && elevation_type == TokenElevationTypeLimited
+        read_ok
+            && bytes_returned == std::mem::size_of::<TOKEN_ELEVATION_TYPE>() as u32
+            && elevation_type == TokenElevationTypeLimited
     }
 }
 
@@ -107,11 +107,21 @@ pub fn is_current_process_elevated() -> bool {
     false
 }
 
-/// Only the child created by this module can replace a normal primary through
-/// a cooperative exit request. Other duplicate launches remain ordinary
-/// forwards, even when Explorer already started them elevated.
+/// Recognize the foreground relaunch marker. Actual handoff still requires a
+/// verified elevated sender, whether launched here or directly by Explorer.
 pub fn should_handoff_existing_instance(args: &[String]) -> bool {
-    !is_helper_launch(args) && !is_logon_router_launch(args) && is_elevated_relaunch(args)
+    !is_helper_launch(args)
+        && !is_logon_router_launch(args)
+        && !is_legacy_background_launch(args)
+        && is_elevated_relaunch(args)
+}
+
+pub fn is_focus_only_launch(args: &[String]) -> bool {
+    args.iter().skip(1).all(|arg| arg == "--focus")
+}
+
+pub fn can_promote_existing_instance(args: &[String], is_elevated: bool) -> bool {
+    is_elevated && (should_handoff_existing_instance(args) || is_focus_only_launch(args))
 }
 
 /// Build the child arguments without passing the internal sentinel on again.
@@ -166,84 +176,23 @@ fn should_request_admin_handoff(is_elevated: bool, has_split_admin_token: bool) 
 #[cfg(windows)]
 pub fn offer_startup_elevation(args: &[String]) -> StartupElevationResult {
     use std::os::windows::ffi::OsStrExt;
-    use std::os::windows::process::CommandExt;
-    use windows_sys::Win32::UI::{
-        Shell::{IsUserAnAdmin, ShellExecuteW},
-        WindowsAndMessaging::SW_SHOWNORMAL,
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, GetLastError, ERROR_CANCELLED},
+        UI::{
+            Shell::{
+                ShellExecuteExW, SEE_MASK_FLAG_NO_UI, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS,
+                SHELLEXECUTEINFOW,
+            },
+            WindowsAndMessaging::SW_SHOWNORMAL,
+        },
     };
 
-    // A user may explicitly choose "Run as administrator" from Explorer.
-    // Do not spawn a needless second elevated instance in that case.
-    let elevated = unsafe { IsUserAnAdmin() } != 0;
-    if elevated || is_logon_router_launch(args) {
-        return StartupElevationResult::ContinueNormally;
-    }
-
-    // A standard account cannot use the Administrators-only scheduled
-    // launcher. Never turn an ordinary WinCommander launch into a credential
-    // prompt; machine-wide operations still request approval when invoked.
-    if !should_request_admin_handoff(elevated, current_user_has_split_admin_token()) {
-        crate::log_message_src(
-            "info",
-            "core",
-            "[StartupElevation] standard account continues without elevation",
-        );
-        return StartupElevationResult::ContinueNormally;
-    }
-
-    // The machine installer owns this Administrators-group task. Task
-    // Scheduler verifies group membership and starts the configured high-token
-    // child without another consent dialog. Only a foreground launch may
-    // fall back to UAC when the task is unavailable.
-    let task_name = ELEVATED_LAUNCH_TASK;
-    let task_path = ELEVATED_LAUNCH_TASK_PATH;
-    let launch_intent = "--focus";
-    // Never hand a dev/portable launch to an unrelated installed executable.
-    // RunEx binds the task to this interactive session on multi-user machines.
-    let task_script = std::env::current_exe().ok().map(|path| format!(
-        "$ErrorActionPreference='Stop'; try {{ $scheduler=New-Object -ComObject Schedule.Service; $scheduler.Connect(); $task=$scheduler.GetFolder('{task_path}').GetTask('{task_name}'); $d=$task.Definition; if (-not $d.Settings.Enabled -or -not $d.Settings.AllowDemandStart -or $d.Triggers.Count -ne 0 -or $d.Actions.Count -ne 1 -or $d.Actions.Item(1).Path -ine '{}' -or $d.Actions.Item(1).Arguments -ne '--elevated-relaunch $(Arg0)' -or $d.Principal.RunLevel -ne 1 -or $d.Settings.MultipleInstances -ne 0 -or $d.Settings.RestartCount -ne 0 -or $d.Settings.StartWhenAvailable -or $d.Settings.WakeToRun) {{ exit 77 }}; $sid=$d.Principal.GroupId; if ($sid -notmatch '^S-1-') {{ $sid=([Security.Principal.NTAccount]$sid).Translate([Security.Principal.SecurityIdentifier]).Value }}; if ($sid -ne 'S-1-5-32-544') {{ exit 77 }}; $session=[Diagnostics.Process]::GetCurrentProcess().SessionId }} catch {{ exit 77 }}; try {{ $running=$task.RunEx('{launch_intent}',4,$session,$null); if ($null -eq $running) {{ exit 1 }} }} catch {{ exit 1 }}; exit 0",
-        path.to_string_lossy().replace('\'', "''")
-    ));
-    use handoff_wait::SchedulerHandoff;
-    let task_status = if !cfg!(debug_assertions) {
-        task_script.map_or(SchedulerHandoff::NotStarted, |script| {
-            let child = std::process::Command::new("powershell.exe")
-                .args([
-                    "-NoProfile",
-                    "-NonInteractive",
-                    "-WindowStyle",
-                    "Hidden",
-                    "-Command",
-                    &script,
-                ])
-                .creation_flags(0x08000000) // CREATE_NO_WINDOW
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn();
-            match child {
-                Ok(mut child) => {
-                    handoff_wait::wait_for_handoff(&mut child, std::time::Duration::from_secs(12))
-                }
-                Err(_) => SchedulerHandoff::NotStarted,
-            }
-        })
-    } else {
-        SchedulerHandoff::NotStarted
-    };
-    if task_status == SchedulerHandoff::Accepted {
-        crate::log_message_src(
-            "info",
-            "core",
-            &format!("[StartupElevation] trusted task started: {task_name}"),
-        );
-        return StartupElevationResult::ElevatedCopyStarted;
-    }
-    if task_status == SchedulerHandoff::AcceptanceUnknown {
-        crate::log_message_src(
-            "warn", "core",
-            "[StartupElevation] scheduler handoff outcome unknown; continuing without another elevation request",
-        );
+    if !should_offer_startup_elevation(false, args, false)
+        || !should_request_admin_handoff(
+            is_current_process_elevated(),
+            current_user_has_split_admin_token(),
+        )
+    {
         return StartupElevationResult::ContinueNormally;
     }
 
@@ -258,6 +207,12 @@ pub fn offer_startup_elevation(args: &[String]) -> StartupElevationResult {
             return StartupElevationResult::ContinueNormally;
         }
     };
+    if is_focus_only_launch(args) && crate::session_instance::reveal_elevated_primary(&executable) {
+        return StartupElevationResult::UseElevatedDesktop;
+    }
+
+    // Scheduler acceptance is not proof of a high-token process. Use Windows'
+    // interactive consent route directly when an elevated desktop is needed.
     let verb: Vec<u16> = "runas\0".encode_utf16().collect();
     let executable: Vec<u16> = executable
         .as_os_str()
@@ -269,29 +224,43 @@ pub fn offer_startup_elevation(args: &[String]) -> StartupElevationResult {
         .chain(Some(0))
         .collect();
 
-    let result = unsafe {
-        ShellExecuteW(
-            std::ptr::null_mut(),
-            verb.as_ptr(),
-            executable.as_ptr(),
-            parameters.as_ptr(),
-            std::ptr::null(),
-            SW_SHOWNORMAL,
-        )
+    let mut request = SHELLEXECUTEINFOW {
+        cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+        fMask: SEE_MASK_FLAG_NO_UI | SEE_MASK_NOASYNC | SEE_MASK_NOCLOSEPROCESS,
+        lpVerb: verb.as_ptr(),
+        lpFile: executable.as_ptr(),
+        lpParameters: parameters.as_ptr(),
+        nShow: SW_SHOWNORMAL,
+        ..Default::default()
     };
-    if (result as isize) <= 32 {
-        // UAC cancel is intentionally quiet. It is a normal choice, not an
-        // application error; the original app carries on with its user token.
-        crate::log_message_src(
-            "info",
-            "core",
-            "[StartupElevation] elevation was declined or unavailable; continuing normally",
-        );
-        StartupElevationResult::ContinueNormally
-    } else {
-        crate::log_message_src("info", "core", "[StartupElevation] elevated copy started");
-        StartupElevationResult::ElevatedCopyStarted
+    if unsafe { ShellExecuteExW(&mut request) } == 0 {
+        let code = unsafe { GetLastError() };
+        if code == ERROR_CANCELLED {
+            crate::log_message_src(
+                "info",
+                "core",
+                "[StartupElevation] consent declined; using standard mode",
+            );
+        } else {
+            crate::log_message_src("warn", "core", &format!("[StartupElevation] Windows could not start the elevated desktop (error {code}); using standard mode"));
+        }
+        return StartupElevationResult::ContinueNormally;
     }
+
+    let child = request.hProcess;
+    if !child.is_null() {
+        let elevated = crate::process_privileges::process_elevation(child);
+        unsafe { CloseHandle(child) };
+        if elevated == Ok(true) {
+            return StartupElevationResult::UseElevatedDesktop;
+        }
+    }
+    crate::log_message_src(
+        "warn",
+        "core",
+        "[StartupElevation] Windows could not verify the new desktop's elevated token",
+    );
+    StartupElevationResult::ContinueNormally
 }
 
 #[cfg(not(windows))]
@@ -307,34 +276,60 @@ mod tests {
     fn foreground_gui_launch_offers_elevation() {
         assert!(should_offer_startup_elevation(
             false,
-            &["wincommander-free.exe".into()], false
+            &["wincommander-free.exe".into()],
+            false
         ));
     }
 
     #[test]
     fn calculator_cover_never_requests_optional_startup_elevation() {
-        assert!(!should_offer_startup_elevation(false, &["app.exe".into()], true));
-        assert!(!should_offer_startup_elevation(false, &["app.exe".into(), "--focus".into()], true));
-        assert!(should_offer_startup_elevation(false, &["app.exe".into()], false));
+        assert!(!should_offer_startup_elevation(
+            false,
+            &["app.exe".into()],
+            true
+        ));
+        assert!(!should_offer_startup_elevation(
+            false,
+            &["app.exe".into(), "--focus".into()],
+            true
+        ));
+        assert!(should_offer_startup_elevation(
+            false,
+            &["app.exe".into()],
+            false
+        ));
     }
 
     #[test]
     fn helpers_and_automatic_launches_never_request_elevation() {
-        for flag in ["--safe-copy", "--context-shred", "--scrub", "--safe-paste", "--recovery-reveal"] {
+        for flag in [
+            "--safe-copy",
+            "--context-shred",
+            "--scrub",
+            "--safe-paste",
+            "--recovery-reveal",
+        ] {
             assert!(!should_offer_startup_elevation(
                 false,
-                &["app.exe".into(), flag.into()], false
+                &["app.exe".into(), flag.into()],
+                false
             ));
         }
         assert!(!should_offer_startup_elevation(
             false,
-            &["app.exe".into(), "--autostart".into()], false
+            &["app.exe".into(), "--autostart".into()],
+            false
         ));
         assert!(!should_offer_startup_elevation(
             false,
-            &["app.exe".into(), "--minimized".into()], false
+            &["app.exe".into(), "--minimized".into()],
+            false
         ));
-        assert!(!should_offer_startup_elevation(true, &["app.exe".into()], false));
+        assert!(!should_offer_startup_elevation(
+            true,
+            &["app.exe".into()],
+            false
+        ));
     }
 
     #[test]
@@ -360,7 +355,8 @@ mod tests {
         for extra in ["--focus", "--minimized", ELEVATED_RELAUNCH_FLAG] {
             assert!(!should_offer_startup_elevation(
                 false,
-                &["app.exe".into(), "--autostart".into(), extra.into()], false
+                &["app.exe".into(), "--autostart".into(), extra.into()],
+                false
             ));
         }
     }
@@ -369,12 +365,13 @@ mod tests {
     fn elevated_child_cannot_loop_back_into_uac() {
         assert!(!should_offer_startup_elevation(
             false,
-            &["app.exe".into(), ELEVATED_RELAUNCH_FLAG.into()], false
+            &["app.exe".into(), ELEVATED_RELAUNCH_FLAG.into()],
+            false
         ));
     }
 
     #[test]
-    fn only_a_split_token_administrator_uses_the_elevated_launcher() {
+    fn only_a_split_token_administrator_needs_a_consent_request() {
         assert!(should_request_admin_handoff(false, true));
         assert!(!should_request_admin_handoff(false, false));
         assert!(!should_request_admin_handoff(true, true));
@@ -397,6 +394,28 @@ mod tests {
             ELEVATED_RELAUNCH_FLAG.into(),
             "--autostart".into()
         ]));
+        assert!(!should_handoff_existing_instance(&[
+            "app.exe".into(),
+            ELEVATED_RELAUNCH_FLAG.into(),
+            "--minimized".into()
+        ]));
+    }
+
+    #[test]
+    fn shell_elevated_foreground_launch_can_replace_a_standard_desktop() {
+        for args in [
+            vec!["app.exe".into()],
+            vec!["app.exe".into(), "--focus".into()],
+        ] {
+            assert!(can_promote_existing_instance(&args, true));
+            assert!(!can_promote_existing_instance(&args, false));
+        }
+        for flag in ["--autostart", "--minimized", "--safe-paste"] {
+            assert!(!can_promote_existing_instance(
+                &["app.exe".into(), flag.into()],
+                true
+            ));
+        }
     }
 
     #[test]

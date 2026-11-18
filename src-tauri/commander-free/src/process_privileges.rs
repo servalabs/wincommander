@@ -2,7 +2,9 @@
 //! Read the desktop process token without inferring privileges from its account.
 
 #[cfg(windows)]
-pub(crate) fn query_elevation(token: windows_sys::Win32::Foundation::HANDLE) -> Result<bool, String> {
+pub(crate) fn query_elevation(
+    token: windows_sys::Win32::Foundation::HANDLE,
+) -> Result<bool, String> {
     use windows_sys::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION};
     let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
     let mut returned = 0;
@@ -25,15 +27,20 @@ pub(crate) fn query_elevation(token: windows_sys::Win32::Foundation::HANDLE) -> 
 
 #[cfg(windows)]
 pub(crate) fn current_process_elevation() -> Result<bool, String> {
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    process_elevation(unsafe { GetCurrentProcess() })
+}
+
+#[cfg(windows)]
+pub(crate) fn process_elevation(
+    process: windows_sys::Win32::Foundation::HANDLE,
+) -> Result<bool, String> {
     use windows_sys::Win32::{
-        Foundation::CloseHandle,
-        Security::TOKEN_QUERY,
-        System::Threading::{GetCurrentProcess, OpenProcessToken},
+        Foundation::CloseHandle, Security::TOKEN_QUERY, System::Threading::OpenProcessToken,
     };
     let mut token = std::ptr::null_mut();
-    // Query only our own primary token; release the acquired handle on either query result.
-    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
-        return Err("Windows could not open this app's process token.".into());
+    if unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) } == 0 {
+        return Err("Windows could not open the process token.".into());
     }
     let result = query_elevation(token);
     unsafe { CloseHandle(token) };

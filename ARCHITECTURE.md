@@ -173,8 +173,11 @@ launches hidden; OFF reveals the ready interface maximized within the work area.
 Old personal overlays cannot override this choice, and changing it requires an
 elevated process. PIN and hide policies continue to apply.
 A duplicate logon launch does not reveal or replace an existing window.
-Portable/development startup tasks retain normal privileges. Explicit manual
-launches still request focus and may request administrator consent.
+Portable/development startup tasks retain normal privileges. A foreground launch
+by a split-token administrator focuses a verified elevated desktop when one is
+already running. Otherwise it requests Windows administrator consent directly.
+Declining consent keeps the standard session. Calculator PIN, helper, and
+background launches retain their existing startup rules.
 Native startup runs the integrity check once on a background thread. Autostart
 IPC operations use blocking workers rather than the window event thread; the
 renderer does not launch a duplicate startup repair.
@@ -193,7 +196,7 @@ task migration cannot recreate a retired launcher.
 | Scheduled task | Purpose | Scope |
 | --- | --- | --- |
 | `\System Maintenance\SM-AS` | Sign-in startup using the shared silent preference | One all-user logon trigger; highest available token in the signed-in session |
-| `\System Maintenance\SM-EL` | On-demand administrator launcher | No automatic trigger; current interactive administrator session |
+| `\System Maintenance\SM-EL` | Installer-owned administrator task retained for compatibility | No automatic trigger; current interactive administrator session |
 | `SL-UW-<identity>-<SID>` | Scheduled personal cleanup | Exact owning Windows account |
 | `SL-SW-<identity>` | Scheduled machine cleanup | SYSTEM |
 | `WinCommanderShellPriorityLogon` | Apply configured desktop-shell priority | Machine logon helper |

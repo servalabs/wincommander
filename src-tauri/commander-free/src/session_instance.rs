@@ -156,6 +156,48 @@ pub fn pipe_path(sid: u32) -> String {
     format!(r"\\.\pipe\{}", instance_object_name(sid, "args"))
 }
 
+fn is_elevated_desktop_process(pid: u32, session: u32, executable: &std::path::Path) -> bool {
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::System::Threading::QueryFullProcessImageNameW;
+
+    let mut actual_session = 0;
+    if unsafe { ProcessIdToSessionId(pid, &mut actual_session) } == 0 || actual_session != session {
+        return false;
+    }
+    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if process.is_null() {
+        return false;
+    }
+    let mut image = vec![0u16; 32_768];
+    let mut length = image.len() as u32;
+    let read = unsafe { QueryFullProcessImageNameW(process, 0, image.as_mut_ptr(), &mut length) };
+    let verified = read != 0
+        && std::ffi::OsString::from_wide(&image[..length as usize])
+            .eq_ignore_ascii_case(executable.as_os_str())
+        && crate::process_privileges::process_elevation(process) == Ok(true);
+    unsafe { CloseHandle(process) };
+    verified
+}
+
+/// A verified elevated primary can handle a normal reopen without prompting again.
+pub(crate) fn reveal_elevated_primary(executable: &std::path::Path) -> bool {
+    use std::{io::Write as _, os::windows::io::AsRawHandle as _};
+    use windows_sys::Win32::{System::Pipes::GetNamedPipeServerProcessId, UI::WindowsAndMessaging::AllowSetForegroundWindow};
+
+    let session = current_session_id();
+    let Ok(mut pipe) = std::fs::OpenOptions::new().write(true).open(pipe_path(session)) else {
+        return false;
+    };
+    let mut pid = 0;
+    if unsafe { GetNamedPipeServerProcessId(pipe.as_raw_handle(), &mut pid) } == 0
+        || !is_elevated_desktop_process(pid, session, executable)
+    {
+        return false;
+    }
+    unsafe { AllowSetForegroundWindow(pid) };
+    pipe.write_all(b"--focus").is_ok()
+}
+
 // ── Public API ───────────────────────────────────────────────────────────────
 
 /// Background duplicates must not ask Scheduler for a fresh elevated GUI.
@@ -230,8 +272,14 @@ pub fn acquire(cli_args: &[String]) -> bool {
     }
 
     if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
-        if crate::startup_elevation::should_handoff_existing_instance(cli_args) {
+        if crate::startup_elevation::can_promote_existing_instance(
+            cli_args,
+            crate::startup_elevation::is_current_process_elevated(),
+        ) {
             unsafe { CloseHandle(hmutex) };
+            if std::env::current_exe().is_ok_and(|exe| reveal_elevated_primary(&exe)) {
+                return false;
+            }
             return acquire_after_cooperative_elevation_handoff(sid, &mutex_name);
         }
 
@@ -403,6 +451,7 @@ fn acquire_after_cooperative_elevation_handoff(sid: u32, mutex_name: &[u16]) -> 
                 primary_pid
             ),
         );
+        focus_preserved_primary(sid, primary_pid);
         return false;
     }
 
@@ -432,7 +481,23 @@ fn acquire_after_cooperative_elevation_handoff(sid: u32, mutex_name: &[u16]) -> 
         "core",
         "[SessionInstance] primary did not exit for elevation handoff; preserving it",
     );
+    focus_preserved_primary(sid, primary_pid);
     false
+}
+
+fn focus_preserved_primary(sid: u32, pid: Option<u32>) -> bool {
+    if let Some(pid) = pid {
+        unsafe { windows_sys::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow(pid) };
+    }
+    let (delivered, _) = forward_args_with_liveness(sid, &["--focus".into()]);
+    if !delivered {
+        crate::log_message_src(
+            "warn",
+            "core",
+            "[SessionInstance] the preserved desktop could not receive a focus request",
+        );
+    }
+    delivered
 }
 
 /// Spawn the async named-pipe server in the Tauri async runtime.
@@ -495,8 +560,18 @@ pub fn start_pipe_listener(app: tauri::AppHandle) {
             let mut buf = vec![0u8; 8192];
             match server.read(&mut buf).await {
                 Ok(n) if n > 0 => {
+                    use std::os::windows::io::AsRawHandle as _;
+                    use windows_sys::Win32::System::Pipes::GetNamedPipeClientProcessId;
+
                     let payload = String::from_utf8_lossy(&buf[..n]);
-                    handle_forwarded_args(&app, &payload);
+                    let handoff = payload.split('|').any(|part| part == "--elevated-relaunch");
+                    let mut pid = 0;
+                    let is_authorized = !handoff
+                        || (unsafe { GetNamedPipeClientProcessId(server.as_raw_handle(), &mut pid) } != 0
+                            && std::env::current_exe().is_ok_and(|exe| is_elevated_desktop_process(pid, sid, &exe)));
+                    if is_authorized {
+                        handle_forwarded_args(&app, &payload);
+                    }
                 }
                 _ => {}
             }
@@ -651,17 +726,20 @@ fn forward_args_with_attempts(sid: u32, args: &[String], attempts: usize) -> (bo
     use std::io::Write as _;
     let path = pipe_path(sid);
     let stored_pid = read_stored_primary_pid();
+    let payload = args.join("|");
     // Each attempt is 100ms. Ordinary forwards get 3 seconds; the controlled
     // elevation handoff gets 10 seconds while the cold primary creates its
     // listener. Both remain bounded and never replace a live pipe-silent app.
     for _ in 0..attempts {
-        match std::fs::OpenOptions::new().write(true).open(&path) {
-            Ok(mut f) => {
-                let _ = f.write_all(args.join("|").as_bytes());
-                return (true, stored_pid);
-            }
-            Err(_) => std::thread::sleep(std::time::Duration::from_millis(100)),
+        if std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .and_then(|mut pipe| pipe.write_all(payload.as_bytes()))
+            .is_ok()
+        {
+            return (true, stored_pid);
         }
+        std::thread::sleep(std::time::Duration::from_millis(100));
     }
     // Pipe did not open within 3s → primary is silent; return stored PID for
     // the caller to decide whether to take over.
@@ -825,6 +903,36 @@ mod resolve_context_menu_event_tests {
         should_reveal_existing_instance, take_pending_safe_pastes,
     };
     use std::sync::Mutex;
+
+    #[test]
+    fn desktop_handoff_checks_the_real_image_session_and_token() {
+        let pid = super::GetCurrentProcessId;
+        let pid = unsafe { pid() };
+        let session = super::current_session_id();
+        let executable = std::env::current_exe().unwrap();
+        assert_eq!(
+            super::is_elevated_desktop_process(pid, session, &executable),
+            crate::startup_elevation::is_current_process_elevated()
+        );
+        assert!(!super::is_elevated_desktop_process(pid, session ^ 1, &executable));
+        assert!(!super::is_elevated_desktop_process(pid, session, &executable.with_extension("other")));
+    }
+
+    #[tokio::test]
+    async fn failed_handoff_fallback_requests_normal_focus_on_the_preserved_pipe() {
+        use tokio::{io::AsyncReadExt as _, net::windows::named_pipe::ServerOptions};
+
+        let sid = u32::MAX;
+        let mut server = ServerOptions::new().first_pipe_instance(true).create(pipe_path(sid)).unwrap();
+        let request = tokio::task::spawn_blocking(move || super::focus_preserved_primary(sid, None));
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            server.connect().await.unwrap();
+            let mut payload = [0; 16];
+            let size = server.read(&mut payload).await.unwrap();
+            assert_eq!(&payload[..size], b"--focus");
+            assert!(request.await.unwrap());
+        }).await.unwrap();
+    }
 
     #[cfg(wincommander_dev_profile)]
     #[test]
