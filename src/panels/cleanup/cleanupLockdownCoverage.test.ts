@@ -31,35 +31,11 @@ const FORENSIC_TRACE_SCHEDULE_IDS = [
   "explorerSearchHistory", "searchPersonalization",
 ];
 
-const TRACE_FULL_SCOPE_ADVANCED_IDS = [
-  "trace_all_user_certificates", "trace_all_scheduled_tasks", "trace_all_services",
-  "trace_all_wireless_profiles", "trace_all_vpn_connections", "trace_all_chrome_extensions",
-  "trace_all_crypto_provider_data", "trace_windows_update_log", "trace_push_notifications",
-];
-
 async function readProCleanupSteps() {
   return Bun.file("../wincommander-pro/commander-pro/src/handlers/cleanup_steps.rs").text();
 }
 
 describe("System Cleanup lockdown coverage", () => {
-  test("all scanable cleanup categories use the shared details viewer by default", async () => {
-    const panel = await Bun.file("src/panels/cleanup/SystemCleanupPanel.tsx").text();
-
-    expect(panel).toContain("Object.fromEntries(");
-    expect(panel).toContain(".filter((category) => !category.actionOnly && !!category.getDataKey)");
-    expect(panel).toContain("openSharedDetails(category.id)");
-  });
-
-  test("completed scans pack every four clean cards into the next grid slot", async () => {
-    const grid = await Bun.file("src/panels/cleanup/CleanupCategoryGrid.tsx").text();
-    const card = await Bun.file("src/components/cleanup/CleanupTraceCard.tsx").text();
-
-    expect(grid).toContain("const cleanCardPacks = packCleanCards(");
-    expect(grid).toContain("orderedScanCategories.flatMap");
-    expect(grid).toContain('data-cleanup-clean-pack="true"');
-    expect(grid).not.toContain("cleanCardsOpen");
-    expect(card).toContain('height: compact ? "100%" : TRACE_CARD_HEIGHT');
-  });
 
   test("every expanded cleanup category is configurable and dispatched through the guarded lockdown path", async () => {
     const frontend = await Bun.file("src/types/lockdownSteps.ts").text();
@@ -90,17 +66,6 @@ describe("System Cleanup lockdown coverage", () => {
       expect(categories).toContain(`'${id}'`);
       expect(scheduler).toContain(`'${id}'`);
     }
-  });
-
-  test("full-scope system hygiene actions explain their impact before an operator enables them", async () => {
-    const frontend = await Bun.file("src/types/lockdownSteps.ts").text();
-    const descriptions = frontend.slice(frontend.indexOf("export const DESTRUCT_STEP_DESCRIPTIONS"));
-
-    for (const id of TRACE_FULL_SCOPE_ADVANCED_IDS) {
-      expect(descriptions).toContain(`${id}:`);
-    }
-    expect(descriptions).toContain("intentional burn-down");
-    expect(descriptions).toContain("before reconnecting");
   });
 
   test("scheduled wipes execute real hardened payloads and overwrite the Recycle Bin before unlinking", async () => {

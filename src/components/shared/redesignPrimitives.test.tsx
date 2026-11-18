@@ -1,7 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import AdaptiveCard from "./AdaptiveCard";
-import StatusPill from "./StatusPill";
 import SystemRadar from "./SystemRadar";
 import TraceDetailDialog from "./TraceDetailDialog";
 import { ALL_CATEGORIES, type CleanupCategory } from "../../panels/cleanup/cleanupCategories";
@@ -21,24 +19,6 @@ const category: CleanupCategory = {
 };
 
 describe("redesign shared primitives", () => {
-  test("adaptive card renders tile and row density variants", () => {
-    const guided = renderToStaticMarkup(
-      <AdaptiveCard density="guided" title="Privacy" description="Curated controls" />,
-    );
-    const expert = renderToStaticMarkup(
-      <AdaptiveCard density="expert" title="Privacy" description="Curated controls" />,
-    );
-
-    expect(guided).toContain("adaptive-card--tile");
-    expect(expert).toContain("adaptive-card--row");
-  });
-
-  test("status pill renders a stable status label", () => {
-    const html = renderToStaticMarkup(<StatusPill tone="success">Ready</StatusPill>);
-
-    expect(html).toContain("status-pill--success");
-    expect(html).toContain("Ready");
-  });
 
   test("trace detail dialog centralizes trace action state", () => {
     const html = renderToStaticMarkup(

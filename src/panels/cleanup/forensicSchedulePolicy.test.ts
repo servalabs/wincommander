@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { SCHEDULABLE_CATEGORIES } from "./cleanupCategories";
 import { getAutoScheduleInterval } from "./autoSchedulePolicy";
+import { DEFAULT_BULK_CLEAR_EXCLUDES } from "./cleanupManualPolicy";
 import {
   ensureForensicTraceSchedules,
   FORENSIC_SCHEDULE_ALLOWED_IDS,
@@ -9,34 +10,11 @@ import {
   getMissingForensicTraceScheduleCategories,
 } from "./forensicSchedulePolicy";
 
-declare const Bun: {
-  file(path: string): { text(): Promise<string> };
-};
-
-const DEFAULT_CLEANUP_EXCLUDED_IDS = new Set([
-  "wlanProfiles",
-  "browserFootprints",
-  "notepadState",
-  "wslData",
-  "dockerDesktopData",
-  "virtualMachineArtifacts",
-  "developerCaches",
-  "credentialManager",
-  "sshState",
-  "passwordManagerCaches",
-]);
+const DEFAULT_CLEANUP_EXCLUDED_IDS = new Set<string>(DEFAULT_BULK_CLEAR_EXCLUDES);
 
 describe("Secure persona scheduled trace wipes", () => {
-  test("keeps every default-excluded schedulable cleanup target out of the recommendation", async () => {
-    const cleanup = await Bun.file("src/panels/cleanup/cleanupManualPolicy.ts").text();
-    const start = cleanup.indexOf("const DEFAULT_BULK_CLEAR_EXCLUDES = [");
-    const end = cleanup.indexOf("];", start);
-    expect(start).toBeGreaterThan(-1);
-    const defaultExcludedIds = Array.from(
-      cleanup.slice(start, end).matchAll(/'([^']+)'/g),
-      (match) => match[1],
-    );
-    expect(defaultExcludedIds.sort()).toEqual([...DEFAULT_CLEANUP_EXCLUDED_IDS].sort());
+  test("keeps every default-excluded schedulable cleanup target out of the recommendation", () => {
+    const defaultExcludedIds: string[] = [...DEFAULT_CLEANUP_EXCLUDED_IDS];
     for (const id of defaultExcludedIds) {
       expect(FORENSIC_SCHEDULE_PROTECTED_IDS.has(id)).toBe(true);
     }

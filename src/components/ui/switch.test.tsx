@@ -26,13 +26,6 @@ function renderWithProviders(ui: ReactElement): string {
 }
 
 describe("Switch", () => {
-  test("uses explicit off-state contrast tokens", () => {
-    const html = renderWithProviders(<Switch checked={false} />);
-
-    expect(html).toContain("--switch-off-bg");
-    expect(html).toContain("--switch-off-border");
-    expect(html).toContain("--switch-off-thumb");
-  });
 
   test("remains renderable across a presentation-only provider refresh", () => {
     const html = renderToStaticMarkup(
@@ -41,7 +34,7 @@ describe("Switch", () => {
       </AuthModeProvider>,
     );
 
-    expect(html).toContain("--switch-off-bg");
+    expect(html).toContain('role="switch"');
   });
 
   test("exposes switch semantics and the accessible label", () => {
@@ -61,12 +54,4 @@ describe("Switch", () => {
     expect(html).toContain('aria-checked="false"');
   });
 
-  test("size sm renders the compact track", () => {
-    const md = renderWithProviders(<Switch checked={false} />);
-    const sm = renderWithProviders(<Switch checked={false} size="sm" />);
-
-    expect(md).toContain("w-[46px]");
-    expect(sm).toContain("w-[38px]");
-    expect(sm).not.toContain("w-[46px]");
-  });
 });

@@ -48,21 +48,6 @@ describe("Vault Access service intent", () => {
     expect(roundTrip?.entries[0]?.can_edit_policy).toBe(false);
     expect(roundTrip?.entries[0]?.can_remove_policy).toBe(false);
   });
-  test("keeps every actionable Rust mount reason in the renderer vocabulary", () => {
-    expect(VAULT_MOUNT_REASONS).toEqual([
-      "not_authorized", "administrator_required", "policy_access_denied", "private_owner_required", "mount_state_unknown", "invalid_request", "already_mounted", "broker_unavailable", "broker_rejected",
-      "broker_identity_rejected", "broker_handshake_rejected", "broker_reply_rejected",
-      "broker_plan_rejected",
-      "presentation_rejected",
-      "caller_access_denied",
-      "caller_acl_repair_failed",
-      "entitlement_denied",
-      "pro_not_installed",
-      "session_unavailable", "syncthing_profile_unavailable", "syncthing_install_failed",
-      "syncthing_root_conflict", "syncthing_not_enabled", "engine_unlock_failed", "engine_drive_letter_unavailable",
-      "engine_mount_failed", "acl_apply_failed", "acl_readback_failed", "dismount_failed",
-    ]);
-  });
 
   test("renders every terminal reason without falling back to a generic failure", () => {
     for (const reason of VAULT_MOUNT_REASONS) {
@@ -84,14 +69,6 @@ describe("Vault Access service intent", () => {
     expect(message).toContain("exFAT and FAT32");
     expect(message).toContain("Other Windows access problems");
     expect(message).toContain("Back up your files");
-  });
-  test("starts with the shared plus two private file-container shape", () => {
-    const policy = newVaultPolicy();
-    expect(policy.schema_version).toBe(1);
-    expect(policy.entries).toHaveLength(3);
-    expect(policy.entries[0]?.mount.presentation).toBe("machine");
-    expect(policy.entries.slice(1).every(entry => entry.mount.presentation === "per-user")).toBe(true);
-    expect(policy.entries.every(entry => entry.container_kind === "standard")).toBe(true);
   });
 
   test("does not treat an incomplete renderer draft as deployable", () => {

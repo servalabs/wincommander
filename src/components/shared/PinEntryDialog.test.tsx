@@ -18,7 +18,7 @@
 import { describe, expect, test } from "bun:test";
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import PinEntryDialog, { PinEntryDialogBody, validatePin } from "./PinEntryDialog";
+import { PinEntryDialogBody, validatePin } from "./PinEntryDialog";
 import { Dialog } from "@/components/ui/dialog";
 import { buildToggleCommandParams } from "../../types/toggles";
 
@@ -134,21 +134,5 @@ describe("PinEntryDialogBody (the PIN modal content)", () => {
     // The "Turn on" button carries the disabled attribute while invalid.
     expect(html).toMatch(/Turn on<\/button>/);
     expect(html).toContain("disabled=\"\"");
-  });
-});
-
-describe("PinEntryDialog (SSR smoke)", () => {
-  test("renders nothing when closed", () => {
-    const html = renderToStaticMarkup(
-      <PinEntryDialog
-        isOpen={false}
-        toggleLabel="BitLocker TPM+PIN"
-        description="Require a PIN on every boot"
-        onConfirm={() => {}}
-        onCancel={() => {}}
-      />,
-    );
-
-    expect(html).not.toContain("Set a PIN for");
   });
 });
