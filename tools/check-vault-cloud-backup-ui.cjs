@@ -33,13 +33,13 @@ window.$RefreshReg$=()=>{}; window.$RefreshSig$=()=>type=>type; window.__vite_pl
     await page.getByRole('button', { name: 'Connect Proton Drive', exact: true }).click();
     const save = page.getByRole('button', { name: 'Save backup setup', exact: true });
     assert.equal(await save.isDisabled(), true, 'Uploading needs explicit consent');
-    await page.getByLabel('Choose folders', { exact: true }).check();
-    await page.getByLabel('Paths inside this Vault — one per line', { exact: true }).fill('../Private');
+    await page.getByLabel('Choose files or folders', { exact: true }).check();
+    await page.getByLabel('Selected paths inside this Vault — one per line', { exact: true }).fill('../Private');
     await page.getByLabel('I agree to copy these files to my Proton Drive account.', { exact: true }).check();
     await save.click();
     await page.getByRole('alert').filter({ hasText: 'Choose 1–32 paths inside this Vault' }).waitFor();
     assert.equal((await requests()).filter(request => request.action === 'configure').length, 0);
-    await page.getByLabel('Paths inside this Vault — one per line', { exact: true }).fill('Documents\nPhotos');
+    await page.getByLabel('Selected paths inside this Vault — one per line', { exact: true }).fill('Documents\nPhotos');
     await save.click();
     await page.getByRole('status').filter({ hasText: 'Watching for changes' }).waitFor();
     const configured = (await requests()).find(request => request.action === 'configure');
@@ -56,11 +56,11 @@ window.$RefreshReg$=()=>{}; window.$RefreshSig$=()=>type=>type; window.__vite_pl
     assert.equal(await page.getByRole('button', { name: 'Connect Proton Drive', exact: true }).count(), 0);
     await page.getByRole('button', { name: 'Stop backup', exact: true }).click();
     await page.getByRole('status').filter({ hasText: 'Automatic backup is paused' }).waitFor();
-    await page.getByText('Connected — saved session reused', { exact: true }).waitFor();
+    await page.getByText('Connected', { exact: true }).waitFor();
     assert.equal((await requests()).some(request => request.action === 'disconnect'), false, 'Stopping preserves the session');
 
     await reset('partial');
-    await page.getByText('partial', { exact: true }).waitFor();
+    await page.getByText('Backup partly finished', { exact: true }).waitFor();
     assert.equal(await page.getByText('Operation complete', { exact: true }).count(), 0, 'Partial is not complete');
     await page.evaluate(() => { window.__cloudState.mount_receipt = 'b'.repeat(64); });
     await page.getByRole('button', { name: 'Refresh', exact: true }).click();

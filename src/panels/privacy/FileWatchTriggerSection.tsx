@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { armBackend } from "../../hooks/armBackend";
 import { Icon } from "../../components/ui/icon";
 import type { FileWatchRule, FileWatchTriggerSettings } from "../../types/settings";
@@ -28,6 +29,9 @@ export default function FileWatchTriggerSection({ settings, onPatch, bare = fals
     const [showAdd, setShowAdd] = useState(false);
     const [form, setForm] = useState({ ...EMPTY_FORM });
     const [formError, setFormError] = useState('');
+    const [picking, setPicking] = useState(false);
+    const disabledRef = useRef(disabled);
+    disabledRef.current = disabled;
 
     const [watchFailed, setWatchFailed] = useState(false);
 
@@ -83,6 +87,22 @@ export default function FileWatchTriggerSection({ settings, onPatch, bare = fals
     };
 
     const activeCount = rules.filter(r => r.enabled).length;
+
+    const chooseDirectory = async () => {
+        if (disabled || picking) return;
+        setPicking(true);
+        try {
+            const picked = await openDialog({ directory: true, multiple: false, title: 'Choose a folder to watch' });
+            if (!disabledRef.current && typeof picked === 'string') {
+                setForm(current => ({ ...current, path: picked }));
+                setFormError('');
+            }
+        } catch {
+            setFormError('The folder picker could not be opened. You can enter the directory path instead.');
+        } finally {
+            setPicking(false);
+        }
+    };
 
     return (
         <div className={bare ? "lockdown-trigger-block" : "rounded-lg border p-4"}>
@@ -172,6 +192,10 @@ export default function FileWatchTriggerSection({ settings, onPatch, bare = fals
                         onChange={e => setForm(f => ({ ...f, path: e.target.value }))}
                         className="lockdown-trigger-input"
                     />
+                    <button type="button" onClick={() => void chooseDirectory()} disabled={disabled || picking}
+                        className="lockdown-trigger-action" aria-label="Choose directory to watch">
+                        Choose folder
+                    </button>
                     <div className="flex gap-2">
                         <input
                             type="text"
@@ -204,6 +228,7 @@ export default function FileWatchTriggerSection({ settings, onPatch, bare = fals
                         <button
                             type="button"
                             onClick={() => { setShowAdd(false); setFormError(''); setForm({ ...EMPTY_FORM }); }}
+                            disabled={picking}
                             className="lockdown-trigger-action"
                         >
                             Cancel

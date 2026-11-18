@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-shell";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Button, Dialog, DialogBody, DialogFooter, Icon } from "@/components/ui/bp";
 import { Button as UiButton } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,6 +14,7 @@ import { notifyVaultSyncRecovery } from "@/lib/vaultSyncWarning";
 import { personalVaultSyncError, personalVaultSyncOutcomeUnknown, personalVaultSyncSetupMessage } from "@/lib/personalVaultSyncFeedback";
 import { DEFAULT_VAULT_SYNC_LABEL, validVaultSyncLabel, validateVaultSyncDrafts, vaultSyncLabel, acceptsVaultSyncMountReceipt, type VaultSyncDraft } from "@/lib/personalVaultSyncManagement";
 import { showSuccess } from "@/utils/toast";
+import { pickedVaultPath } from "@/lib/vaultCloudBackupPicker";
 import VaultOperationNotice from "./VaultOperationNotice";
 
 interface Props { isOpen: boolean; onClose: () => void; internalDrive: number; driveLabel: string }
@@ -33,6 +35,7 @@ export default function PersonalVaultSyncDialog({ isOpen, onClose, internalDrive
   const [labels, setLabels] = useState<Record<string, string>>({});
   const [removeId, setRemoveId] = useState("");
   const [busy, setBusy] = useState(false);
+  const [picking, setPicking] = useState(false);
   const [changing, setChanging] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState("");
@@ -64,6 +67,7 @@ export default function PersonalVaultSyncDialog({ isOpen, onClose, internalDrive
     const epoch = ++generation.current;
     if (isOpen) {
       mountReceipt.current = "";
+      setPicking(false);
       setLoaded(false); setError(""); setFolders([]); setGui(""); setRemoveId(""); setSyncDisabled(false); setCanEnableSync(false); setBusy(true);
       inFlight.current = true;
       operationKind.current = "refresh"; uncertain.current = false; setChanging(false);
@@ -160,6 +164,23 @@ export default function PersonalVaultSyncDialog({ isOpen, onClose, internalDrive
     window.requestAnimationFrame(() => document.getElementById(focusId === undefined
       ? `${fieldId}-add-folder` : `${fieldId}-path-${focusId}`)?.focus());
   };
+  const chooseFolder = async (id: number) => {
+    if (picking || inFlight.current || !loaded) return;
+    const epoch = generation.current;
+    const expectedReceipt = mountReceipt.current;
+    setPicking(true);
+    try {
+      const selected = await openDialog({ directory: true, multiple: false,
+        defaultPath: `${driveLabel.replace(/[\\/]+$/, "")}\\`, title: "Choose a folder inside this Vault" });
+      if (epoch !== generation.current || expectedReceipt !== mountReceipt.current || !selected) return;
+      const relative = typeof selected === "string" ? pickedVaultPath(driveLabel, selected) : null;
+      if (relative === null) { setError("Choose a folder inside this Vault, not the Vault root."); return; }
+      setDrafts(current => current.map(item => item.id === id ? { ...item, path: relative } : item));
+      setError("");
+    } catch {
+      if (epoch === generation.current) setError("The folder picker could not be opened. You can enter the folder path instead.");
+    } finally { if (epoch === generation.current) setPicking(false); }
+  };
   return <Dialog isOpen={isOpen} onClose={close} title="Sync setup" className="personal-vault-sync"
     onOpenAutoFocus={() => { returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; }}
     onCloseAutoFocus={event => { if (returnFocus.current?.isConnected) { event.preventDefault(); returnFocus.current.focus({ preventScroll: true }); } }}
@@ -214,7 +235,7 @@ export default function PersonalVaultSyncDialog({ isOpen, onClose, internalDrive
       </section>
       <section aria-labelledby={`${fieldId}-add`} className="personal-vault-sync__section">
         <h3 id={`${fieldId}-add`}>Add a folder</h3>
-        <p id={`${fieldId}-path-help`} className="personal-vault-sync__muted">Use a path inside this Vault, for example <code>Phone\Camera</code>. Choose separate folders that do not overlap.</p>
+        <p id={`${fieldId}-path-help`} className="personal-vault-sync__muted">Choose a folder inside this Vault or enter a path such as <code>Phone\Camera</code>. Choose separate folders that do not overlap.</p>
         <p id={`${fieldId}-name-help`} className="personal-vault-sync__muted">The sync name is a label. It does not rename, move or delete files.</p>
         {drafts.map((draft, index) => <div key={draft.id} className="personal-vault-sync__draft">
           <div className="personal-vault-sync__draft-heading"><h4>Folder {index + 1}</h4>
@@ -226,6 +247,7 @@ export default function PersonalVaultSyncDialog({ isOpen, onClose, internalDrive
             <Input id={`${fieldId}-path-${draft.id}`} value={draft.path} maxLength={240} disabled={busy} placeholder="Phone\Camera"
               aria-describedby={`${fieldId}-path-help ${fieldId}-error`} aria-invalid={Boolean(error) && !pathsValid}
               onChange={event => setDrafts(current => current.map((item, i) => i === index ? { ...item, path: event.target.value } : item))} />
+            <Button disabled={busy || picking || !loaded} aria-label={`Choose folder ${index + 1} inside this Vault`} onClick={() => void chooseFolder(draft.id)}>Choose folder</Button>
           </div>
           <div>
             <label htmlFor={`${fieldId}-label-${draft.id}`}>Sync display name</label>

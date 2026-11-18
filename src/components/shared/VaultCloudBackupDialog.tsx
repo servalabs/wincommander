@@ -2,8 +2,10 @@
 import { useId, useRef, useState } from "react";
 import { Button, Dialog, DialogBody, DialogFooter } from "@/components/ui/bp";
 import { Input } from "@/components/ui/input";
+import { open } from "@tauri-apps/plugin-dialog";
 import useVaultCloudBackup from "@/hooks/useVaultCloudBackup";
 import { cloudBackupRecordedRuns, cloudBackupRunSummary, cloudBackupStateLabel, validCloudBackupPath } from "@/lib/vaultCloudBackup";
+import { restorePathInPickedFolder } from "@/lib/vaultCloudBackupPicker";
 import VaultCloudBackupForm from "./VaultCloudBackupForm";
 import VaultCloudBackupRunResult from "./VaultCloudBackupRunResult";
 import VaultOperationNotice from "./VaultOperationNotice";
@@ -15,12 +17,27 @@ export default function VaultCloudBackupDialog({ isOpen, onClose, internalDrive,
   const returnFocus = useRef<HTMLElement | null>(null);
   const { result, busy, action, error, perform } = useVaultCloudBackup(isOpen, personal, internalDrive);
   const [restorePath, setRestorePath] = useState("");
+  const [restorePickerError, setRestorePickerError] = useState("");
+  const [pickingRestore, setPickingRestore] = useState(false);
   const [confirmation, setConfirmation] = useState<"disconnect" | "remove_setup" | null>(null);
   const changing = busy && action !== "status";
   const ready = Boolean(result?.engine_ready && result.connected && result.configured);
   const runs = result ? cloudBackupRecordedRuns(result) : null;
   const restoreSummary = runs?.restore ? cloudBackupRunSummary(runs.restore) : null;
-  const close = () => { if (!changing) { setConfirmation(null); setRestorePath(""); onClose(); } };
+  const close = () => { if (!changing) { setConfirmation(null); setRestorePath(""); setRestorePickerError(""); onClose(); } };
+  const chooseRestoreParent = async () => {
+    setPickingRestore(true);
+    try {
+      const chosen = await open({ directory: true, multiple: false, defaultPath: `${driveLabel.replace(/[\\/]+$/, "")}\\`, title: "Choose a location inside this Vault" });
+      if (!chosen) return;
+      const next = restorePathInPickedFolder(driveLabel, chosen, restorePath);
+      if (next === null) { setRestorePickerError("Choose a location inside this Vault."); return; }
+      setRestorePath(next);
+      setRestorePickerError("");
+    } catch {
+      setRestorePickerError("The folder picker could not be opened. Enter a new folder path inside this Vault.");
+    } finally { setPickingRestore(false); }
+  };
   const run = (operation: "disconnect" | "remove_setup") => {
     setConfirmation(null); void perform(operation);
   };
@@ -62,6 +79,7 @@ export default function VaultCloudBackupDialog({ isOpen, onClose, internalDrive,
           </div>
         </section>
         <VaultCloudBackupForm key={`${result.mount_receipt}-${result.configured}`} configuration={result.configuration}
+          driveLabel={driveLabel}
           disabled={busy || !result.can_configure} canSave={result.engine_ready && result.connected && result.can_configure}
           onSave={configuration => void perform("configure", configuration)} />
         <section className="vault-cloud-backup__section" aria-labelledby={`${id}-restore`}>
@@ -69,7 +87,9 @@ export default function VaultCloudBackupDialog({ isOpen, onClose, internalDrive,
           {runs?.restore && <VaultCloudBackupRunResult run={runs.restore} />}
           <label htmlFor={`${id}-restore-path`}>New folder inside this Vault</label>
           <Input id={`${id}-restore-path`} value={restorePath} maxLength={240} disabled={busy} placeholder="Restored files" onChange={event => setRestorePath(event.target.value)} />
-          <p className="vault-cloud-backup__muted">Restores into a new folder; existing files stay intact.</p>
+          <Button disabled={busy || pickingRestore} onClick={() => void chooseRestoreParent()}>Choose restore location</Button>
+          <p className="vault-cloud-backup__muted">Choose a parent folder inside this Vault; a new folder is created there. You can edit its name above.</p>
+          {restorePickerError && <p role="alert">{restorePickerError}</p>}
           <Button disabled={busy || !ready || result.running || !validCloudBackupPath(restorePath)} onClick={() => void perform("restore", undefined, restorePath)}>Restore files</Button>
         </section>
         <div className="vault-cloud-backup__actions">

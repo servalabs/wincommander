@@ -17,6 +17,7 @@ export function renderCloudBackupFixture(state = 'new') {
     configuration: configured ? configuration : null, last_run: state === 'partial' ? {
       run_id: 'fixture-run', outcome: 'partial', started_at: '2026-11-16T12:00:00Z', finished_at: '2026-11-16T12:00:10Z',
       transferred_items: 2, transferred_bytes: '1024', skipped_items: 1, failed_items: 1,
+      action: 'start', remote_folder_name: 'Example backup', restore_relative_path: null, confirmation: null, checked_files: 0,
     } : null, reason_code: null,
   };
   const call = async request => {

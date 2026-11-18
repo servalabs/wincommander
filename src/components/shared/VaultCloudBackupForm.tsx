@@ -2,16 +2,19 @@
 import { useId, useState } from "react";
 import { Button } from "@/components/ui/bp";
 import { Input } from "@/components/ui/input";
+import { open } from "@tauri-apps/plugin-dialog";
 import type { VaultCloudBackupConfiguration } from "@/types/generated/ipc";
 import { validateCloudBackupDraft } from "@/lib/vaultCloudBackup";
+import { addPickedVaultSources } from "@/lib/vaultCloudBackupPicker";
 
 interface Props {
   configuration: VaultCloudBackupConfiguration | null;
   disabled: boolean;
   canSave: boolean;
+  driveLabel: string;
   onSave: (configuration: VaultCloudBackupConfiguration) => void;
 }
-export default function VaultCloudBackupForm({ configuration, disabled, canSave, onSave }: Props) {
+export default function VaultCloudBackupForm({ configuration, disabled, canSave, driveLabel, onSave }: Props) {
   const id = useId();
   const [wholeVault, setWholeVault] = useState(configuration?.whole_vault ?? true);
   const [sources, setSources] = useState(configuration?.source_relative_paths.join("\n") ?? "");
@@ -19,6 +22,20 @@ export default function VaultCloudBackupForm({ configuration, disabled, canSave,
   const [automatic, setAutomatic] = useState(configuration?.automatic ?? true);
   const [consent, setConsent] = useState(false);
   const [error, setError] = useState("");
+  const [picking, setPicking] = useState(false);
+  const pickSources = async (directory: boolean) => {
+    setPicking(true);
+    try {
+      const chosen = await open({ directory, multiple: true, defaultPath: `${driveLabel.replace(/[\\/]+$/, "")}\\`, title: directory ? "Choose folders inside this Vault" : "Choose files inside this Vault" });
+      if (!chosen) return;
+      const next = addPickedVaultSources(driveLabel, sources, Array.isArray(chosen) ? chosen : [chosen]);
+      if (next === null) { setError("Choose files or folders inside this Vault. Backup settings and system folders cannot be selected."); return; }
+      setSources(next);
+      setError("");
+    } catch {
+      setError("The file picker could not be opened. Enter paths inside this Vault below.");
+    } finally { setPicking(false); }
+  };
   const save = () => {
     const next: VaultCloudBackupConfiguration = {
       whole_vault: wholeVault, source_relative_paths: wholeVault ? [] : sources.split(/\r?\n/).map(value => value.trim()).filter(Boolean),
@@ -30,14 +47,17 @@ export default function VaultCloudBackupForm({ configuration, disabled, canSave,
   };
   return <section className="vault-cloud-backup__section" aria-labelledby={`${id}-title`}>
     <h3 id={`${id}-title`}>Backup settings</h3>
-    <fieldset disabled={disabled} className="vault-cloud-backup__fields">
+    <fieldset disabled={disabled || picking} className="vault-cloud-backup__fields">
       <legend className="sr-only">Backup sources</legend>
       <label><input type="radio" name={`${id}-source`} checked={wholeVault} onChange={() => setWholeVault(true)} /> Whole Vault</label>
-      <label><input type="radio" name={`${id}-source`} checked={!wholeVault} onChange={() => setWholeVault(false)} /> Choose folders</label>
-      {!wholeVault && <div><label htmlFor={`${id}-sources`}>Paths inside this Vault — one per line</label>
+      <label><input type="radio" name={`${id}-source`} checked={!wholeVault} onChange={() => setWholeVault(false)} /> Choose files or folders</label>
+      {!wholeVault && <div><div className="vault-cloud-backup__actions">
+        <Button disabled={picking} onClick={() => void pickSources(true)}>Choose folders</Button>
+        <Button disabled={picking} onClick={() => void pickSources(false)}>Choose files</Button>
+      </div><label htmlFor={`${id}-sources`}>Selected paths inside this Vault — one per line</label>
         <textarea id={`${id}-sources`} value={sources} onChange={event => setSources(event.target.value)} maxLength={8000} rows={4} placeholder={"Documents\nPhotos"} aria-describedby={`${id}-help`} />
       </div>}
-      <p id={`${id}-help`} className="vault-cloud-backup__muted">Use paths such as Documents. Backup settings and system folders are excluded.</p>
+      <p id={`${id}-help`} className="vault-cloud-backup__muted">Choose files or folders inside this Vault, or enter paths such as Documents. Backup settings and system folders are excluded.</p>
       <label htmlFor={`${id}-name`}>Proton backup folder name</label>
       <Input id={`${id}-name`} value={name} maxLength={128} onChange={event => setName(event.target.value)} />
       <p className="vault-cloud-backup__muted">Destination: My files / WinCommander Vault Backups / {name || "your folder"}</p>
@@ -46,6 +66,6 @@ export default function VaultCloudBackupForm({ configuration, disabled, canSave,
       <label><input type="checkbox" checked={consent} onChange={event => setConsent(event.target.checked)} /> I agree to copy these files to my Proton Drive account.</label>
     </fieldset>
     {error && <p role="alert">{error}</p>}
-    <Button intent="primary" disabled={disabled || !canSave || !consent} onClick={save}>Save backup setup</Button>
+    <Button intent="primary" disabled={disabled || picking || !canSave || !consent} onClick={save}>Save backup setup</Button>
   </section>;
 }
