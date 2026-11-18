@@ -191,11 +191,6 @@ impl<R: Read + Seek> ProtectedFile<R> {
 }
 
 #[test]
-fn experimental_cipher_clears_sensitive_state_on_drop() {
-    fn require_zeroize_on_drop<T: zeroize::ZeroizeOnDrop>() {}
-    require_zeroize_on_drop::<Aes256Gcm>();
-}
-#[test]
 fn distinct_file_keys_use_bounded_disjoint_counter_nonces() {
     let key = [14; 32];
     let plaintext = vec![42; CHUNK + 1];

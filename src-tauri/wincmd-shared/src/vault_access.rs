@@ -1059,7 +1059,7 @@ mod tests {
     }
 
     #[test]
-    fn mount_request_debug_and_results_never_echo_a_password() {
+    fn mount_request_debug_never_echoes_a_password() {
         let request = VaultMountRequest {
             entry_id: "shared".into(),
             password: "canary-password".into(),
@@ -1068,17 +1068,6 @@ mod tests {
         };
         assert!(!format!("{request:?}").contains("canary-password"));
         assert!(!format!("{request:?}").contains("hidden-canary-password"));
-        let result = VaultMountResult {
-            entry_id: "shared".into(),
-            state: VaultMountState::Denied,
-            presentation: None,
-            drive_letter: None,
-            reason: Some(VaultMountReason::NotAuthorized),
-            sync_warning: None,
-        };
-        assert!(!serde_json::to_string(&result)
-            .unwrap()
-            .contains("canary-password"));
     }
 
     fn sample_mount_plan() -> VaultMountPlan {

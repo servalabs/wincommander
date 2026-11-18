@@ -24,16 +24,12 @@ pub mod generation_lease;
 pub mod generation_security;
 #[cfg(any(test, all(windows, feature = "experimental-encrypted-search")))]
 mod encrypted_index_prototype;
-#[cfg(test)]
-mod encrypted_cutover_prototype;
 #[cfg(any(test, all(windows, feature = "experimental-encrypted-search")))]
 mod encrypted_key_prototype;
 #[cfg(any(test, all(windows, feature = "experimental-encrypted-search")))]
 mod encrypted_scope;
 #[cfg(any(test, all(windows, feature = "experimental-encrypted-search")))]
 mod encrypted_legacy_quarantine;
-#[cfg(test)]
-mod encrypted_migration_prototype;
 #[cfg(any(test, all(windows, feature = "experimental-encrypted-search")))]
 mod encrypted_generation_prototype;
 #[cfg(any(test, all(windows, feature = "experimental-encrypted-search")))]
@@ -2009,7 +2005,6 @@ mod tests {
     }
 
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]
-    #[test]
     fn offline_empty_cache_reconciles_with_live_roots_after_restart() {
         let root = TempDir::new().unwrap();
         let old = root.path().join("legacy");

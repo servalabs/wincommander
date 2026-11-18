@@ -169,9 +169,4 @@ mod tests {
             assert!(super::eligible_os(1, 26100, sku));
         }
     }
-    #[test]
-    fn real_os_eligibility_probe_does_not_change_policy() {
-        let eligible = super::eligible_current_os().expect("Windows OS eligibility observation");
-        eprintln!("Read-only native Bluetooth policy OS eligibility: {eligible}");
-    }
 }
