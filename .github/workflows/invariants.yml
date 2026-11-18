@@ -440,7 +440,11 @@ jobs:
           bun-version: 1.4.3
       - run: bun install --frozen-lockfile
       - name: bun audit (frontend)
-        run: bun audit
+        # GHSA-fc5q-39xc-vjpf (picomatch ReDoS, <=4.0.7) has no patched release
+        # (4.0.7 is the latest). It is reachable only through dev tooling (vite and
+        # typescript-eslint via tinyglobby/fdir), not the shipped app. Reviewed
+        # 2026-11-18; drop this ignore once a fixed picomatch is published.
+        run: bun audit --ignore GHSA-fc5q-39xc-vjpf
 
   # Supply-chain policy gate (REPORT-ONLY). Surfaces licence-allow-list,
   # banned/duplicate-crate, and advisory violations from src-tauri/deny.toml

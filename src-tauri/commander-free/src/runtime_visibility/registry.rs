@@ -213,10 +213,8 @@ pub fn read_run_values() -> Vec<RunValue> {
                 cursor.next(|i, cap| enum_value(hkey, i, cap))
             {
                 if value_type == REG_SZ || value_type == REG_EXPAND_SZ {
-                    let units: Vec<u16> = data
-                        .chunks_exact(2)
-                        .map(|b| u16::from_le_bytes([b[0], b[1]]))
-                        .collect();
+                    let (pairs, _) = data.as_chunks::<2>();
+                    let units: Vec<u16> = pairs.iter().map(|b| u16::from_le_bytes(*b)).collect();
                     out.push(RunValue {
                         hive: hive_name.into(),
                         subkey: subkey.into(),

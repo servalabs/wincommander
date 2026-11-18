@@ -7506,6 +7506,7 @@ mod fleet_connect_v2_tests {
     /// caller), this coercion stops compiling. The lease's own boxing is
     /// covered by `an_operation_larger_than_the_blocking_stack_runs_without_overflow`.
     #[test]
+    #[allow(clippy::type_complexity)] // the full fn-pointer signature is the assertion
     fn connect_entry_point_returns_a_heap_future() {
         let _entry: fn(
             tauri::AppHandle,

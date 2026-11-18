@@ -242,7 +242,7 @@ pub(super) fn overlaps_backup_state(path: &str) -> bool {
         .is_some_and(|part| part.eq_ignore_ascii_case(".wincommander"))
         && parts
             .next()
-            .is_none_or(|part| part.eq_ignore_ascii_case("cloud-backup"))
+            .map_or(true, |part| part.eq_ignore_ascii_case("cloud-backup"))
 }
 
 fn backup_request(active: &ActiveMount, action: Action) -> Request {

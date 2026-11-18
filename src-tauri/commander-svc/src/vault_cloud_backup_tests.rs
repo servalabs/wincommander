@@ -30,8 +30,10 @@ fn missing_cloud_consent_never_allows_a_write_member_to_export() {
 
 #[test]
 fn browser_login_keeps_its_lease_without_claiming_a_backup_is_running() {
-    let mut pending = ResultView::default();
-    pending.reason_code = Some("cloud_backup_sign_in_pending".into());
+    let mut pending = ResultView {
+        reason_code: Some("cloud_backup_sign_in_pending".into()),
+        ..ResultView::default()
+    };
     assert!(!pending.running);
     assert!(supervisor::should_renew(&pending));
     pending.reason_code = Some("cloud_backup_not_signed_in".into());

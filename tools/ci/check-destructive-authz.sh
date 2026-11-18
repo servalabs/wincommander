@@ -15,6 +15,8 @@ EXPECTED=(
   disk_delete_item
   erase_encrypted_container
   fleet_connect
+  fleet_repair_machine_trust
+  fleet_set_dispatch
   full_lockdown
   internet_kill_switch_set
   lockdown

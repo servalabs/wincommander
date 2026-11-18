@@ -221,10 +221,8 @@ fn read_registry_policy_windows() -> Vec<(String, serde_json::Value)> {
         while let Some((name, value_type, data)) = cursor.next(|i, cap| enum_value(hkey, i, cap)) {
             match value_type {
                 REG_SZ | REG_EXPAND_SZ => {
-                    let units: Vec<u16> = data
-                        .chunks_exact(2)
-                        .map(|b| u16::from_le_bytes([b[0], b[1]]))
-                        .collect();
+                    let (pairs, _) = data.as_chunks::<2>();
+                    let units: Vec<u16> = pairs.iter().map(|b| u16::from_le_bytes(*b)).collect();
                     out.push((name, serde_json::Value::String(from_wide_nul(&units))));
                 }
                 REG_DWORD if data.len() >= 4 => {
