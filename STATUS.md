@@ -93,8 +93,8 @@ stays disabled or unwired by default and is listed in
 the private open-work ledger. Docs for features that arrived with the merge
 (`FEATURES.md`, `ARCHITECTURE.md`, `SECURITY.md`) were merged textually but not
 reconciled feature by feature against the 859 commits; treat them as unverified
-for those features. The owner decision still open is how to fix the gates
-([USER-TASKS.md](USER-TASKS.md)).
+for those features. The failing gates were fixed in `27f22f4f` (above); 35
+commits have landed since and their gates were not re-run.
 
 ## How this was checked
 

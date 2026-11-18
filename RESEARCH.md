@@ -191,13 +191,15 @@ unimplemented, unshipped work.
 - **Remote file search and semantic or forensic search backends.** Seams are
   reserved in `fleet-proto` (`SearchMode`) and `wincmd-search`
   (`SemanticBackend`, `ForensicBackend`); a handler and catalog entry would be
-  needed. Any remote content collection must respect the Fleet boundaries in
-  NON-GOALS.md.
+  needed. Not planned: semantic and forensic remote collection conflicts with
+  the Fleet boundaries in NON-GOALS.md; keyword `files.search` is the supported
+  remote search.
 - **Tunnel-style Fleet transport.** Only light traffic shaping (randomized
   check-in cadence, constant-size padding, optional decoy check-ins) exists in
-  `fleet-agent-core`; a tunnel tier was explicitly set aside.
+  `fleet-agent-core`; a tunnel tier is not planned.
 - **DNS canary tokens.** Only HTTP/TCP beacon canaries exist; DNS canaries
-  were left for a later version.
+  are not planned (they need a public DNS zone and conflict with the
+  local-first design).
 - **Post-quantum migration.** Hybrid Ed25519 + ML-DSA-65 rehearsal tooling
   exists in `wincmd-pq-experiment`; its limits and the claim boundary are in
   that crate's docs and SECURITY.md.
