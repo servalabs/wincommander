@@ -73,7 +73,7 @@ async fn accept_page(
         );
         Ok((pages, policy))
     })
-    .await?
+    .await
 }
 
 fn build_page_args(base: &[String], offset: usize, page_size: usize) -> Vec<String> {
