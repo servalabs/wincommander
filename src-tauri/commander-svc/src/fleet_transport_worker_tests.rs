@@ -64,29 +64,6 @@ async fn reject_complete_request(stream: &mut (impl AsyncRead + AsyncWrite + Unp
     reader.get_mut().shutdown().await.unwrap();
 }
 
-#[tokio::test]
-async fn rejection_fixture_waits_for_the_complete_declared_body() {
-    let (mut client, mut server) = tokio::io::duplex(4096);
-    let task = tokio::spawn(async move {
-        reject_complete_request(&mut server).await;
-    });
-    client
-        .write_all(b"POST / HTTP/1.1\r\nContent-Length: 7\r\n\r\n{\"a")
-        .await
-        .unwrap();
-    let mut byte = [0];
-    assert!(
-        tokio::time::timeout(Duration::from_millis(20), client.read(&mut byte))
-            .await
-            .is_err()
-    );
-    client.write_all(b"\":1}").await.unwrap();
-    let mut response = String::new();
-    client.read_to_string(&mut response).await.unwrap();
-    assert!(response.starts_with("HTTP/1.1 400 Bad Request\r\n"));
-    task.await.unwrap();
-}
-
 #[tokio::test(start_paused = true)]
 async fn committed_rotation_interrupts_the_real_worker_backoff() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

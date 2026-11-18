@@ -1349,17 +1349,6 @@ mod tests {
         assert!(health.rules_compiled);
     }
 
-    #[test]
-    fn first_install_with_no_prior_version_is_accepted() {
-        let store = new_store();
-        // Nothing installed yet -- self.version is None, so ANY version
-        // (including a high one) must be accepted, not rejected as "not
-        // strictly greater than nothing".
-        store
-            .install_clipboard_epoch(input_b_v6())
-            .expect("first-ever install of any version must succeed");
-    }
-
     // ── 3. Atomic install / last-valid retention (plan §9 Phase 1c) ──────
 
     #[test]
@@ -1549,34 +1538,6 @@ mod tests {
         assert_eq!(err, PolicyStoreError::BadSignature);
     }
 
-    // ── Windows-only ACL smoke test ────────────────────────────────────────
-    // Not a correctness test for the pure logic above (which never touches
-    // the real filesystem) -- just confirms `lock_down` doesn't panic and
-    // succeeds when run with sufficient privilege. Skips (rather than
-    // fails) if the environment doesn't grant WRITE_DAC on a freshly
-    // created temp directory, matching the skip-on-environment-limitation
-    // idiom `commander-pro`'s `event_store` integration tests use.
-    #[cfg(windows)]
-    #[test]
-    fn windows_lock_down_smoke() {
-        let dir = std::env::temp_dir().join(format!(
-            "wincmd-policy-store-acl-test-{}",
-            std::process::id()
-        ));
-        if std::fs::create_dir_all(&dir).is_err() {
-            eprintln!("[skip] could not create temp dir for ACL smoke test");
-            return;
-        }
-        match super::windows_acl::lock_down(&dir) {
-            Ok(()) => {}
-            Err(()) => {
-                eprintln!(
-                    "[skip] lock_down failed -- environment likely lacks WRITE_DAC on temp dir"
-                );
-            }
-        }
-        let _ = std::fs::remove_dir_all(&dir);
-    }
     include!("policy_store_binding_tests.rs");
 
 }

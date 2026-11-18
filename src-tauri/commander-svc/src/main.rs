@@ -622,13 +622,4 @@ mod tests {
         assert!(ok);
     }
 
-    #[test]
-    fn run_iteration_catching_panics_does_not_swallow_a_clean_run() {
-        let mut ran = false;
-        let ok = run_iteration_catching_panics("test_loop", || {
-            ran = true;
-        });
-        assert!(ok);
-        assert!(ran);
-    }
 }

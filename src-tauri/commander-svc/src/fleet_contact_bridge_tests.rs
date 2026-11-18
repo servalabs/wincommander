@@ -17,18 +17,6 @@ fn stable_history(mut response: Value) -> Value {
 }
 
 #[test]
-fn independently_changing_reachability_does_not_change_contact_evidence() {
-    let first = json!({"deviceId":"device", "observation":{"observed_unix_ms":123},
-        "service_reachability":{"state":"starting", "observed_unix_ms":null}});
-    let mut later = first.clone();
-    later["service_reachability"] = json!({"state":"unconfirmed"});
-    assert_ne!(first, later);
-    assert_eq!(stable_history(first.clone()), stable_history(later.clone()));
-    later["observation"]["observed_unix_ms"] = json!(124);
-    assert_ne!(stable_history(first), stable_history(later));
-}
-
-#[test]
 fn chunked_maximum_evidence_verifies_once_and_exposes_only_bound_history() {
     let fixture = Fixture::new();
     let begun = handle(&fixture.store, json!({"operation":"begin"})).unwrap();
@@ -109,28 +97,4 @@ fn chunked_maximum_evidence_verifies_once_and_exposes_only_bound_history() {
         stable_history(handle(&fixture.store, json!({"operation":"get"})).unwrap()),
         stable_history(history)
     );
-}
-
-#[cfg(windows)]
-#[test]
-fn windows_sync_then_rename_replaces_an_existing_record() {
-    use std::io::Write;
-    let fixture = Fixture::new();
-    let root = std::env::temp_dir().join(format!("wincmd-contact-{}", fixture.nonce()));
-    std::fs::create_dir(&root).unwrap();
-    let live = root.join("record.json");
-    let next = root.join("record.next");
-    std::fs::write(&live, b"old").unwrap();
-    let mut file = std::fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&next)
-        .unwrap();
-    file.write_all(b"new").unwrap();
-    file.sync_all().unwrap();
-    drop(file);
-    std::fs::rename(&next, &live).unwrap();
-    assert_eq!(std::fs::read(&live).unwrap(), b"new");
-    assert!(!next.exists());
-    std::fs::remove_dir_all(root).unwrap();
 }

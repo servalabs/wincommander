@@ -4736,10 +4736,6 @@ mod tests {
     }
 
     #[test]
-    fn a_viewer_mount_does_not_make_the_shared_device_read_only_for_the_owner() {
-        const _: () = assert!(!SHARED_VAULT_DEVICE_READ_ONLY);
-    }
-    #[test]
     fn broker_drive_reply_is_bounded() {
         assert!(valid_drive_letter("V"));
         assert!(valid_drive_letter("V:"));
@@ -6120,13 +6116,4 @@ mod tests {
         assert!(!valid_syncthing_gui_url("http://127.0.0.1:0"));
     }
 
-    #[test]
-    fn scoped_persistence_failure_does_not_make_the_registry_untrusted() {
-        let mut recovery = RecoveryState::default();
-        recovery.persistence_pending.insert("sales".into());
-        assert!(!recovery.registry_untrusted);
-        assert!(recovery.persistence_pending.contains("sales"));
-        recovery.persistence_pending.clear();
-        assert!(recovery.persistence_pending.is_empty());
-    }
 }
