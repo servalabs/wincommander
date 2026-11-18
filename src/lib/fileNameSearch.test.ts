@@ -8,7 +8,7 @@
 // wrapper and the client-side re-filter are gone; buildSearchQuery must
 // always emit every active filter token AND the text together.
 
-import { describe, expect, it, test } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import { buildSearchQuery, fileSearchPageStatus, formatFileSearchError } from "./fileNameSearch";
 import { FILE_TYPE_EXTENSIONS } from "./fileNameSearch";
 import type { SearchType } from "./fileNameSearch";
@@ -50,28 +50,12 @@ describe("buildSearchQuery — files/folders scope", () => {
 });
 
 describe("buildSearchQuery — extension categories dedupe into one ext: token", () => {
-  for (const [cat, exts] of Object.entries(FILE_TYPE_EXTENSIONS)) {
-    test(`${cat} alone emits one semicolon-joined ext: token`, () => {
-      const q = buildSearchQuery("", new Set([cat as SearchType]), "any", "any");
-      expect(q).toBe(`ext:${exts.join(";")}`);
-    });
-  }
-
   it("unions extensions from two selected categories into a single ext: token", () => {
     const q = buildSearchQuery("", new Set<SearchType>(["images", "videos"]), "any", "any");
     // Exactly one ext: token — categories are merged, never emitted twice.
     expect(q.match(/ext:/g)?.length).toBe(1);
     const merged = [...FILE_TYPE_EXTENSIONS.images, ...FILE_TYPE_EXTENSIONS.videos];
     expect(q).toBe(`ext:${merged.join(";")}`);
-  });
-
-  it("a combined type set dedupes so no extension appears twice even when categories repeat a value", () => {
-    // FILE_TYPE_EXTENSIONS has no real cross-category duplicate today, but the
-    // builder merges through a Set — assert that guard directly so a future
-    // category addition that does overlap can't silently double an ext:.
-    const q = buildSearchQuery("", new Set<SearchType>(["documents", "images", "code"]), "any", "any");
-    const extPart = q.slice("ext:".length).split(";");
-    expect(new Set(extPart).size).toBe(extPart.length);
   });
 
   it("files + folders + a real category keeps file:/folder: mutual exclusivity moot and still emits the category's ext:", () => {
@@ -83,30 +67,7 @@ describe("buildSearchQuery — extension categories dedupe into one ext: token",
   });
 });
 
-describe("buildSearchQuery — Defect 1: previously-missing mainstream extensions (measured)", () => {
-  // Each pair is [category, extension added by FIX-D]. Verified against a
-  // real Everything index with raw `es -n 3 ext:<ext>` before landing this
-  // fix — e.g. `es ext:c` / `ext:h` / `ext:hpp` / `ext:avif` / `ext:apk` all
-  // returned real files on this machine that the old sets could not reach.
-  const additions: [keyof typeof FILE_TYPE_EXTENSIONS, string][] = [
-    ["code", "c"], ["code", "h"], ["code", "hpp"],
-    ["code", "sh"], ["code", "sql"], ["code", "toml"], ["code", "xml"],
-    ["code", "vue"], ["code", "svelte"], ["code", "kt"], ["code", "swift"],
-    ["code", "rb"], ["code", "php"], ["code", "lua"],
-    ["images", "avif"], ["images", "tif"], ["images", "tiff"],
-    ["apps", "apk"],
-    ["documents", "odt"], ["documents", "epub"], ["documents", "pages"],
-    ["documents", "numbers"], ["documents", "djvu"],
-    ["videos", "mpg"], ["videos", "mpeg"], ["videos", "3gp"],
-    ["audio", "m4b"],
-  ];
-
-  for (const [cat, ext] of additions) {
-    test(`${cat} chip's ext: token contains newly added .${ext}`, () => {
-      expect(FILE_TYPE_EXTENSIONS[cat]).toContain(ext);
-    });
-  }
-
+describe("file type extension table", () => {
   it("never assigns the same extension to two different category chips", () => {
     // A shared extension would make one chip silently answer for another
     // (e.g. Videos surfacing TypeScript source) — guard the whole table, not

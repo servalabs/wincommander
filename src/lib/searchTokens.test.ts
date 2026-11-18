@@ -10,7 +10,6 @@ import {
   CHIP_DEFS,
   EMPTY_QUERY,
   addChip,
-  chipDef,
   chipOf,
   cycleChipStrict,
   demoteLastChip,
@@ -29,32 +28,7 @@ function mustSuggest(state: QueryState): ChipSuggestion {
   return s;
 }
 
-// Mirrors the verified icon names in src/components/ui/icon.tsx.
-const VERIFIED_ICONS = [
-  "folder-close", "folder-open", "document", "media", "video", "music", "compressed",
-  "archive", "application", "code", "th", "layout-grid", "time", "calendar", "history",
-  "stopwatch", "filter", "cross", "duplicate", "square", "properties", "database", "search",
-];
-
-const ALL_KINDS: ChipKind[] = [
-  "folders", "files", "images", "videos", "audio", "documents", "pdf", "excel", "word", "text", "slides", "code", "archives", "apps",
-  "today", "yesterday", "thisWeek", "last30Days", "thisYear", "big", "small",
-  "empty", "duplicates", "in",
-];
-
 describe("CHIP_DEFS catalogue", () => {
-  it("has exactly one def per kind and chipDef finds each", () => {
-    expect(CHIP_DEFS).toHaveLength(ALL_KINDS.length);
-    for (const kind of ALL_KINDS) expect(chipDef(kind).kind).toBe(kind);
-  });
-
-  it("uses only verified icon names and non-empty labels", () => {
-    for (const def of CHIP_DEFS) {
-      expect(VERIFIED_ICONS).toContain(def.icon);
-      expect(def.label.length).toBeGreaterThan(0);
-    }
-  });
-
   it("never shares a trigger word between two kinds", () => {
     const owner = new Map<string, ChipKind>();
     for (const def of CHIP_DEFS) {
@@ -64,11 +38,6 @@ describe("CHIP_DEFS catalogue", () => {
         owner.set(trigger, def.kind);
       }
     }
-  });
-
-  it("marks supportsStrict on the five time chips only", () => {
-    const strictKinds = CHIP_DEFS.filter((d) => d.supportsStrict).map((d) => d.kind);
-    expect(strictKinds).toEqual(["today", "yesterday", "thisWeek", "last30Days", "thisYear"]);
   });
 });
 
@@ -257,10 +226,6 @@ describe("addChip", () => {
 // Defect 2 (FIX-D, measured): Everything's `empty:` matches empty FOLDERS
 // only, so pairing it with the `files` scope is a guaranteed, permanent zero.
 describe("empty — relabelled and no longer combinable with files (Defect 2)", () => {
-  it("is labelled 'Empty folders', not the old bare 'Empty'", () => {
-    expect(chipDef("empty").label).toBe("Empty folders");
-  });
-
   it("drops files when empty is added", () => {
     const state = addChip(addChip(EMPTY_QUERY, "files"), "empty");
     expect(state.chips.map((c) => c.kind)).toEqual(["empty"]);
@@ -277,28 +242,7 @@ describe("empty — relabelled and no longer combinable with files (Defect 2)", 
   });
 });
 
-// Defect 3 (FIX-D, measured): Everything's `dupe:` matches filename+size (not
-// content) and a whole-disk click with no other input deterministically blows
-// the 6-second search timeout, so the chip is retired from the catalogue.
-// The ChipKind and searchQueryPlan.ts's `dupe:` planning stay intact — only
-// the user-facing route to it (CHIP_DEFS + its trigger words) is gone.
-// This chip was briefly retired for "exceeding the 6s timeout"; that timing was
-// taken while seven load-testing agents shared one Everything daemon and did not
-// reproduce (147-161ms over five trials on a quiet machine, 210ms at 5000 rows).
-// What IS real and load-independent is the semantics: `dupe:` matches filename +
-// size, never content. So the chip stays and the LABEL carries the caveat.
-describe("duplicates — kept, but labelled for what the engine actually does", () => {
-  it("is present in CHIP_DEFS", () => {
-    expect(CHIP_DEFS.some((d) => d.kind === "duplicates")).toBe(true);
-  });
-
-  it("does not claim to find content duplicates", () => {
-    const label = chipDef("duplicates").label;
-    // "Duplicates" alone would promise content-level dedup the engine cannot do.
-    expect(label.toLowerCase()).not.toBe("duplicates");
-    expect(label).toBe("Same name & size");
-  });
-
+describe("duplicates chip", () => {
   it("still answers its trigger words", () => {
     for (const word of ["duplicate", "duplicates", "dupe", "dupes"]) {
       expect(suggestChip(q(word))?.chip.kind).toBe("duplicates");

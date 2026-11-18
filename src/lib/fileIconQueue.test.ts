@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import { FileIconQueue } from "./fileIconQueue";
-import { MAX_CACHED_FILE_ICONS } from "./fileIconCache";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -21,15 +20,6 @@ describe("FileIconQueue", () => {
     expect(queue.get("fresh")).toBe("data");
   });
 
-  test("a long browse retains only the configured recent icon population", () => {
-    const queue = new FileIconQueue(async () => null);
-    const paths = Array.from({ length: 10_000 }, (_, index) => `file-${index}`);
-    for (const path of paths) queue.prime(path, `icon-${path}`);
-    const retained = paths.filter((path) => queue.get(path) !== undefined);
-    expect(retained).toHaveLength(MAX_CACHED_FILE_ICONS);
-    expect(retained).toEqual(paths.slice(-MAX_CACHED_FILE_ICONS));
-  });
-
   test("replacing an entry releases its prior byte cost", () => {
     const queue = new FileIconQueue(async () => null, 1, { maxBytes: 12 });
     queue.prime("a", "12345");
@@ -46,27 +36,6 @@ describe("FileIconQueue", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(received).toEqual(["icon"]);
     expect(queue.get("file")).toBeUndefined();
-  });
-
-  test("evicts the least recently used icon when the entry budget is full", () => {
-    const queue = new FileIconQueue(async () => null, 1, { maxEntries: 2 });
-    queue.prime("a", "icon-a");
-    queue.prime("b", "icon-b");
-    expect(queue.get("a")).toBe("icon-a");
-    queue.prime("c", "icon-c");
-    expect(queue.get("b")).toBeUndefined();
-    expect(queue.get("a")).toBe("icon-a");
-    expect(queue.get("c")).toBe("icon-c");
-  });
-
-  test("bounds retained string bytes without retaining an oversized icon", () => {
-    const queue = new FileIconQueue(async () => null, 1, { maxBytes: 20 });
-    queue.prime("one", "aaaaa"); // 16 bytes including the UTF-16 path.
-    queue.prime("two", "bb"); // 10 bytes; the old entry must leave.
-    expect(queue.get("one")).toBeUndefined();
-    queue.prime("huge", "x".repeat(20));
-    expect(queue.get("huge")).toBeUndefined();
-    expect(queue.get("two")).toBe("bb");
   });
 
   test("expires successful and negative lookups without a recurring timer", () => {

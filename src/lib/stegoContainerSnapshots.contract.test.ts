@@ -13,7 +13,7 @@ import {
 
 describe("Stego container snapshots", () => {
   test("attaches .hc, .tc, and extensionless containers without collecting a password", () => {
-    for (const containerPath of ["D:\\Vault\\Personal.hc", "D:\\Vault\\Archive.TC", "D:\\Vault\\NtfsVault"]) {
+    for (const containerPath of ["D:\\Vault\\Personal.hc", "D:\\Vault\\Archive.TC", "D:\\Vault\\NtfsVault", "D:\\Vault\\Private.zip"]) {
       const verdict = validateAttachForm({
         carrierPath: "D:\\Videos\\holiday.mp4",
         containerPath,
@@ -63,10 +63,8 @@ describe("Stego container snapshots", () => {
 
     expect(valid.canSubmit).toBe(true);
     expect(valid.errors).toEqual([]);
-    // The V2 form deliberately takes destinationDir, not a user-supplied
-    // output filename. The handler reads the stored original name instead.
-    expect(Object.keys({ inputPath: "", destinationDir: "" })).toEqual(["inputPath", "destinationDir"]);
     expect(validateRestoreFolderForm({ inputPath: "D:\\Backups\\holiday-private.mp4", destinationDir: "" }).canSubmit).toBe(false);
+    expect(validateRestoreFolderForm({ inputPath: "", destinationDir: "E:\\Recovered" }).canSubmit).toBe(false);
   });
 
   test("requires an explicit acknowledgement before refresh replaces a backup", () => {

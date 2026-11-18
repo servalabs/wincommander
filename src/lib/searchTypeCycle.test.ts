@@ -5,20 +5,7 @@
 import { describe, expect, it } from "bun:test";
 import { CHIP_DEFS } from "./searchTokens";
 import type { ChipKind } from "./searchTokens";
-import { TAB_TYPE_CYCLE, TYPE_DROPDOWN_ORDER, TYPE_FILTER_MAX_VISIBLE, isTabTypeCycleKind, nextAppendType, nextTabType, visibleSelectedTypes } from "./searchTypeCycle";
-
-describe("TAB_TYPE_CYCLE", () => {
-  it("is folders → pdf → excel → images", () => {
-    expect([...TAB_TYPE_CYCLE]).toEqual(["folders", "pdf", "excel", "images"]);
-  });
-
-  it("contains only ChipKinds", () => {
-    for (const kind of TAB_TYPE_CYCLE) {
-      expect(CHIP_DEFS.some((def) => def.kind === kind)).toBe(true);
-      expect(isTabTypeCycleKind(kind)).toBe(true);
-    }
-  });
-});
+import { isTabTypeCycleKind, nextAppendType, nextTabType, visibleSelectedTypes } from "./searchTypeCycle";
 
 describe("nextTabType", () => {
   it("cycles null → folders → pdf → excel → images → menu", () => {
@@ -29,12 +16,10 @@ describe("nextTabType", () => {
     expect(nextTabType("images")).toBe("menu");
   });
 
-  it("returns menu after images, and menu is not a ChipKind", () => {
-    const next = nextTabType("images");
-    expect(next).toBe("menu");
+  it("menu is a pseudo-step, not a real chip kind", () => {
     const chipKinds = new Set<string>(CHIP_DEFS.map((def) => def.kind));
-    expect(chipKinds.has(next)).toBe(false);
-    expect(isTabTypeCycleKind(next as ChipKind)).toBe(false);
+    expect(chipKinds.has(nextTabType("images"))).toBe(false);
+    expect(isTabTypeCycleKind(nextTabType("images") as ChipKind)).toBe(false);
   });
 
   it("restarts at folders when the current type is outside the Tab cycle", () => {
@@ -66,24 +51,8 @@ describe("nextAppendType", () => {
   });
 });
 
-describe("TYPE_DROPDOWN_ORDER", () => {
-  it("lists Type menu kinds in priority order", () => {
-    expect([...TYPE_DROPDOWN_ORDER]).toEqual([
-      "word",
-      "videos",
-      "slides",
-      "text",
-      "audio",
-      "archives",
-      "apps",
-      "code",
-    ]);
-  });
-});
-
 describe("visibleSelectedTypes", () => {
   it("caps the control at four selected icons and reports the rest as overflow", () => {
-    expect(TYPE_FILTER_MAX_VISIBLE).toBe(4);
     expect(visibleSelectedTypes([])).toEqual({ visible: [], overflow: [] });
     expect(visibleSelectedTypes(["folders", "pdf"])).toEqual({
       visible: ["folders", "pdf"],

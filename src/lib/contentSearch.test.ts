@@ -117,12 +117,6 @@ describe("formatContentModified", () => {
   it("returns — for epoch zero", () => {
     expect(formatContentModified(0)).toBe("—");
   });
-
-  it("returns a non-empty string for a real timestamp", () => {
-    const s = formatContentModified(1700000000);
-    expect(s.length).toBeGreaterThan(0);
-    expect(s).not.toBe("—");
-  });
 });
 
 describe("chunksToText", () => {

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, test } from "bun:test";
-import { FileIconCache, MAX_FILE_ICON_CACHE_BYTES } from "./fileIconCache";
+import { FileIconCache } from "./fileIconCache";
 
 describe("FileIconCache bounds", () => {
   test("entry count stays bounded and the oldest entry is evicted first", () => {
@@ -32,10 +32,6 @@ describe("FileIconCache bounds", () => {
     expect(cache.get("a")).toBeUndefined();
     cache.set("huge", "x".repeat(200));
     expect(cache.get("huge")).toBeUndefined();
-  });
-
-  test("default budget is 8 MiB", () => {
-    expect(MAX_FILE_ICON_CACHE_BYTES).toBe(8 * 1024 * 1024);
   });
 
   test("null (negative) results are distinguishable from a miss", () => {

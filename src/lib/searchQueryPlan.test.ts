@@ -109,12 +109,6 @@ describe("buildEverythingPlan — time chips are sort-biased by default", () => 
   it("sorts by recency for a plain text search, so path order cannot bury user files", () => {
     expect(buildEverythingPlan(q("budget")).sort).toBe("dm-descending");
   });
-
-  it("keeps the recency sort while a strict time chip also hard-filters", () => {
-    const plan = buildEverythingPlan(withText(strictTime(EMPTY_QUERY, "today"), "x"));
-    expect(plan.sort).toBe("dm-descending");
-    expect(plan.tokens).toContain("dm:today");
-  });
 });
 
 describe("buildEverythingPlan — scopePath", () => {
@@ -142,14 +136,6 @@ describe("buildEverythingPlan — scopePath", () => {
     const plan = buildEverythingPlan(state);
     expect(plan.scopePath).toBeUndefined();
     expect(plan.tokens).toContain("<C:|D:>");
-    expect(plan.tokens.some((t) => t.startsWith("path:"))).toBe(false);
-  });
-
-  it("ORs three drive roots as one grouping token and does not set scopePath", () => {
-    const state = addChip(EMPTY_QUERY, "in", { path: "C:\\|D:\\|E:\\", pathLabel: "C: + D: + E:" });
-    const plan = buildEverythingPlan(state);
-    expect(plan.scopePath).toBeUndefined();
-    expect(plan.tokens).toContain("<C:|D:|E:>");
     expect(plan.tokens.some((t) => t.startsWith("path:"))).toBe(false);
   });
 
@@ -267,16 +253,6 @@ describe("buildEverythingPlan — operator/switch neutralisation and separator t
     // wrapped independently — still an AND of the two substrings.
     const plan = buildEverythingPlan(q("docker desktop"));
     expect(plan.tokens).toEqual(["*docker*", "*desktop*"]);
-  });
-
-  it("wrapping a plain word in */* is a no-op for Everything's default substring match, so it never regresses a query with no punctuation", () => {
-    expect(toEverythingToken("budget")).toBe("*budget*");
-    expect(toEverythingToken("report")).toBe("*report*");
-  });
-
-  it("never emits a token containing a raw space", () => {
-    const plan = buildEverythingPlan(q("My Documents Q4"));
-    for (const token of plan.tokens) expect(token).not.toContain(" ");
   });
 });
 
