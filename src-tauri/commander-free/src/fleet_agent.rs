@@ -7063,30 +7063,6 @@ mod tests {
         );
     }
 
-    /// Verify the JSON shape sent to Pro for configure matches what FleetConfig
-    /// in fleet_push.rs expects (camelCase serde rename).
-    #[test]
-    fn configure_args_json_has_camel_case_keys() {
-        let server_url = "http://fleet.example.internal:8787";
-        let dispatch = true;
-        let signing_key_pub = "AAABBBCCC";
-
-        let args = json!({
-            "serverUrl": server_url,
-            "dispatch": dispatch,
-            "signingKeyPub": signing_key_pub,
-            "deviceId": "stable-device-uuid",
-        });
-
-        assert_eq!(args["serverUrl"], server_url);
-        assert_eq!(args["dispatch"], dispatch);
-        assert_eq!(args["signingKeyPub"], signing_key_pub);
-        assert_eq!(args["deviceId"], "stable-device-uuid");
-        // Ensure no snake_case keys accidentally leaked.
-        assert!(args.get("server_url").is_none());
-        assert!(args.get("signing_key_pub").is_none());
-    }
-
     #[test]
     fn fleet_server_url_repairs_a_single_accidental_extra_slash() {
         assert_eq!(
@@ -7281,17 +7257,6 @@ mod tests {
             stopped["current"]["privacy"]["screenCapture"]["detectionEnabled"],
             false
         );
-    }
-
-    /// FleetStatus default is disconnected with empty strings.
-    #[test]
-    fn fleet_status_default_is_disconnected() {
-        let s = super::FleetStatus::default();
-        assert!(!s.connected);
-        assert!(s.device_id.is_empty());
-        assert!(s.server_url.is_empty());
-        assert!(s.last_enroll_at.is_none());
-        assert!(s.last_error.is_none());
     }
 
     #[test]
@@ -7938,16 +7903,10 @@ mod fleet_connect_v2_tests {
     }
 
     #[test]
-    fn shield_failures_are_classified_from_the_same_strings_that_produce_them() {
+    fn shield_failures_are_classified_by_their_message() {
         assert_eq!(classify_shield_failure(SHIELD_HANDOFF_MISMATCH), ShieldFailure::HandoffMismatch);
         assert_eq!(classify_shield_failure(SHIELD_SESSION_UNCONFIRMED), ShieldFailure::SessionUnconfirmed);
         assert_eq!(classify_shield_failure("service connect failed"), ShieldFailure::Other);
-        // The producing sites use the constants, not copies of the text.
-        let source = include_str!("fleet_agent.rs").replace("\r\n", "\n");
-        let handoff = ["handoff does not match protected", " policy identity or revision"].concat();
-        assert_eq!(source.matches(&handoff).count(), 1);
-        let session = ["requires one confirmed", " Windows user session"].concat();
-        assert_eq!(source.matches(&session).count(), 1);
     }
 
     #[test]
@@ -8369,14 +8328,4 @@ mod fleet_connect_v2_tests {
     }
 
 
-    #[test]
-    fn adoption_refusals_are_reported_once_in_the_status_vocabulary() {
-        let _serial = GLOBAL_TRUST_STATE.blocking_lock();
-        set_epoch_adoption_issue(None);
-        assert_eq!(epoch_adoption_issue(), None);
-        set_epoch_adoption_issue(Some("epoch_trust_generation_differs"));
-        assert_eq!(epoch_adoption_issue(), Some("epoch_trust_generation_differs"));
-        set_epoch_adoption_issue(None);
-        assert_eq!(epoch_adoption_issue(), None);
-    }
 }

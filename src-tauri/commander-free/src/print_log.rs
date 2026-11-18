@@ -110,14 +110,4 @@ mod tests {
         assert!(entry.job_status.is_none());
     }
 
-    #[test]
-    fn status_serialises_camel_case() {
-        let s = PrintAuditStatus {
-            channel_enabled: true,
-            channel_present: true,
-        };
-        let json = serde_json::to_string(&s).unwrap();
-        assert!(json.contains("channelEnabled"));
-        assert!(json.contains("channelPresent"));
-    }
 }

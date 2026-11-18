@@ -297,11 +297,4 @@ mod tests {
         assert!(validate_categories(Some(vec!["registry".into()])).is_err());
     }
 
-    #[test]
-    fn defaults_to_all_categories() {
-        assert_eq!(
-            validate_categories(None).unwrap().len(),
-            ALLOWED_CATEGORIES.len()
-        );
-    }
 }

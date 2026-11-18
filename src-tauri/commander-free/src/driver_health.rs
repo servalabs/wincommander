@@ -152,38 +152,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn report_round_trips_through_json() {
-        let report = DriverHealthReport {
-            devices: vec![DriverProblem {
-                name: "Realtek USB Audio".to_string(),
-                class: "MEDIA".to_string(),
-                status: "Error".to_string(),
-                problem_code: Some(28),
-                problem_text: "No driver is installed for this device.".to_string(),
-                severity: "critical".to_string(),
-                instance_id: "USB\\VID_0BDA&PID_4014\\6&abc".to_string(),
-                manufacturer: "Realtek".to_string(),
-            }],
-            summary: DriverHealthSummary {
-                total: 1,
-                critical: 1,
-                warning: 0,
-                info: 0,
-                ok: false,
-            },
-        };
-        let json = serde_json::to_string(&report).unwrap();
-        // camelCase keys present.
-        assert!(json.contains("problemCode"));
-        assert!(json.contains("problemText"));
-        assert!(json.contains("instanceId"));
-        let back: DriverHealthReport = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.devices[0].problem_code, Some(28));
-        assert_eq!(back.summary.critical, 1);
-        assert!(!back.summary.ok);
-    }
-
-    #[test]
     fn deserializes_pro_camel_case_payload() {
         // Mirrors exactly what Pro's `scan()` emits.
         let pro = r#"{

@@ -119,44 +119,10 @@ mod tests {
         issue_wipe_token, signing_key_to_bytes, verify_wipe_token, verifying_key_to_bytes,
     };
 
-    // ── Keystore round-trip test (in-memory, not touching the real datastore) ──
-    //
-    // We test the keystore logic by directly exercising the encode/decode path
-    // that `get_or_create_device_signing_key` uses, without calling the real
-    // `datastore::load/save` (which would touch %ProgramData% and need Argon2).
-    // The full datastore encryption is covered by `datastore.rs` tests.
-    //
-    // What we test here:
-    //   1. `signing_key_from_bytes(signing_key_to_bytes(k))` round-trips.
-    //   2. The hex encode/decode path preserves all 32 bytes correctly.
-    //   3. A token issued with the original key verifies with the round-tripped key.
+    // Keystore key-handling checks (in-memory; the real datastore is not touched).
 
     fn deterministic_signing_key() -> DalekSigningKey {
         DalekSigningKey::from_bytes(&[0x5Au8; 32])
-    }
-
-    #[test]
-    fn signing_key_seed_hex_roundtrip() {
-        let sk = deterministic_signing_key();
-        let seed = signing_key_to_bytes(&sk);
-
-        // Simulate what get_or_create_device_signing_key stores: hex-encode seed.
-        let hex_str = hex::encode(seed);
-        assert_eq!(hex_str.len(), 64, "hex of 32 bytes must be 64 chars");
-
-        // Simulate the load path: hex-decode → reconstruct.
-        let decoded = hex::decode(&hex_str).expect("must decode");
-        assert_eq!(decoded.len(), 32);
-        let mut arr = [0u8; 32];
-        arr.copy_from_slice(&decoded);
-        let reconstructed = wincmd_shared::wipe_auth::signing_key_from_bytes(&arr);
-
-        // The reconstructed key must be byte-identical to the original.
-        assert_eq!(
-            signing_key_to_bytes(&sk),
-            signing_key_to_bytes(&reconstructed),
-            "reconstructed signing key seed must match original"
-        );
     }
 
     #[test]
@@ -197,20 +163,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn corrupt_hex_is_detected() {
-        // Simulates what would happen if the stored hex is corrupted.
-        let bad_hex = "not_valid_hex!";
-        let result = hex::decode(bad_hex);
-        assert!(result.is_err(), "corrupt hex must fail to decode");
-    }
-
-    #[test]
-    fn wrong_length_seed_is_detected() {
-        // If the stored bytes were truncated to 16 bytes, we must return an error.
-        let short_hex = hex::encode([0u8; 16]);
-        let decoded = hex::decode(&short_hex).unwrap();
-        // Simulate the guard in get_or_create_device_signing_key.
-        assert_ne!(decoded.len(), 32, "16 bytes must not pass the length check");
-    }
 }

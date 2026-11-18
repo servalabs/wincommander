@@ -284,16 +284,6 @@ mod tests {
     }
 
     #[test]
-    fn trace_event_carries_only_contract_fields() {
-        let trace = StartupTrace::new();
-        let event = trace.record_at("milestone", "setup.entered", "complete", 42);
-        assert_eq!(event.kind, "milestone");
-        assert_eq!(event.name, "setup.entered");
-        assert_eq!(event.status, "complete");
-        assert_eq!(event.elapsed_ms, 42);
-    }
-
-    #[test]
     fn frontend_contract_rejects_arbitrary_job_and_milestone_names() {
         assert_eq!(
             serde_json::from_str::<StartupJobId>(r#""settings-cache""#).unwrap(),

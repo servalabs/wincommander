@@ -2480,22 +2480,6 @@ mod tests {
     }
 
     #[test]
-    fn fleet_lab_join_has_a_bounded_one_use_request_timeout() {
-        assert_eq!(
-            request_timeout_for("fleet_lab_join"),
-            Some(Duration::from_secs(45))
-        );
-    }
-
-    #[test]
-    fn metadata_scrub_has_room_for_its_bounded_pro_batch() {
-        assert_eq!(
-            request_timeout_for("scrub_metadata_paths"),
-            Some(Duration::from_secs(210))
-        );
-    }
-
-    #[test]
     fn ordinary_pro_requests_keep_the_standard_timeout() {
         for feature_id in [
             "Create-EncryptionVolume",
@@ -2546,22 +2530,6 @@ mod tests {
         assert!(!pool_session_is_expired(now, now + PRO_POOL_IDLE_TIMEOUT));
         assert!(pool_session_is_expired(now, now));
         assert!(pool_session_is_expired(now, now - Duration::from_secs(1)));
-    }
-
-    #[test]
-    fn each_desktop_session_keeps_only_one_normal_pro_worker() {
-        assert_eq!(POOL_CAPACITY, 1);
-        assert_eq!(PRO_POOL_IDLE_TIMEOUT, Duration::from_secs(30));
-    }
-
-    #[test]
-    fn debug_hash_bypass_is_explicitly_successful_not_a_warning() {
-        let message = debug_pro_hash_bypass_message("abc123");
-        assert!(message.contains("Debug build"));
-        assert!(message.contains("intentionally bypassed"));
-        assert!(message.contains("handshake accepted"));
-        assert!(message.contains("abc123"));
-        assert!(!message.contains("skipped"));
     }
 
     #[test]

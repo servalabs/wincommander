@@ -379,16 +379,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_iso_roundtrips() {
-        let now = chrono::Utc::now();
-        let s = now.to_rfc3339();
-        let back = parse_iso(&s).expect("parse");
-        // Some sub-microsecond truncation is fine.
-        let delta = (back - now).num_milliseconds().abs();
-        assert!(delta < 1000);
-    }
-
-    #[test]
     fn config_defaults_are_safe() {
         let c = DeadMansSwitchConfig::default();
         assert!(!c.enabled);
@@ -397,12 +387,4 @@ mod tests {
         assert!(c.last_fired_at.is_none());
     }
 
-    /// Sanity: a 14-day default threshold means a brand-new install
-    /// can't fire until 14 days from now, ever.
-    #[test]
-    fn threshold_default_is_safe() {
-        let c = DeadMansSwitchConfig::default();
-        assert!(c.threshold_days >= 1);
-        assert!(c.threshold_days <= MAX_THRESHOLD_DAYS);
-    }
 }

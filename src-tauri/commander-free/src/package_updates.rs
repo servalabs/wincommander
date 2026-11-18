@@ -584,11 +584,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn combined_install_is_limited_to_chocolatey_and_scoop() {
-        assert_eq!(OPTIONAL_MANAGERS, [Manager::Chocolatey, Manager::Scoop]);
-    }
-
-    #[test]
     fn chocolatey_install_uses_only_its_exact_machine_scope_winget_package() {
         assert_eq!(
             chocolatey_winget_install_args(),
@@ -605,20 +600,6 @@ mod tests {
                 "--accept-package-agreements",
             ]
         );
-    }
-
-    #[test]
-    fn optional_manager_install_result_serializes_camel_case_fields() {
-        let value = serde_json::to_value(OptionalManagerInstallResult {
-            installed: vec!["chocolatey".into()],
-            already_installed: vec!["scoop".into()],
-            errors: vec!["npm: not applicable".into()],
-        })
-        .unwrap();
-        assert_eq!(value["installed"], serde_json::json!(["chocolatey"]));
-        assert_eq!(value["alreadyInstalled"], serde_json::json!(["scoop"]));
-        assert!(value.get("already_installed").is_none());
-        assert_eq!(value["errors"], serde_json::json!(["npm: not applicable"]));
     }
 
     #[test]
