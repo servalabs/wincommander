@@ -1,3 +1,4 @@
+import { cameraPresenceStore, requestCameraRecheck } from "../../hooks/cameraPresenceProbe";
 // src/panels/privacy/PrivacyShieldCard.tsx
 // Self-contained Privacy Gaze Shield card — no props needed.
 import { Button, Slider, Switch, Tooltip, Icon } from "@/components/ui/bp";
@@ -142,7 +143,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
     const [privacyShieldRunning, _setShieldRunning] = useState<boolean | null>(_shieldRunningCache);
     const setPrivacyShieldRunning = (val: boolean | null) => { _shieldRunningCache = val; _setShieldRunning(val); };
     const [activeShieldMode, setActiveShieldMode] = useState<PrivacyShieldMode | null>(null);
-    const [cameraAvailable, setCameraAvailable] = useState<boolean | null>(null);
+    const [cameraAvailable, setCameraAvailable] = useState<boolean | null>(() => cameraPresenceStore.get() === "absent" ? false : null);
     const [cameraMessage, setCameraMessage] = useState<string | null>(null);
     // Live look-away state surfaced by the backend shield reader. Only
     // meaningful while the shield is running.
@@ -282,16 +283,19 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
     const statusGate = useRef(new ShieldStatusGate());
     const lastCameraProbeAt = useRef(0);
     const forceCameraProbe = useRef(false);
+    const cameraAbsent = useRef(cameraPresenceStore.get() === "absent");
+    const hardwareMissingApplied = useRef(cameraAbsent.current);
     checkStatusRef.current = async (forceCamera = false) => {
         const gate = statusGate.current;
-        if (forceCamera) { forceCameraProbe.current = true; gate.queueRead(); }
+        if (forceCamera) { forceCameraProbe.current = true; requestCameraRecheck(); gate.queueRead(); }
         const generation = gate.beginRead();
         if (generation === null) return;
-        const includeCamera = shouldProbeShieldCamera(lastCameraProbeAt.current, Date.now(), forceCameraProbe.current);
+        const includeCamera = shouldProbeShieldCamera(lastCameraProbeAt.current, Date.now(), forceCameraProbe.current, cameraAbsent.current);
         if (includeCamera) {
             lastCameraProbeAt.current = Date.now();
             forceCameraProbe.current = false;
         }
+        const cameraGeneration = cameraPresenceStore.epoch();
         try {
             const shield = await executeBackendCommand<{
                 running: boolean;
@@ -307,10 +311,14 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                     && (shield.data.activeMode === "notify_only" || shield.data.activeMode === "blur_notify")
                     ? shield.data.activeMode
                     : null);
-                if (includeCamera && (shield.data.cameraStatus === "unknown" || typeof shield.data.cameraAvailable !== "boolean")) {
+                if (includeCamera && cameraGeneration === cameraPresenceStore.epoch()) {
+                    if (shield.data.cameraStatus === "hardware_unavailable") cameraPresenceStore.publish("absent", cameraGeneration);
+                    else if (shield.data.cameraStatus === "available") cameraPresenceStore.publish("present", cameraGeneration);
+                }
+                if (includeCamera && cameraGeneration === cameraPresenceStore.epoch() && (shield.data.cameraStatus === "unknown" || typeof shield.data.cameraAvailable !== "boolean")) {
                     setCameraAvailable(null);
                     setCameraMessage(shield.data.cameraMessage ?? "Camera status could not be confirmed.");
-                } else if (includeCamera && typeof shield.data.cameraAvailable === "boolean") {
+                } else if (includeCamera && cameraGeneration === cameraPresenceStore.epoch() && typeof shield.data.cameraAvailable === "boolean") {
                     setCameraAvailable(shield.data.cameraAvailable);
                     setCameraMessage(shield.data.cameraMessage ?? null);
                     if (!shield.data.cameraAvailable) {
@@ -352,6 +360,23 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
         }
     };
     const checkStatus = useCallback((forceCamera = false) => checkStatusRef.current(forceCamera), []);
+
+    useEffect(() => {
+        const unsubscribeCamera = cameraPresenceStore.subscribe(value => {
+            cameraAbsent.current = value === "absent";
+            if (value === "absent") {
+                hardwareMissingApplied.current = true;
+                setCameraAvailable(false);
+                setCameraMessage("No camera detected. Recheck after connecting one.");
+            } else if (hardwareMissingApplied.current) {
+                hardwareMissingApplied.current = false;
+                setCameraAvailable(null);
+                setCameraMessage(null);
+                lastCameraProbeAt.current = 0;
+            }
+        });
+        return unsubscribeCamera;
+    }, []);
 
     useEffect(() => {
         const gate = statusGate.current;
@@ -793,6 +818,9 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                             <p className="text-[10px] text-[var(--color-warning)] mt-1 max-w-[320px]">
                                 {cameraMessage || "No usable webcam was detected on this PC, so Privacy Shield cannot monitor the screen."}
                             </p>
+                        )}
+                        {privacyShieldRunning !== true && (
+                            <button type="button" className="text-xs underline mt-1" onClick={() => void checkStatus(true)}>Recheck camera</button>
                         )}
                     </div>
                 </div>

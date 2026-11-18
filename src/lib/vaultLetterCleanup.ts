@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 const CATEGORIES = ["real_windows_volume", "active_wincommander_mount", "stale_wincommander_reservation", "duplicate_saved_entry", "system_or_policy_reserved_letter", "external_or_unknown_owner"] as const;
-export interface VaultLetterReport { letter: string; category: typeof CATEGORIES[number]; released: boolean; saved_entry: boolean }
+export interface VaultLetterReport { letter: string; category: typeof CATEGORIES[number]; released: boolean; saved_entry: boolean; vault_policy_reservation?: boolean }
 export interface VaultLetterCleanup { released: number; letters: VaultLetterReport[] }
 
 export function readVaultLetterCleanup(value: unknown): VaultLetterCleanup {
@@ -12,6 +12,8 @@ export function readVaultLetterCleanup(value: unknown): VaultLetterCleanup {
   for (const report of result.letters) {
     if (!report || typeof report.letter !== "string" || !/^[A-Z]$/.test(report.letter) || seen.has(report.letter) || !CATEGORIES.includes(report.category)
       || typeof report.released !== "boolean" || typeof report.saved_entry !== "boolean"
+      || (report.vault_policy_reservation !== undefined && typeof report.vault_policy_reservation !== "boolean")
+      || (report.vault_policy_reservation === true && report.category !== "system_or_policy_reserved_letter")
       || (report.released && (report.letter <= "C" || report.category !== "stale_wincommander_reservation" || report.saved_entry))) return invalid();
     seen.add(report.letter);
   }
@@ -24,13 +26,15 @@ export function vaultLetterReportMessage(report: VaultLetterReport): string {
   if (report.letter <= "C") return `${prefix}is outside the D:–Z: range supported by Vault cleanup.`;
   if (report.released) return `${prefix}a confirmed stale WinCommander reservation was released.`;
   switch (report.category) {
-    case "real_windows_volume": return `${prefix}is assigned to a Windows volume or device and cannot be released here.`;
+    case "real_windows_volume": return `${prefix}is in use by a Windows volume or device. This is normal; choose a free letter for the Vault.`;
     case "active_wincommander_mount": return `${prefix}is held by an active Vault or recovery operation. Check Secure Storage; finish the operation or use its authorized recovery action.`;
     case "duplicate_saved_entry": return `${prefix}is selected by duplicate saved entries. Edit or remove the duplicate shortcuts; no Windows mapping was changed.`;
-    case "system_or_policy_reserved_letter": return report.saved_entry
+    case "system_or_policy_reserved_letter": return report.vault_policy_reservation
+      ? `${prefix}is reserved by a saved Vault policy and cannot be used by another Vault. Check Vault Access to review the reservation.`
+      : report.saved_entry
       ? `${prefix}is reserved by a saved Quick Mount entry. Remove or edit that entry to release its preference.`
       : `${prefix}is protected by Windows or Vault policy and cannot be released here.`;
     case "stale_wincommander_reservation": return `${prefix}has a WinCommander recovery record, but safe release could not be confirmed. Refresh its status and use authorized recovery.`;
-    default: return `${prefix}has an external or unverified owner, possibly in another Windows session. WinCommander left it unchanged.`;
+    default: return `${prefix}is in use or reserved outside the verified Vault records. It may be a network drive or a drive in another Windows session; its owner could not be verified. WinCommander left it unchanged.`;
   }
 }

@@ -43,7 +43,7 @@ Assert-Status 'remote_virtual' 'available' $true
 Assert-Status 'absent' 'hardware_unavailable' $false
 Assert-Status 'wmi_failed' 'unknown' $null
 Assert-Status 'restricted' 'unknown' $null
-Assert-Status 'ambiguous' 'unknown' $null
+Assert-Status 'ambiguous' 'hardware_unavailable' $false
 Assert-Status 'blocked' 'windows_camera_policy_denied' $false
 $script:cameraFixture = 'wmi_failed'
 $status = Get-PrivacyShieldStatus

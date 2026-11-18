@@ -382,7 +382,7 @@ export default function SearchFilesPanel() {
             </TooltipContent>
           </Tooltip>
         </div>
-        {currentFileError && <p className="sfp-indexing-note" aria-live="polite">{fileSearchDiagnostic("service_unavailable").message}</p>}
+        {currentFileError && <p className="sfp-indexing-note" aria-live="polite">{fileSearchDiagnostic("filename_unavailable").message}</p>}
         {tabFilter && (
           <button type="button" className="sfp-tab-filter" onClick={acceptTabFilter}>
             <Icon icon="filter" size={13} />

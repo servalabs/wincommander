@@ -40,6 +40,10 @@ if ((Get-CellularHistoryInfo).message -notmatch 'interfaces could not be read') 
 function Get-NetAdapter { [CmdletBinding()] param([switch]$IncludeHidden) [pscustomobject]@{ InterfaceType = 6; NdisPhysicalMedium = 0 } }
 $noHardware = Get-CellularHistoryInfo
 if ($noHardware.error -or $noHardware.partial -or -not $noHardware.noHardware -or $noHardware.status -ne 'not_applicable' -or $noHardware.coverageNote -notmatch 'disconnected') { throw 'No current broadband adapter must be distinguished from a verified empty profile inventory.' }
+$script:serviceStatus = $null
+$noHardwareNoService = Get-CellularHistoryInfo
+if ($noHardwareNoService.coverageNote -notmatch 'service is unavailable' -or $noHardwareNoService.coverageNote -notmatch 'install its driver') { throw 'Missing cellular prerequisites must be explained without claiming disconnected profiles were checked.' }
+$script:serviceStatus = 'Running'
 function Get-NetAdapter { [CmdletBinding()] param([switch]$IncludeHidden) throw 'Synthetic adapter enumeration failure' }
 if (-not (Get-CellularHistoryInfo).error) { throw 'Failed adapter inventory must not become an empty or no-hardware result.' }
 $script:failCommand = $false

@@ -179,7 +179,7 @@ impl VaultMountBroker {
             }
             reports.push(
                 serde_json::json!({ "letter": key, "category": kind, "released": was_released,
-                "saved_entry": saved_count > 0 }),
+                "saved_entry": saved_count > 0, "vault_policy_reservation": policy.contains(&key) }),
             );
         }
         // The returned availability is another observation, never the old query cache.

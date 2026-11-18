@@ -123,14 +123,6 @@ function Get-PrivacyShieldCameraAvailability {
         $video = if ($names.Count -eq 0) { Get-PrivacyShieldVideoSourceSummary } else { $null }
         if ($video -and $video.known -and $video.count -gt 0) { $names = @('Camera source') }
         if ($names.Count -eq 0 -and ($isRemote -ne $false -or -not $video -or -not $video.known -or $video.access -ne 'Allowed')) { $uncertain = $true }
-        if ($names.Count -eq 0 -and -not $uncertain) {
-            # Generic media/software devices may expose a localized or virtual
-            # camera through a path not represented by the two CIM classes.
-            try {
-                $ambiguous = @(Get-PnpDevice -PresentOnly -ErrorAction Stop | Where-Object { $_.Class -in @('Media','SoftwareDevice') })
-                if ($ambiguous.Count -gt 0) { $uncertain = $true }
-            } catch { $uncertain = $true }
-        }
         $policyBlockers = @()
         try {
             if ((Get-ItemProperty -Path 'HKCU:\SOFTWARE\Policies\Microsoft\Camera' -Name 'AllowCamera' -ErrorAction SilentlyContinue).AllowCamera -eq 0) {

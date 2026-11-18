@@ -734,6 +734,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
               releasingOrphaned={releasingOrphanedLetters}
             />
             {letterReports.length > 0 && <div role="status" className="vault-letter-cleanup-report">
+              <p>Unavailable letters include drives and Vault reservations in normal use. Only confirmed stale Vault mappings can be released.</p>
               {letterReports.map(report => <p key={report.letter}>{vaultLetterReportMessage(report)}</p>)}
             </div>}
           </FormGroup>

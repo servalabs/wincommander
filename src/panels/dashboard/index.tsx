@@ -864,7 +864,7 @@ export default function DashboardPanel() {
     void armBackend("lock_to_calculator", undefined, "Could not lock to calculator");
   }, []);
 
-  const { presence: cameraPresence, blocked: cameraBlocked, refreshAccess: refreshCameraAccess, invalidateAccess: invalidateCameraAccess } = useCameraPresence();
+  const { presence: cameraPresence, blocked: cameraBlocked, mixed: cameraMixed, refreshAccess: refreshCameraAccess, invalidateAccess: invalidateCameraAccess } = useCameraPresence();
   const microphoneBlocked = getByPath(appSettings, "current.privacy.appCapabilities.microphone") === "Deny";
 
   const missingEngineCount = activeFindings.filter((f) => f.category === "engines").length;
@@ -884,7 +884,11 @@ export default function DashboardPanel() {
       }
       void refreshSettings().catch(reportSettingsWriteFailure);
     } finally {
-      if (capability === "webcam") void refreshCameraAccess();
+      if (capability === "webcam") {
+        // Discard any periodic read that began while the change was in flight.
+        invalidateCameraAccess();
+        void refreshCameraAccess();
+      }
       setCapabilityPending(null);
     }
   }, [refreshSettings, refreshCameraAccess, invalidateCameraAccess, needsElevation]);
@@ -936,6 +940,7 @@ export default function DashboardPanel() {
             <PrivacyTogglesCard
               cameraBlocked={cameraBlocked}
               cameraPresence={cameraPresence}
+              cameraMixed={cameraMixed}
               microphoneBlocked={microphoneBlocked}
               capabilityPending={capabilityPending}
               onCapabilityToggle={handleCapabilityToggle}

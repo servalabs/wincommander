@@ -1,29 +1,65 @@
 export type CameraPresence = "present" | "absent" | "unknown";
 
-/** Share the in-progress query across dashboard remounts and focus events. */
-export function createCameraPresenceProbe(read: () => Promise<unknown>, timeoutMs = 20_000): () => Promise<CameraPresence> {
-  let pending: Promise<CameraPresence> | null = null;
-  return () => {
-    if (!pending) {
+/** Share reads within a generation; serialize new generations behind older reads. */
+export function createCameraPresenceProbe(read: () => Promise<unknown>, timeoutMs = 20_000): (generation?: number) => Promise<CameraPresence> {
+  const pending = new Map<number, Promise<CameraPresence>>();
+  let tail: Promise<unknown> = Promise.resolve();
+  return (generation = 0) => {
+    const existing = pending.get(generation);
+    if (existing) return existing;
+    const query: Promise<CameraPresence> = tail.then(async () => {
       let timer: ReturnType<typeof setTimeout>;
       const deadline = new Promise<unknown>(resolve => { timer = setTimeout(() => resolve(null), timeoutMs); });
-      pending = Promise.race([Promise.resolve().then(read), deadline]).then(
-        value => value === "present" || value === "absent" ? value : "unknown",
-        () => "unknown" as const,
-      ).finally(() => { clearTimeout(timer); pending = null; });
-    }
-    return pending;
+      try {
+        const value = await Promise.race([Promise.resolve().then(read), deadline]);
+        return value === "present" || value === "absent" ? value : "unknown";
+      } catch {
+        return "unknown";
+      } finally {
+        clearTimeout(timer!);
+      }
+    });
+    pending.set(generation, query);
+    tail = query;
+    void query.finally(() => { if (pending.get(generation) === query) pending.delete(generation); });
+    return query;
   };
 }
 
-export function cameraDisplayState(presence: CameraPresence, blocked: boolean | null): "absent" | "unknown" | "allowed" | "blocked" {
-  if (presence === "absent") return "absent";
+export function cameraDisplayState(_presence: CameraPresence, blocked: boolean | null): "absent" | "unknown" | "allowed" | "blocked" {
   if (blocked === null) return "unknown";
   return blocked ? "blocked" : "allowed";
 }
 
 export function cameraAccessState(data: { disabled?: unknown; app_access_mixed?: unknown; desktop_apps_allowed?: unknown } | undefined): boolean | null {
-  if (typeof data?.disabled !== "boolean" || data.app_access_mixed === true) return null;
-  if (typeof data.desktop_apps_allowed === "boolean" && data.desktop_apps_allowed === data.disabled) return null;
+  if (typeof data?.disabled !== "boolean") return null;
   return data.disabled;
+}
+
+// Both views share only hardware evidence; permissions and Shield readiness are separate.
+export function createCameraPresenceStore() {
+  let value: CameraPresence | null = null;
+  let epoch = 0;
+  const listeners = new Set<(value: CameraPresence | null) => void>();
+  const notify = () => listeners.forEach(listener => listener(value));
+  return {
+    get: () => value,
+    epoch: () => epoch,
+    publish(next: CameraPresence, generation: number) {
+      if (generation !== epoch || (next === "unknown" && value !== null)) return;
+      value = next;
+      notify();
+    },
+    reset() { epoch++; value = null; notify(); },
+    subscribe(listener: (value: CameraPresence | null) => void) {
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
+    },
+  };
+}
+export const cameraPresenceStore = createCameraPresenceStore();
+export const CAMERA_RECHECK_EVENT = "wincommander:camera-recheck";
+export function requestCameraRecheck(): void {
+  cameraPresenceStore.reset();
+  window.dispatchEvent(new Event(CAMERA_RECHECK_EVENT));
 }

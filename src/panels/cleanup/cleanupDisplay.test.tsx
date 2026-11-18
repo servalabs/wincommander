@@ -31,7 +31,15 @@ describe("System Cleanup display projection", () => {
     expect(result.state).toBe("empty");
     expect(result.message).toContain("adapter");
     expect(result.nextStep).toContain("disconnected");
+    expect(result.nextStep).toContain("install its driver");
+    expect(summarizeCleanupResult({ id: "cellularHistory", count: 0, raw: { ...raw, mobileService: "unavailable" } }).nextStep).toContain("service is unavailable");
+    expect(summarizeCleanupResult({ id: "cellularHistory", count: 0, raw: { ...raw, mobileService: "stopped" } }).nextStep).toContain("service is stopped");
     expect(summarizeCleanupResult({ id: "cellularHistory", count: 0, raw: { ...raw, partial: true } }).state).toBe("partial");
+  });
+
+  test("shows the number of listed processes with unavailable details", () => {
+    const result = summarizeCleanupResult({ id: "processIntel", count: 2, raw: { partial: true, status: "partial", processes: [{ pid: 1, name: "one" }, { pid: 2, name: "two" }], unavailableDetails: 1 } });
+    expect(result.nextStep).toContain("1 listed process has unavailable details");
   });
 
   test("uses the existing persona for presentation", () => {

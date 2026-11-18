@@ -50,7 +50,6 @@ if ($videoCount -gt 0) { 'present' }
 elseif (@($cameras | Where-Object { $_.Present -eq $true }).Count -gt 0) { 'pnp_present' }
 elseif (-not $pnpOk -or $null -eq $videoCount -or $cameraAccess -ne 'Allowed' -or $cameras.Count -gt 0) { 'unknown' }
 elseif (@($devices | Where-Object { $_.Class -eq 'Image' }).Count -gt 0) { 'unknown' }
-elseif (@($devices | Where-Object { $_.Present -eq $true -and $_.Class -in @('Media','SoftwareDevice') }).Count -gt 0) { 'unknown' }
 else { 'absent' }
 "#;
 
@@ -134,7 +133,7 @@ mod tests {
             ("[pscustomobject]@{Class='Camera'; FriendlyName='Camera'; Present=$true; Status='Error'}", "$true", "0", "DeniedByUser", "pnp_present"),
             ("[pscustomobject]@{Class='Camera'; FriendlyName='Camera'; Present=$false; Status='Unknown'}", "$true", "0", "Allowed", "unknown"),
             ("[pscustomobject]@{Class='Image'; FriendlyName='Scanner'; Present=$true; Status='OK'}", "$true", "0", "Allowed", "unknown"),
-            ("[pscustomobject]@{Class='Media'; FriendlyName='localized'; Present=$true}", "$true", "0", "Allowed", "unknown"),
+            ("[pscustomobject]@{Class='Media'; FriendlyName='Speakers'; Present=$true}", "$true", "0", "Allowed", "absent"),
             ("[pscustomobject]@{Class='DiskDrive'; FriendlyName='Disk'; Present=$true; Status='OK'}", "$true", "0", "Allowed", "absent"),
             ("[pscustomobject]@{Class='DiskDrive'; FriendlyName='Disk'; Present=$true}", "$true", "0", "DeniedByUser", "unknown"),
             ("", "$false", "$null", "Unknown", "unknown"),
