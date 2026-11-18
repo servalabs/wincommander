@@ -4,7 +4,7 @@ Known engineering and product limits of the Free client that are not security
 claims. Limits that qualify what users may rely on for security are owned by
 [SECURITY.md](SECURITY.md#current-operational-limits) and
 [NON-GOALS.md](NON-GOALS.md); unfinished features are in
-[ROADMAP.md](ROADMAP.md). This is a public list: it holds only limits already
+the private open-work ledger. This is a public list: it holds only limits already
 disclosed in public documentation or visible in public source, and no
 vulnerability details (report those through [SECURITY.md](SECURITY.md)).
 
@@ -32,9 +32,9 @@ vulnerability details (report those through [SECURITY.md](SECURITY.md)).
   same-generation rollback are refused only against the state that is present.
 - **Recovery and re-admission are disabled by design.** The panel does not offer
   them and the native commands refuse, so no recovery path ships
-  ([ROADMAP.md](ROADMAP.md#2-wip)).
+  (tracked in the private open-work ledger).
 - **Commands still use the legacy check-in route**, not the v2 enrollment
-  path ([ROADMAP.md](ROADMAP.md#3-partial)).
+  path (tracked in the private open-work ledger).
 - **Identity history from an old Fleet database is not migrated.** There is no
   safe migration procedure.
 - Trust repair, epoch adoption and dispatch changes are covered by automated
@@ -95,7 +95,7 @@ not been validated in the named environment. Acceptance work is tracked in
   whose reports are not in this repository.
 - One runtime message (`flow_capabilities.rs`) still says CameraTrigger is
   "tracked as `flows.fix-camera` in the roadmap"; no such tracker exists here
-  (see [ROADMAP.md](ROADMAP.md#3-partial)).
+  (tracked in the private open-work ledger).
 
 ## Optional third-party components
 

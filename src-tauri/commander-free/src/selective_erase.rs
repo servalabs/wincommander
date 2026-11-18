@@ -163,7 +163,7 @@ pub fn map_receipt(
                 key_evicted,
                 detail: if ok {
                     // Honesty: the overwrite was issued + flushed; we do NOT
-                    // independently re-mount to verify (see ROADMAP.md, Partial).
+                    // independently re-mount to verify (tracked in the private roadmap).
                     "Header (primary + backup) overwritten with random data and flushed; the container can no longer be mounted with its password. (Overwrite issued + flushed; not independently re-mounted to verify.)".to_string()
                 } else {
                     format!("VeraCrypt header destroy did not confirm success: {handler}")

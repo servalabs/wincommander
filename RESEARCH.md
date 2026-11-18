@@ -1,7 +1,7 @@
 # Research — WinCommander Free
 
 Explored ideas, measured findings, rejected options and conditional future
-opportunities. Conclusions only: commitments are in [ROADMAP.md](ROADMAP.md),
+opportunities. Conclusions only: commitments are in the private open-work ledger,
 deliberate exclusions in [NON-GOALS.md](NON-GOALS.md), and design decisions in
 [ARCHITECTURE.md](ARCHITECTURE.md). Items marked "dev notes" come from design
 notes that were kept on the `dev` branch before it merged into `main` and describe
@@ -41,7 +41,7 @@ unimplemented, unshipped work.
   user what to do; it does not suspend or kill automatically, because acting
   without process attribution risks stopping the wrong process. Reading file
   contents before and after every write to compute an entropy delta was judged
-  too heavy for an always-on monitor (still open in ROADMAP.md).
+  too heavy for an always-on monitor (still open).
 - **Parent-directory pinning on Windows (dev notes).** In a restricted-token
   fixture test on one machine (2026-11-06), a directory pinned with read access
   and delete sharing denied could still be turned into a junction. This was not

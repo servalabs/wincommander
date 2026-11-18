@@ -259,7 +259,7 @@ operational risk, or proprietary enforcement logic.
   to a new folder; legacy recovery requires an explicit choice. These checks do
   not prove remote durability or retention. Requires a matching updated Pro;
   availability starts with a future release containing this paired app change
-  (see [ROADMAP.md](ROADMAP.md)).
+  (tracked in the private open-work ledger).
   Copy-check results identify the submitted folder and when the app received
   the result using this device's clock. They remain scoped to that check across
   picker changes and panel navigation; they do not track later file changes or
@@ -356,8 +356,8 @@ listed as a product feature. The public status and the evidence required before
 any scoped quantum-resistant claim are in
 [SECURITY.md](SECURITY.md#cryptography-and-post-quantum-status).
 
-Planned, deferred and partially implemented work is in
-[ROADMAP.md](ROADMAP.md). Current operational limits that qualify these
+Planned, deferred and partially implemented work is tracked in the
+private open-work ledger. Current operational limits that qualify these
 capabilities are in [SECURITY.md](SECURITY.md). Deliberate product exclusions are in
 [NON-GOALS.md](NON-GOALS.md); source ownership and technical interfaces are in
 [ARCHITECTURE.md](ARCHITECTURE.md).

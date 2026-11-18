@@ -3,7 +3,7 @@
 Current state of this repository and its unfinished boundaries. It states what
 is true of `main`; shipped capabilities are in [FEATURES.md](FEATURES.md) and
 the change record is in [CHANGELOG.md](CHANGELOG.md). Open work is in
-[ROADMAP.md](ROADMAP.md), known limits in [WEAKNESSES.md](WEAKNESSES.md), and
+the private open-work ledger, known limits in [WEAKNESSES.md](WEAKNESSES.md), and
 manual or owner-side work in [USER-TASKS.md](USER-TASKS.md).
 
 Written against local `main` at `dc5722ba` (2026-11-16, after the merge of `dev`
@@ -35,10 +35,10 @@ file is revised.
 ## Present on `main` but not part of default builds
 
 - Post-quantum rehearsal crate and its opt-in Cargo features: see
-  [ROADMAP.md](ROADMAP.md#2-wip). Releases do not enable them and they hold no
+  the private open-work ledger. Releases do not enable them and they hold no
   production keys.
 - Service placeholders: `commander-svc` starts idle `reconciler` and
-  `command_worker` tasks ([ROADMAP.md](ROADMAP.md#3-partial)).
+  `command_worker` tasks (tracked in the private open-work ledger).
 
 ## Fleet connect (2026-11-17)
 
@@ -89,7 +89,7 @@ knowingly with failing gates. The lint and test failures were fixed the same day
 Experimental and gated work that arrived with the merge (folder deletion,
 settings-generation cutover, encrypted index, service-owned recovery fixtures)
 stays disabled or unwired by default and is listed in
-[ROADMAP.md](ROADMAP.md#2-wip). Docs for features that arrived with the merge
+the private open-work ledger. Docs for features that arrived with the merge
 (`FEATURES.md`, `ARCHITECTURE.md`, `SECURITY.md`) were merged textually but not
 reconciled feature by feature against the 859 commits; treat them as unverified
 for those features. The owner decision still open is how to fix the gates

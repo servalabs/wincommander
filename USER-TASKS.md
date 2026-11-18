@@ -2,7 +2,7 @@
 
 External, manual or owner-side work that code changes cannot finish: live
 acceptance runs and decisions. Each item says what outcome closes it. Open
-engineering work is in [ROADMAP.md](ROADMAP.md); the limits these tasks address
+engineering work is tracked in the private `wincommander-pro` repository; the limits these tasks address
 are in [WEAKNESSES.md](WEAKNESSES.md).
 
 ## Acceptance runs (need real Windows)

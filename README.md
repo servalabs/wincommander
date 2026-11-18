@@ -40,7 +40,7 @@ Other tools that have access to WinCommander's settings interface may still read
 ## Install
 
 1. Download the latest installer from [Releases](https://github.com/servalabs/wincommander/releases).
-2. For desktop operation, use Windows 11 (the supported target). Windows Server 2019, 2022 and 2025 with Desktop Experience and WebView2 are targeted, but live Server/RDS validation is still pending ([ROADMAP.md](ROADMAP.md)). Most features need Administrator. Server Core is not a full GUI target: it has no Explorer/taskbar, and CLI commands work only when WebView2 and that command's prerequisites are installed. See [SECURITY.md](SECURITY.md) for current operational limits.
+2. For desktop operation, use Windows 11 (the supported target). Windows Server 2019, 2022 and 2025 with Desktop Experience and WebView2 are targeted, but live Server/RDS validation is still pending. Most features need Administrator. Server Core is not a full GUI target: it has no Explorer/taskbar, and CLI commands work only when WebView2 and that command's prerequisites are installed. See [SECURITY.md](SECURITY.md) for current operational limits.
 3. Follow the guided first-run tour. You can switch between the **Casual** and **Secure** profiles later from the sidebar.
 
 Or run from source:
@@ -81,7 +81,6 @@ on the GitHub Release:
 | [PERFORMANCE.md](PERFORMANCE.md)   | Responsiveness design and public measurement status           |
 | [POSITIONING.md](POSITIONING.md)   | Who it's for and how it compares to alternatives              |
 | [NON-GOALS.md](NON-GOALS.md)       | What WinCommander deliberately is not                         |
-| [ROADMAP.md](ROADMAP.md)           | Deferred, in-progress, partial and pending work               |
 | [STATUS.md](STATUS.md)             | Current state of `main`, and how it was checked     |
 | [WEAKNESSES.md](WEAKNESSES.md)     | Known engineering and product limits                          |
 | [USER-TASKS.md](USER-TASKS.md)     | Manual acceptance runs and owner decisions                    |

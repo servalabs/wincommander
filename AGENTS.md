@@ -21,8 +21,6 @@ stricter rule when instructions conflict.
 - [CHANGELOG.md](CHANGELOG.md) — public release-facing changes
 - [STATUS.md](STATUS.md) — current state of `main`, and how it was
   checked
-- [ROADMAP.md](ROADMAP.md) — the only list of open public work (deferred, WIP,
-  partial, full pending)
 - [WEAKNESSES.md](WEAKNESSES.md) — known engineering and product limits
 - [USER-TASKS.md](USER-TASKS.md) — manual acceptance runs and owner decisions
 - [RESEARCH.md](RESEARCH.md) — measured findings, rejected options, conditional
@@ -56,10 +54,10 @@ implementation, commercial work, and acceptance records live in
   measurement evidence. `CHANGELOG.md` owns shipped historical changes.
 - Living status documents (root Markdown, each fact in exactly one place):
   `STATUS.md` owns the current state of `main` and how it was
-  checked; `ROADMAP.md` owns open work in four parts (Deferred, WIP, Partial,
-  Full pending) and contains only unfinished items — completed work moves to
-  `CHANGELOG.md` and the capability docs, and gated, disabled or unaccepted work is
-  listed as WIP, never as shipped; `WEAKNESSES.md` owns known engineering and
+  checked; open work is tracked only in the private `wincommander-pro`
+  `ROADMAP.md` (this repository has no roadmap file); completed work moves to
+  `CHANGELOG.md` and the capability docs, and gated, disabled or unaccepted work
+  is never described as shipped; `WEAKNESSES.md` owns known engineering and
   product limits that are not security claims; `USER-TASKS.md` owns manual
   acceptance runs and owner decisions; `RESEARCH.md` owns measured findings,
   rejected options and conditional opportunities; `INTEGRATIONS.md` owns

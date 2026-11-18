@@ -330,7 +330,7 @@ fn check_webhook_listener(tailscale_status: CapabilityStatus) -> CapabilityCheck
 }
 
 /// Privacy Shield event bus for CameraTrigger. CameraTrigger is still
-/// rejected by flow validation (see ROADMAP.md, Partial), so this check
+/// rejected by flow validation (tracked in the private roadmap), so this check
 /// always reports Fail until camera-specific events are emitted and the
 /// trigger is enabled.
 fn check_privacy_shield_bus() -> CapabilityCheck {

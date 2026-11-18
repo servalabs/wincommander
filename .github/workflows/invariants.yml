@@ -13,7 +13,7 @@ name: invariants
 #
 # Also below: strings-grep-free (blocking; scans wincommander-free.exe for
 # forbidden tokens so paid code never taints the AV-clean build). A
-# reproducible-build job is drafted but commented out; see ROADMAP.md.
+# reproducible-build job is drafted but commented out; tracked in the private roadmap.
 
 on:
   workflow_dispatch:

@@ -271,7 +271,7 @@ authoritative statement of what WinCommander does not claim to defend against.
   explicit quit, a sign-out, a crash, a failed startup, or a sidecar or update
   failure can interrupt session-bound check-ins and enforcement. The installed
   LocalSystem service does not yet own the full Fleet lifecycle
-  ([ROADMAP.md](ROADMAP.md)).
+  (tracked in the private open-work ledger).
 - Managed-state enforcement is partial, not absent. Supported settings that
   have a mapped enable/disable command are periodically probed and re-applied,
   including organization-locked paths. Controls without such a mapping, and
@@ -382,7 +382,7 @@ evidence that all existing local data is encrypted.
 
 Clearing the application log removes its history; retain any history needed for
 troubleshooting before clearing it. A safe migration and visible status flow
-are not implemented (see [ROADMAP.md](ROADMAP.md)). Do not delete key material to retry: older settings,
+are not implemented (tracked in the private open-work ledger). Do not delete key material to retry: older settings,
 logs and diagnostic data may need that same key. If a settings key is missing,
 preserve the existing settings, logs and backups, and seek help restoring the
 matching key. Data in other Windows profiles or on disconnected storage may
