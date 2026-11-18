@@ -1312,7 +1312,6 @@ mod tests {
         );
     }
     use super::*;
-    use serde_json::json;
 
     fn test_key(seed: u8) -> [u8; DERIVED_KEY_LEN] {
         [seed; DERIVED_KEY_LEN]

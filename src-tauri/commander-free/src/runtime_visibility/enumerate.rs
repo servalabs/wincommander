@@ -213,13 +213,9 @@ fn looks_like_user_service(name: &str, display: &str) -> bool {
         "klsetuphandler",
         "klserveravsvc",
     ];
-    if BLOCKLIST
+    !BLOCKLIST
         .iter()
         .any(|p| n.starts_with(p) || d.starts_with(p))
-    {
-        return false;
-    }
-    true
 }
 
 fn parse_sc_qc(text: &str) -> (String, Option<String>) {

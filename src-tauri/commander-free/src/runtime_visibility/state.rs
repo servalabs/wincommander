@@ -195,10 +195,7 @@ pub fn matches_run_value(rv: &RunValue, key: &str) -> bool {
             return true;
         }
     }
-    if rv.name.to_lowercase().contains(key_stem) {
-        return true;
-    }
-    false
+    rv.name.to_lowercase().contains(key_stem)
 }
 
 pub fn matches_uninstall(entry: &UninstallEntry, key: &str) -> bool {

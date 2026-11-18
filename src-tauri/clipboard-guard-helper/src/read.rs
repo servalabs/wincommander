@@ -109,8 +109,6 @@ impl ClipboardTextSource for Win32TextSource {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn truncation_helper_cuts_at_a_multibyte_boundary() {
         // Exercises the exact helper this module's real read path calls,
