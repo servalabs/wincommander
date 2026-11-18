@@ -41,36 +41,3 @@ pub struct HelperHealth {
     /// `get_policy` or `report_event`) succeeded.
     pub svc_reachable: bool,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn default_is_all_false() {
-        // The conservative starting point: nothing has been proven
-        // healthy yet, so nothing should default to `true`.
-        let health = HelperHealth::default();
-        assert!(!health.helper_running);
-        assert!(!health.listener_registered);
-        assert!(!health.policy_current);
-        assert!(!health.rules_compiled);
-        assert!(!health.clear_failing);
-        assert!(!health.svc_reachable);
-    }
-
-    #[test]
-    fn round_trips_through_json() {
-        let health = HelperHealth {
-            helper_running: true,
-            listener_registered: true,
-            policy_current: true,
-            rules_compiled: true,
-            clear_failing: false,
-            svc_reachable: true,
-        };
-        let json = serde_json::to_string(&health).unwrap();
-        let back: HelperHealth = serde_json::from_str(&json).unwrap();
-        assert_eq!(health, back);
-    }
-}

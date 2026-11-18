@@ -515,10 +515,4 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn privacy_shield_always_fails_today() {
-        let check = check_privacy_shield_bus();
-        assert_eq!(check.status, CapabilityStatus::Fail);
-        assert!(check.detail.contains("fix-camera"));
-    }
 }

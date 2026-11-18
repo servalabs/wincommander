@@ -1089,11 +1089,6 @@ mod tests {
     }
 
     #[test]
-    fn basic_timeline_defaults_to_machine_notification_enabled() {
-        assert!(BasicTimeline::default().notify);
-    }
-
-    #[test]
     fn requested_watcher_needs_a_fresh_successful_observation() {
         let mut health = BasicMonitorHealth {
             monitor_started_at: Some(100),

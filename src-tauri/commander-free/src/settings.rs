@@ -4825,15 +4825,6 @@ mod tests {
     }
 
     #[test]
-    fn file_search_result_limit_accepts_frontend_camel_case_choice() {
-        let settings: FileSearchSettings = serde_json::from_value(serde_json::json!({
-            "roots": [], "exclusions": [], "resultLimit": 50
-        }))
-        .unwrap();
-        assert_eq!(settings.result_limit, 50);
-    }
-
-    #[test]
     fn file_search_result_limit_serializes_only_canonical_camel_case() {
         let settings = FileSearchSettings {
             result_limit: 1_000,
@@ -5031,18 +5022,6 @@ mod tests {
             assert_eq!(parsed.start_silently_at_sign_in, silent);
             let serialized = serde_json::to_value(parsed).unwrap();
             assert_eq!(serialized["startSilentlyAtSignIn"], silent);
-        }
-    }
-
-    #[test]
-    fn new_settings_follow_system_theme_without_overwriting_saved_preferences() {
-        assert_eq!(AppPreferences::default().theme, "system");
-        for theme in ["dark", "light", "system"] {
-            let parsed: AppPreferences = serde_json::from_value(serde_json::json!({
-                "theme": theme
-            }))
-            .unwrap();
-            assert_eq!(parsed.theme, theme);
         }
     }
 

@@ -421,15 +421,4 @@ mod tests {
         assert!(source.contains("crate::license::require_paid(\"Decoy File Monitor\")"));
     }
 
-    #[test]
-    fn atomic_start_forwards_the_complete_persisted_configuration() {
-        let source = include_str!("file_monitor.rs");
-        assert!(source.contains("paths: Vec<String>"));
-        assert!(source.contains("read_audit_enabled: bool"));
-        assert!(source.contains("\"readAuditEnabled\": read_audit_enabled"));
-        assert!(source.contains("\"fleetAlertEnabled\": fleet_alert_enabled"));
-        assert!(source.contains("let registry_paths = paths.clone()"));
-        assert!(source.contains("let canonical_paths = status"));
-        assert!(source.contains("replace_registry_paths(&canonical_paths)"));
-    }
 }

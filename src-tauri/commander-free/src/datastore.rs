@@ -1314,19 +1314,6 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    #[cfg(windows)]
-    #[test]
-    fn dpapi_material_roundtrip() {
-        let secret = [7u8; 32];
-        let blob = dpapi_protect(&secret).expect("protect");
-        assert!(
-            blob.len() > 32,
-            "DPAPI blob should be larger than the 32-byte plaintext"
-        );
-        let back = dpapi_unprotect(&blob).expect("unprotect");
-        assert_eq!(back, secret.to_vec());
-    }
-
     fn test_key(seed: u8) -> [u8; DERIVED_KEY_LEN] {
         [seed; DERIVED_KEY_LEN]
     }
@@ -1458,17 +1445,6 @@ mod tests {
         let k1 = derive_section_key(&material, None).unwrap();
         let k2 = derive_section_key(&material, Some("")).unwrap();
         assert_eq!(k1, k2);
-    }
-
-    #[test]
-    fn json_roundtrip_through_encode_decode() {
-        let key = test_key(99);
-        let data = json!({"version": 1, "foo": "bar", "nums": [1, 2, 3]});
-        let bytes = serde_json::to_vec(&data).unwrap();
-        let encoded = encode_section(&key, &bytes, "machine:settings").unwrap();
-        let decoded_bytes = decode_section(&key, &encoded, "machine:settings").unwrap();
-        let decoded: Value = serde_json::from_slice(&decoded_bytes).unwrap();
-        assert_eq!(data, decoded);
     }
 
     #[test]

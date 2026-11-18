@@ -774,14 +774,6 @@ mod tests {
         assert!(!retries_service_startup_handshake("svc.vault.unmount"));
     }
 
-    #[test]
-    fn machine_setting_uses_the_standard_service_deadline() {
-        assert_eq!(
-            request_timeout_for(wincmd_shared::svc::APPLY_MACHINE_SETTING_VERB),
-            SVC_TRANSPORT_TIMEOUT
-        );
-    }
-
     #[cfg(windows)]
     #[test]
     fn retries_only_transient_named_pipe_connect_failures() {

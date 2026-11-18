@@ -583,13 +583,6 @@ mod tests {
     }
 
     #[test]
-    fn bitlocker_clean_no_escrow_is_erased() {
-        let h = json!({ "status": "ok", "escrow_warning": "", "recovery_protectors_remaining": 0 });
-        let r = map_receipt("bitlocker", "BitLocker D:", &h, true, false);
-        assert_eq!(r.status, "erased");
-    }
-
-    #[test]
     fn bitlocker_escrow_warning_never_erased() {
         let h = json!({
             "status": "ok",

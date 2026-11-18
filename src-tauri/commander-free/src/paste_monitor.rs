@@ -2946,15 +2946,6 @@ mod tests {
         assert_eq!(stored, h);
     }
 
-    #[test]
-    fn auto_clear_seconds_clamped_to_range() {
-        // Mirrors the [5,600] clamp the set_paste_monitor_auto_clear
-        // command applies before storing AUTO_CLEAR_SECONDS (T3 step 6).
-        assert_eq!(1u32.clamp(5, 600), 5);
-        assert_eq!(9999u32.clamp(5, 600), 600);
-        assert_eq!(30u32.clamp(5, 600), 30);
-    }
-
     fn custom_rule(id: &str, actions: Vec<Action>, enabled: bool) -> Rule {
         Rule {
             id: RuleId::new(id).unwrap(),

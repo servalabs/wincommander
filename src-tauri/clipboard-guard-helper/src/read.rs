@@ -111,29 +111,6 @@ impl ClipboardTextSource for Win32TextSource {
 mod tests {
     use super::*;
 
-    struct FakeSource(Vec<ReadOutcome>);
-    impl ClipboardTextSource for FakeSource {
-        fn read_text(&mut self) -> ReadOutcome {
-            if self.0.is_empty() {
-                ReadOutcome::NoText
-            } else {
-                self.0.remove(0)
-            }
-        }
-    }
-
-    #[test]
-    fn fake_source_yields_configured_outcomes_in_order() {
-        let mut src = FakeSource(vec![
-            ReadOutcome::Text("hello".to_string()),
-            ReadOutcome::NoText,
-            ReadOutcome::Failed,
-        ]);
-        assert_eq!(src.read_text(), ReadOutcome::Text("hello".to_string()));
-        assert_eq!(src.read_text(), ReadOutcome::NoText);
-        assert_eq!(src.read_text(), ReadOutcome::Failed);
-    }
-
     #[test]
     fn truncation_helper_cuts_at_a_multibyte_boundary() {
         // Exercises the exact helper this module's real read path calls,

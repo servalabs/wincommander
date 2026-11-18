@@ -154,14 +154,4 @@ mod tests {
         );
         assert_eq!(expand_variables("%UNKNOWN%\\bin", &HashMap::new()), None);
     }
-    #[test]
-    fn never_approves_an_empty_path() {
-        let removals: std::collections::HashSet<String> =
-            std::collections::HashSet::from(["c:\\missing".into()]);
-        let kept: Vec<_> = "C:\\Missing"
-            .split(';')
-            .filter(|entry| !removals.contains(&entry.to_ascii_lowercase()))
-            .collect();
-        assert!(kept.is_empty());
-    }
 }

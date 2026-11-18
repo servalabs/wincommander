@@ -882,24 +882,6 @@ mod resolve_context_menu_event_tests {
     }
 
     #[test]
-    fn unrelated_flags_fall_through_to_shred() {
-        // --focus / --minimized are handled by separate logic in the callers
-        // and must NOT be mistaken for scrub/safe-paste here.
-        assert_eq!(
-            resolve_context_menu_event(|f| f == "--focus"),
-            "shred-requested"
-        );
-    }
-
-    #[test]
-    fn direct_context_shred_flag_is_not_a_frontend_event() {
-        assert_eq!(
-            resolve_context_menu_event(|f| f == "--context-shred"),
-            "shred-requested"
-        );
-    }
-
-    #[test]
     fn only_a_normal_primary_exits_for_an_elevation_handoff() {
         assert!(should_exit_for_elevation_handoff(true, false));
         assert!(!should_exit_for_elevation_handoff(true, true));

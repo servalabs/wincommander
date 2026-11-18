@@ -218,12 +218,3 @@ pub async fn delete_vault_tpm_key() -> Result<Value, String> {
     crate::sidecar::dispatch_paid_command("delete_vault_tpm_key", serde_json::Value::Null).await
 }
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn module_exists() {
-        // Structural smoke-test: this module compiles and links.
-        // Functional tests require the sidecar + licence, so they live in
-        // the integration-test suite rather than here.
-    }
-}
