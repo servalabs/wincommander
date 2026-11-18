@@ -75,14 +75,12 @@ mounted or unverifiable Vault state stops native preparation, and
 the desktop launcher for native testing; a browser-only session does not load
 new native code.
 
-A plain `bun x tauri dev` also works on a fresh checkout. Its `beforeDevCommand`
-installs anything missing (Bun, the pinned Rust toolchain and the native Perl
-used by the vendored OpenSSL build), then starts Vite first (`--vite-first`) so
-Tauri's fixed frontend wait is met while the Pro and service preparation runs
-behind it. Cargo finds Perl through `src-tauri/.cargo/config.toml`, and debug
-builds create empty placeholders for the generated `scripts/**/*.enc` bundle
-resources. Prefer `tools/dev.ps1` for native testing. Set
-`WINCOMMANDER_DEV_DEBUG_PORT=9223` to expose a loopback WebView2 debugging port.
+A plain `bun x tauri dev` prepares the pinned Rust toolchain, native Perl,
+optional Pro sidecar and local Windows service before Tauri starts waiting for
+Vite. On x64, AWS-LC uses NASM when installed or the bundled object files when
+it is absent. Close any existing dev server on port 1420 before starting this
+command. Use `tools/dev.ps1` for protected Pro broker testing and set
+`WINCOMMANDER_DEV_DEBUG_PORT=9223` there to enable loopback WebView2 debugging.
 
 ### Free-only development (no Pro checkout)
 

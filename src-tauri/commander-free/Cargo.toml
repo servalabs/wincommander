@@ -178,7 +178,6 @@ aws-lc-rs = { version = "1.19", default-features = false, features = ["alloc", "
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.56"
-webview2-com = "=0.38.2"
 webview2-com-runtime = { package = "webview2-com", version = "=0.39.1" }
 windows-runtime = { package = "windows", version = "=0.62.2", features = ["Win32_System_Com", "Win32_UI_Shell"] }
 # explorer_context.rs — the Ctrl+Space "in this folder" chip asks the shell

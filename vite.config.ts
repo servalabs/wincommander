@@ -3,9 +3,10 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import fs from "node:fs";
 import path from "path";
-import { assertSharedAssets } from "./tools/check-shared-assets";
+import { assertSharedAssets } from "./tools/check-shared-assets.ts";
 
-assertSharedAssets(__dirname);
+const root = import.meta.dirname;
+assertSharedAssets(root);
 
 // Tauri injects TAURI_DEV_HOST=localhost for ordinary desktop development.
 // Do not let that hostname choose the bind address: WebView2 can resolve
@@ -23,8 +24,8 @@ const host = tauriDevHost || "127.0.0.1";
 // `src/assets.ts` also resolve against this same root (`../assets/...` from
 // `src/`). The optional workspace sibling `../assets` is only allowed for
 // rare `/@fs/...` paths — do not point product globs at it.
-const appAssetsRoot = path.resolve(__dirname, "./assets");
-const workspaceAssetsRoot = path.resolve(__dirname, "../assets");
+const appAssetsRoot = path.resolve(root, "./assets");
+const workspaceAssetsRoot = path.resolve(root, "../assets");
 
 const assetContentTypes: Record<string, string> = {
   ".avif": "image/avif",
@@ -146,11 +147,11 @@ function reportInitialResources(): Plugin {
   };
 }
 
-export default defineConfig(({ command }): UserConfig => ({
+export default defineConfig({
   plugins: [serveAppAssetsInDevelopment(), reportInitialResources(), ...react(), ...tailwindcss()],
   resolve: {
     alias: [
-      { find: "@", replacement: path.resolve(__dirname, "./src") },
+      { find: "@", replacement: path.resolve(root, "./src") },
       // `@assets` also exposes the local React RiskMatrix component, which
       // resolves its own React dependency through this app's node_modules.
       { find: "@assets", replacement: appAssetsRoot },
@@ -167,18 +168,15 @@ export default defineConfig(({ command }): UserConfig => ({
     // logo) silently becomes a data: URI instead of a file, and that check
     // fails even though the build itself is fine.
     assetsInlineLimit: 0,
-    // esbuild is 10-20x faster than terser and handles console/debugger
-    // drops natively. Terser's property mangling was disabled anyway
-    // (`properties: false`), so there is no obfuscation regression.
-    minify: "esbuild" as const,
     // Manual chunking — split the heavy dependencies into named
     // chunks so the Flows panel doesn't pull @xyflow into the
     // initial bundle, and so Blueprint / framer-motion / react-query
     // can be cached independently of app code. Panels are already
     // lazy-loaded via PANEL_MANIFESTS, but their shared vendor code
     // ends up in the entry chunk without these splits.
-    rollupOptions: {
+    rolldownOptions: {
       output: {
+        minify: { compress: { dropConsole: true, dropDebugger: true } },
         manualChunks: (id: string) => {
           if (!id.includes("node_modules")) return undefined;
           if (id.includes("@xyflow")) return "vendor-flows";
@@ -191,10 +189,6 @@ export default defineConfig(({ command }): UserConfig => ({
       },
     },
     chunkSizeWarningLimit: 600,
-  },
-  esbuild: {
-    // Drop console.* and debugger statements in production builds only.
-    drop: command === 'build' ? ["console", "debugger"] : [],
   },
   clearScreen: false,
   server: {
@@ -239,4 +233,4 @@ export default defineConfig(({ command }): UserConfig => ({
       ],
     },
   },
-}));
+} satisfies UserConfig);

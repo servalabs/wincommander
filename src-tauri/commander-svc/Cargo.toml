@@ -30,6 +30,10 @@ fleet-recovery-lab = []
 # Compile-only migration work; this does not enable issuance or cache writes.
 experimental-pq-licence = ["dep:wincmd-pq-experiment", "dep:rustls", "dep:rustls-platform-verifier", "dep:bytes"]
 
+[lints.rust]
+# The shared update anchor has desktop-only feature gates that stay disabled here.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("experimental-pq-free-release", "experimental-pq-pro-release"))'] }
+
 [dependencies]
 wincmd-shared = { path = "../wincmd-shared" }
 wincmd-pq-experiment = { path = "../wincmd-pq-experiment", optional = true }

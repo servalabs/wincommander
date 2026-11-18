@@ -60,18 +60,7 @@ const PRESERVE_WINCOMMANDER = MULTI_USER || process.argv.includes("--preserve-wi
 const FRONTEND_ONLY = process.argv.includes("--frontend-only");
 const PREPARE_ONLY = process.argv.includes("--prepare-only");
 const VITE_ONLY = process.argv.includes("--vite-only");
-// A plain `bun x tauri dev` has no separate preparation step, and Tauri gives
-// up waiting for the frontend after a fixed deadline that a cold Pro/service
-// build exceeds. `--vite-first` starts Vite as soon as the quick installs are
-// done and runs the long native preparation behind it, so the dev server is
-// reachable in time. tools/dev.ps1 does not need it (it prepares first).
-const VITE_FIRST = process.argv.includes("--vite-first");
-let earlyVite: ReturnType<typeof spawn> | null = null;
-
-function failAfterStoppingVite(code: number): never {
-  earlyVite?.kill();
-  process.exit(code);
-}
+const KEEP_FRONTEND = process.argv.includes("--keep-frontend");
 
 function windowsPowerShellEnv(): NodeJS.ProcessEnv {
   // Bun and PowerShell 7 leave their module path in the process environment.
@@ -127,7 +116,7 @@ function freeVitePort(): void {
 
 function activeVitePortOwner(): string | null {
   const netstat = spawnSync("netstat", ["-ano"], { cwd: ROOT, encoding: "utf8", shell: false });
-  return vitePortOwner(netstat.stdout ?? "", netstat.status, PRESERVE_WINCOMMANDER);
+  return vitePortOwner(netstat.stdout ?? "", netstat.status, PRESERVE_WINCOMMANDER || KEEP_FRONTEND);
 }
 
 const VAULT_INSPECTION_ATTEMPTS = 3;
@@ -178,7 +167,7 @@ async function main(): Promise<void> {
   const existingViteOwner = activeVitePortOwner();
   const policy = developmentStartupPolicy({ preserveSessions: PRESERVE_WINCOMMANDER,
     freeOnly: FREE_ONLY || frontendOnly, precleaned: PRE_CLEANED, portOwner: existingViteOwner });
-  if (existingViteOwner && frontendOnly) {
+  if (existingViteOwner && (frontendOnly || KEEP_FRONTEND)) {
     throw new Error(
       "Port 1420 is already in use; its listener was preserved. Use the existing frontend server or close it yourself before starting another.",
     );
@@ -194,6 +183,7 @@ async function main(): Promise<void> {
       name: "kill:dev",
       promise: run("[kill]", WINDOWS_POWERSHELL, [
         "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "tools/kill-dev.ps1",
+        ...(KEEP_FRONTEND ? ["-PreserveFrontend"] : []),
       ]),
     }] : []),
   ];
@@ -205,11 +195,6 @@ async function main(): Promise<void> {
       console.error(`[dev-server] ${steps[i].name} failed (exit ${results[i]}).`);
       process.exit(results[i]);
     }
-  }
-
-  if (VITE_FIRST && !PREPARE_ONLY) {
-    console.log("[dev-server] starting vite first so Tauri's frontend wait is met; native preparation continues behind it.");
-    earlyVite = startVite();
   }
 
   if (!frontendOnly) {
@@ -225,7 +210,7 @@ async function main(): Promise<void> {
     const buildProResult = await run("[build:pro]", "bun", ["run", "tools/build-pro.ts"]);
     if (buildProResult !== 0) {
       console.error(`[dev-server] build:pro failed (exit ${buildProResult}).`);
-      failAfterStoppingVite(buildProResult);
+      process.exit(buildProResult);
     }
   }
 
@@ -236,8 +221,7 @@ async function main(): Promise<void> {
     ? "[dev-server] SYSTEM settings service verified — native preparation ready."
     : "[dev-server] SYSTEM settings service verified — starting vite.");
 
-  // Never release the port when this process already owns it through Vite.
-  if (policy.releasePort && !earlyVite) freeVitePort();
+  if (policy.releasePort && !KEEP_FRONTEND) freeVitePort();
   }
 
   if (PREPARE_ONLY) {
@@ -245,7 +229,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (!earlyVite) startVite();
+  startVite();
 }
 
 function startVite(): ReturnType<typeof spawn> {
@@ -271,5 +255,5 @@ function startVite(): ReturnType<typeof spawn> {
 
 main().catch((err) => {
   console.error("[dev-server] fatal:", err);
-  failAfterStoppingVite(1);
+  process.exit(1);
 });

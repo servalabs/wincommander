@@ -29,3 +29,5 @@
 # `bun x tauri dev` works without exporting OPENSSL_SRC_PERL first.
 # force = false keeps an explicit OPENSSL_SRC_PERL / PERL from the caller.
 OPENSSL_SRC_PERL = { value = "../tools/dev-perl-shim.cmd", relative = true, force = false }
+# AWS-LC uses an installed NASM when available, with bundled x64 objects as a fallback.
+AWS_LC_SYS_PREBUILT_NASM = { value = "1", force = false }

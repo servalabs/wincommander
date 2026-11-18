@@ -24,6 +24,10 @@ const recoveryLab = recoveryLabEnabled(process.env);
 validateRecoveryLabCargoArgs(extraArgs, recoveryLab);
 const staticCrtFlags = "-C target-feature=+crt-static";
 const rustflags = [process.env.RUSTFLAGS, staticCrtFlags].filter(Boolean).join(" ");
+const environment: NodeJS.ProcessEnv = { ...normalizedPqReleaseEnvironment(process.env), RUSTFLAGS: rustflags };
+if (!release && process.platform === "win32" && process.arch === "x64") {
+  environment.AWS_LC_SYS_PREBUILT_NASM ??= "1";
+}
 
 const result = spawnSync(
   "cargo",
@@ -33,7 +37,7 @@ const result = spawnSync(
     // Cargo reads config from its working directory, which is this public
     // checkout rather than the private manifest's directory. Keep local Pro
     // builds self-contained just like the private release path.
-    env: { ...normalizedPqReleaseEnvironment(process.env), RUSTFLAGS: rustflags },
+    env: environment,
     stdio: "inherit",
     shell: false,
   },

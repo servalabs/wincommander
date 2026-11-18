@@ -6,7 +6,8 @@ param(
     # Multi-session development records each user's installed app before its
     # per-session agent swaps it for the debug binary.  Do not erase that
     # evidence during the shared Vite-server bootstrap.
-    [switch]$PreserveWinCommander
+    [switch]$PreserveWinCommander,
+    [switch]$PreserveFrontend
 )
 
 if ($PreserveWinCommander) {
@@ -18,11 +19,14 @@ if (-not $PreserveWinCommander) {
     $vaultState = Get-WcDevelopmentVaultState
     if ($vaultState.state -ne 'free') {
         Write-Host 'Vault state requires preservation. Desktop processes and the frontend port were preserved; startup will recheck state before preparing the frontend. Backend replacement remains pending.'
+        if ($PreserveFrontend) { exit 1 }
         exit 0
     }
     Get-Process wincommander-free, wincommander-pro, WinCommander -ErrorAction SilentlyContinue |
         Stop-Process -Force -ErrorAction SilentlyContinue
 }
+
+if ($PreserveFrontend) { exit 0 }
 
 # Free port 1420 (Vite dev server) if held by a stale bun/node process.
 # vite.config.ts uses strictPort: true, so an occupied port aborts startup.
