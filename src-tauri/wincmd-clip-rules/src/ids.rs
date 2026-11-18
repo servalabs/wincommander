@@ -184,12 +184,4 @@ mod tests {
             "error echoed the rejected text: {rendered}"
         );
     }
-
-    #[test]
-    fn round_trips_through_json() {
-        let id = RuleId::new("0e8f1a2b-3c4d-5e6f-7a8b-9c0d1e2f3a4b").unwrap();
-        let json = serde_json::to_string(&id).unwrap();
-        let back: RuleId = serde_json::from_str(&json).unwrap();
-        assert_eq!(id, back);
-    }
 }

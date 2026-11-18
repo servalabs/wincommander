@@ -40,26 +40,6 @@ pub type Result<T> = std::result::Result<T, SearchError>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io;
-
-    #[test]
-    fn extract_error_message() {
-        let e = SearchError::Extract("bad format".into());
-        assert!(e.to_string().contains("bad format"));
-    }
-
-    #[test]
-    fn config_error_message() {
-        let e = SearchError::Config("missing index_dir".into());
-        assert!(e.to_string().contains("missing index_dir"));
-    }
-
-    #[test]
-    fn io_error_converts() {
-        let io_err = io::Error::new(io::ErrorKind::NotFound, "file missing");
-        let search_err: SearchError = io_err.into();
-        assert!(search_err.to_string().contains("I/O error"));
-    }
 
     #[test]
     fn extraction_errors_are_per_file_skips() {

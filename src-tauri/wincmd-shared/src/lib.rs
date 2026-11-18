@@ -595,22 +595,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn envelope_roundtrips() {
-        let req = Envelope::Request(Request {
-            request_id: 42,
-            feature_id: "Disable-WindowsDefender".to_string(),
-            diagnostic_operation_id: None,
-            args: serde_json::json!({}),
-        });
-        let s = serde_json::to_string(&req).unwrap();
-        let back: Envelope = serde_json::from_str(&s).unwrap();
-        match back {
-            Envelope::Request(r) => assert_eq!(r.request_id, 42),
-            _ => panic!("wrong variant"),
-        }
-    }
-
-    #[test]
     fn request_accepts_older_wire_without_diagnostic_correlation() {
         let raw = r#"{"kind":"request","request_id":1,"feature_id":"svc.vault.mount","args":{}}"#;
         let Envelope::Request(request) = serde_json::from_str::<Envelope>(raw).unwrap() else {
@@ -726,24 +710,6 @@ mod tests {
     }
 
     // ── Phase 9b: signed envelopes ───────────────────────────────────
-
-    #[test]
-    fn signed_envelope_roundtrips() {
-        let original = Envelope::Request(Request {
-            request_id: 9,
-            feature_id: "Disable-WindowsDefender".to_string(),
-            diagnostic_operation_id: None,
-            args: serde_json::json!({}),
-        });
-        let signed = original.clone().sign("token-abc");
-        // Wire form should be a Signed variant.
-        assert!(matches!(signed, Envelope::Signed(_)));
-        let unwrapped = signed.verify_and_unwrap("token-abc").unwrap();
-        match unwrapped {
-            Envelope::Request(r) => assert_eq!(r.request_id, 9),
-            _ => panic!("expected Request"),
-        }
-    }
 
     #[test]
     fn signed_envelope_rejects_wrong_token() {

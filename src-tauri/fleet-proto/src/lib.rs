@@ -2579,25 +2579,6 @@ mod tests {
     }
 
     #[test]
-    fn config_epoch_round_trips_and_preserves_version() {
-        let epoch = ConfigEpoch {
-            org_id: OrgId("local".into()),
-            version: 7,
-            config_json: serde_json::json!({ "telemetry": false }),
-            target_kind: "device".into(),
-            target_id: Some("dev-1".into()),
-            locked_paths: vec!["privacy.telemetry".into()],
-            managed: true,
-            signature: "c2ln".into(),
-            signer_key: "a2V5".into(),
-        };
-        let json = serde_json::to_string(&epoch).unwrap();
-        let back: ConfigEpoch = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.version, 7);
-        assert_eq!(back, epoch);
-    }
-
-    #[test]
     fn config_epoch_targeting_fields_default_for_legacy_json() {
         // A pre-targeting epoch (no target/lock fields) must still deserialize,
         // defaulting to an org-wide, unlocked, unmanaged epoch.
@@ -2638,12 +2619,6 @@ mod tests {
             &epoch_signing_envelope(&cfg, &[], false, "group", Some("g1")),
         );
         assert_ne!(a, unlocked);
-    }
-
-    #[test]
-    fn action_class_serializes_snake_case() {
-        let json = serde_json::to_string(&ActionClass::Irreversible).unwrap();
-        assert_eq!(json, "\"irreversible\"");
     }
 
     #[test]

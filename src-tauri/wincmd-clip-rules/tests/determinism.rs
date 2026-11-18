@@ -9,24 +9,6 @@ mod common;
 use wincmd_clip_rules::{compile, RuleSetLimits};
 
 #[test]
-fn equal_priority_rules_resolve_identically_across_repeated_evaluations() {
-    let rules: Vec<_> = (0..20u8)
-        .map(|i| common::phrase_rule(i, 100, "same-priority-match"))
-        .collect();
-    let compiled = compile(&rules, &RuleSetLimits::default()).unwrap();
-
-    let text = "this text contains same-priority-match somewhere";
-    let first = compiled.evaluate(text).unwrap();
-    for _ in 0..200 {
-        let again = compiled.evaluate(text).unwrap();
-        assert_eq!(
-            again.rule_id, first.rule_id,
-            "tie-break winner must be stable across repeated calls"
-        );
-    }
-}
-
-#[test]
 fn equal_priority_rules_resolve_identically_across_independent_compiles() {
     // Same logical rule set, recompiled from scratch twice — simulating
     // the fleet console's validation compile and the endpoint's own

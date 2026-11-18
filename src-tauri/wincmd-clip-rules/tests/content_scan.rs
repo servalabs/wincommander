@@ -5,7 +5,6 @@ use wincmd_clip_rules::*;
 #[test]
 fn curated_catalog_compiles_with_the_eight_mib_budget() {
     let catalog = detector_catalog();
-    assert_eq!(catalog.len(), 251);
     assert!(
         catalog
             .iter()

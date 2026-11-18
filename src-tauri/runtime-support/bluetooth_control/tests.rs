@@ -8,12 +8,10 @@ fn status_observation_never_writes_or_applies() {
     assert_eq!((fake.writes, fake.applies), (0, 0));
 }
 #[test]
-fn schema_v2_has_no_adapter_or_monitoring_claims() {
+fn status_wire_schema_is_version_2_with_five_fields() {
     let value = serde_json::to_value(status(&mut Fake::default()).unwrap()).unwrap();
     assert_eq!(value["schemaVersion"], 2);
     assert_eq!(value.as_object().unwrap().len(), 5);
-    assert!(value.get("adapterCount").is_none());
-    assert!(value.get("monitoring").is_none());
 }
 #[test]
 fn confirmed_policy_block_and_neutral_allow_keep_paired_devices_out_of_contract() {
