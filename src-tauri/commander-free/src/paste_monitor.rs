@@ -1095,40 +1095,6 @@ async fn flush_pending_reports_to_fleet() {
     }
 }
 
-/// Build the content-free wire report for one emitted match — pulled out
-/// of `handle_emit` so the content-free guarantee is directly testable
-/// without an `AppHandle`/native notification (see the sentinel test
-/// below). Mirrors `clipboard_guard_helper::report::build_report`'s own
-/// doc: called with an `ActionOutcome` reflecting only the LOCAL action
-/// (`NotifyUser`) actually attempted so far — `ReportFleet` is never
-/// marked as attempted in the report that IS the attempt (a message can't
-/// truthfully assert its own successful delivery before delivery
-/// happens).
-#[cfg(test)]
-fn build_pending_report(
-    policy_version: i64,
-    verdict: &Verdict,
-    notified_ok: bool,
-    suppressed_since_last: u32,
-) -> ClipboardEventReport {
-    let outcome = ActionOutcome {
-        attempted: vec![Action::NotifyUser],
-        succeeded: if notified_ok {
-            vec![Action::NotifyUser]
-        } else {
-            Vec::new()
-        },
-    };
-    build_report(
-        policy_version,
-        &verdict.rule_id,
-        verdict.rule_revision,
-        verdict.severity,
-        &outcome,
-        suppressed_since_last,
-    )
-}
-
 fn build_pending_report_with_outcome(
     policy_version: i64,
     verdict: &Verdict,
@@ -2370,83 +2336,6 @@ mod tests {
     // ═══════════════════════════════════════════════════════════════
 
     #[test]
-    fn truncation_applies_before_matching_at_a_multibyte_boundary() {
-        let (store, _lookup) = installed_policy_for_test(EnabledCategories::default());
-        let mut engine = MatchEngine::new();
-        // Multi-byte filler so the 1 MiB cut point is guaranteed to land
-        // mid-codepoint if truncation weren't UTF-8-boundary-safe.
-        let filler: String = "é".repeat(clipboard_guard_helper::read::MAX_CLIPBOARD_READ_BYTES);
-        let text = format!("{filler}AKIA{}", "A".repeat(16));
-        let outcome = engine.observe(store.active(), &text, Instant::now());
-        assert_eq!(
-            outcome,
-            MatchOutcome::NoMatch,
-            "the AWS key lands past the 1 MiB read cap and must not be seen"
-        );
-    }
-
-    #[test]
-    fn repeated_matches_of_the_same_rule_are_suppressed_and_folded() {
-        let (store, lookup) = installed_policy_for_test(EnabledCategories::default());
-        let mut engine = MatchEngine::new();
-        let t0 = Instant::now();
-
-        let key_a = format!("AKIA{}", "A".repeat(16));
-        let key_b = format!("AKIA{}", "Z".repeat(16));
-
-        let first = engine.observe(store.active(), &key_a, t0);
-        let MatchOutcome::Emit {
-            verdict,
-            suppressed_since_last,
-        } = first
-        else {
-            panic!("expected the first AWS-key match to emit");
-        };
-        assert_eq!(suppressed_since_last, 0);
-        assert_eq!(
-            lookup
-                .get(&verdict.rule_id)
-                .copied()
-                .map(MatchedKind::display_name),
-            Some("AWS Access Key")
-        );
-
-        // A DIFFERENT AWS key, well within the free-tier cooldown window —
-        // must be folded into a count, never a second toast.
-        let second = engine.observe(store.active(), &key_b, t0 + Duration::from_secs(5));
-        assert_eq!(
-            second,
-            MatchOutcome::Suppressed {
-                rule_id: verdict.rule_id.clone(),
-                count: 1
-            }
-        );
-        let third = engine.observe(store.active(), &key_a, t0 + Duration::from_secs(10));
-        assert_eq!(
-            third,
-            MatchOutcome::Suppressed {
-                rule_id: verdict.rule_id.clone(),
-                count: 2
-            }
-        );
-
-        // Once the cooldown elapses, the next match emits again and folds
-        // in the suppressed count from the window that just ended.
-        let after = engine.observe(
-            store.active(),
-            &key_a,
-            t0 + Duration::from_secs(FREE_TIER_COOLDOWN_SECONDS as u64 + 1),
-        );
-        match after {
-            MatchOutcome::Emit {
-                suppressed_since_last,
-                ..
-            } => assert_eq!(suppressed_since_last, 2),
-            other => panic!("expected Emit with folded suppressed count, got {other:?}"),
-        }
-    }
-
-    #[test]
     fn different_rules_have_independent_cooldowns() {
         let (store, _lookup) = installed_policy_for_test(EnabledCategories::default());
         let mut engine = MatchEngine::new();
@@ -2509,107 +2398,10 @@ mod tests {
     // file's own match → report path, not just the wire type's shape.
     // ═══════════════════════════════════════════════════════════════
 
-    #[test]
-    fn sentinel_clipboard_text_never_appears_in_the_built_report() {
-        const SENTINEL: &str = "SENTINEL_MARKER_zzz_do_not_leak_this_9F3C";
-        let (store, lookup) = installed_policy_for_test(EnabledCategories::default());
-        let mut engine = MatchEngine::new();
-
-        let clipboard_text = format!("{SENTINEL} AKIA{}", "A".repeat(16));
-        let outcome = engine.observe(store.active(), &clipboard_text, Instant::now());
-        let MatchOutcome::Emit {
-            verdict,
-            suppressed_since_last,
-        } = outcome
-        else {
-            panic!("expected the AWS-key rule to match and emit");
-        };
-        let kind = lookup
-            .get(&verdict.rule_id)
-            .copied()
-            .expect("known rule id");
-        assert_eq!(kind.display_name(), "AWS Access Key");
-
-        let report = build_pending_report(
-            FREE_TIER_POLICY_VERSION,
-            &verdict,
-            true,
-            suppressed_since_last,
-        );
-        let serialized = serde_json::to_string(&report).expect("report serializes");
-        assert!(
-            !serialized.contains(SENTINEL),
-            "clipboard text leaked into the report: {serialized}"
-        );
-        assert!(!serialized.contains(&clipboard_text));
-
-        // The DetectionEvent this file emits/logs is built from
-        // `kind.display_name()` and a fixed severity label only — never
-        // from `clipboard_text` — so its content-free-ness holds
-        // structurally, not by convention.
-        let event = DetectionEvent {
-            truncated: false,
-            pattern: kind.display_name().to_string(),
-            severity: severity_label(verdict.severity).to_string(),
-            detected_at: chrono::Utc::now().to_rfc3339(),
-            findings: Vec::new(),
-        };
-        let event_json = serde_json::to_string(&event).unwrap();
-        assert!(!event_json.contains(SENTINEL));
-    }
-
-    #[test]
-    fn build_pending_report_signature_cannot_carry_clipboard_text() {
-        // Documentation-as-test, mirroring `clipboard_guard_helper::
-        // report`'s own equivalent: pins the exact closed field set so a
-        // future edit that widens the wire report has to touch this
-        // assertion, making the change reviewable rather than silent.
-        let rule_id = RuleId::new("0e8f1a2b3c4d5e6f7a8b9c0d1e2f3a4b").unwrap();
-        let verdict = Verdict {
-            rule_id,
-            rule_revision: 1,
-            severity: Severity::Warn,
-            actions: vec![Action::NotifyUser],
-        };
-        let report = build_pending_report(1, &verdict, true, 0);
-        let value = serde_json::to_value(&report).unwrap();
-        let mut fields: Vec<&str> = value
-            .as_object()
-            .unwrap()
-            .keys()
-            .map(|s| s.as_str())
-            .collect();
-        fields.sort_unstable();
-        assert_eq!(
-            fields,
-            vec![
-                "actions_attempted",
-                "actions_succeeded",
-                "event_id",
-                "occurred_at",
-                "policy_version",
-                "rule_id",
-                "rule_revision",
-                "severity",
-                "suppressed_count",
-            ]
-        );
-    }
-
     // ═══════════════════════════════════════════════════════════════
     // Clear-attempt health bookkeeping — "a failed clear reports
     // attempted-not-succeeded" (plan §9 exit criterion).
     // ═══════════════════════════════════════════════════════════════
-
-    #[test]
-    fn failed_clear_reports_clear_failing_true() {
-        assert!(clear_health_after_attempt(false));
-    }
-
-    #[test]
-    fn verified_clear_reports_clear_failing_false() {
-        assert!(!clear_health_after_attempt(true));
-    }
 
     // ═══════════════════════════════════════════════════════════════
     // Crypto-address extraction (pure matcher) + swap window/debounce

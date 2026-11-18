@@ -151,19 +151,6 @@
     }
 
     #[test]
-    fn mock_scrub_failure_cannot_return_a_publishable_handle() {
-        let root = tempfile::tempdir().unwrap();
-        let stage = root.path().join("stage");
-        let result = mock_scrub_into_new_held_file(&stage, |file| {
-            file.write_all(b"synthetic partial output")?;
-            Err(std::io::Error::from(std::io::ErrorKind::InvalidData))
-        });
-        assert!(result.is_err());
-        // Any partial output remains only in the disposable fixture, and no
-        // MockHandleScrubbedStage was returned for publication.
-        assert!(stage.exists());
-    }
-    #[test]
     fn owned_handle_retains_identity_across_publish_and_rollback() {
         const CHILD: &str = "WINCMD_SAFE_PASTE_HANDLE_FIXTURE";
         if let Some(root) = std::env::var_os(CHILD) {

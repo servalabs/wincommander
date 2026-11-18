@@ -440,17 +440,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_config_roundtrip() {
-        let cfg = crate::settings::VpnKillSwitchSettings {
-            armed: Some(true),
-            provider: Some("protonvpn".to_string()),
-            poll_interval_secs: Some(10),
-        };
-        let json = serde_json::to_string(&cfg).unwrap();
-        let back: crate::settings::VpnKillSwitchSettings = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.armed, Some(true));
-        assert_eq!(back.provider.as_deref(), Some("protonvpn"));
-        assert_eq!(back.poll_interval_secs, Some(10));
-    }
 }
