@@ -118,6 +118,26 @@ function activeVitePortOwner(): string | null {
   return vitePortOwner(netstat.stdout ?? "", netstat.status, PRESERVE_WINCOMMANDER);
 }
 
+const VAULT_INSPECTION_ATTEMPTS = 3;
+const VAULT_INSPECTION_TIMEOUT_MS = 45_000;
+
+function inspectVaultStateOnce(): ReturnType<typeof readDevelopmentVaultState> {
+  const inspection = spawnSync(WINDOWS_POWERSHELL, [
+    "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
+    "tools/dev-vault-state.ps1", "-InspectOnly",
+  ], { cwd: ROOT, encoding: "utf8", shell: false, timeout: VAULT_INSPECTION_TIMEOUT_MS, maxBuffer: 4096 });
+  return readDevelopmentVaultState(inspection.stdout ?? "", inspection.status);
+}
+
+function inspectVaultStateWithRetry(): ReturnType<typeof readDevelopmentVaultState> {
+  let state = inspectVaultStateOnce();
+  for (let attempt = 2; state.state === "unknown" && attempt <= VAULT_INSPECTION_ATTEMPTS; attempt += 1) {
+    console.log(`[dev-server] Vault state not verified yet; retrying (${attempt}/${VAULT_INSPECTION_ATTEMPTS})...`);
+    state = inspectVaultStateOnce();
+  }
+  return state;
+}
+
 async function main(): Promise<void> {
   if (PREPARE_ONLY && (VITE_ONLY || FRONTEND_ONLY)) {
     throw new Error("--prepare-only cannot be combined with a frontend-only mode.");
@@ -129,11 +149,11 @@ async function main(): Promise<void> {
     startVite();
     return;
   }
-  const inspection = FRONTEND_ONLY ? null : spawnSync(WINDOWS_POWERSHELL, [
-    "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
-    "tools/dev-vault-state.ps1", "-InspectOnly",
-  ], { cwd: ROOT, encoding: "utf8", shell: false, timeout: 10_000, maxBuffer: 4096 });
-  const vaultState = inspection ? readDevelopmentVaultState(inspection.stdout ?? "", inspection.status) : null;
+  // A loaded machine (parallel cargo builds, antivirus scans) can push the
+  // PowerShell probe past a short deadline. An unverified answer must never be
+  // read as "no Vault mounted", but it should not make the launcher give up on
+  // the first slow attempt either, so retry before settling for "unknown".
+  const vaultState = FRONTEND_ONLY ? null : inspectVaultStateWithRetry();
   const frontendOnly = FRONTEND_ONLY || vaultState?.state !== "free";
   if (PREPARE_ONLY && frontendOnly) {
     throw new Error("Native development preparation requires verified unmounted Vaults. Existing processes were preserved. Run bun run dev:server for the preserved frontend; backend replacement remains pending.");

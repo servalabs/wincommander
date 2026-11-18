@@ -3,3 +3,6 @@
 
 # Keep the pinned upstream input byte-identical for generator hash verification.
 tools/import-secret-rules/gitleaks-v8.24.3.toml -text whitespace=-blank-at-eof
+
+# The Perl launcher is a batch file: cmd.exe mis-parses labels in LF-only files.
+tools/dev-perl-shim.cmd text eol=crlf

@@ -112,6 +112,24 @@ try {
         $tauriArgs = @('dev', '--config', 'src-tauri/commander-free/tauri.conf.json',
             '--config', 'src-tauri/commander-free/tauri.prepared-dev.conf.json')
         if ($hasProWorkspace) { $tauriArgs += @('--runner', $runnerCommand, '--no-watch') }
+        # Opt-in WebView2 remote-debugging port (loopback only) for automated
+        # UI checks. The app relaunches itself through Explorer when elevated,
+        # which drops environment variables, so the port has to travel in the
+        # window configuration. Set WINCOMMANDER_DEV_DEBUG_PORT=9223 to enable.
+        $debugPort = $env:WINCOMMANDER_DEV_DEBUG_PORT
+        if (-not [string]::IsNullOrWhiteSpace($debugPort)) {
+            if ($debugPort -notmatch '^[1-9][0-9]{3,4}$' -or [int]$debugPort -gt 65535) {
+                throw "WINCOMMANDER_DEV_DEBUG_PORT must be a TCP port between 1000 and 65535."
+            }
+            $baseConfig = Get-Content -LiteralPath (Join-Path $repoRoot 'src-tauri\commander-free\tauri.conf.json') -Raw | ConvertFrom-Json
+            $debugWindow = $baseConfig.app.windows[0]
+            $debugWindow | Add-Member -NotePropertyName additionalBrowserArgs -Force -NotePropertyValue `
+                "--remote-debugging-port=$debugPort --remote-allow-origins=http://127.0.0.1:$debugPort"
+            $debugConfig = Join-Path ([IO.Path]::GetTempPath()) "wincommander-dev-debug-$debugPort.conf.json"
+            @{ app = @{ windows = @($debugWindow) } } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $debugConfig -Encoding UTF8
+            $tauriArgs += @('--config', $debugConfig)
+            Write-Host "WebView2 remote debugging enabled on 127.0.0.1:$debugPort (development only)." -ForegroundColor Yellow
+        }
         & $tauriCli @tauriArgs
     }
     $exitCode = $LASTEXITCODE
