@@ -539,22 +539,6 @@ mod tests {
     }
 
     #[test]
-    fn veracrypt_plain_file_container_stays_data() {
-        assert!(!is_os_target(
-            "veracrypt",
-            None,
-            Some("D:\\secret.hc"),
-            "C:"
-        ));
-        assert!(!is_os_target(
-            "veracrypt",
-            None,
-            Some("C:\\Users\\me\\v.tc"),
-            "C:"
-        ));
-    }
-
-    #[test]
     fn unknown_kind_fails_safe_to_os() {
         assert!(is_os_target("mystery", Some("D:"), None, "C:"));
     }

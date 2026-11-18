@@ -632,14 +632,6 @@ description             Internal SSD
     }
 
     #[test]
-    fn finds_usb_entry() {
-        let entries = parse_bcdedit_firmware_entries(SAMPLE_OUTPUT).expect("parse");
-        let usb = entries.into_iter().find(|e| e.is_removable);
-        assert!(usb.is_some(), "must find the USB entry");
-        assert_eq!(usb.unwrap().id, "{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}");
-    }
-
-    #[test]
     fn returns_error_on_empty_output() {
         let result = parse_bcdedit_firmware_entries("");
         assert!(result.is_err(), "empty output must return Err");

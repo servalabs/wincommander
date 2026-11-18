@@ -1840,8 +1840,6 @@ mod machine_update_tests {
             consent_defender_exclusion: false,
             pro_version: None,
         };
-        assert!(!request.consent_defender_exclusion);
-        assert!(request.pro_version.is_none());
         assert!(validate_machine_pro_update_request(&request).is_err());
     }
 

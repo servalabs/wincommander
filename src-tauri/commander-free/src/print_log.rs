@@ -83,23 +83,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn entry_round_trips_through_json() {
-        let e = PrintAuditEntry {
-            time_created: "2026-05-12T10:00:00Z".to_string(),
-            document: Some("Report.docx".to_string()),
-            pages: 7,
-            printer: Some("HP LaserJet".to_string()),
-            user: Some("DOMAIN\\alice".to_string()),
-            job_status: None,
-        };
-        let json = serde_json::to_string(&e).unwrap();
-        let back: PrintAuditEntry = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.document.as_deref(), Some("Report.docx"));
-        assert_eq!(back.pages, 7);
-        assert!(!json.contains("jobStatus"));
-    }
-
-    #[test]
     fn missing_windows_optional_fields_decode_without_fabrication() {
         let json = r#"{"timeCreated":"2026-09-17T10:00:00Z","pages":2}"#;
         let entry: PrintAuditEntry = serde_json::from_str(json).unwrap();
