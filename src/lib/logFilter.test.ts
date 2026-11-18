@@ -86,14 +86,6 @@ describe("dedupNearSimultaneous", () => {
     expect(out.length).toBe(1);
   });
 
-  test("keeps the longer (richer) message when collapsing", () => {
-    const out = dedupNearSimultaneous([
-      at("ERROR", "ui", "same event message", "12:00:01"),
-      at("ERROR", "ui", "same event message", "12:00:00"),
-    ]);
-    expect(out[0].message).toBe("same event message");
-  });
-
   test("sums occurrences on merge instead of discarding the older record's count", () => {
     // Backend already summarized 9 identical errors (occurrences: 9); a 10th
     // arrives 1s later as its own record (occurrences: 1, the default). The

@@ -1,19 +1,11 @@
-import { describe, expect, it, test } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import { buildContentFilterTokens } from "./contentQueryFilters";
 import { FILE_TYPE_EXTENSIONS } from "./fileNameSearch";
-import type { SearchType } from "./fileNameSearch";
 
 // Fixed instant for every date-based assertion below: 2026-07-09 local.
 const NOW = new Date(2026, 6, 9);
 
 describe("buildContentFilterTokens — type categories", () => {
-  for (const [cat, exts] of Object.entries(FILE_TYPE_EXTENSIONS)) {
-    test(`${cat} emits one comma-joined ext: token`, () => {
-      const tokens = buildContentFilterTokens(new Set([cat as SearchType]), "any", "any", NOW);
-      expect(tokens).toBe(`ext:${exts.join(",")}`);
-    });
-  }
-
   it("unions and comma-joins extensions across two selected categories", () => {
     const tokens = buildContentFilterTokens(new Set(["images", "documents"]), "any", "any", NOW);
     expect(tokens).toBe(

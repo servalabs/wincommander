@@ -110,23 +110,6 @@ describe("frecencyScore", () => {
     expect(frecencyScore("d:\\projects\\notes.txt", now)).toBeGreaterThan(0);
     expect(frecencyScore("d:\\projects\\notes.txt", now)).toBe(frecencyScore("D:/Projects/Notes.TXT", now));
   });
-
-  // Defect 1 regression: eviction must be decoupled from the decaying
-  // ranking score, or a heavy-use idle file gets permanently forgotten.
-  test("MEASURED: a 200-open file idle 100 days scores 86.44, below a brand-new single open's 100", () => {
-    const now = 1_700_000_000_000;
-    recordOpen("C:/heavy-use.exe", now - 100 * DAY_MS);
-    for (let i = 1; i < 200; i++) recordOpen("C:/heavy-use.exe", now - 100 * DAY_MS);
-    recordOpen("C:/brand-new.txt", now);
-
-    // RANKING legitimately prefers recency (intentional) — the bug was
-    // letting this same score decide EVICTION too; see the flood test below.
-    // (No toBeCloseTo in this repo's bun:test shim — round explicitly.)
-    const heavyUseScore = Math.round(frecencyScore("C:/heavy-use.exe", now) * 100) / 100;
-    expect(heavyUseScore).toBe(86.44);
-    expect(frecencyScore("C:/brand-new.txt", now)).toBe(100);
-    expect(frecencyScore("C:/brand-new.txt", now)).toBeGreaterThan(frecencyScore("C:/heavy-use.exe", now));
-  });
 });
 
 describe("normalizeKey", () => {

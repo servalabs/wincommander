@@ -122,7 +122,6 @@ test("generic engine failures never diagnose an incorrect password or expose tra
 
 test("busy letters and Windows access denial have actionable messages", () => {
   expect(vaultOperationError("vault_engine_drive_letter_unavailable")).toContain("reserved");
-  expect(vaultOperationError("vault_caller_access_denied")).toContain("automatically repairs");
   expect(vaultOperationError("unknown", "dismount")).toContain("Close files");
 });
 

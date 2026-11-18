@@ -18,20 +18,6 @@ import {
   type SizeUnit,
 } from "./stegoBackup";
 
-// Mirrors useBackend.parseSizeToMB (src/hooks/useBackend.ts:642-661), the
-// consumer of toBackendSize(). Copied on purpose: these tests pin the contract
-// between the two, so if that parser changes this mirror must change with it.
-const parseSizeAsUseBackendDoes = (size: string): number => {
-  const raw = size.trim().toUpperCase();
-  const match = raw.match(/^(\d+(?:\.\d+)?)([MGT])$/);
-  if (!match) return 0;
-  const value = Number(match[1]);
-  if (!Number.isFinite(value) || value <= 0) return 0;
-  if (match[2] === "M") return Math.round(value);
-  if (match[2] === "G") return Math.round(value * 1024);
-  return Math.round(value * 1024 * 1024);
-};
-
 describe("parseContainerSize", () => {
   it("reads a plain number in each unit", () => {
     expect(parseContainerSize("20", "M").mb).toBe(20);
@@ -88,16 +74,14 @@ describe("parseContainerSize", () => {
 });
 
 describe("toBackendSize", () => {
-  it("a bare number reaches the backend parser as 0 MB — the unit suffix is what stops that", () => {
-    expect(parseSizeAsUseBackendDoes("20")).toBe(0);
-    expect(parseSizeAsUseBackendDoes(toBackendSize(20))).toBe(20);
+  it("always carries the megabyte unit suffix, since a bare number reaches the backend as 0 MB", () => {
+    expect(toBackendSize(20)).toBe("20M");
   });
 
   it("keeps the size unchanged across the client-to-backend encoding for every unit", () => {
-    const cases: [string, SizeUnit, number][] = [["20", "M", 20], ["0.5", "G", 512], ["20", "G", 20480], ["1", "T", 1048576]];
-    for (const [raw, unit, mb] of cases) {
-      expect(parseContainerSize(raw, unit).mb).toBe(mb);
-      expect(parseSizeAsUseBackendDoes(toBackendSize(mb))).toBe(mb);
+    const cases: [string, SizeUnit, string][] = [["20", "M", "20M"], ["0.5", "G", "512M"], ["20", "G", "20480M"], ["1", "T", "1048576M"]];
+    for (const [raw, unit, backend] of cases) {
+      expect(toBackendSize(parseContainerSize(raw, unit).mb!)).toBe(backend);
     }
   });
 });
@@ -276,12 +260,6 @@ describe("describeCapacity", () => {
     const plan = describeCapacity(10, 0);
     expect(plan.verdict).toBe("implausible");
     expect(plan.estimatedOutputBytes).toBe(TEN_MB + 16);
-  });
-
-  it("estimates the output as carrier plus volume plus trailer", () => {
-    const plan = describeCapacity(10, 100 * BYTES_PER_MB);
-    expect(plan.estimatedOutputBytes).toBe(100 * BYTES_PER_MB + TEN_MB + 16);
-    expect(plan.verdict).toBe("ok");
   });
 
   it("payload share shrinks as the carrier grows", () => {

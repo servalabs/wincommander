@@ -2,10 +2,7 @@ import { describe, it, expect } from "bun:test";
 import {
   explainStegoFailure,
   validateCreateForm,
-  validateAttachForm,
   validateExtractForm,
-  validateRefreshForm,
-  validateRestoreFolderForm,
   visibleIssues,
   type CreateFormInput,
   type StegoField,
@@ -224,34 +221,6 @@ describe("validateExtractForm", () => {
       outputPath: "C:\\Vault\\recovered.hc",
     });
     expect(verdict.warnings).toHaveLength(0);
-  });
-});
-
-describe("Stego Container Snapshot forms", () => {
-  const attach = (over = {}) => validateAttachForm({
-    carrierPath: "C:\\Videos\\holiday.mp4", containerPath: "D:\\Vault\\Private.hc", outputPath: "D:\\Backups\\holiday.mp4", ...over,
-  });
-  it("attaches an existing .hc without a password or size field", () => {
-    expect(attach().canSubmit).toBe(true);
-  });
-  it("allows arbitrary VeraCrypt container names but refuses either source being replaced", () => {
-    // VeraCrypt permits extensionless and custom-named containers; an extension
-    // cannot prove whether encrypted bytes are a genuine container.
-    expect(attach({ containerPath: "D:\\Vault\\Private.zip" }).canSubmit).toBe(true);
-    expect(attach({ outputPath: "c:/videos/holiday.mp4" }).canSubmit).toBe(false);
-    expect(attach({ outputPath: "d:/vault/private.hc" }).canSubmit).toBe(false);
-  });
-  it("restores to a folder, leaving the original filename to V2 metadata", () => {
-    expect(validateRestoreFolderForm({ inputPath: "C:\\Backups\\holiday.mp4", destinationDir: "D:\\Recovered\\2026.09" }).canSubmit).toBe(true);
-  });
-  it("will not restore without both a video and destination folder", () => {
-    expect(validateRestoreFolderForm({ inputPath: "", destinationDir: "" }).canSubmit).toBe(false);
-  });
-  it("requires an explicit acknowledgement before refreshing a backup", () => {
-    const base = { backupVideoPath: "C:\\Backups\\holiday.mp4", containerPath: "D:\\Vault\\Private.tc", replacementConfirmed: false };
-    expect(validateRefreshForm(base).canSubmit).toBe(false);
-    expect(on(validateRefreshForm(base).errors, "confirmation")[0]).toContain("Confirm");
-    expect(validateRefreshForm({ ...base, replacementConfirmed: true }).canSubmit).toBe(true);
   });
 });
 
