@@ -35,6 +35,9 @@ $script:mode='streamFiles'; $r=Get-BITSQueueInfo
 if (-not $r.partial -or $r.total -ne 2) { throw 'File emitted before failure was lost.' }
 $script:mode='missing'; $r=Get-BITSQueueInfo
 if ($r.partial -or $r.total -ne 1) { throw 'Absent queue directory should not be a failure.' }
-$text=[IO.File]::ReadAllText((Resolve-Path $source).Path)
-if ($text -notmatch "(?s)'bits_queue'.*?if \(\`$result\.error -or \`$result\.partial\)") { throw 'Fleet partial boundary missing.' }
+$fleetFn = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-FleetForensicProjection' }, $true)
+. ([scriptblock]::Create($fleetFn.Extent.Text))
+function Get-BITSQueueInfo { @{ partial = $true; files = @(); total = 0 } }
+$projection = Get-FleetForensicProjection -Category 'bits_queue'
+if (-not $projection.error -or $projection.total -ne 0) { throw 'Fleet presented a partial scan as a complete inventory.' }
 Write-Output 'Passed: BITS queue preserves details and partial observations.'

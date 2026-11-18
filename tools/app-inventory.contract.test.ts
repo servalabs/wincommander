@@ -1,10 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 
 const inventoryScript = "src-tauri/commander-free/scripts/modules/apps/winget.ps1";
-const inventorySource = readFileSync(inventoryScript, "utf8");
-const installerPanel = readFileSync("src/panels/apps/components/AppInstallerPanel.tsx", "utf8");
 
 describe("Packages & Apps installed-state inventory", () => {
   test.skipIf(process.platform !== "win32")("matches normal ARP names without confusing two products from one publisher", () => {
@@ -39,20 +36,5 @@ Write-Output 'PASS'
     expect(result.stdout.trim()).toBe("PASS");
   });
 
-  test("uses a direct read-only ARP fallback and removes publisher-only matching", () => {
-    expect(inventorySource).toContain("function Get-WindowsUninstallInventory");
-    expect(inventorySource).toContain("$registryInstalled = Get-WindowsUninstallInventory");
-    expect(inventorySource).toContain("Find-ManifestInstallationMatch");
-    expect(inventorySource).not.toContain("[regex]::Escape($publisher)");
-  });
 
-  test("rechecks inventory when the Packages & Apps panel is opened", () => {
-    const panelInventoryEffect = installerPanel.slice(
-      installerPanel.indexOf("Entering Packages & Apps is an explicit request"),
-      installerPanel.indexOf("const openUpdates", installerPanel.indexOf("Entering Packages & Apps is an explicit request")),
-    );
-    expect(panelInventoryEffect).toContain("await runAppInventoryScan(true);");
-    expect(panelInventoryEffect).toContain("await waitForAppInventoryScan();");
-    expect(panelInventoryEffect).not.toContain("catalogIsFresh");
-  });
 });

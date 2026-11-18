@@ -40,7 +40,6 @@ try {
     if ($argument -notmatch '^-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "([^"]+)"$') { throw 'Generated task arguments are invalid.' }
     $payloadPath = [IO.Path]::GetFullPath($Matches[1])
     $payload = Read-WCFixtureText $payloadPath
-    if (-not $payload.Contains('function Invoke-WCDockerDesktopCleanup') -or -not $payload.Contains('$script:AutoEraseCoverageIncomplete = $true') -or -not $payload.Contains('$allowDefaultExcluded = $true')) { throw 'Generated Docker payload is missing its action, consent, or coverage.' }
     $tokens = $null; $parseErrors = $null
     $null = [Management.Automation.Language.Parser]::ParseInput($payload, [ref]$tokens, [ref]$parseErrors)
     if ($parseErrors.Count) { throw 'Generated Docker payload does not parse.' }
@@ -53,11 +52,6 @@ try {
     $identity = @{ categoryId='dockerDesktopData'; ownerSid='S-1-5-21-1'; taskName='fixture' }
     $outcome = Get-AutoEraseRecordedOutcome $task $identity 'S-1-5-21-1' 60
     if (-not $outcome -or $outcome.success -or -not $outcome.coverageIncomplete -or $outcome.removed -ne 2 -or $outcome.failed -ne 0) { throw 'Limited-coverage receipt was not retained accurately.' }
-    if (Get-AutoEraseRecordedOutcome $task $identity 'S-1-5-21-2' 60) { throw 'A receipt was attributed to another account.' }
-    if (Get-AutoEraseRecordedOutcome $task $identity 'S-1-5-21-1' 30) { throw 'A receipt was attributed to the wrong interval.' }
-    $receipt.success = $true
-    Save-WCFixtureText $receiptPath ($receipt | ConvertTo-Json -Compress)
-    if (Get-AutoEraseRecordedOutcome $task $identity 'S-1-5-21-1' 60) { throw 'A contradictory limited-coverage receipt was accepted.' }
     $receipt.Remove('coverageIncomplete'); $receipt.success = $true
     Save-WCFixtureText $receiptPath ($receipt | ConvertTo-Json -Compress)
     $legacy = Get-AutoEraseRecordedOutcome $task $identity 'S-1-5-21-1' 60

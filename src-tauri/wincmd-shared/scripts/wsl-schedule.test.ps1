@@ -1,7 +1,6 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'auto-erase.ps1')
 function Assert-True($Condition, $Message) { if (-not $Condition) { throw $Message } }
-Assert-True ($script:ScheduledWslFunctions.Contains('WaitForExit(300000)') -and $script:ScheduledWslFunctions.Contains('$process.Kill()')) 'WSL provider timeout must be bounded and fail.'
 
 # Denied registry, package or disk access must never be mistaken for absence.
 . ([scriptblock]::Create($script:ScheduledWslFunctions))

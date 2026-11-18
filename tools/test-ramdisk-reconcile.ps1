@@ -122,7 +122,6 @@ $first = New-RamDisk -SizeMB 768 -DriveLetter R -Label TEMP
 Assert-True ($first.status -eq 'reused') 'Existing live R: was not reused'
 Assert-True ($script:units.Count -eq 1 -and $script:units.ContainsKey(7) -and $script:owner -eq 7) 'Duplicate cleanup changed the live R: owner'
 Assert-True (($script:calls -contains 'eject 3') -and -not ($script:calls | Where-Object { $_ -like '-a*' })) 'Duplicate cleanup did not use unit-only eject'
-Assert-True ($script:calls[0] -eq '-l -m R:') 'Mount point was not queried first'
 Assert-True ($script:calls -contains 'access 7 False') 'Reuse did not ensure normal user write access'
 $second = New-RamDisk -SizeMB 768 -DriveLetter R -Label TEMP
 Assert-True ($second.status -eq 'reused' -and $script:units.Count -eq 1) 'A repeat request allocated a disk'

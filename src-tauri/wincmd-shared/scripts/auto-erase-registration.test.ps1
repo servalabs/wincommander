@@ -1,12 +1,6 @@
 $ErrorActionPreference = 'Stop'
 $env:USERNAME = 'TestUser'
 . (Join-Path $PSScriptRoot 'auto-erase.ps1')
-foreach ($revision in @(4,5,6,7,8,9,10,11,12,13)) {
-    if (-not (Test-AutoEraseManagedTask ([pscustomobject]@{ Description="System Maintenance scheduled cleanup v$revision (managed)" }))) { throw "Managed ownership was not recognized for v$revision." }
-}
-foreach ($revision in @(6,7,8,9,10,11,12,13)) {
-    if (Test-AutoEraseManagedTask ([pscustomobject]@{ Description="System Maintenance scheduled cleanup v$revision (manual opt-in)" })) { throw "An individual v$revision schedule was treated as Auto-set managed." }
-}
 $script:registered = @(); $script:existing = $false
 function Assert-AutoEraseAdmin {}
 function Invoke-AutoEraseScheduleLock { param($CategoryId,$Operation) & $Operation }

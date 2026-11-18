@@ -30,6 +30,9 @@ $script:mode = 'stream'; $r = Get-OneDriveMetadataInfo
 if (-not $r.partial -or $r.total -ne 1) { throw 'A record emitted before an error must be retained.' }
 $script:mode = 'complete'; $r = Get-OneDriveMetadataInfo
 if ($r.partial -or $r.total -ne 1) { throw 'Readable metadata should be complete.' }
-$text = [IO.File]::ReadAllText((Resolve-Path $source).Path)
-if ($text -notmatch '(?s)''onedrive_metadata''.*?if \(\$result\.error -or \$result\.partial\)') { throw 'Fleet partial boundary missing.' }
+$fleetFn = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-FleetForensicProjection' }, $true)
+. ([scriptblock]::Create($fleetFn.Extent.Text))
+function Get-OneDriveMetadataInfo { @{ partial = $true; files = @(); total = 0 } }
+$projection = Get-FleetForensicProjection -Category 'onedrive_metadata'
+if (-not $projection.error -or $projection.total -ne 0) { throw 'Fleet presented a partial scan as a complete inventory.' }
 Write-Output 'Passed: OneDrive metadata retains paths and reports incomplete sources.'

@@ -25,6 +25,9 @@ $script:mode='partial'; $r=Get-BranchCacheInfo
 if (-not $r.partial -or $r.total -ne 1 -or $r.files[0].source -ne 'PeerDistRep' -or -not $r.files[0].path.EndsWith('sample.bin')) { throw 'Accessible record or path was lost.' }
 $script:mode='stream'; $r=Get-BranchCacheInfo
 if (-not $r.partial -or $r.total -ne 2) { throw 'Records produced before source errors were lost.' }
-$text = [IO.File]::ReadAllText((Resolve-Path $source).Path)
-if ($text -notmatch "(?s)'peer_distribution_cache'.*?if \(\`$result\.error -or \`$result\.partial\)") { throw 'Fleet partial boundary missing.' }
+$fleetFn = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-FleetForensicProjection' }, $true)
+. ([scriptblock]::Create($fleetFn.Extent.Text))
+function Get-BranchCacheInfo { @{ partial = $true; files = @(); total = 0 } }
+$projection = Get-FleetForensicProjection -Category 'peer_distribution_cache'
+if (-not $projection.error -or $projection.total -ne 0) { throw 'Fleet presented a partial scan as a complete inventory.' }
 Write-Output 'Passed: BranchCache retains paths and reports incomplete sources.'

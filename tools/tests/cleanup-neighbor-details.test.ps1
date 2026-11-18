@@ -16,6 +16,9 @@ if ($result.partial -or $result.total -ne 1 -or $result.files[0].address -ne '19
 $script:failNeighbor = $true
 $partial = Get-NeighborCacheInfo
 if (-not $partial.partial -or $partial.total -ne 1 -or $partial.files[0].address -ne '192.0.2.10') { throw 'Partial provider failure discarded observed neighbors.' }
-$fleet = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-FleetForensicProjection' }, $true)
-if ($fleet.Extent.Text -notmatch '''neighbor_cache''\s*\{[^\r\n]*\$result\.error -or \$result\.partial') { throw 'Fleet must report a partial neighbor scan as unavailable.' }
+$fleetFn = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-FleetForensicProjection' }, $true)
+. ([scriptblock]::Create($fleetFn.Extent.Text))
+function Get-NeighborCacheInfo { @{ partial = $true; files = @(); total = 0 } }
+$projection = Get-FleetForensicProjection -Category 'neighbor_cache'
+if (-not $projection.error -or $projection.total -ne 0) { throw 'Fleet presented a partial scan as a complete inventory.' }
 Write-Output 'Passed: neighbor details and partial scan behavior.'
