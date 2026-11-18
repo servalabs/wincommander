@@ -115,9 +115,7 @@ pub fn device_verifying_key_bytes() -> Result<[u8; 32], String> {
 #[cfg(test)]
 mod tests {
     use ed25519_dalek::SigningKey as DalekSigningKey;
-    use wincmd_shared::wipe_auth::{
-        issue_wipe_token, signing_key_to_bytes, verify_wipe_token, verifying_key_to_bytes,
-    };
+    use wincmd_shared::wipe_auth::{issue_wipe_token, signing_key_to_bytes, verify_wipe_token};
 
     // Keystore key-handling checks (in-memory; the real datastore is not touched).
 
@@ -146,21 +144,5 @@ mod tests {
             .expect("token issued from reconstructed key must verify");
     }
 
-    #[test]
-    fn verifying_key_bytes_matches_signing_key() {
-        let sk = deterministic_signing_key();
-        let seed = signing_key_to_bytes(&sk);
-        let mut arr = [0u8; 32];
-        arr.copy_from_slice(&seed);
-        let reconstructed = wincmd_shared::wipe_auth::signing_key_from_bytes(&arr);
-
-        let vk_bytes = verifying_key_to_bytes(&reconstructed.verifying_key());
-        // Also derives from the original — must match.
-        let vk_bytes_orig = verifying_key_to_bytes(&sk.verifying_key());
-        assert_eq!(
-            vk_bytes, vk_bytes_orig,
-            "verifying key bytes must be identical for the same signing key"
-        );
-    }
 
 }

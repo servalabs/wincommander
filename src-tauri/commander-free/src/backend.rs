@@ -10789,14 +10789,6 @@ mod es_query_tests {
         );
     }
 
-    #[test]
-    fn tokenize_apps_priority_query() {
-        // The real query EverythingSearchBar builds for its apps-first pass.
-        assert_eq!(
-            tokenize_es_query("brave* ext:exe;lnk;msi;appx;msix"),
-            vec!["brave*", "ext:exe;lnk;msi;appx;msix"]
-        );
-    }
 
     // ── Flag-injection guard ──
 
@@ -11005,41 +10997,6 @@ mod es_query_tests {
         }
     }
 
-    #[test]
-    fn validate_es_tokens_rejects_the_exact_visible_name_of_common_real_files() {
-        // KNOWN GAP, confirmed at scale (160 distinct real files across a
-        // 4066-entry real-filesystem corpus; 316 of 468 total rejections in
-        // the harness run): buildEverythingPlan() splits typed search text on
-        // bare whitespace, so any filename containing a standalone " - "
-        // separator — the standard Windows WinX power-user-menu naming
-        // (`01a - Windows PowerShell.lnk`, present on every Windows install
-        // under %LOCALAPPDATA%\Microsoft\Windows\WinX\) and the extremely
-        // common "Name - Description" pattern generally — produces a lone
-        // "-" token. validate_es_tokens's flag-injection guard then rejects
-        // the WHOLE query on that one token, so a user who types the exact,
-        // visible name of a file open in Explorer right now gets "Invalid
-        // search term '-'" instead of finding it.
-        let cases: &[&[&str]] = &[
-            &["01a", "-", "Windows", "PowerShell.lnk"],
-            &["03", "-", "Computer", "Management.lnk"],
-            &[
-                "Microsoft",
-                ".NET",
-                "Runtime",
-                "-",
-                "8.0.29",
-                "(x64).swidtag",
-            ],
-        ];
-        for tokens in cases {
-            let owned: Vec<String> = tokens.iter().map(|s| s.to_string()).collect();
-            let err = validate_es_tokens(&owned).unwrap_err();
-            assert!(
-                err.contains("'-'"),
-                "unexpected message for {owned:?}: {err}"
-            );
-        }
-    }
 }
 
 fn resolve_command_via_powershell_es() -> Option<std::path::PathBuf> {

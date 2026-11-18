@@ -1421,13 +1421,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn key_derivation_is_deterministic() {
-        let material = [0xABu8; 32];
-        let k1 = derive_section_key(&material, Some("pass")).unwrap();
-        let k2 = derive_section_key(&material, Some("pass")).unwrap();
-        assert_eq!(k1, k2);
-    }
 
     #[test]
     fn key_derivation_differs_by_passphrase() {

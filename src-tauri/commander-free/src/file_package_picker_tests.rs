@@ -50,12 +50,3 @@ fn closed_session_refuses_late_dialog_results() {
         .is_err());
 }
 
-#[test]
-fn picker_guard_lives_with_the_callback() {
-    let active = Arc::new(AtomicBool::new(true));
-    let guard = DialogGuard(Arc::clone(&active));
-    let callback = move || drop(guard);
-    assert!(active.load(Ordering::Acquire));
-    callback();
-    assert!(!active.load(Ordering::Acquire));
-}

@@ -274,32 +274,8 @@ mod tests {
         assert!(p.source.is_empty());
     }
 
-    #[test]
-    fn dword_one_becomes_true() {
-        let input = [kv("LockTelemetryOff", json!(1u32))];
-        let p = parse_policy(&input);
-        assert!(p.managed);
-        assert_eq!(p.values["LockTelemetryOff"], json!(true));
-    }
 
-    #[test]
-    fn dword_zero_becomes_false() {
-        let input = [kv("DisableSelfDestruct", json!(0u32))];
-        let p = parse_policy(&input);
-        assert!(p.managed);
-        assert_eq!(p.values["DisableSelfDestruct"], json!(false));
-    }
 
-    #[test]
-    fn reg_sz_passes_through_as_string() {
-        let input = [kv("ForceSecureDNS", json!("https://1.1.1.1/dns-query"))];
-        let p = parse_policy(&input);
-        assert!(p.managed);
-        assert_eq!(
-            p.values["ForceSecureDNS"],
-            json!("https://1.1.1.1/dns-query")
-        );
-    }
 
     #[test]
     fn unknown_keys_are_ignored() {

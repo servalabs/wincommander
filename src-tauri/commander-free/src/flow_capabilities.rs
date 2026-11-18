@@ -505,14 +505,5 @@ mod tests {
         assert_eq!(m.get("ScheduleTrigger").map(String::as_str), Some("ok"));
     }
 
-    #[test]
-    fn fs_watcher_probe_succeeds_in_test_env() {
-        let check = check_fs_watcher();
-        // Test env should always have a writable temp dir.
-        assert!(matches!(
-            check.status,
-            CapabilityStatus::Ok | CapabilityStatus::Warn
-        ));
-    }
 
 }

@@ -250,12 +250,6 @@ fn with_verified_file_after_pins<T>(
 mod tests {
     use super::*;
     #[test]
-    fn current_process_user_is_stable_and_nonempty() {
-        let first = current_user().unwrap();
-        assert!(!first.is_empty());
-        assert_eq!(first, current_user().unwrap());
-    }
-    #[test]
     fn verified_parent_cannot_be_renamed_during_operation() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("parent");

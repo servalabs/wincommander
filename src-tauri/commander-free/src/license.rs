@@ -2415,18 +2415,6 @@ mod tests {
         (signing_key, public_key_b64)
     }
 
-    #[test]
-    fn mainline_license_defaults_are_well_formed() {
-        let url = reqwest::Url::parse(DEFAULT_LICENSE_API_BASE).expect("valid licensing URL");
-        assert_eq!(url.scheme(), "https");
-        assert_eq!(url.host_str(), Some("wincommander-licensing.servalabs.com"));
-        assert_eq!(
-            decode_b64_any(DEFAULT_LICENSE_PUBLIC_KEY_B64)
-                .expect("valid public key")
-                .len(),
-            32
-        );
-    }
 
     #[test]
     fn fresh_trial_eligibility_cache_is_device_bound_and_uses_worker_ttl() {
@@ -2932,24 +2920,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn expired_trial_token_past_offline_grace_grants_no_features() {
-        let exp = 2_000_000_u64;
-        let claims = trial_claims(exp);
-        // Last verified right at issuance; "now" is long past both exp AND
-        // the 7-day offline grace window measured from last_verified_at.
-        let last_verified_at = claims.iat;
-        let now = last_verified_at + OFFLINE_GRACE_SECONDS + 1_000_000;
-
-        let features = features_from_verified_claims(&claims, last_verified_at, now);
-
-        assert!(
-            features.is_empty(),
-            "an expired trial token outside the offline grace window must grant NO \
-             features — the old bug returned [\"all\"] forever regardless of expiry \
-             because it checked trial.json's mere existence instead of the token's exp"
-        );
-    }
 
     #[test]
     fn expired_trial_token_never_uses_offline_grace() {

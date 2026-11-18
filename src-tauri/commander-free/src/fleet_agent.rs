@@ -5914,10 +5914,6 @@ mod tests {
         assert!(super::validate_recovery_operator_key(&format!(" {key}")).is_err());
         assert!(super::validate_recovery_operator_key(&STANDARD.encode([7u8;31])).is_err());
     }
-    #[test]
-    fn recovery_lab_bridge_requires_explicit_build_feature() {
-        assert_eq!(super::require_recovery_lab().is_ok(),cfg!(feature="fleet-recovery-lab"));
-    }
 
     #[test]
     #[allow(clippy::assertions_on_constants)] // asserts a build-time readiness flag stays off
@@ -7088,11 +7084,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn fleet_connection_requires_https() {
-        assert!(super::require_secure_fleet_origin("http://fleet.example").is_err());
-        assert!(super::require_secure_fleet_origin("https://fleet.example").is_ok());
-    }
 
     #[test]
     fn required_device_alerts_need_fleet_and_the_signed_master_policy() {

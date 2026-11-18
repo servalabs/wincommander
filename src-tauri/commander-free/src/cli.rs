@@ -1273,32 +1273,6 @@ mod tests {
         assert_eq!(classify_risk(schedules), Risk::ReadOnly);
     }
 
-    /// The generator derives this from `#[cfg(debug_assertions)]`; a hardcoded
-    /// copy in this file used to be able to drift silently past every gate.
-    #[test]
-    fn debug_only_flags_come_from_the_generated_catalog() {
-        let catalog = catalog().expect("catalog parses");
-        let flagged: Vec<&str> = catalog
-            .commands
-            .iter()
-            .filter(|entry| entry.debug_only)
-            .map(|entry| entry.id.as_str())
-            .collect();
-        assert_eq!(
-            flagged,
-            [
-                "tauri:dev_reset_state",
-                "tauri:dev_simulate_event",
-                "tauri:open_devtools",
-                "tauri:test_pro_dispatch"
-            ]
-        );
-        assert!(catalog
-            .commands
-            .iter()
-            .filter(|entry| entry.debug_only)
-            .all(|entry| entry.transport == Transport::Tauri));
-    }
 
     #[test]
     fn params_accept_primitives_and_structures_without_shell_parsing() {

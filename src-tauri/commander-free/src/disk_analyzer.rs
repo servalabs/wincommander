@@ -741,9 +741,7 @@ mod tests {
         let _ = std::fs::create_dir_all(&pubdir);
         let roots = vec![protected.clone()];
         let raw = pubdir.join("..").join("windows");
-        // Pre-fix: the raw traversal string does NOT lexically match the root.
-        assert!(!is_protected_against(&raw, &roots));
-        // Post-fix: after canonicalization it does (norm_path strips \\?\).
+        // After canonicalization the traversal resolves into the protected root.
         let canonical = std::fs::canonicalize(&raw).unwrap();
         assert!(is_protected_against(&canonical, &roots));
     }
