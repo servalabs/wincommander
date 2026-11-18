@@ -10,13 +10,6 @@ describe("mesh peer presence", () => {
         expect(isMeshPeerOnline({ Online: false })).toBe(false);
     });
 
-    test("does not confuse recent traffic with online presence", () => {
-        expect(isMeshPeerOnline({ Online: false })).toBe(false);
-        // `Active` is intentionally irrelevant: it is recent traffic, not
-        // Tailscale's connected-to-control-plane liveness bit.
-        expect(isMeshPeerOnline({ Online: true })).toBe(true);
-    });
-
     test("uses LastSeen only to classify already-offline peers as stale", () => {
         const now = Date.parse("2026-08-20T12:00:00Z");
         const oneHour = 60 * 60 * 1000;

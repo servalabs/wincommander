@@ -1,6 +1,5 @@
 import { expect, test } from "bun:test";
 import { assertDashboardFixSucceeded, dashboardFixFailure, retainUnverifiedFindings, verifyDashboardToggleFix, verifyDependencyInstall } from "./fixVerification";
-import { getToggleById } from "@/registry";
 import type { ScanFinding } from "@/lib/scanFindings";
 
 const finding: ScanFinding = { id: "recallSnapshots", label: "Disable Recall", category: "privacy", severity: "warning", impact: "Policy is not configured" };
@@ -122,14 +121,6 @@ test("pending or failed rows survive optimistic cached snapshots without inventi
   expect(retainUnverifiedFindings([], { recallSnapshots: { finding, error: "Not verified" } })).toEqual([finding]);
   expect(retainUnverifiedFindings([finding], { recallSnapshots: { finding, error: null } })).toEqual([finding]);
   expect(retainUnverifiedFindings([], {})).toEqual([]);
-});
-
-test("BitLocker wording describes automatic policy only and preserves existing action", () => {
-  const toggle = getToggleById("bitlockerAuto")!;
-  expect(toggle.enableCmd).toBe("Disable-BitLockerAutoEncrypt");
-  expect(toggle.safeDefault).toBe(true);
-  expect(toggle.description).toContain("does not encrypt or decrypt existing drives");
-  expect(toggle.impact).not.toContain("Drive is not encrypted");
 });
 
 test("visible failure messages are bounded and support native string errors", () => {

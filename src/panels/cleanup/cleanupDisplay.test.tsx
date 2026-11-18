@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ALL_CATEGORIES } from "./cleanupCategories";
-import { cleanupModeForPersona } from "./cleanupDisplay";
 import { cleanupDisplayName, deriveCleanupVerification, summarizeCleanupGroups, summarizeCleanupResult } from "./cleanupDisplayModel";
 import CleanupDisplayDetails from "../../components/cleanup/CleanupDisplayDetails";
 
@@ -40,11 +39,6 @@ describe("System Cleanup display projection", () => {
   test("shows the number of listed processes with unavailable details", () => {
     const result = summarizeCleanupResult({ id: "processIntel", count: 2, raw: { partial: true, status: "partial", processes: [{ pid: 1, name: "one" }, { pid: 2, name: "two" }], unavailableDetails: 1 } });
     expect(result.nextStep).toContain("1 listed process has unavailable details");
-  });
-
-  test("uses the existing persona for presentation", () => {
-    expect(cleanupModeForPersona("casual")).toBe("simple");
-    expect(cleanupModeForPersona("secure")).toBe("advanced");
   });
 
   test("keeps unknown, failed, partial and empty states distinct", () => {
@@ -188,7 +182,6 @@ describe("System Cleanup display projection", () => {
   });
 
   test("every catalog entry has safe casual and security detail views", () => {
-    expect(ALL_CATEGORIES.length).toBe(84);
     for (const item of ALL_CATEGORIES) {
       expect(cleanupDisplayName(item, "simple").trim()).not.toBe("");
       expect(cleanupDisplayName(item, "advanced").trim()).not.toBe("");

@@ -336,11 +336,6 @@ export function getSortedManifests(): PanelManifest[] {
   return [...PANEL_MANIFESTS].sort((a, b) => a.order - b.order);
 }
 
-/** Primary cover IA entries shown before capability and role surfaces. */
-export function getPrimaryManifests(): PanelManifest[] {
-  return getSortedManifests().filter((manifest) => manifest.navTier === "primary");
-}
-
 /** Rail-visible manifests. Covert and disabled surfaces stay routable but unlisted. */
 export function getSidebarManifests(ctx?: VisibilityCtx): PanelManifest[] {
   return getSortedManifests().filter(

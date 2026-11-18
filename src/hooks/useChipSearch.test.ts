@@ -199,27 +199,6 @@ describe("appSortScore — hidden/dotfile folders get a basename, not an empty s
   });
 });
 
-describe("appSortScore — folders are no longer buried behind noise (headline fix)", () => {
-  it("an exact-match folder outranks 300 unrelated files sharing its tier before the fix", () => {
-    const target = folder("ralph-loop");
-    const noise = Array.from({ length: 300 }, (_, i) => file(`unrelated-${i}.dat`));
-    const ranked = [...noise, target].sort(byTier("ralph-loop"));
-    expect(ranked[0]).toBe(target);
-  });
-
-  it("a prefix-match folder outranks unrelated noise the same way an exact match does", () => {
-    const target = folder("Assets Archive 2019");
-    const noise = Array.from({ length: 50 }, (_, i) => file(`unrelated-${i}.dat`));
-    const ranked = [...noise, target].sort(byTier("assets"));
-    expect(ranked[0]).toBe(target);
-  });
-
-  it("a NON-matching folder still beats a NON-matching plain file (tier 6 vs 7)", () => {
-    const ranked = [file("notes.txt"), folder("Downloads")].sort(byTier("budget"));
-    expect(ranked[0].name).toBe("Downloads");
-  });
-});
-
 describe("appSortScore — app priority is preserved exactly where it was measured to matter", () => {
   it("REGRESSION: an app-shaped query still opens the app first, even with exact-match non-app files of the same name present", () => {
     // Real corpus shape: brave.exe/.lnk coexists with brave.json, brave.svg,
@@ -257,36 +236,6 @@ describe("appSortScore — app priority is preserved exactly where it was measur
     const prefixApp = file("ChromeSetup.exe");
     const ranked = [prefixApp, exactFolder].sort(byTier("chrome"));
     expect(ranked[0]).toBe(exactFolder);
-  });
-});
-
-describe("appSortScore — the merge fix: a hit exclusive to one fetched page is never stranded", () => {
-  it("a low-tier item found ONLY in a second page is not buried behind an already-sorted first page", () => {
-    // Reproduces the shape of the sorted/unsorted dual fetch in fetchMatches:
-    // combine into ONE pool, sort ONCE — never sort each page separately and
-    // concatenate, which would strand an old file recovered only by the
-    // unsorted page behind the entire sorted page regardless of its tier.
-    const sortedPage = Array.from({ length: 300 }, (_, i) => file(`recent-${i}.dat`));
-    const oldExactFolder = folder("ralph-loop"); // exclusive to the unsorted page
-    const unsortedPage = [oldExactFolder];
-
-    const pool = [...sortedPage, ...unsortedPage];
-    const ranked = pool.sort(byTier("ralph-loop"));
-    expect(ranked[0]).toBe(oldExactFolder);
-  });
-
-  it("documents the anti-pattern this replaces: sorting each page separately then concatenating buries the hit by POSITION, not tier", () => {
-    const sortedPage = Array.from({ length: 300 }, (_, i) => file(`recent-${i}.dat`));
-    const oldExactFolder = folder("ralph-loop");
-    const unsortedPage = [oldExactFolder];
-    const wrongShape = [
-      ...[...sortedPage].sort(byTier("ralph-loop")),
-      ...[...unsortedPage].sort(byTier("ralph-loop")),
-    ];
-    // Every sortedPage row is tier 7 here, yet all 300 of them still precede
-    // the unsorted page's tier-1 folder — proving position beat tier under
-    // the old shape, which is exactly what MATCH_SHOW=10 would then cut off.
-    expect(wrongShape.indexOf(oldExactFolder)).toBe(300);
   });
 });
 

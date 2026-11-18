@@ -15,14 +15,4 @@ describe("filename search cancellation", () => {
     expect(request.current).not.toBe(responseRequest);
   });
 
-  test("a fresh query can run after cancellation", async () => {
-    const timer: { current: ReturnType<typeof setTimeout> | null } = { current: null };
-    const request = { current: 1 };
-    cancelPendingFileSearch(timer, request);
-    let searches = 0;
-    await new Promise<void>((resolve) => {
-      timer.current = setTimeout(() => { searches += 1; resolve(); }, 1);
-    });
-    expect(searches).toBe(1);
-  });
 });

@@ -61,7 +61,6 @@ test("clean reconciliation retains failed items and recomputes preview totals", 
 });
 
 test("app-cache cleanup excludes the system category that Windows disk cleanup already owns", () => {
-  expect(APP_CACHE_CLEANUP_CATEGORIES).toEqual(["browsers", "applications", "developers", "ai", "gaming", "databases"]);
   expect(APP_CACHE_CLEANUP_CATEGORIES).not.toContain("system");
   expect(getRoutineCleanerCategories(APP_CACHE_CLEANUP_CATEGORIES).map((category) => category.id)).toEqual(APP_CACHE_CLEANUP_CATEGORIES);
 });

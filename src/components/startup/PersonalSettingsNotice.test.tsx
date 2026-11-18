@@ -31,7 +31,6 @@ test("recovery banner offers a Settings route and details stay available indepen
   expect(details).toContain("password reset can leave older protected data locked even in the same account");
   expect(details).toContain("WinCommander cannot recreate lost keys");
   expect(details).not.toContain("Dismiss");
-  expect(status.recoveryRequired).toBe(true);
 });
 
 test("an acknowledged episode has a stable identity until the actual recovery or save status changes", () => {

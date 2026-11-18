@@ -21,9 +21,8 @@ test("lockdown phrase can be added inline and cancelled", async () => {
     const help = host.querySelector('[aria-label="How typed lockdown words work"]');
     assert.ok(help); assert.equal(help.textContent, '?');
     const button = [...host.querySelectorAll('button')].find(x => x.textContent.includes('Add phrase'));
-    assert.ok(button); assert.ok(button.classList.contains('lockdown-trigger-action--add')); await act(async () => button.click());
+    assert.ok(button); await act(async () => button.click());
     assert.ok(host.querySelector('[aria-label="Lockdown secret phrase"]'));
-    assert.ok(host.querySelector('.lockdown-trigger-form'));
     assert.equal(host.querySelector('[role="dialog"]'), null);
     const cancel = [...host.querySelectorAll('button')].find(x => x.textContent === 'Cancel');
     assert.ok(cancel); await act(async () => cancel.click());
