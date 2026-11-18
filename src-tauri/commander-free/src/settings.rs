@@ -2578,6 +2578,8 @@ pub(crate) fn cached_window_policy() -> Option<WindowPolicy> {
 #[path = "settings_preload.rs"]
 mod preload;
 pub(crate) use preload::preload_settings;
+#[cfg(windows)]
+pub(crate) use preload::read_startup_calculator_lock;
 
 #[cfg(test)]
 #[path = "settings_concurrency_tests.rs"]

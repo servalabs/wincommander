@@ -1808,7 +1808,12 @@ pub fn run() {
                 std::process::exit(0);
             }
         }
-        if !cli_mode && !session_instance::acquire(&cli_args) {
+        if !cli_mode
+            && !session_instance::acquire(
+                &cli_args,
+                preloaded_startup_settings.map(|startup| startup.calculator_lock_active),
+            )
+        {
             // Primary instance already running in this session and has received
             // the forwarded args.  Nothing more to do.
             std::process::exit(0);

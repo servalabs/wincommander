@@ -26,6 +26,15 @@ pub(crate) fn preload_settings() -> Result<StartupSettings, String> {
     preload_with(|| super::read_settings().map(|settings| StartupSettings::from_settings(&settings)))
 }
 
+#[cfg(windows)]
+pub(crate) fn read_startup_calculator_lock(timeout: Duration) -> Option<bool> {
+    preload_with_timeout(
+        || super::read_settings().map(|settings| StartupSettings::from_settings(&settings).calculator_lock_active),
+        timeout,
+    )
+    .ok()
+}
+
 fn preload_with<T: Send + 'static>(
     load: impl FnOnce() -> Result<T, String> + Send + 'static,
 ) -> Result<T, String> {

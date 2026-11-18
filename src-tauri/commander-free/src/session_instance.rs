@@ -244,7 +244,7 @@ fn duplicate_forward_arguments(args: &[String]) -> Option<Vec<String>> {
 /// Returns `true`  → caller is the primary; proceed with normal startup.
 /// Returns `false` → another instance already owns this session; args have
 ///                   been forwarded; caller should call `std::process::exit(0)`.
-pub fn acquire(cli_args: &[String]) -> bool {
+pub fn acquire(cli_args: &[String], calculator_lock: Option<bool>) -> bool {
     let sid = current_session_id();
 
     // The name has NO "Global\" prefix (stays in the session-local object
@@ -278,6 +278,11 @@ pub fn acquire(cli_args: &[String]) -> bool {
         ) {
             unsafe { CloseHandle(hmutex) };
             if std::env::current_exe().is_ok_and(|exe| reveal_elevated_primary(&exe)) {
+                return false;
+            }
+            let calculator_lock = calculator_lock.or_else(read_calculator_lock);
+            if !calculator_allows_elevation_handoff(calculator_lock) {
+                focus_preserved_primary(sid, read_stored_primary_pid());
                 return false;
             }
             return acquire_after_cooperative_elevation_handoff(sid, &mutex_name);
@@ -451,7 +456,7 @@ fn acquire_after_cooperative_elevation_handoff(sid: u32, mutex_name: &[u16]) -> 
                 primary_pid
             ),
         );
-        focus_preserved_primary(sid, primary_pid);
+        focus_or_explain_elevation_failure(sid, primary_pid);
         return false;
     }
 
@@ -481,7 +486,7 @@ fn acquire_after_cooperative_elevation_handoff(sid: u32, mutex_name: &[u16]) -> 
         "core",
         "[SessionInstance] primary did not exit for elevation handoff; preserving it",
     );
-    focus_preserved_primary(sid, primary_pid);
+    focus_or_explain_elevation_failure(sid, primary_pid);
     false
 }
 
@@ -498,6 +503,26 @@ fn focus_preserved_primary(sid: u32, pid: Option<u32>) -> bool {
         );
     }
     delivered
+}
+
+fn read_calculator_lock() -> Option<bool> {
+    crate::settings::read_startup_calculator_lock(std::time::Duration::from_secs(2))
+}
+
+fn calculator_allows_elevation_handoff(calculator_lock: Option<bool>) -> bool {
+    calculator_lock == Some(false)
+}
+
+fn focus_or_explain_elevation_failure(sid: u32, pid: Option<u32>) {
+    // A PIN may have been enabled while the elevated desktop waited for handoff.
+    if !focus_preserved_primary(sid, pid)
+        && calculator_allows_elevation_handoff(read_calculator_lock())
+    {
+        crate::startup_window::show_error_dialog(
+            "WinCommander startup",
+            "WinCommander is already running. It could not switch to the administrator window or bring the current window forward. Try opening WinCommander again. If it stays unresponsive, close it from the tray before retrying.",
+        );
+    }
 }
 
 /// Spawn the async named-pipe server in the Tauri async runtime.
@@ -776,18 +801,21 @@ pub(crate) fn resolve_context_menu_event(has_flag: impl Fn(&str) -> bool) -> &'s
 fn handle_forwarded_args(app: &tauri::AppHandle, payload: &str) {
     let parts: Vec<&str> = payload.split('|').collect();
     let primary_is_elevated = crate::startup_elevation::is_current_process_elevated();
-    if should_exit_for_elevation_handoff(
-        parts.contains(&"--elevated-relaunch")
-            && !parts.contains(&"--autostart")
-            && !parts.contains(&"--minimized"),
-        primary_is_elevated,
-    ) {
+    let handoff_requested = parts.contains(&"--elevated-relaunch")
+        && !parts.contains(&"--autostart")
+        && !parts.contains(&"--minimized");
+    let calculator_locked = handoff_requested && crate::calc_mode_active(app);
+    if should_exit_for_elevation_handoff(handoff_requested, primary_is_elevated, calculator_locked) {
         crate::log_message_src(
             "info",
             "core",
             "[SessionInstance] cooperative elevation handoff requested",
         );
         app.exit(0);
+        return;
+    }
+    if calculator_locked {
+        handle_forwarded_args(app, "--focus");
         return;
     }
     // If the app is still initializing, queue the payload — showing the window
@@ -883,8 +911,12 @@ fn handle_forwarded_args(app: &tauri::AppHandle, payload: &str) {
     }
 }
 
-fn should_exit_for_elevation_handoff(requested: bool, primary_is_elevated: bool) -> bool {
-    requested && !primary_is_elevated
+fn should_exit_for_elevation_handoff(
+    requested: bool,
+    primary_is_elevated: bool,
+    calculator_locked: bool,
+) -> bool {
+    requested && !primary_is_elevated && !calculator_locked
 }
 
 fn should_reveal_existing_instance(parts: &[&str], primary_is_elevated: bool) -> bool {
@@ -1009,17 +1041,25 @@ mod resolve_context_menu_event_tests {
 
     #[test]
     fn only_a_normal_primary_exits_for_an_elevation_handoff() {
-        assert!(should_exit_for_elevation_handoff(true, false));
-        assert!(!should_exit_for_elevation_handoff(true, true));
-        assert!(!should_exit_for_elevation_handoff(false, false));
+        assert!(should_exit_for_elevation_handoff(true, false, false));
+        assert!(!should_exit_for_elevation_handoff(true, true, false));
+        assert!(!should_exit_for_elevation_handoff(false, false, false));
+        assert!(!should_exit_for_elevation_handoff(true, false, true));
+    }
+
+    #[test]
+    fn pin_or_unknown_settings_keep_the_elevation_handoff_and_diagnostic_hidden() {
+        assert!(super::calculator_allows_elevation_handoff(Some(false)));
+        assert!(!super::calculator_allows_elevation_handoff(Some(true)));
+        assert!(!super::calculator_allows_elevation_handoff(None));
     }
 
     #[test]
     fn elevated_relaunch_reveals_existing_elevated_primary_without_replacing_it() {
         let parts = ["--elevated-relaunch"];
-        assert!(!should_exit_for_elevation_handoff(true, true));
+        assert!(!should_exit_for_elevation_handoff(true, true, false));
         assert!(should_reveal_existing_instance(&parts, true));
-        assert!(should_exit_for_elevation_handoff(true, false));
+        assert!(should_exit_for_elevation_handoff(true, false, false));
         assert!(!should_reveal_existing_instance(&parts, false));
     }
 
