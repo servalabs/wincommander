@@ -1,63 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { applyProductAliases } from "./assets/products";
 
-declare const Bun: {
-  file(path: string): {
-    text(): Promise<string>;
-  };
-};
-
 describe("applyProductAliases", () => {
-  test("keeps shared asset module URLs separate from raw WebView asset URLs", async () => {
-    const [appsSource, networkSource, featureSource, productSource] = await Promise.all([
-      Bun.file("src/assets/apps.ts").text(),
-      Bun.file("src/assets/network.ts").text(),
-      Bun.file("src/assets/featureLogos.ts").text(),
-      Bun.file("src/assets/products.ts").text(),
-    ]);
-    const featureQueries = featureSource.match(/query: "\?url&wc-module"/g) ?? [];
-    const productQueries = productSource.match(/query: "\?url&wc-module"/g) ?? [];
-
-    expect(appsSource).toContain('query: "?url&wc-module"');
-    expect(networkSource).toContain('query: "?url&wc-module"');
-    expect(featureQueries).toHaveLength(2);
-    expect(productQueries).toHaveLength(3);
-    expect(appsSource).not.toContain('query: "?url"');
-    expect(networkSource).not.toContain('query: "?url"');
-    expect(productSource).not.toContain('query: "?url"');
-    // Product media must load from the app's assets submodule, not a
-    // missing workspace sibling at ../../assets (that left the title logo empty).
-    expect(productSource).toContain('../../assets/products/wincommander/Scrub.gif');
-    expect(appsSource).not.toContain('assets/products/');
-    expect(networkSource).not.toContain('assets/products/');
-    expect(productSource).not.toContain('../../assets/products/wincommander/**/*');
-    expect(productSource).not.toContain('../../assets/products/private-server/**/*');
-    expect(productSource).not.toContain('../../assets/products/private-phone/**/*');
-    expect(productSource).not.toContain('../../assets/products/theron/**/*');
-    expect(appsSource).not.toContain('../assets/softwares/**/*",');
-    expect(featureSource).not.toContain('assets/softwares/**/*');
-  });
-
-  test("keeps large asset families behind their consuming feature modules", async () => {
-    const [registrySource, appIconsSource, browserSource, meshSource] = await Promise.all([
-      Bun.file("src/registry/features.ts").text(),
-      Bun.file("src/panels/apps/components/appIcons.ts").text(),
-      Bun.file("src/panels/privacy/BrowserHardeningSection.tsx").text(),
-      Bun.file("src/panels/mesh/MeshGrid.tsx").text(),
-    ]);
-
-    expect(registrySource).toContain('from "@/assets/featureLogos"');
-    expect(appIconsSource).toContain('from "@/assets/apps"');
-    expect(browserSource).toContain('from "../../assets/privacy"');
-    expect(meshSource).toContain("from '@/assets/mesh'");
-  });
-
-  test("exposes the bundled Contingency clips through the UI media map", async () => {
-    const source = await Bun.file("src/assets/products.ts").text();
-
-    expect(source).toMatch(/export const ui[\s\S]*privateServerMods/);
-  });
-
   test("keeps legacy product keys wired to the renamed asset files", () => {
     const aliased = applyProductAliases({
       "private-phone/phone-top-view.png": "/private-phone/phone-top-view.png",

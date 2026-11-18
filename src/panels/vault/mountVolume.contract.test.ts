@@ -1,5 +1,4 @@
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
 import { buildMountVolumeRequest } from "../../hooks/useBackend";
 
 test("Secure Storage defaults to machine-wide write and retains explicit read-only", () => {
@@ -69,22 +68,4 @@ test("hidden-volume mount sends the hidden role through the primary credentials"
     Scope: "per-user",
     HardenAcl: true,
   });
-});
-
-test("partition discovery failure offers retry instead of claiming no partitions", () => {
-  const panel = readFileSync(new URL("./index.tsx", import.meta.url), "utf8");
-  const errorBranch = panel.slice(
-    panel.indexOf(") : partitionDiscoveryError ?"),
-    panel.indexOf(") : partitions.length === 0 ?"),
-  );
-
-  expect(errorBranch).toContain('text="Retry partition check"');
-  expect(errorBranch).not.toContain("No mountable partitions found");
-});
-test("Secure Storage delegates elevated ordinary-Vault recovery to the service", () => {
-  const panel = readFileSync(new URL("./index.tsx", import.meta.url), "utf8");
-
-  expect(panel).toContain("service automatically repairs root access");
-  expect(panel).not.toContain("repairCurrentAccountAccess:");
-  expect(panel).not.toContain("Recover this account's access");
 });

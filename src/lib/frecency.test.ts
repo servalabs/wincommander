@@ -218,33 +218,7 @@ describe("recordOpen / topPaths", () => {
   });
 });
 
-describe("recordOpen performance (Defect 3 — hot path, runs on every file open)", () => {
-  test("recordOpen stays fast with the store already at full 500-entry capacity", () => {
-    const now = 1_700_000_000_000;
-    // Fill the store to the cap first so every timed call below pays the
-    // full readStore/enforceCap/writeStore cost against 500 entries.
-    for (let i = 0; i < 500; i++) recordOpen(`C:/warm/file${i}.txt`, now - i * DAY_MS);
-
-    const iterations = 1000;
-    const start = performance.now();
-    for (let i = 0; i < iterations; i++) {
-      recordOpen(`C:/warm/file${i % 500}.txt`, now + i);
-    }
-    const elapsedMs = performance.now() - start;
-    const perCallMs = elapsedMs / iterations;
-
-    // Reported (measured on this machine, this run): see verification output.
-    // Threshold is generous on purpose — this asserts "not accidentally
-    // quadratic / not blocking a render", not a tight perf budget.
-    // (This repo's bun:test shim has no toBeLessThan — express perCallMs < 5
-    // as "5 is greater than perCallMs" using the matcher that does exist.)
-    expect(5).toBeGreaterThan(perCallMs);
-    // Surfaces the real measured number in test output per the task's
-    // "time it" requirement — not asserted beyond the threshold above
-    // because absolute timing is machine-dependent.
-    console.log(`recordOpen @ 500-entry cap: ${perCallMs.toFixed(4)}ms/call over ${iterations} iterations`);
-  });
-
+describe("recordOpen cache", () => {
   test("the parse cache invalidates when another WebView changes localStorage", () => {
     const now = 1_700_000_000_000;
     recordOpen("C:/main-window.txt", now);

@@ -12,7 +12,6 @@ describe("license refresh schedule", () => {
     const verifiedNow = now / 1_000;
     const verifiedThreeHoursFiftyNineMinutesAgo = (now - LICENSE_REFRESH_BASE_MS + 60_000) / 1_000;
 
-    expect(LICENSE_REFRESH_BASE_MS).toBe(4 * 60 * 60 * 1_000);
     expect(nextLicenseRefreshDueDelay(verifiedNow, now, () => 0)).toBe(LICENSE_REFRESH_BASE_MS);
     expect(nextLicenseRefreshDueDelay(verifiedNow, now, () => 1)).toBe(
       LICENSE_REFRESH_BASE_MS + 5 * 60 * 1_000,

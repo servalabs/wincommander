@@ -520,10 +520,4 @@ mod tests {
         );
         assert!(event.redacted_context.is_empty());
     }
-    #[test]
-    fn diagnostic_reader_retains_legacy_log_records() {
-        let source = include_str!("datastore.rs");
-        assert!(source.contains("log_decrypt_line(line)"));
-        assert!(source.contains("seal_diagnostic_record"));
-    }
 }

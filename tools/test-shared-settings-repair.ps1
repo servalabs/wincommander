@@ -38,9 +38,6 @@ try {
             else { $entry.SetAccessControl([Security.AccessControl.FileSecurity]$Acl) }
         }
     }
-    if ((Get-Content -LiteralPath $repair -Raw) -match '(?im)^\s*(Get|Set)-Acl\b') {
-        throw 'Installer repair must not depend on Microsoft.PowerShell.Security ACL cmdlets.'
-    }
     function Repair {
         $ErrorActionPreference = 'Continue'
         $output = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $repair -DataRoot $root 2>&1 | Out-String

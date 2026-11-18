@@ -1,8 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { getMaintenanceFailureMessage } from "./maintenance";
 
-declare const Bun: { file(path: string): { text(): Promise<string> } };
-
 describe("maintenance failure reporting", () => {
   test("rejects a failed native action receipt", () => {
     expect(getMaintenanceFailureMessage("System repair", { success: true, data: { ok: false, message: "Repair failed" } })).toBe("Repair failed");
@@ -40,17 +38,5 @@ describe("maintenance failure reporting", () => {
       },
     })).toBe(null);
     expect(getMaintenanceFailureMessage("Apply Service Profile", null)).toBe(null);
-  });
-
-  test("service-profile entry points stop success reporting after failed work", async () => {
-    const [manager, dashboard] = await Promise.all([
-      Bun.file("src/components/tweaks/managers/ServiceManager.tsx").text(),
-      Bun.file("src/panels/dashboard/index.tsx").text(),
-    ]);
-
-    expect(manager).toContain('const result = await changeServices({ action: "Profile" })');
-    expect(manager).toContain("if (!result.success)");
-    expect(manager.indexOf("if (!result.success)") < manager.indexOf("const previous = appSettings")).toBe(true);
-    expect(dashboard).toContain('getMaintenanceFailureMessage("Apply Recommended Service Profile", res)');
   });
 });

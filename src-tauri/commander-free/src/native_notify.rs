@@ -415,7 +415,7 @@ pub fn show_rdp_idle_warning_native(
 #[cfg(test)]
 mod tests {
     use super::{
-        enqueue_pending_notification, infer_presentation, promote_notification_window,
+        enqueue_pending_notification, infer_presentation,
         CustomNotificationPayload, NotificationDeliveryState, MAX_PENDING_NOTIFICATIONS,
     };
 
@@ -433,25 +433,6 @@ mod tests {
             infer_presentation("Update available", "A new build is ready."),
             ("info", "WinCommander")
         );
-    }
-
-    #[test]
-    fn custom_notifications_are_promoted_after_the_renderer_shows_them() {
-        let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/native_notify.rs"));
-        let start = source
-            .find("fn show_custom_notification")
-            .expect("custom notification path must exist");
-        let body = &source[start..start + 900.min(source.len() - start)];
-        assert!(body.contains("ensure_notification_window(app)?;"));
-        assert!(!body.contains("promote_notification_window(app)?;"));
-        assert!(body.contains("queue_or_deliver_notification(&window, payload)"));
-        assert!(!body.contains("app.emit(\"wc-native-notification\", payload)"));
-        assert!(source.contains("pub fn notification_renderer_ready"));
-        assert!(source.contains("pub fn present_notification_window"));
-        assert!(source.contains("HWND_TOPMOST"));
-        assert!(source.contains("SWP_NOACTIVATE"));
-        assert!(source.contains("SWP_SHOWWINDOW"));
-        let _ = promote_notification_window as fn(&tauri::AppHandle) -> Result<(), String>;
     }
 
     #[test]

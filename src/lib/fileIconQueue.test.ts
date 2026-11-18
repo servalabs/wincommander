@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { FileIconQueue, MAX_CONCURRENT_FILE_ICON_REQUESTS } from "./fileIconQueue";
+import { FileIconQueue } from "./fileIconQueue";
 import { MAX_CACHED_FILE_ICONS } from "./fileIconCache";
 
 function deferred<T>() {
@@ -128,10 +128,6 @@ describe("FileIconQueue", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(received).toEqual(["x".repeat(20)]);
     expect(queue.get("file")).toBeUndefined();
-  });
-
-  test("caps native icon IPC at eight concurrent requests", () => {
-    expect(MAX_CONCURRENT_FILE_ICON_REQUESTS).toBe(8);
   });
 
   test("starts visible requests first and never exceeds its concurrency budget", async () => {

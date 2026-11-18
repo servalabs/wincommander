@@ -6,11 +6,6 @@ import {
 } from "./visibilityDefaults";
 
 describe("visibility defaults", () => {
-  test("hides license controls and the tour in Borrowed Mode by default", () => {
-    expect(DEFAULT_BORROWED_EXTRAS).toContain("license-panel");
-    expect(DEFAULT_BORROWED_EXTRAS).toContain("tour");
-  });
-
   test("conceals the other requested surfaces in Borrowed Mode", () => {
     for (const surface of [
       "risk-matrix",

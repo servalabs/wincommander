@@ -675,11 +675,7 @@ pub(crate) fn decode_section(
     plaintext.map_err(|_| "Decoding failed — wrong passphrase or corrupted data".to_string())
 }
 
-// ── Atomic write helper ───────────────────────────────────────────────────────
-
-fn atomic_write_bytes(path: &std::path::Path, data: &[u8]) -> Result<(), String> {
-    crate::datastore_io::atomic_write(path, data)
-}
+use crate::datastore_io::atomic_write as atomic_write_bytes;
 
 // ── Public API ────────────────────────────────────────────────────────────────
 

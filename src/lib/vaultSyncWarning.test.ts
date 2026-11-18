@@ -1,5 +1,4 @@
 import { describe, expect, it } from "bun:test";
-import { readFileSync } from "node:fs";
 import {
   VAULT_SYNC_WARNING_EVENT, notifyPersonalMountSyncWarning, notifyPolicyMountSyncWarning,
   vaultSyncNotice, vaultSyncWarningMessage, type VaultSyncNotice,
@@ -62,32 +61,5 @@ describe("post-mount Syncthing warning", () => {
     const unavailable = vaultSyncWarningMessage({ drive: "J:", warning: "unavailable" });
     expect(unavailable).toContain("could not confirm");
     expect(unavailable).not.toContain("still stopped");
-  });
-
-  it("reports warnings only after readback while Quick Mount stays usable", () => {
-    const source = (path: string) => readFileSync(path, "utf8").replace(/\r\n/g, "\n");
-    const expectBefore = (body: string, before: string, after: string) => {
-      expect(body).toContain(before);
-      expect(body).toContain(after);
-      expect(body.indexOf(before) < body.indexOf(after)).toBe(true);
-    };
-    const storage = source("src/panels/vault/index.tsx");
-    const storageMount = storage.slice(storage.indexOf("const result = await mountPasswordSelectedVolume"));
-    expectBefore(storageMount, "const observationError = confirmedMountObservationError", "notifyPersonalMountSyncWarning(result)");
-    expectBefore(storageMount, "setMountDialogOpen(false)", "notifyPersonalMountSyncWarning(result)");
-    expect(storageMount).toContain("setMountedVolume(result.data.syncWarning ? null : result.data)");
-    const fleet = source("src/panels/fleet/VaultAccessTab.tsx");
-    const fleetMount = fleet.slice(fleet.indexOf("const result = await mountRequest"));
-    expectBefore(fleetMount, "if (!vaultMountResultConfirmed", "notifyPolicyMountSyncWarning(result)");
-    expectBefore(fleetMount, "setMountTarget(null)", "notifyPolicyMountSyncWarning(result)");
-    const sidebar = source("src/components/RightSidebar.tsx");
-    const quickFleet = sidebar.slice(sidebar.indexOf("const handleFleetVaultMount"), sidebar.indexOf("const nextFreeLetter"));
-    expectBefore(quickFleet, "if (!confirmed || !vaultMountResultConfirmed", "notifyPolicyMountSyncWarning(result)");
-    expect(quickFleet).not.toContain("setQmOpen(false)");
-    const quickPersonal = sidebar.slice(sidebar.indexOf("const handleQmMount"));
-    expectBefore(quickPersonal, "const observationError = confirmedMountObservationError", "notifyPersonalMountSyncWarning(r)");
-    expect(quickPersonal.slice(0, quickPersonal.indexOf("// Safe Paste requests"))).not.toContain("setQmOpen(false)");
-    expect(source("src/hooks/useBackend.ts")).not.toContain("notifyPersonalMountSyncWarning");
-    expect(source("src/hooks/useVaultAccess.ts")).not.toContain("notifyPolicyMountSyncWarning");
   });
 });

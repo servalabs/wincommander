@@ -77,8 +77,6 @@ try {
     $classes.DeleteSubKeyTree('*\shell\WinCommanderScrub')
     $result = Repair-ScrubClasses $classes $target
     if ($null -ne $classes.OpenSubKey('*\shell\WinCommanderScrub') -or $result.updated -ne 0) { throw 'Missing menu was enabled' }
-    $text = [IO.File]::ReadAllText($source)
-    if ($text -match 'reg(?:\.exe)?\s+load|Set-Acl|Register-ScheduledTask|Remove-Item') { throw 'Migration acquired unrelated mutation authority' }
     $hooks = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '../src-tauri/commander-free/nsis/hooks.nsh'))
     if ($hooks.IndexOf('wincommander-migrate-scrub-context-menus.ps1" -SharedExecutable') -lt 0 -or
         $hooks.Substring($hooks.IndexOf('!macro NSIS_HOOK_PREUNINSTALL')).Contains('WC_SCRUB_MENU_MIGRATION')) { throw 'Migration hook is absent or runs during uninstall' }

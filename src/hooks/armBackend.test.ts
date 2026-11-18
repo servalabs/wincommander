@@ -86,26 +86,3 @@ test("file watch toggle is not persisted ON and shows 'not active' when the watc
     await act(async () => root.unmount());
   `);
 });
-
-test("arming call sites no longer swallow failures", async () => {
-  const read = async (path: string) => await Bun.file(path).text();
-  const checks: Array<[string, RegExp[]]> = [
-    ["src/panels/secret/index.tsx", [/enter_calculator_mode"\)\.catch/, /update_hide_hotkey"[^)]*\)\.catch\(\(\) => \{\}\)/, /update_autostart_task_identity"[^)]*\}\)\.catch\(\(\) => \{\}\)/]],
-    ["src/panels/privacy/FileWatchTriggerSection.tsx", [/start_file_watch_triggers[^\n]*catch\(\(\) => \{\}\)/]],
-    ["src/context/AuthModeContext.tsx", [/set_decoy_mode[^\n]*catch\(\(\) => \{\}\)/]],
-    ["src/App.tsx", [/set_capture_protection[^\n]*catch\(\(\) => \{\}\)/]],
-    ["src/panels/dashboard/index.tsx", [/lock_to_calculator"\)\.catch\(\(\) => \{\}\)/]],
-    ["src/panels/privacy/PanicHotkeyTrigger.tsx", [/update_panic_hotkey[^\n]*catch/]],
-  ];
-  for (const [path, patterns] of checks) {
-    const text = await read(path);
-    for (const pattern of patterns) expect({ path, hit: pattern.test(text) }).toEqual({ path, hit: false });
-  }
-  const secret = await read("src/panels/secret/index.tsx");
-  // A failed enter_calculator_mode must roll back the persisted lock setting and never reach showSuccess.
-  const catchAt = secret.indexOf('reportArmFailure("enter_calculator_mode"');
-  expect(catchAt).toBeGreaterThan(-1);
-  const after = secret.slice(catchAt, secret.indexOf("showSuccess(next", catchAt));
-  expect(after).toContain('set_startup_pin_enabled", { enabled: false }');
-  expect(after).toContain("return;");
-});

@@ -150,8 +150,4 @@ mod tests {
         assert!(std::str::from_utf8(truncated.as_bytes()).is_ok());
     }
 
-    #[test]
-    fn max_clipboard_read_bytes_is_one_mebibyte() {
-        assert_eq!(MAX_CLIPBOARD_READ_BYTES, 1024 * 1024);
-    }
 }

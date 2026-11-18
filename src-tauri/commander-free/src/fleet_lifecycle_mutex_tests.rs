@@ -26,9 +26,7 @@ impl Drop for OwnedHandle {
     }
 }
 
-fn wide(value: &str) -> Vec<u16> {
-    value.encode_utf16().chain(Some(0)).collect()
-}
+use crate::win_util::wide;
 fn name() -> String {
     format!(
         r"Global\WinCommander.FleetLease.Test.{}",
@@ -273,6 +271,5 @@ fn ace_parser_rejects_truncated_and_malformed_entries() {
     }
 }
 
-#[allow(clippy::duplicate_mod)] // the same file is deliberately included under more than one module path
 #[path = "fleet_lifecycle_mutex_security_tests.rs"]
 mod security_tests;

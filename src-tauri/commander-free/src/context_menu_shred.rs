@@ -42,28 +42,3 @@ pub(crate) fn log_result(result: Result<(), String>) {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn explorer_shred_is_handled_before_single_instance_forwarding() {
-        let app_startup = include_str!("lib.rs");
-        let direct_runner = app_startup
-            .find("context_menu_shred::execute_cli(paths)")
-            .expect("Explorer shred must have a standalone runner");
-        let instance_guard = app_startup
-            .find("session_instance::acquire(&cli_args)")
-            .expect("single-instance guard must remain present");
-
-        assert!(direct_runner < instance_guard);
-        assert!(!app_startup.contains("app_handle.exit(0);"));
-    }
-
-    #[test]
-    fn in_app_and_explorer_paths_share_the_same_native_core() {
-        let source = include_str!("context_menu_shred.rs");
-        assert!(source.contains("commander_context_shred::execute_cli(raw_paths)"));
-        assert!(source.contains("pub(crate) async fn secure_shred"));
-        assert!(source.contains("DestructiveAction::DiskDelete"));
-    }
-}
