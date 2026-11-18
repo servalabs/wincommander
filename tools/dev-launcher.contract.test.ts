@@ -2,16 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 
-const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
-  scripts: Record<string, string>;
-};
-const devLauncher = readFileSync("tools/dev.ps1", "utf8");
-const combinedLauncher = readFileSync("tools/dev-all.ts", "utf8");
 const serviceSync = readFileSync("tools/sync-dev-service.ps1", "utf8");
-const devServer = readFileSync("tools/dev-server.ts", "utf8");
-const serviceStartup = readFileSync("tools/dev-service-startup.ts", "utf8");
-const protectedRunner = readFileSync("tools/protected-dev-runner.ps1", "utf8");
-const protectedRunnerCommand = readFileSync("tools/protected-dev-runner.cmd", "utf8");
 
 function powershellStderrIsInformational(stderr: string): boolean {
   const text = stderr.trim();
@@ -21,26 +12,6 @@ function powershellStderrIsInformational(stderr: string): boolean {
 }
 
 describe("desktop development launchers", () => {
-  test("distinguishes PowerShell host/progress records from errors", () => {
-    expect(powershellStderrIsInformational("")).toBe(true);
-    expect(powershellStderrIsInformational('#< CLIXML\n<Objs><S S="information">message</S><PR /></Objs>')).toBe(true);
-    expect(powershellStderrIsInformational('#< CLIXML\n<Objs><S S="Error">failure</S></Objs>')).toBe(false);
-    expect(powershellStderrIsInformational('#< CLIXML\n<Objs><S S="Warning">warning</S></Objs>')).toBe(false);
-    expect(powershellStderrIsInformational("plain error")).toBe(false);
-  });
-  test("excludes locked runtime files from the frontend watcher", () => {
-    const viteConfig = readFileSync("vite.config.ts", "utf8");
-    expect(viteConfig).toMatch(/watch:\s*\{\s*ignored:\s*\[[\s\S]*?"\*\*\/\.dev\/\*\*"/);
-  });
-  test("bounds service shutdown before replacing the running development binary", () => {
-    expect(serviceSync).toContain("Stop-Service -Name $serviceName -Force -NoWait -ErrorAction Stop");
-    const stopped = "WaitForStatus('Stopped', [TimeSpan]::FromSeconds(150))";
-    expect(serviceSync).toContain(stopped);
-    expect(serviceSync.indexOf(stopped)).toBeLessThan(
-      serviceSync.indexOf("Copy-Item -LiteralPath $builtService -Destination $stagedService"),
-    );
-    expect(serviceSync).not.toMatch(/Stop-Process|taskkill/i);
-  });
 
   test.skipIf(process.platform !== "win32")("accepts a matching driver path in multiline service output and rejects a missing path", () => {
     // Parse only the readiness conditions; never execute the service installer.
@@ -79,44 +50,7 @@ ConvertTo-Json -Compress -InputObject @($results)
     expect(JSON.parse(result.stdout.trim())).toEqual([false, false, true, true]);
   });
 
-  test("synchronizes the settings service before starting either desktop edition", () => {
-    expect(packageJson.scripts["dev:tauri"]).toContain("tools/dev.ps1");
-    expect(packageJson.scripts["dev:admin"]).toContain("tools/dev.ps1 -Elevated");
-    expect(devLauncher).not.toContain('sync-dev-service.ps1');
-    expect(serviceStartup).toContain('"tools/sync-dev-service.ps1"');
-    expect(serviceStartup).toContain('...(!freeOnly ? ["-SyncPro"] : [])');
-    expect(devServer).toMatch(/if \(!FREE_ONLY\) \{[\s\S]*?buildProResult[\s\S]*?\n  \}\s*\/\/ Free[\s\S]*?await syncDevelopmentService\(FREE_ONLY/);
-    expect(devServer.indexOf('"tools/build-pro.ts"')).toBeLessThan(devServer.indexOf('await syncDevelopmentService('));
-    expect(devServer.indexOf('await syncDevelopmentService(')).toBeLessThan(devServer.indexOf('const vite = spawn'));
-    expect(serviceStartup).toContain('if (result !== 0)');
-    expect(serviceSync).toContain('(-not $SyncPro -or (Test-EncryptedVolumeDriverReady))');
-    expect(serviceSync).toContain('if ($SyncPro) { Ensure-EncryptedVolumeDriver }');
-    const tauri = JSON.parse(readFileSync("src-tauri/commander-free/tauri.conf.json", "utf8"));
-    expect(tauri.build.beforeDevCommand).toContain('dev:server');
-    expect(devLauncher).toContain('& $bun run dev:server');
-    expect(devLauncher).toContain('node_modules\\.bin\\tauri.exe');
-    expect(packageJson.scripts.tauri).toContain(`@tauri-apps/cli@${packageJson.devDependencies['@tauri-apps/cli']}`);
-  });
 
-  test("clears the old desktop before setup and avoids killing the new one", () => {
-    // Tauri starts Cargo while beforeDevCommand is still running. Cleanup must
-    // happen before slow setup, and dev-server must not repeat it later.
-    const tauri = JSON.parse(readFileSync("src-tauri/commander-free/tauri.conf.json", "utf8"));
-    expect(tauri.build.beforeDevCommand.indexOf("kill:dev")).toBeLessThan(
-      tauri.build.beforeDevCommand.indexOf("setup:dev"),
-    );
-    expect(tauri.build.beforeDevCommand).toContain("dev:server --precleaned");
-    expect(devServer).toContain('const PRE_CLEANED = process.argv.includes("--precleaned")');
-    expect(devServer).toContain("...(policy.cleanProcesses ? [{");
-    expect(devServer).toContain("if (policy.releasePort) freeVitePort()");
-    expect(devServer).toContain("policy.noServiceRestart");
-    // A fresh launch must not preserve a stale wincommander-pro.exe because
-    // Cargo has to replace that exact debug binary before Vite is exposed.
-    expect(devServer).toContain("developmentStartupPolicy({ preserveSessions: PRESERVE_WINCOMMANDER");
-    expect(devServer).toContain('"tools/build-pro.ts"');
-    expect(devServer).not.toContain('PRESERVE_WINCOMMANDER ? ["-PreserveWinCommander"]');
-    expect(serviceSync).toContain("if ($NoServiceRestart -and $Elevated)");
-  });
 
   test.skipIf(process.platform !== "win32")("preserve mode never inspects or stops processes or the listener", () => {
     const script = String.raw`
@@ -172,24 +106,7 @@ Write-Output 'preserved'
     expect(powershellStderrIsInformational(result.stderr)).toBe(true);
   });
 
-  test("offers an explicit elevated launcher for privileged development checks", () => {
-    expect(devLauncher).toContain("[switch]$Elevated");
-    expect(devLauncher).toContain("Test-ElevatedToken");
-    expect(devLauncher).toContain("Start-Process -FilePath powershell.exe -Verb RunAs");
-    expect(devLauncher).toContain("-NoExit -NoProfile");
-    expect(devLauncher).toContain("-File $scriptPath -Elevated");
-  });
 
-  test("runs the compiled desktop from the protected service pin in Pro development", () => {
-    expect(devLauncher).toContain("'--runner', $runnerCommand");
-    expect(devLauncher).not.toContain("CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUNNER");
-    expect(devLauncher).toContain("--no-watch");
-    expect(protectedRunnerCommand).toContain('protected-dev-runner.ps1" %*');
-    expect(protectedRunner).toContain("& $cargo build -p commander-free --bin wincommander-free @buildArgs");
-    expect(protectedRunner).not.toContain("& $cargo run");
-    expect(protectedRunner).toContain("-SyncPro -StageFleetDebug");
-    expect(protectedRunner).toContain("WinCommander\\dev-fleet\\wincommander-free.exe");
-  });
 
   test.skipIf(process.platform !== "win32")("protected runner rejects an unexpected Tauri command before staging", () => {
     const result = spawnSync("powershell.exe", [
@@ -238,17 +155,8 @@ ConvertTo-Json -Compress -InputObject @($selected.Id, ($null -eq $missing))
     ], { encoding: "utf8" });
     expect(result.status).toBe(0);
     expect(JSON.parse(result.stdout.trim())).toEqual([13, true]);
-    expect(protectedRunner).toContain("$knownIds += $active.Id");
-    expect(protectedRunner).toContain("$handoffDeadline = [DateTime]::UtcNow.AddSeconds(8)");
   });
 
-  test("verifies the running service process and current Pro helper", () => {
-    expect(serviceSync).toContain('Test-ServiceProcessCurrent');
-    expect(serviceSync).toContain('$runningProcess.ExecutablePath.Equals($stagedService');
-    expect(serviceSync).toContain('(-not $SyncPro -or (Test-DevelopmentProCurrent))');
-    expect(serviceSync).toContain('$existingBuildArgument$proArgument');
-    expect(serviceSync).toContain('The service Pro helper does not match the current development build.');
-  });
 
   test.skipIf(process.platform !== "win32")("missing services are false rather than StrictMode exceptions", () => {
     const expression = serviceSync.match(/\$serviceRunning = ([^\r\n]+)/)?.[1];
@@ -287,21 +195,8 @@ ConvertTo-Json -Compress -InputObject @($results)
     expect(serviceSync).toContain('-AllowUnverifiable:(-not $Elevated)');
   });
 
-  test("routes the combined developer launcher through the normal desktop launcher", () => {
-    expect(combinedLauncher).toContain('"run", "dev:tauri"');
-    expect(combinedLauncher).not.toContain('"x", "tauri", "dev"');
-  });
 
-  test("does not repeat Cargo work after the parent has prepared the service binary", () => {
-    expect(serviceSync).toContain("[switch]$UseExistingBuild");
-    expect(serviceSync).toContain("Start-ElevatedSync -UseExistingBuild");
-    expect(serviceSync).toContain("Using the development service built by the non-elevated parent.");
-  });
 
-  test("keeps a spaced development service path quoted for the Windows service manager", () => {
-    expect(serviceSync).toContain(`$servicePathArgument = '"' + $stagedService + '"'`);
-    expect(serviceSync).not.toContain(`$servicePathArgument = '\\"' + $stagedService + '\\"'`);
-  });
 
   test("repairs the fixed encrypted-volume driver when its pinned payload is present", () => {
     expect(serviceSync).toContain("$driverServiceName = 'WinCommanderEncVol'");

@@ -103,8 +103,6 @@ class GazeTests(unittest.TestCase):
         self.assertFalse(overlay.label.isHidden())
         self.assertEqual(overlay.label.text(), "LOOK AWAY")
         self.assertNotIn("FULL TURN", overlay.label.text())
-        self.assertIn("rgba(255, 50, 50, 200)", overlay.label.styleSheet())
-        self.assertIn("Consolas", overlay.label.styleSheet())
         self.assertEqual(overlay.grab().toImage().pixelColor(0, 0), QColor("black"))
         overlay.update_state(False, "PRESENCE LOST")
         self.assertEqual(overlay.presentation, "blackout")

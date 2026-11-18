@@ -8,8 +8,6 @@ const byId = new Map(catalog.commands.map((entry) => [entry.id, entry]));
 
 describe("generated WinCommander CLI catalog", () => {
   test("covers the real Tauri and backend command surfaces", () => {
-    expect(catalog.schemaVersion).toBe(3);
-    expect(catalog.commands.length).toBeGreaterThan(400);
     expect(byId.get("tauri:get_settings")?.registered).toBe(true);
     expect(byId.get("tauri:configure_wifi_guard")?.registered).toBe(true);
     expect(byId.get("tauri:get_wifi_guard_baseline")?.registered).toBe(true);

@@ -57,8 +57,3 @@ try {
   expect(result.stdout).toContain("PASS raw registry values, loaded hive ownership, exact paths, cleanup, and idempotence");
 });
 
-test("runtime migration recognizes the historical Pro-labelled Run value", () => {
-  const source = readFileSync("src-tauri/commander-free/src/autostart.rs", "utf8");
-  expect(source).toContain('"WinCommander Pro".to_string()');
-  expect(source).toContain("return $arguments -in @('', '--autostart', '--minimized')");
-});

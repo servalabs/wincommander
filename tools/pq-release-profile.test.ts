@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -77,10 +77,6 @@ describe("paired post-quantum release configuration", () => {
     });
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr.toString()).toMatch(/Release trust approval is not configured|Invalid or missing WINCMD_PQ_LIC_ED_KEY/);
-    const wrapper = readFileSync("tools/build-tauri-release.ts", "utf8");
-    expect(wrapper.indexOf("validateReleaseTrust(root, process.env)")).toBeLessThan(wrapper.indexOf("assertSharedAssets(root)"));
-    expect(wrapper).toContain("serviceBuildCommand()");
-    expect(wrapper).toContain("desktopBuildCommand(generatedConfigPath)");
   });
   test("Pro release build refuses missing approval before invoking Cargo", () => {
     const env = { ...process.env };

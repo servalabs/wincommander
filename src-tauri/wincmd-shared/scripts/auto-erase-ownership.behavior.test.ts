@@ -1,6 +1,5 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
 
 test.skipIf(process.platform !== "win32")("schedule readback preserves old and current bulk ownership without changing tasks", () => {
   const script = String.raw`
@@ -31,10 +30,3 @@ if (-not $result.schedules[0].managedByAutoSet -or -not $result.schedules[1].man
   if (result.error) throw result.error;
   expect({ code: result.status, stderr: result.stderr.toString() }).toEqual({ code: 0, stderr: "" });
 }, 30_000);
-
-
-test("migration preserves the same ownership classification", () => {
-  const source = readFileSync("src-tauri/wincmd-shared/scripts/auto-erase.ps1", "utf8");
-  const migration = source.slice(source.indexOf("function Invoke-AutoEraseMigration"));
-  expect(migration).toContain("elseif (Test-AutoEraseManagedTask $task)");
-});

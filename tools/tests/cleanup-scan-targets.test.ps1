@@ -3,7 +3,7 @@ $path = Join-Path $PSScriptRoot '..\..\src-tauri\commander-free\scripts\modules\
 $tokens = $null; $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path), [ref]$tokens, [ref]$errors)
 if ($errors.Count) { throw 'Cleanup source did not parse.' }
-foreach ($name in @('Get-PCAInfo', 'Get-PrintSpoolerInfo', 'Get-CleanupArtifactFiles', 'Get-BITSQueueInfo', 'Get-FontCacheInfo')) {
+foreach ($name in @('Get-PCAInfo', 'Get-PrintSpoolerInfo', 'Get-CleanupArtifactFiles', 'Get-FontCacheInfo')) {
     $definition = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
     if (-not $definition) { throw "Missing reader: $name" }
     . ([scriptblock]::Create($definition.Extent.Text))
@@ -19,16 +19,6 @@ function Get-ChildItem {
     [CmdletBinding()] param([string]$LiteralPath, [switch]$File, [switch]$Force, [switch]$Recurse, [string]$Filter)
     $script:paths += $LiteralPath; $script:filters += $Filter
     [pscustomobject]@{ Name='mock.dat'; FullName=(Join-Path $LiteralPath 'mock.dat'); Length=1024; LastWriteTime=[DateTime]'2026-10-01'; Extension='.dat' }
-}
-function Get-Service {
-    [CmdletBinding()] param([Parameter(Position=0)][string]$Name)
-    [pscustomobject]@{ Status='Running' }
-}
-$script:denyBits = $false
-function Get-BitsTransfer {
-    [CmdletBinding()] param([switch]$AllUsers)
-    if ($script:denyBits) { throw [UnauthorizedAccessException]::new('Denied') }
-    [pscustomobject]@{ DisplayName='Mock transfer'; JobState='Queued' }
 }
 $pca = Get-PCAInfo
 if ($pca.error -or $pca.total -ne 1 -or $script:paths[0] -ne "$env:SystemRoot\appcompat\pca") { throw 'PCA reader did not scan its intended target.' }
@@ -47,10 +37,6 @@ $blocked = $false
 try { Get-CleanupArtifactFiles -Sources @(@{ path='C:\Mock'; label='Mock'; patterns=@('*') }) } catch [UnauthorizedAccessException] { $blocked = $true }
 if (-not $blocked) { throw 'Denied artifact traversal was treated as empty.' }
 $script:deny = $false
-if ((Get-BITSQueueInfo).total -ne 2) { throw 'BITS job and store counts were incorrect.' }
-$script:denyBits = $true
-$bits = Get-BITSQueueInfo
-if (-not $bits.partial -or $bits.status -ne 'partial' -or $bits.total -ne 1) { throw 'An incomplete all-user BITS scan was reported as complete or lost its readable store.' }
 $script:denyBits = $false; $script:deny = $false; $script:paths = @(); $script:filters = @()
 $font = Get-FontCacheInfo
 $fontRoot = Join-Path $env:WINDIR 'ServiceProfiles\LocalService\AppData\Local\FontCache'

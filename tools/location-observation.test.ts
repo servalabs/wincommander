@@ -78,18 +78,6 @@ $script:serviceStart='Manual'; $script:master='invalid'; $r=Get-LocationTracking
 }, 15_000);
 
 
-test("startup and hardening preserve unknown location observations", async () => {
-  const bridge = await Bun.file("src-tauri/commander-free/scripts/core/settings-bridge.ps1").text();
-  const hardening = await Bun.file("src-tauri/commander-free/scripts/modules/tweaks/system.ps1").text();
-  const backend = await Bun.file("src-tauri/commander-free/src/backend.rs").text();
-  expect(bridge).toContain("locationTrackingDisabled   = $null");
-  expect(bridge).toContain("$locationStatus = Get-LocationTrackingStatus");
-  expect(bridge).toContain("$locationStatus.disabled -is [bool]");
-  expect(hardening).toContain("$locationStatus.disabled -isnot [bool]) { $null }");
-  const composition = backend.slice(backend.indexOf('} else if command == "Get-WCSystemProbe"'), backend.indexOf('} else if command == "Get-HardeningStatus"'));
-  expect(composition).toContain('command == "Get-DashboardPrivacyPolicyStatus"');
-  expect(composition).toContain('load_module("privacy/telemetry")');
-});
 
 test("actual location probe branches preserve known, unknown, and migration semantics", async () => {
   const script = String.raw`

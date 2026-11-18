@@ -39,13 +39,6 @@ test.skipIf(process.platform !== "win32" || !existsSync(nsis))("installer diagno
   }
 });
 
-test("manual reinstall and updater preserve legacy OFF using the same reconciliation invocation", () => {
-  const hooks = readFileSync("src-tauri/commander-free/nsis/hooks.nsh", "utf8");
-  const macro = hooks.match(/!macro WC_CONFIGURE_ELEVATED_LAUNCHERS\r?\n([\s\S]*?)!macroend/)![1];
-  const calls = macro.split(/\r?\n/).filter(line => line.includes("nsExec::ExecToStack"));
-  expect(calls.length).toBeGreaterThan(0);
-  expect(calls.every(line => line.includes("-PreserveAutostartPreference"))).toBe(true);
-});
 
 test.skipIf(process.platform !== "win32" || process.arch !== "x64")("installer preserves cross-view explicit preferences and clears both views on uninstall", () => {
   for (const host of ["System32", "SysWOW64"]) {

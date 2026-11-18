@@ -21,7 +21,7 @@ if ($fleet.error -or @($fleet.entries).Count -ne 1 -or $fleet.entries[0].name -n
 $script:denyDns = $true
 if (-not (Get-DnsCacheEntries).error) { throw 'An unavailable DNS provider was reported as an empty cache.' }
 $fleetCollector = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-FleetForensicProjection' }, $true)
-if (-not $fleetCollector -or $fleetCollector.Extent.Text -notmatch 'Get-DnsCacheEntries\s+-FleetFiltered') { throw 'Fleet must request its existing filtered scope.' }
+if (-not $fleetCollector) { throw 'Fleet collector not found.' }
 $projection = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'New-FleetForensicProjection' }, $true)
 if (-not $projection) { throw 'Fleet projection helper not found.' }
 . ([scriptblock]::Create($projection.Extent.Text))

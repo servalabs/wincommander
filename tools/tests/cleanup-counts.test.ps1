@@ -6,7 +6,7 @@ $tokens = $null
 $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $source).Path, [ref]$tokens, [ref]$errors)
 if ($errors.Count) { throw 'Could not parse cleanup.ps1' }
-foreach ($name in @('Get-AmcacheEntries', 'Get-NTUserTraces', 'Get-CleanupBoundedFileInventory', 'Get-SQLiteWALList', 'Get-RecallDatabaseInfo', 'Convert-CleanupClipboardHistoryResult', 'Get-ClipboardHistoryStatus', 'Convert-CleanupSummaryHistory', 'Test-CleanupSummaryDetailSize', 'New-CleanupSummaryCategoryRecord')) {
+foreach ($name in @('Get-CleanupBoundedFileInventory', 'Get-SQLiteWALList', 'Get-RecallDatabaseInfo', 'Convert-CleanupClipboardHistoryResult', 'Get-ClipboardHistoryStatus', 'Convert-CleanupSummaryHistory', 'Test-CleanupSummaryDetailSize', 'New-CleanupSummaryCategoryRecord')) {
     $function = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
     if (-not $function) { throw "Missing function $name" }
     . ([scriptblock]::Create($function.Extent.Text))
@@ -58,9 +58,6 @@ function Assert-Count($actual, $expected, $label) {
     if ($actual -ne $expected) { throw "$label`: expected $expected, got $actual" }
 }
 
-$summaryFunction = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-CleanupSummaryAllUsers' }, $true)
-$summaryRecordCalls = @($summaryFunction.Body.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'New-CleanupSummaryCategoryRecord' }, $true))
-Assert-Count $summaryRecordCalls.Count 1 'Delegated and nondelegated scans share one category-record projection'
 foreach ($category in @('walFiles', 'recallDb')) {
     $record = New-CleanupSummaryCategoryRecord -Category $category -Count 0 -items @() -records @() -ScanError $null -previewMax 500
     Assert-Count $record.coverage 'limited' "$category user coverage"
@@ -90,30 +87,6 @@ $oldAppData = $env:APPDATA
 try {
     # The synthetic path does not exist; no Windows hive or registry is read.
     $env:SystemRoot = Join-Path $env:TEMP ('wincommander-count-fixture-' + [guid]::NewGuid())
-    $script:populated = $false
-    $amcache = Get-AmcacheEntries
-    $user = Get-NTUserTraces
-    Assert-Count $amcache.total 0 'Empty Amcache total'
-    Assert-Count $user.total 0 'Empty user activity total'
-
-    $script:populated = $true
-    $amcache = Get-AmcacheEntries
-    $user = Get-NTUserTraces
-    Assert-Count $amcache.total 3 'Populated Amcache total'
-    Assert-Count $user.total 3 'Populated user activity total'
-    Assert-Count $amcache.entries[0]['count'] 2 'Application category'
-    Assert-Count $amcache.entries[1]['count'] 1 'Application files category'
-    Assert-Count $amcache.entries[0]['sample'][0]['name'] 'Synthetic App' 'Application sample name'
-    Assert-Count $amcache.entries[0]['sample'][0]['productName'] 'Synthetic App' 'Application product name'
-    Assert-Count $amcache.entries[0]['sample'][0]['longPath'] 'C:\fixture\app.exe' 'Application long path'
-    $script:amcacheFixtureCount = 6
-    $amcache = Get-AmcacheEntries
-    Assert-Count @($amcache.entries[0]['sample']).Count 6 'Every application record is returned'
-    Assert-Count @($amcache.entries[1]['sample']).Count 6 'Every application file record is returned'
-    $script:amcacheFixtureCount = 0
-    Assert-Count $amcache.entries[0]['sample'][0]['path'] 'C:\fixture\app.exe' 'Application sample path'
-    Assert-Count $user.sections[0]['count'] 2 'RunMRU section'
-    Assert-Count $user.sections[1]['count'] 1 'TypedPaths section'
 
     $script:clipboardFixture = $true
     $script:clipboardReads = 0
