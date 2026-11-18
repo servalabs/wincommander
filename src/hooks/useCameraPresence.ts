@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { CAMERA_RECHECK_EVENT, cameraPresenceStore, cameraAccessState, createCameraPresenceProbe, type CameraPresence } from "./cameraPresenceProbe";
+import { CAMERA_RECHECK_EVENT, cameraPresenceStore, cameraAccessState, createCameraPresenceProbe, hasNoDetectedCamera, type CameraPresence } from "./cameraPresenceProbe";
 
 const readPresence = createCameraPresenceProbe(() => invoke("dashboard_camera_presence"));
 
@@ -48,7 +48,7 @@ export function useCameraPresence(): {
     const unsubscribe = cameraPresenceStore.subscribe(value => { if (active) setPresence(value ?? "unknown"); });
     const refresh = async (force = false) => {
       if (inFlight) { if (force) recheckQueued = true; return; }
-      if (!force && cameraPresenceStore.get() === "absent") return;
+      if (!force && hasNoDetectedCamera(cameraPresenceStore.get())) return;
       inFlight = true;
       const generation = cameraPresenceStore.epoch();
       try {

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { cameraAccessState, cameraDisplayState, createCameraPresenceProbe, createCameraPresenceStore } from "./cameraPresenceProbe";
+import { cameraAccessState, cameraDisplayState, createCameraPresenceProbe, createCameraPresenceStore, hasNoDetectedCamera } from "./cameraPresenceProbe";
 
 describe("dashboard camera presence", () => {
   test("separates missing hardware, unknown probes, and camera permissions", () => {
@@ -19,6 +19,18 @@ describe("dashboard camera presence", () => {
     expect(cameraAccessState({ disabled: false, desktop_apps_allowed: true })).toBe(false);
     expect(cameraAccessState({ disabled: true })).toBe(true);
     expect(cameraAccessState(undefined)).toBeNull();
+  });
+
+  test("host absence survives sharing and stays separate from confirmed session absence", async () => {
+    const store = createCameraPresenceStore();
+    const read = createCameraPresenceProbe(async () => "host_absent");
+    store.publish(await read(), store.epoch());
+    expect(store.get()).toBe("host_absent");
+    expect(hasNoDetectedCamera(store.get())).toBe(true);
+    expect(cameraDisplayState("host_absent", false)).toBe("allowed");
+    expect(cameraDisplayState("host_absent", true)).toBe("blocked");
+    store.reset();
+    expect(hasNoDetectedCamera(store.get())).toBe(false);
   });
 
   test("shares an in-flight query and treats failure as unknown", async () => {

@@ -1,4 +1,12 @@
-export type CameraPresence = "present" | "absent" | "unknown";
+export type CameraPresence = "present" | "absent" | "host_absent" | "unknown";
+
+export function isCameraPresence(value: unknown): value is CameraPresence {
+  return value === "present" || value === "absent" || value === "host_absent" || value === "unknown";
+}
+
+export function hasNoDetectedCamera(value: CameraPresence | null): boolean {
+  return value === "absent" || value === "host_absent";
+}
 
 /** Share reads within a generation; serialize new generations behind older reads. */
 export function createCameraPresenceProbe(read: () => Promise<unknown>, timeoutMs = 20_000): (generation?: number) => Promise<CameraPresence> {
@@ -12,7 +20,7 @@ export function createCameraPresenceProbe(read: () => Promise<unknown>, timeoutM
       const deadline = new Promise<unknown>(resolve => { timer = setTimeout(() => resolve(null), timeoutMs); });
       try {
         const value = await Promise.race([Promise.resolve().then(read), deadline]);
-        return value === "present" || value === "absent" ? value : "unknown";
+        return isCameraPresence(value) ? value : "unknown";
       } catch {
         return "unknown";
       } finally {

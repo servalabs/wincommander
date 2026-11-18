@@ -4893,6 +4893,19 @@ fn local_admin_preflight(command: &str, elevated: bool) -> Option<serde_json::Va
     }))
 }
 
+fn allows_current_user_media_consent(
+    command: &str,
+    params: &HashMap<String, String>,
+    machine_wide: bool,
+) -> bool {
+    !machine_wide
+        && command == "Set-AppCapabilityAccess"
+        && matches!(
+            params.get("Capability").map(String::as_str),
+            Some("webcam" | "microphone")
+        )
+}
+
 fn machine_wide_status(command: &str, status: &str, reason: &str) -> serde_json::Value {
     serde_json::json!({
         "command": command,
@@ -4923,6 +4936,20 @@ fn is_elevated_process() -> bool {
 mod param_env_tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[test]
+    fn camera_and_microphone_consent_can_use_the_standard_account_path() {
+        for capability in ["webcam", "microphone"] {
+            let params = HashMap::from([("Capability".into(), capability.into())]);
+            assert!(allows_current_user_media_consent("Set-AppCapabilityAccess", &params, false));
+            assert!(!allows_current_user_media_consent("Set-AppCapabilityAccess", &params, true));
+            assert!(!allows_current_user_media_consent("Other-Command", &params, false));
+        }
+        let location = HashMap::from([("Capability".into(), "location".into())]);
+        assert!(!allows_current_user_media_consent("Set-AppCapabilityAccess", &location, false));
+        assert!(local_admin_preflight("Set-AppCapabilityAccess", false).is_some());
+        assert!(local_admin_preflight("Set-AppCapabilityAccess", true).is_none());
+    }
 
     #[test]
     fn local_machine_policies_require_elevation_without_fix_all_flag() {
@@ -6009,6 +6036,7 @@ pub(crate) async fn run_backend_script_with_timeout(
                     | "Add-IPFirewallRule"
                     | "Remove-IPFirewallRule"
                     | "Set-AdditionalAppPermission"
+                    | "Set-AppCapabilityAccess"
                     | "Set-ShellVisibility"
                     | "Set-ContextItemVisibility"
             );
@@ -6160,8 +6188,10 @@ pub(crate) async fn run_backend_script_with_timeout(
 
     // Local machine policies need the effective token even outside Fix All.
     // Paid commands retain their own sidecar authorization above.
-    if let Some(blocked) = local_admin_preflight(&command, is_elevated_process()) {
-        return Ok(blocked);
+    if !allows_current_user_media_consent(&command, &params, requested_machine_wide) {
+        if let Some(blocked) = local_admin_preflight(&command, is_elevated_process()) {
+            return Ok(blocked);
+        }
     }
 
     // Module gate — refuse to run commands whose frontend module is disabled
@@ -9992,9 +10022,17 @@ Start-Process -FilePath 'cmd.exe' -ArgumentList "/c `"$batchPath`"" -WindowStyle
 
 #[path = "backend/everything_engine.rs"]
 mod everything_engine;
+#[cfg(windows)]
+#[path = "backend/everything_startup.rs"]
+mod everything_startup;
 mod everything_privacy;
 #[path = "backend/everything_results.rs"]
 mod everything_results;
+
+pub(crate) fn start_filename_search() {
+    #[cfg(windows)]
+    tauri::async_runtime::spawn_blocking(everything_startup::start);
+}
 use everything_privacy::{ObservedVolume, PublicSearchPolicy};
 
 fn observe_search_volume(path: &std::path::Path) -> Option<ObservedVolume> {
@@ -10380,6 +10418,13 @@ fn search_known_folder_path(
     id: &windows_sys::core::GUID,
     fallback: &str,
 ) -> Option<std::path::PathBuf> {
+    known_folder_path(id).or_else(|| {
+        std::env::var_os("USERPROFILE").map(|profile| std::path::PathBuf::from(profile).join(fallback))
+    })
+}
+
+#[cfg(windows)]
+fn known_folder_path(id: &windows_sys::core::GUID) -> Option<std::path::PathBuf> {
     use std::ffi::OsString;
     use std::os::windows::ffi::OsStringExt;
     use windows_sys::Win32::System::Com::CoTaskMemFree;
@@ -10404,9 +10449,7 @@ fn search_known_folder_path(
             CoTaskMemFree(path_ptr as *const core::ffi::c_void);
         }
     }
-    std::env::var("USERPROFILE")
-        .ok()
-        .map(|profile| std::path::PathBuf::from(profile).join(fallback))
+    None
 }
 
 #[tauri::command]
@@ -11068,92 +11111,7 @@ fn resolve_command_via_powershell_es() -> Option<std::path::PathBuf> {
         })
 }
 
-/// Try to start the Everything.exe background daemon silently.
-/// Returns true if the process was launched (not necessarily connected yet).
-fn try_start_everything_daemon() -> bool {
-    let mut candidate_paths: Vec<std::path::PathBuf> = Vec::new();
-    candidate_paths.push(std::path::PathBuf::from(
-        r"C:\Program Files\Everything\Everything.exe",
-    ));
-    candidate_paths.push(std::path::PathBuf::from(
-        r"C:\Program Files (x86)\Everything\Everything.exe",
-    ));
-    for var in &["ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"] {
-        if let Ok(root) = std::env::var(var) {
-            candidate_paths.push(
-                std::path::PathBuf::from(root)
-                    .join("Everything")
-                    .join("Everything.exe"),
-            );
-        }
-    }
-    if let Ok(local) = std::env::var("LOCALAPPDATA") {
-        candidate_paths.push(
-            std::path::PathBuf::from(&local)
-                .join("Programs")
-                .join("Everything")
-                .join("Everything.exe"),
-        );
-        // WinGet CLI package includes es.exe and optionally Everything.exe in the same dir
-        let winget_links = std::path::PathBuf::from(&local)
-            .join("Microsoft")
-            .join("WinGet")
-            .join("Links");
-        candidate_paths.push(winget_links.join("Everything.exe"));
-        // WinGet Packages dir
-        let packages = std::path::PathBuf::from(&local)
-            .join("Microsoft")
-            .join("WinGet")
-            .join("Packages");
-        if packages.exists() {
-            if let Ok(entries) = std::fs::read_dir(&packages) {
-                for entry in entries.flatten() {
-                    let candidate = entry.path().join("Everything.exe");
-                    if candidate.exists() {
-                        candidate_paths.push(candidate);
-                    }
-                }
-            }
-        }
-    }
-    candidate_paths.push(std::path::PathBuf::from(
-        r"C:\Program Files\WinGet\Links\Everything.exe",
-    ));
-    candidate_paths.push(std::path::PathBuf::from(
-        r"C:\ProgramData\Microsoft\WinGet\Links\Everything.exe",
-    ));
-    for packages in [
-        std::path::PathBuf::from(r"C:\Program Files\WinGet\Packages"),
-        std::path::PathBuf::from(r"C:\ProgramData\Microsoft\WinGet\Packages"),
-    ] {
-        if packages.exists() {
-            if let Ok(entries) = std::fs::read_dir(&packages) {
-                for entry in entries.flatten() {
-                    let candidate = entry.path().join("Everything.exe");
-                    if candidate.exists() {
-                        candidate_paths.push(candidate);
-                    }
-                }
-            }
-        }
-    }
-    for path in &candidate_paths {
-        if path.exists() {
-            // -startup: start hidden in tray without showing the GUI window
-            let mut cmd = Command::new(path);
-            cmd.arg("-startup");
-            #[cfg(target_os = "windows")]
-            {
-                use std::os::windows::process::CommandExt;
-                const CREATE_NO_WINDOW: u32 = 0x08000000;
-                cmd.creation_flags(CREATE_NO_WINDOW);
-            }
-            let result = cmd.spawn();
-            return result.is_ok();
-        }
-    }
-    false
-}
+
 
 /// Parse raw es.exe stdout bytes into an EsResponse.
 fn parse_es_output(stdout: Vec<u8>, query: String) -> Result<EsResponse, String> {

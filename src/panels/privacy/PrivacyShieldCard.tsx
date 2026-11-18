@@ -1,4 +1,4 @@
-import { cameraPresenceStore, requestCameraRecheck } from "../../hooks/cameraPresenceProbe";
+import { cameraPresenceStore, hasNoDetectedCamera, isCameraPresence, requestCameraRecheck } from "../../hooks/cameraPresenceProbe";
 // src/panels/privacy/PrivacyShieldCard.tsx
 // Self-contained Privacy Gaze Shield card — no props needed.
 import { Button, Slider, Switch, Tooltip, Icon } from "@/components/ui/bp";
@@ -144,7 +144,8 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
     const setPrivacyShieldRunning = (val: boolean | null) => { _shieldRunningCache = val; _setShieldRunning(val); };
     const [activeShieldMode, setActiveShieldMode] = useState<PrivacyShieldMode | null>(null);
     const [cameraAvailable, setCameraAvailable] = useState<boolean | null>(() => cameraPresenceStore.get() === "absent" ? false : null);
-    const [cameraMessage, setCameraMessage] = useState<string | null>(null);
+    const [cameraMessage, setCameraMessage] = useState<string | null>(() =>
+        cameraPresenceStore.get() === "host_absent" ? "No camera detected on this computer. Windows could not verify other video sources." : null);
     // Live look-away state surfaced by the backend shield reader. Only
     // meaningful while the shield is running.
     const [lookingAway, setLookingAway] = useState(false);
@@ -283,7 +284,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
     const statusGate = useRef(new ShieldStatusGate());
     const lastCameraProbeAt = useRef(0);
     const forceCameraProbe = useRef(false);
-    const cameraAbsent = useRef(cameraPresenceStore.get() === "absent");
+    const cameraAbsent = useRef(hasNoDetectedCamera(cameraPresenceStore.get()));
     const hardwareMissingApplied = useRef(cameraAbsent.current);
     checkStatusRef.current = async (forceCamera = false) => {
         const gate = statusGate.current;
@@ -302,6 +303,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                 activeMode?: PrivacyShieldMode | null;
                 cameraAvailable?: boolean | null;
                 cameraStatus?: string;
+                cameraPresence?: unknown;
                 cameraMessage?: string;
             }>("Get-PrivacyShieldStatus", { SkipCameraProbe: !includeCamera });
             if (!gate.canApply(generation)) return;
@@ -312,7 +314,8 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                     ? shield.data.activeMode
                     : null);
                 if (includeCamera && cameraGeneration === cameraPresenceStore.epoch()) {
-                    if (shield.data.cameraStatus === "hardware_unavailable") cameraPresenceStore.publish("absent", cameraGeneration);
+                    if (isCameraPresence(shield.data.cameraPresence)) cameraPresenceStore.publish(shield.data.cameraPresence, cameraGeneration);
+                    else if (shield.data.cameraStatus === "hardware_unavailable") cameraPresenceStore.publish("absent", cameraGeneration);
                     else if (shield.data.cameraStatus === "available") cameraPresenceStore.publish("present", cameraGeneration);
                 }
                 if (includeCamera && cameraGeneration === cameraPresenceStore.epoch() && (shield.data.cameraStatus === "unknown" || typeof shield.data.cameraAvailable !== "boolean")) {
@@ -363,11 +366,13 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
 
     useEffect(() => {
         const unsubscribeCamera = cameraPresenceStore.subscribe(value => {
-            cameraAbsent.current = value === "absent";
-            if (value === "absent") {
+            cameraAbsent.current = hasNoDetectedCamera(value);
+            if (cameraAbsent.current) {
                 hardwareMissingApplied.current = true;
-                setCameraAvailable(false);
-                setCameraMessage("No camera detected. Recheck after connecting one.");
+                setCameraAvailable(value === "absent" ? false : null);
+                setCameraMessage(value === "absent"
+                    ? "No camera detected. Recheck after connecting one."
+                    : "No camera detected on this computer. Windows could not verify other video sources.");
             } else if (hardwareMissingApplied.current) {
                 hardwareMissingApplied.current = false;
                 setCameraAvailable(null);
@@ -814,9 +819,9 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                                         : "monitoring is off by Fleet policy."}
                             </p>
                         )}
-                        {cameraAvailable === false && privacyShieldRunning !== true && (
-                            <p className="text-[10px] text-[var(--color-warning)] mt-1 max-w-[320px]">
-                                {cameraMessage || "No usable webcam was detected on this PC, so Privacy Shield cannot monitor the screen."}
+                        {(cameraMessage || cameraAvailable !== null) && privacyShieldRunning !== true && (
+                            <p className={`text-[10px] mt-1 max-w-[320px] ${cameraAvailable === true ? "text-[var(--color-success)]" : "text-[var(--color-warning)]"}`}>
+                                {cameraMessage || (cameraAvailable ? "Camera available." : "No camera detected.")}
                             </p>
                         )}
                         {privacyShieldRunning !== true && (

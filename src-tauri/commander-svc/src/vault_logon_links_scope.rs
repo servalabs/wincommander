@@ -98,6 +98,32 @@ pub(super) fn verified_owner(logon: LogonId, caller_sid: &str, session: u32) -> 
     ))
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum LogonRelationship {
+    CurrentSession,
+    OtherSession,
+    OtherAccount,
+}
+
+pub(super) fn logon_relationship(
+    logon: LogonId,
+    caller_sid: &str,
+    session: u32,
+) -> Option<LogonRelationship> {
+    let expected = saved_owner(caller_sid, session).ok()?;
+    let actual = owner_session(logon).ok()??;
+    if actual.session == 0 {
+        return None;
+    }
+    Some(if actual.sid != expected.sid {
+        LogonRelationship::OtherAccount
+    } else if actual.session != expected.session {
+        LogonRelationship::OtherSession
+    } else {
+        LogonRelationship::CurrentSession
+    })
+}
+
 fn positively_matches_owner(expected: &OwnerSession, actual: Option<&OwnerSession>) -> bool {
     actual == Some(expected)
 }

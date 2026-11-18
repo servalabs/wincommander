@@ -35,6 +35,13 @@ export default function PrivacyTogglesCard({
   onToggleInternet,
 }: PrivacyTogglesCardProps) {
   const cameraState = cameraDisplayState(cameraPresence, cameraBlocked);
+  const cameraPresenceLabel = cameraPresence === "absent" ? "NO CAM" : cameraPresence === "host_absent" ? "NO HOST CAM" : null;
+  const cameraPresenceDescription = {
+    present: "Camera detected",
+    absent: "No camera detected",
+    host_absent: "No camera detected on this computer. Windows could not verify other video sources",
+    unknown: "Camera presence could not be confirmed",
+  }[cameraPresence];
   return (
     <div className="privacy-toggles-card">
       <div className="ptc-toggles">
@@ -42,8 +49,8 @@ export default function PrivacyTogglesCard({
         <div className="dashboard-capability-toggles">
           {cameraState === "unknown" ? (
             <button type="button" className="dashboard-capability-toggle no-device" disabled
-              title="Camera access is being checked">
-              <Camera size={12} /> CAM ?
+              title={`Camera access could not be confirmed. ${cameraPresenceDescription}.`}>
+              <Camera size={12} /> {cameraPresenceLabel ?? "CAM CHECK"}
             </button>
           ) : (
             <button
@@ -51,11 +58,11 @@ export default function PrivacyTogglesCard({
               className={`dashboard-capability-toggle ${cameraBlocked ? "active" : ""}`}
               onClick={() => onCapabilityToggle?.("webcam", !cameraBlocked)}
               disabled={!onCapabilityToggle || capabilityPending === "webcam"}
-              title={`${cameraBlocked ? "Camera access blocked - click to allow" : cameraMixed ? "Camera permissions differ between apps - click to block" : "Camera access allowed - click to block"}${cameraPresence === "absent" ? "; no camera detected" : cameraPresence === "unknown" ? "; camera presence could not be confirmed" : ""}`}
+              title={`${cameraBlocked ? "Camera access blocked. Select to allow" : cameraMixed ? "Camera permissions differ between apps. Select to block" : "Camera access allowed. Select to block"}. ${cameraPresenceDescription}.`}
             >
               {cameraBlocked ? <CameraOff size={12} /> : <Camera size={12} />}
               CAM {cameraBlocked ? "OFF" : cameraMixed ? "MIXED" : "ON"}
-              {cameraPresence === "absent" && <span> - NO CAM</span>}
+              {cameraPresenceLabel && <span> · {cameraPresenceLabel}</span>}
             </button>
           )}
           <button

@@ -6,6 +6,8 @@
 pub(crate) enum CameraPresence {
     Present,
     Absent,
+    #[serde(rename = "host_absent")]
+    HostAbsent,
     Unknown,
 }
 
@@ -48,8 +50,8 @@ $cameras = @($devices | Where-Object {
 })
 if ($videoCount -gt 0) { 'present' }
 elseif (@($cameras | Where-Object { $_.Present -eq $true }).Count -gt 0) { 'pnp_present' }
-elseif (-not $pnpOk -or $null -eq $videoCount -or $cameraAccess -ne 'Allowed' -or $cameras.Count -gt 0) { 'unknown' }
-elseif (@($devices | Where-Object { $_.Class -eq 'Image' }).Count -gt 0) { 'unknown' }
+elseif (-not $pnpOk -or @($devices | Where-Object { $_.Class -eq 'Image' -and $_.Present -ne $false }).Count -gt 0 -or @($cameras | Where-Object { $null -eq $_.Present }).Count -gt 0) { 'unknown' }
+elseif ($wcRemote -or $null -eq $videoCount -or $cameraAccess -ne 'Allowed') { 'host_absent' }
 else { 'absent' }
 "#;
 
@@ -60,6 +62,7 @@ fn interpret_probe(output: &str, remote_session: bool) -> CameraPresence {
         // Plug and Play describes the host. A redirected remote-session
         // camera need not be represented by a host camera device.
         "absent" if !remote_session => CameraPresence::Absent,
+        "host_absent" => CameraPresence::HostAbsent,
         _ => CameraPresence::Unknown,
     }
 }
@@ -115,6 +118,7 @@ mod tests {
         assert_eq!(interpret_probe("pnp_present", true), CameraPresence::Unknown);
         assert_eq!(interpret_probe("absent", false), CameraPresence::Absent);
         assert_eq!(interpret_probe("absent", true), CameraPresence::Unknown);
+        assert_eq!(interpret_probe("host_absent", true), CameraPresence::HostAbsent);
         for output in ["", "unknown", "error", "present\nabsent"] {
             assert_eq!(interpret_probe(output, false), CameraPresence::Unknown);
         }
@@ -131,11 +135,12 @@ mod tests {
             ("[pscustomobject]@{Class='Image'; FriendlyName='localized'; CompatibleID='USB\\Class_0E'; Present=$true}", "$true", "0", "Allowed", "pnp_present"),
             ("[pscustomobject]@{Class='SoftwareDevice'; FriendlyName='localized'; Present=$true}", "$true", "1", "Allowed", "present"),
             ("[pscustomobject]@{Class='Camera'; FriendlyName='Camera'; Present=$true; Status='Error'}", "$true", "0", "DeniedByUser", "pnp_present"),
-            ("[pscustomobject]@{Class='Camera'; FriendlyName='Camera'; Present=$false; Status='Unknown'}", "$true", "0", "Allowed", "unknown"),
+            ("[pscustomobject]@{Class='Camera'; FriendlyName='Camera'; Present=$false; Status='Unknown'}", "$true", "0", "Allowed", "absent"),
             ("[pscustomobject]@{Class='Image'; FriendlyName='Scanner'; Present=$true; Status='OK'}", "$true", "0", "Allowed", "unknown"),
             ("[pscustomobject]@{Class='Media'; FriendlyName='Speakers'; Present=$true}", "$true", "0", "Allowed", "absent"),
             ("[pscustomobject]@{Class='DiskDrive'; FriendlyName='Disk'; Present=$true; Status='OK'}", "$true", "0", "Allowed", "absent"),
-            ("[pscustomobject]@{Class='DiskDrive'; FriendlyName='Disk'; Present=$true}", "$true", "0", "DeniedByUser", "unknown"),
+            ("[pscustomobject]@{Class='DiskDrive'; FriendlyName='Disk'; Present=$true}", "$true", "0", "DeniedByUser", "host_absent"),
+            ("[pscustomobject]@{Class='DiskDrive'; FriendlyName='Disk'; Present=$true}", "$true", "$null", "Unknown", "host_absent"),
             ("", "$false", "$null", "Unknown", "unknown"),
         ];
         for (devices, pnp_ok, video_count, access, expected) in samples {

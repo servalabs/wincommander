@@ -6,6 +6,7 @@ mod logon_links;
 pub(crate) use logon_links::{
     cleanup_ended_logon_encrypted_link, cleanup_owned_caller_link,
     cleanup_owned_logon_encrypted_link, ended_logon_encrypted_link_absent, logon_ended,
+    session_drive_mappings,
 };
 
 use std::{collections::HashSet, ffi::c_void, mem::size_of};
@@ -151,11 +152,16 @@ fn bounded_string(value: &UNICODE_STRING, buffer: &[usize], returned: usize) -> 
         .map_err(|_| ())
 }
 
+fn drive_letter(name: &str) -> Option<char> {
+    let bytes = name.as_bytes();
+    (bytes.len() == 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
+        .then(|| char::from(bytes[0].to_ascii_uppercase()))
+}
+
 fn add_drive_names(letters: &mut HashSet<String>, entries: Vec<(String, String)>) {
     for (name, _) in entries {
-        let bytes = name.as_bytes();
-        if bytes.len() == 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
-            letters.insert((bytes[0].to_ascii_uppercase() as char).to_string());
+        if let Some(letter) = drive_letter(&name) {
+            letters.insert(letter.to_string());
         }
     }
 }

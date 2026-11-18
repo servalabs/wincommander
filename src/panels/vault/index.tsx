@@ -203,7 +203,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
       if (!refreshed) { showError("Cleanup returned a result, but current drive availability could not be refreshed. Check status before mounting."); return; }
       showSuccess(
         result.data.released === 0
-          ? "No stale Vault drive mappings could be safely removed."
+          ? "Drive letters checked. No stale Vault mappings were released."
           : `Cleared ${result.data.released} stale Vault drive mapping${result.data.released === 1 ? "" : "s"}.`,
       );
     } finally {

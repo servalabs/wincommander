@@ -2709,6 +2709,7 @@ pub fn run() {
             // when the user first opens Search Files. The indexer owns its own
             // background worker, so this does not delay window startup.
             file_search::start_background_indexing();
+            backend::start_filename_search();
 
             #[cfg(windows)]
             session_instance::set_app_ready(&app.handle().clone());

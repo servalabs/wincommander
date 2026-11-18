@@ -870,7 +870,6 @@ export default function DashboardPanel() {
   const missingEngineCount = activeFindings.filter((f) => f.category === "engines").length;
 
   const handleCapabilityToggle = useCallback(async (capability: "webcam" | "microphone", blocked: boolean) => {
-    if (needsElevation) { showError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
     setCapabilityPending(capability);
     if (capability === "webcam") invalidateCameraAccess();
     try {
@@ -891,7 +890,7 @@ export default function DashboardPanel() {
       }
       setCapabilityPending(null);
     }
-  }, [refreshSettings, refreshCameraAccess, invalidateCameraAccess, needsElevation]);
+  }, [refreshSettings, refreshCameraAccess, invalidateCameraAccess]);
 
   // Ambient backdrop glow tracks the health BAND as a peripheral-vision cue:
   // calm green when strong, amber as it slips, red at risk — driven by the
