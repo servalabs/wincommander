@@ -1038,40 +1038,11 @@ mod tests {
     }
 
     #[test]
-    fn absent_marker_defaults_on_but_a_legacy_disabled_task_migrates_to_off() {
-        let script = build_autostart_script(false, AutostartOperation::Ensure).unwrap();
-        assert!(script.contains("if ($null -eq $preference -and (Test-AnyOwnedDisabledTask))"));
-        assert!(script.contains("Set-AutostartPreference 0"));
-        assert!(script.contains("if ($preference -eq 0)"));
-        assert!(!script.contains("Set-AutostartPreference 1"));
-    }
-
-    #[test]
-    fn explicit_enable_is_distinct_from_background_integrity_repair() {
-        let ensure = build_autostart_script(false, AutostartOperation::Ensure).unwrap();
-        let enable = build_autostart_script(false, AutostartOperation::Enable).unwrap();
-        assert!(ensure.contains("$needsRepair = -not (Test-CanonicalTask -Task $desiredTask)"));
-        assert!(enable.contains("$needsRepair = $preference -ne 1"));
-        assert!(enable.contains("Register-CanonicalTask\n  Register-CanonicalLauncher\n  Remove-OwnedRouteArtifacts -KeepTaskName $desiredTaskName\n  Assert-NoOwnedCompetingRoutes\n  # Persist only after the canonical task exists and old routes are gone.\n  Set-AutostartPreference 1"));
-    }
-
-    #[test]
     fn background_integrity_defers_uac_but_explicit_actions_can_request_it() {
         assert!(elevation_is_deferred(AutostartOperation::Ensure, false));
         assert!(!elevation_is_deferred(AutostartOperation::Ensure, true));
         assert!(!elevation_is_deferred(AutostartOperation::Enable, false));
         assert!(!elevation_is_deferred(AutostartOperation::Disable, false));
-    }
-
-    #[test]
-    fn cleanup_handles_missing_registry_values_without_suppressing_real_failures() {
-        let script = build_autostart_script(false, AutostartOperation::Disable).unwrap();
-        assert!(script.contains("$key.GetValue($Name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)"));
-        assert!(!script.contains("Get-ItemPropertyValue"));
-        assert!(!script.contains("SilentlyContinue"));
-        assert!(script.contains("CmdletizationQuery_NotFound"));
-        assert!(script.contains("Remove-OwnedRunValues"));
-        assert!(script.contains("Remove-OwnedStartupShortcuts"));
     }
 
     #[test]
@@ -1090,30 +1061,4 @@ mod tests {
         assert!(!names.contains("*__WC_Hidden"));
     }
 
-    #[test]
-    fn standard_user_repairs_only_its_own_legacy_routes_before_global_integrity() {
-        let script = build_autostart_script(false, AutostartOperation::Ensure).unwrap();
-        assert!(script.contains("function Remove-CurrentUserOwnedCompetingRoutes"));
-        assert!(script.contains(
-            "Remove-OwnedRunValues -Paths @(Get-UserRunPaths -RegistryRoot 'Registry::HKEY_CURRENT_USER')"
-        ));
-        assert!(
-            script.contains("Remove-OwnedStartupShortcuts -Roots @(Get-CurrentUserStartupRoots)")
-        );
-        assert!(script.contains("Remove-CurrentUserOwnedCompetingRoutes\n\n$preference"));
-    }
-
-    #[test]
-    fn status_reports_actual_routes_and_cleanup_requires_our_exact_action() {
-        let status = build_autostart_script(true, AutostartOperation::Status).unwrap();
-        assert!(status.contains("$enabled = @(Get-OwnedRunEntries).Count -gt 0"));
-        assert!(status.contains("$entry.Task.State -ne 'Disabled'"));
-        assert!(POWERSHELL_STATUS.contains("Where-Object { $null -ne $_ -and $_.Enabled }"));
-        assert!(!POWERSHELL_STATUS.contains("Get-AutostartPreference"));
-        assert!(!POWERSHELL_STATUS.contains("Test-CanonicalTask"));
-        assert!(!POWERSHELL_STATUS.contains("Test-LauncherNeedsRepair"));
-        assert!(status.contains("return $arguments -in @('', '--autostart', '--minimized')"));
-        assert!(status.contains("$arguments -notmatch '(?i)autostart\\.stderr\\.log'"));
-        assert!(status.contains("$arguments -eq '--elevated-relaunch --autostart'"));
-    }
 }

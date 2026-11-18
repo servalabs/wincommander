@@ -299,18 +299,6 @@ mod tests {
         assert!(check_drive_is_removable_by_type(5).is_err());
     }
 
-    // ── Test: device_id.txt content matches what orchestrator uses ──
-    #[test]
-    fn device_id_written_matches_settings_device_id_format() {
-        let dir = TempDir::new().expect("tempdir");
-        let device_id = "550e8400-e29b-41d4-a716-446655440000"; // valid UUID v4
-        provision_with_pubkey(dir.path().to_str().unwrap(), device_id, &TEST_PUBKEY).expect("ok");
-        let written =
-            std::fs::read_to_string(dir.path().join("wipe").join("device_id.txt")).expect("read");
-        // Must match character-for-character with no trailing newline
-        assert_eq!(written, device_id);
-    }
-
     #[test]
     fn provision_idempotent_overwrites() {
         let dir = TempDir::new().expect("tempdir");

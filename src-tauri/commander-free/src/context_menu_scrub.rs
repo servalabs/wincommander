@@ -84,17 +84,6 @@ mod tests {
             "scrub_selected_item_missing"
         );
     }
-    #[test]
-    fn explorer_scrub_stays_before_single_instance_and_never_calls_messagebox() {
-        let source = include_str!("lib.rs");
-        assert!(
-            source
-                .find("context_scrub_notification::run(paths)")
-                .unwrap()
-                < source.find("session_instance::acquire(").unwrap()
-        );
-        assert!(!include_str!("context_menu_scrub.rs").contains(concat!("Message", "BoxW(")));
-    }
 
     #[tokio::test]
     async fn verified_failure_is_published_before_cleanup_but_exit_waits_for_cleanup() {

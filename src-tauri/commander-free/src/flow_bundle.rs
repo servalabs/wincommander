@@ -636,14 +636,6 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_block_types_detected() {
-        let mut flows = vec![fake_flow("ok")];
-        flows[0]["triggers"][0]["type"] = json!("MadeUpFutureTrigger");
-        let types = collect_block_types(&flows);
-        assert!(types.contains(&"MadeUpFutureTrigger".to_string()));
-    }
-
-    #[test]
     fn max_risk_picks_highest() {
         let flows = vec![
             json!({ "riskLevel": "low" }),

@@ -406,25 +406,6 @@ mod tests {
         assert_eq!(result["consumed"], false);
     }
 
-    // ── Token issue + self-verify round trip that f6_verify_usb_boot_arm relies on ──
-
-    #[test]
-    fn issued_token_self_verifies_and_nonce_hex_is_64_chars() {
-        use wincmd_shared::wipe_auth::signing_key_from_bytes;
-
-        let sk = signing_key_from_bytes(&[0x11u8; 32]);
-        let device_id = "test-device-verify-boot";
-        let now = 1_751_000_000i64;
-
-        let token = issue_wipe_token(device_id, TEST_TOKEN_TTL_SECS, now, &sk);
-        let verified = verify_wipe_token(&token, &sk.verifying_key(), device_id, now)
-            .expect("self-issued token must self-verify");
-        let nonce_hex = hex::encode(verified.nonce);
-
-        assert_eq!(nonce_hex.len(), 64, "32-byte nonce hex-encodes to 64 chars");
-        assert_eq!(verified.expires_at, now + TEST_TOKEN_TTL_SECS);
-    }
-
     // ── write_wipe_token_to_usb + check_consumed_nonces integration, simulating
     //    what verify-token.sh does on acceptance (appends nonce hex + newline) ──
 

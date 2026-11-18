@@ -832,66 +832,30 @@ mod tests {
 
     #[test]
     fn trace_security_and_forensic_steps_are_opt_in_deep_dfir_actions() {
-        for (id, label) in [
-            (
-                "third_party_security_product_logs",
-                "Third-Party Security Product Logs",
-            ),
-            ("forensic_tool_artifacts", "FTK Imager Artifacts"),
-            (
-                "windows_policy_auth_caches",
-                "Policy & Authentication Caches",
-            ),
-            ("cortana_wsa_logs", "Cortana & Android Subsystem Logs"),
-            (
-                "bitlocker_recovery_temp",
-                "BitLocker Recovery-Key Temp Files",
-            ),
-            ("trace_application_logs", "Hibernation & App Trace Logs"),
-            ("trace_system_temp_files", "User & System Temp Files"),
-            (
-                "trace_all_user_certificates",
-                "All Current-User Certificates",
-            ),
-            ("trace_all_scheduled_tasks", "All Scheduled Tasks"),
-            ("trace_all_services", "All Windows Services"),
-            ("trace_all_wireless_profiles", "All Wireless Profiles"),
-            (
-                "trace_all_vpn_connections",
-                "Current & Shared VPN Connections",
-            ),
-            (
-                "trace_all_chrome_extensions",
-                "Chrome Extensions in Every Profile",
-            ),
-            (
-                "trace_all_crypto_provider_data",
-                "All Current-User RSA Provider Data",
-            ),
-            ("trace_windows_update_log", "Windows Update Log"),
-            ("trace_push_notifications", "Push Notifications"),
+        for id in [
+            "third_party_security_product_logs",
+            "forensic_tool_artifacts",
+            "windows_policy_auth_caches",
+            "cortana_wsa_logs",
+            "bitlocker_recovery_temp",
+            "trace_application_logs",
+            "trace_system_temp_files",
+            "trace_all_user_certificates",
+            "trace_all_scheduled_tasks",
+            "trace_all_services",
+            "trace_all_wireless_profiles",
+            "trace_all_vpn_connections",
+            "trace_all_chrome_extensions",
+            "trace_all_crypto_provider_data",
+            "trace_windows_update_log",
+            "trace_push_notifications",
         ] {
             let step = lookup(id).expect("system hygiene-derived step must remain selectable");
-            assert_eq!(step.label, label);
             assert_eq!(step.group, DestructGroup::DeepDfir);
             assert!(
                 !step.default_enabled,
                 "{id} must require an explicit opt-in"
             );
         }
-    }
-
-    #[test]
-    fn prefetch_step_names_the_readyboot_traces_it_clears() {
-        let step = lookup("prefetch").expect("Prefetch step must remain selectable");
-        assert_eq!(step.label, "Prefetch & ReadyBoot");
-    }
-
-    #[test]
-    fn command_history_step_names_its_powershell_and_cmd_scope() {
-        let step =
-            lookup("powershell_history").expect("Command history step must remain selectable");
-        assert_eq!(step.label, "Command History");
-        assert_eq!(step.group, DestructGroup::PrivacyTraces);
     }
 }

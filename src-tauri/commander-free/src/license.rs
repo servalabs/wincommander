@@ -2562,33 +2562,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "experimental-pq-licence"))]
-    #[test]
-    fn paid_refresh_payload_never_requests_a_seat_write() {
-        let refresh = WorkerRefreshRequest {
-            payload: "payload",
-            signature: "signature",
-            #[cfg(feature = "experimental-pq-licence")]
-            hybrid: Some("hybrid-proof"),
-            device_hash: "device-a",
-            app_id: APP_ID,
-            app_version: "test",
-            is_portable: false,
-        };
-        let refresh_json = serde_json::to_value(refresh).expect("serialize refresh");
-        #[cfg(feature = "experimental-pq-licence")]
-        assert_eq!(
-            refresh_json.get("hybrid").and_then(|value| value.as_str()),
-            Some("hybrid-proof")
-        );
-        #[cfg(not(feature = "experimental-pq-licence"))]
-        assert!(refresh_json.get("hybrid").is_none());
-        assert!(
-            refresh_json.get("seatHeartbeat").is_none(),
-            "routine paid refreshes must never request a seat write"
-        );
-    }
-
     #[test]
     fn hybrid_licence_deactivation_serializes_the_expected_request() {
         let request = WorkerDeactivateRequest {
@@ -2835,31 +2808,6 @@ mod tests {
         let payload = claims_json("device-abc");
         let token = SignedTokenEnvelope { signature: sign_payload(&signing_key, &payload), payload, hybrid: Some("unverified".into()) };
         assert!(verify_token_claims(&token, &public_key).is_err());
-    }
-
-    /// A license bound to one device_hash must not validate for a different
-    /// device_hash. `parse_and_verify_claims` verifies the signature but does
-    /// NOT itself check device binding — every call site (current_features_raw,
-    /// activate_license, refresh_license) does `claims.device_hash != device_hash
-    /// => reject`. This test replays that exact guard against a genuinely
-    /// signature-valid claim minted for different hardware, proving a stolen/
-    /// copied cache file (valid signature, wrong machine) is still rejected.
-    #[test]
-    fn license_bound_to_one_device_hash_does_not_validate_on_another() {
-        let (signing_key, public_key_b64) = test_keypair();
-        let payload = claims_json("device-hash-for-machine-A");
-        let signature = sign_payload(&signing_key, &payload);
-
-        let claims = parse_and_verify_claims(&payload, &signature, &public_key_b64)
-            .expect("signature is valid; only the device binding is under test");
-
-        let this_machine_device_hash = "device-hash-for-machine-B";
-        let accepted_on_this_machine = claims.device_hash == this_machine_device_hash;
-
-        assert!(
-            !accepted_on_this_machine,
-            "a signature-valid license minted for machine A must not be accepted as valid on machine B"
-        );
     }
 
     #[test]

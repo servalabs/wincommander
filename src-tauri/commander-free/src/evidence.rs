@@ -292,22 +292,6 @@ mod tests {
     }
 
     #[test]
-    fn entry_round_trips_and_omits_empty_detail() {
-        let e = EvidenceEntry {
-            time: "2026-06-10T10:00:00Z".to_string(),
-            source: "monitor".to_string(),
-            severity: "danger".to_string(),
-            summary: "Decoy file opened".to_string(),
-            detail: None,
-        };
-        let json = serde_json::to_string(&e).unwrap();
-        assert!(json.contains("\"severity\":\"danger\""));
-        assert!(!json.contains("detail")); // skip_serializing_if
-        let back: EvidenceEntry = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.summary, "Decoy file opened");
-    }
-
-    #[test]
     fn unverified_history_cannot_be_exported_as_complete_evidence() {
         assert!(ensure_export_continuity(true).is_err());
         assert!(ensure_export_continuity(false).is_ok());

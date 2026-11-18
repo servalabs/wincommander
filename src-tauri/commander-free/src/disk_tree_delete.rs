@@ -1254,40 +1254,6 @@ mod tests {
     }
 
     #[test]
-    fn probe_directory_handle_access_and_rename() {
-        let f = Fixture::new();
-        let target = f.target();
-        let renamed = f.root.join("renamed");
-        for (label, access) in [
-            ("attributes", READ_ATTRIBUTES),
-            ("list", LIST_DIRECTORY),
-            ("traverse", 0x20),
-            ("read-control", 0x0002_0000),
-            ("write-attributes", 0x100),
-            ("delete", DELETE),
-        ] {
-            std::fs::create_dir(&target).unwrap();
-            let handle = OpenOptions::new()
-                .access_mode(access)
-                .share_mode(SHARE_READ_WRITE)
-                .custom_flags(BACKUP_SEMANTICS | OPEN_REPARSE_POINT)
-                .open(&target);
-            match handle {
-                Ok(handle) => {
-                    let rename = std::fs::rename(&target, &renamed);
-                    println!("{label}: rename_blocked={}", rename.is_err());
-                    drop(handle);
-                    if rename.is_ok() {
-                        std::fs::rename(&renamed, &target).unwrap();
-                    }
-                }
-                Err(error) => println!("{label}: open_error={:?}", error.raw_os_error()),
-            }
-            std::fs::remove_dir(&target).unwrap();
-        }
-    }
-
-    #[test]
     fn authorized_root_pins_confirmed_identity_until_preparation() {
         let f = Fixture::new();
         let target = f.target();

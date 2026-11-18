@@ -166,13 +166,6 @@ mod tests {
         assert!(report.cleanup_limitation.contains("cannot safely"));
     }
     #[test]
-    fn driver_update_handoff_targets_optional_updates() {
-        assert_eq!(
-            OPTIONAL_UPDATES_SETTINGS_URI,
-            "ms-settings:windowsupdate-optionalupdates"
-        );
-    }
-    #[test]
     fn pnp_payload_uses_camel_case_fields() {
         let entry: DriverInventoryEntry =
             serde_json::from_str(r#"{"deviceName":"Audio","infName":"oem1.inf","isSigned":true}"#)

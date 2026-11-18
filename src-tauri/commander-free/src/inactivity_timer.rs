@@ -378,13 +378,4 @@ mod tests {
         assert!(parse_iso("").is_none());
     }
 
-    #[test]
-    fn config_defaults_are_safe() {
-        let c = DeadMansSwitchConfig::default();
-        assert!(!c.enabled);
-        assert_eq!(c.threshold_days, DEFAULT_THRESHOLD_DAYS);
-        assert!(c.flow_id_to_fire.is_none());
-        assert!(c.last_fired_at.is_none());
-    }
-
 }

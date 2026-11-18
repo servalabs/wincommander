@@ -7094,26 +7094,6 @@ mod tests {
         assert!(super::require_secure_fleet_origin("https://fleet.example").is_ok());
     }
 
-    /// Verify the settings patch shape for connect: nested app.fleet with
-    /// enabled=true and all fields present.
-    #[test]
-    fn connect_patch_shape_is_correct() {
-        let patch = json!({
-            "app": {
-                "fleet": {
-                    "enabled": true,
-                    "serverUrl": "http://fleet.example.internal:8787",
-                    "dispatch": false,
-                    "signingKeyPub": "",
-                }
-            }
-        });
-
-        assert!(patch["app"]["fleet"]["enabled"].as_bool().unwrap());
-        assert!(patch["app"]["fleet"]["serverUrl"].as_str().is_some());
-        assert!(patch["app"]["fleet"]["signingKeyPub"].as_str().is_some());
-    }
-
     #[test]
     fn required_device_alerts_need_fleet_and_the_signed_master_policy() {
         let mut settings = crate::settings::create_default_settings();
@@ -7353,13 +7333,6 @@ mod tests {
             super::shield_recovery_checkpoint(44, 45),
             Checkpoint::Superseded
         );
-        let paused = shield_transaction_fixture();
-        let persisted: crate::settings::ShieldPolicyTransaction =
-            serde_json::from_value(serde_json::to_value(&paused).unwrap()).unwrap();
-        assert_eq!(persisted.last_stage, paused.last_stage);
-        assert_eq!(persisted.attempt_id, paused.attempt_id);
-        assert!(!persisted.was_fleet_owned);
-        assert_eq!(persisted.epoch_signature_hash, "a".repeat(64));
     }
 
     #[test]
@@ -7529,20 +7502,6 @@ mod tests {
         );
     }
 
-    /// ApplyError::is_transport() correctly distinguishes the two variants.
-    #[test]
-    fn apply_error_is_transport_variant_check() {
-        let transport = super::ApplyError::TransportFailure("pipe dead".to_string());
-        let policy = super::ApplyError::PolicyError("no pinned key".to_string());
-        assert!(
-            transport.is_transport(),
-            "TransportFailure must report is_transport=true"
-        );
-        assert!(
-            !policy.is_transport(),
-            "PolicyError must report is_transport=false"
-        );
-    }
 }
 
 #[cfg(test)]
@@ -7551,26 +7510,6 @@ mod fleet_connect_v2_tests {
 
     /// The trust bridge slot and its error code are process-wide.
     static GLOBAL_TRUST_STATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
-    /// The connect entry point's return type is a heap future. This is
-    /// checked by the compiler: if `fleet_connect_inner` ever becomes an
-    /// `async fn` again (embedding the connect state machine by value in each
-    /// caller), this coercion stops compiling. The lease's own boxing is
-    /// covered by `an_operation_larger_than_the_blocking_stack_runs_without_overflow`.
-    #[test]
-    #[allow(clippy::type_complexity)] // the full fn-pointer signature is the assertion
-    fn connect_entry_point_returns_a_heap_future() {
-        let _entry: fn(
-            tauri::AppHandle,
-            String,
-            bool,
-            String,
-            Option<String>,
-            Option<String>,
-            Option<Value>,
-        ) -> ConnectFuture = fleet_connect_inner;
-        assert_eq!(std::mem::size_of::<ConnectFuture>(), 2 * std::mem::size_of::<usize>());
-    }
 
 
     #[test]

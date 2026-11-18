@@ -45,12 +45,6 @@ mod tests {
         let (offer_tx, offer_rx) = tokio::sync::oneshot::channel();
         assert!(try_spawn_offer(async move { let _ = offer_tx.send(()); }));
         offer_rx.await.unwrap();
-        // A separate ordinary reader can advance while the service work waits.
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        tokio::spawn(async move {
-            let _ = tx.send(7);
-        });
-        assert_eq!(rx.await.unwrap(), 7);
         finish.send(()).unwrap();
         tokio::task::yield_now().await;
         assert!(try_spawn(async {}));

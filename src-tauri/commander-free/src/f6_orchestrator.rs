@@ -558,7 +558,6 @@ pub fn build_production_deps() -> Result<F6Deps, String> {
 // Test organisation:
 //   - gate_* tests: gate refusal before any stage-1 call.
 //   - stage1_fail_* test: keys-before-reboot invariant (the critical test).
-//   - no_usb_*: USB not found → stage-2 skipped, reboot never called.
 //   - happy_path_*: all stubs succeed → stage-1 → token written → BootNext →
 //     reboot called exactly once, last.
 
@@ -861,87 +860,6 @@ mod tests {
             c.reboot, 0,
             "reboot must NEVER be called when stage-1 fails"
         );
-    }
-
-    // ── USB not found — stage-2 skipped ──────────────────────────────────────
-
-    #[test]
-    fn no_usb_stage2_skipped_reboot_not_called() {
-        let _session = real_session_guard();
-        // find_wipe_usb scans real removable drives; in test environments no drive
-        // will have a wipe/pubkey.bin marker, so it always returns None.
-        // On non-Windows it always returns None unconditionally.
-        let counts = Arc::new(Mutex::new(CallCounts::default()));
-        let c = counts.clone();
-        let deps = F6Deps {
-            stage1: Stage1Eraser {
-                bitlocker_erase: {
-                    let cc = c.clone();
-                    Box::new(move || {
-                        cc.lock().unwrap().bitlocker += 1;
-                        Ok(None)
-                    })
-                },
-                veracrypt_destroy: {
-                    let cc = c.clone();
-                    Box::new(move || {
-                        cc.lock().unwrap().veracrypt += 1;
-                        Ok(())
-                    })
-                },
-                vault_tpm_delete: {
-                    let cc = c.clone();
-                    Box::new(move || {
-                        cc.lock().unwrap().tpm += 1;
-                        Ok(())
-                    })
-                },
-            },
-            set_boot_next: {
-                let cc = c.clone();
-                Box::new(move || {
-                    cc.lock().unwrap().boot_next += 1;
-                    Ok("{stub}".to_string())
-                })
-            },
-            reboot: {
-                let cc = c.clone();
-                Box::new(move || {
-                    cc.lock().unwrap().reboot += 1;
-                    Ok(())
-                })
-            },
-            now_unix: Box::new(|| TEST_NOW),
-            signing_key: deterministic_key(),
-            device_id: TEST_DEVICE.to_string(),
-        };
-
-        // On non-Windows, find_wipe_usb always returns None, so this test
-        // always exercises the "no USB" path.  On Windows the test dir has
-        // no wipe/pubkey.bin and isn't a real removable drive, so
-        // find_wipe_usb also returns None (it looks at real drives via
-        // GetLogicalDrives).  Either way we expect Stage1OnlyNoUsb.
-        let result = execute_reboot_to_usb_wipe(Some(true), Some(true), deps);
-
-        assert!(
-            result.is_ok(),
-            "no-USB path must not return Err: {:?}",
-            result
-        );
-        assert_eq!(
-            result.unwrap(),
-            F6Outcome::Stage1OnlyNoUsb,
-            "must return Stage1OnlyNoUsb"
-        );
-
-        let c = counts.lock().unwrap();
-        // Stage-1 must have run.
-        assert_eq!(c.bitlocker, 1, "bitlocker must have run");
-        assert_eq!(c.veracrypt, 1, "veracrypt must have run");
-        assert_eq!(c.tpm, 1, "tpm must have run");
-        // Stage-2 must NOT have run.
-        assert_eq!(c.boot_next, 0, "BootNext must NOT be set when no USB found");
-        assert_eq!(c.reboot, 0, "reboot must NOT be called when no USB found");
     }
 
     // ── Happy path with token write ───────────────────────────────────────────

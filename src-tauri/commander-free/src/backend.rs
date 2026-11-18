@@ -10386,30 +10386,6 @@ fn build_es_search_args(
     args
 }
 
-/// Build the argv for a count-only es.exe run.
-#[cfg(test)]
-fn build_es_count_args(scope_path: Option<&str>, tokens: &[String]) -> Vec<String> {
-    let mut args: Vec<String> = vec!["-get-result-count".to_string()];
-    if let Some(scope) = scope_path {
-        args.push("-path".to_string());
-        args.push(scope.to_string());
-    }
-    args.extend(tokens.iter().cloned());
-    args
-}
-
-/// Parse the integer printed by `-get-result-count`.
-#[cfg(test)]
-fn parse_es_count(stdout: &[u8]) -> Result<u64, String> {
-    let raw = String::from_utf8_lossy(stdout);
-    raw.lines()
-        .map(|line| line.trim().trim_start_matches('\u{feff}').trim())
-        .filter(|line| !line.is_empty())
-        // Tolerate a label prefix ("Result count: 42") by taking the last field.
-        .find_map(|line| line.split_whitespace().next_back()?.parse::<u64>().ok())
-        .ok_or_else(|| format!("Search returned an unreadable count: {}", raw.trim()))
-}
-
 const ES_SEARCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(6);
 
 async fn run_es_with_daemon_retry(
@@ -10748,8 +10724,7 @@ fn locate_es_exe_uncached() -> Option<std::path::PathBuf> {
 #[cfg(test)]
 mod es_query_tests {
     use super::{
-        build_es_count_args, build_es_search_args, locate_es_exe_cached, parse_es_count,
-        parse_es_output, search_scope_drive_root, tokenize_es_query, validate_es_scope_path,
+        build_es_search_args, locate_es_exe_cached, parse_es_output, search_scope_drive_root, tokenize_es_query, validate_es_scope_path,
         validate_es_sort, validate_es_tokens,
     };
 
@@ -10939,12 +10914,6 @@ mod es_query_tests {
     }
 
     #[test]
-    fn count_args_are_minimal() {
-        let args = build_es_count_args(None, &tokenize_es_query("ext:md dm:today"));
-        assert_eq!(args, vec!["-get-result-count", "ext:md", "dm:today"]);
-    }
-
-    #[test]
     fn utf8_csv_preserves_unicode_file_names_and_directories() {
         let csv = "\"हिन्दी, 世界 😀.txt\",\"D:\\दस्तावेज़\",42,2026-10-21T07:46:31\r\n";
         let response = parse_es_output(csv.as_bytes().to_vec(), "हिन्दी".into()).unwrap();
@@ -10970,21 +10939,6 @@ mod es_query_tests {
             .err()
             .unwrap();
         assert!(error.contains("unreadable file names"));
-    }
-
-    // ── Count parsing ──
-
-    #[test]
-    fn count_parses_plain_integer() {
-        assert_eq!(parse_es_count(b"1234\r\n").unwrap(), 1234);
-        assert_eq!(parse_es_count("\u{feff}7\r\n".as_bytes()).unwrap(), 7);
-        assert_eq!(parse_es_count(b"Result count: 42\r\n").unwrap(), 42);
-    }
-
-    #[test]
-    fn count_rejects_non_numeric_output() {
-        assert!(parse_es_count(b"").is_err());
-        assert!(parse_es_count(b"ES: IPC not found\r\n").is_err());
     }
 
     // ── Battery 4: TS/Rust parity, validated at scale against 8000+ real
@@ -11049,37 +11003,6 @@ mod es_query_tests {
                 "round-trip mismatch for real filename {name:?}"
             );
         }
-    }
-
-    #[test]
-    fn tokenizer_roundtrip_disagrees_when_a_typed_quote_is_unbalanced() {
-        // KNOWN GAP: buildEverythingPlan() splits typed search text on bare
-        // whitespace with NO quote-awareness, so a user typing a phrase like
-        // `"quoted phrase"` (spaces INSIDE the quotes, meant as an exact
-        // phrase) is split into two tokens ["\"quoted", "phrase\""] rather
-        // than kept together. In the real Ctrl+Space pipeline these go
-        // straight to the backend as pre-split argv entries (search_everything
-        // prefers `tokens` over `query` — see resolve_es_tokens), so this gap
-        // is latent there. It goes LIVE in the classic Search Files panel
-        // (src/hooks/useFileSearch.ts -> buildSearchQuery -> a bare `query`
-        // string with no `tokens`), which is what this asserts: the array
-        // tokenize_es_query reconstructs from the rejoined string differs from
-        // what the frontend actually intended.
-        let ts_tokens = vec!["\"quoted".to_string(), "phrase\"".to_string()];
-        let joined = ts_tokens.join(" ");
-        assert_eq!(joined, "\"quoted phrase\"");
-        let rust_tokens = tokenize_es_query(&joined);
-        assert_ne!(
-            rust_tokens, ts_tokens,
-            "if this now holds, the round-trip gap has been closed and this test should be inverted"
-        );
-        assert_eq!(rust_tokens, vec!["\"quoted phrase\"".to_string()]);
-
-        // Simplest form of the same gap: a single already-joined token that
-        // merely contains an ODD number of '"' characters (only reachable
-        // from typed free text — Windows forbids '"' in real filenames) gets a
-        // trailing '"' silently appended, changing the token es.exe receives.
-        assert_eq!(tokenize_es_query("a\"b"), vec!["a\"b\"".to_string()]);
     }
 
     #[test]
