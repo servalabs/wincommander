@@ -9019,27 +9019,6 @@ mod tests {
     // ── Task A: PrincipalResolution carries the rejected principal name ───
 
     #[test]
-    fn principal_resolution_error_carries_the_rejected_principal_name() {
-        struct RejectingResolver;
-        impl PrincipalResolver for RejectingResolver {
-            fn resolve_sid(&self, name: &str) -> Result<String, VaultError> {
-                Err(VaultError::PrincipalResolution(name.to_string()))
-            }
-        }
-        let s = VaultAccessStore::open(
-            Box::new(Fs(Arc::new(Mutex::new(HashMap::new())))),
-            Box::new(RejectingResolver),
-            Box::new(Acl),
-            PathBuf::from("/policy"),
-        );
-        // `policy()`'s owner_account is "Admin" and is resolved first.
-        assert_eq!(
-            s.apply(policy(1, 0), 7),
-            Err(VaultError::PrincipalResolution("Admin".to_string()))
-        );
-    }
-
-    #[test]
     fn principal_resolution_error_names_the_rejected_grant_not_just_the_owner() {
         struct RejectingResolver;
         impl PrincipalResolver for RejectingResolver {

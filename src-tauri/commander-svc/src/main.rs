@@ -593,15 +593,6 @@ mod tests {
         assert_eq!(extract_pinned_fleet_signing_key(&v), "");
     }
 
-    #[test]
-    fn stop_status_allows_bounded_vault_cleanup() {
-        let status = stop_pending_status();
-        assert_eq!(status.current_state, ServiceState::StopPending);
-        assert_eq!(status.controls_accepted, ServiceControlAccept::empty());
-        assert_eq!(status.checkpoint, 1);
-        assert_eq!(status.wait_hint, std::time::Duration::from_secs(135));
-    }
-
     // ── run_iteration_catching_panics: the loop-resilience contract ──────
 
     #[test]

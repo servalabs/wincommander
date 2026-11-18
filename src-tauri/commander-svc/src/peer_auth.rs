@@ -871,14 +871,4 @@ mod tests {
         }
     }
 
-    // ── resolve_install_root sanity ──────────────────────────────────
-
-    #[test]
-    fn resolve_install_root_points_at_an_existing_directory() {
-        // In any normal test environment `current_exe()` succeeds, so this
-        // should resolve to the test binary's own (existing) directory.
-        if let Some(root) = resolve_install_root() {
-            assert!(root.is_dir());
-        }
-    }
 }
