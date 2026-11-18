@@ -17,7 +17,7 @@ commit reference whenever this file is revised.
 - App version `3.6.7` (`package.json`, `src-tauri/commander-free/tauri.conf.json`).
   The CHANGELOG has a single `Unreleased` section; no earlier release sections
   are kept there (release notes are published with each GitHub Release).
-- Toolchain: Rust `1.99.1` (`rust-toolchain.toml`); Bun `1.4.0` pinned by
+- Toolchain: Rust `1.100.0` (`rust-toolchain.toml`); Bun `1.4.0` pinned by
   `tools/ensure-dev-environment.ps1`, Bun `1.4.3` in CI.
 - CI (`.github/workflows/invariants.yml`) gates: TypeScript schema, tier and
   risk invariants plus the Markdown link check, changed-file quality guards,
