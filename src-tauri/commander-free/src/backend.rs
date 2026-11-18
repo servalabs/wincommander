@@ -5079,13 +5079,19 @@ pub async fn run_backend_script(
     ) {
         let runtime = tokio::runtime::Handle::current();
         return tokio::task::spawn_blocking(move || {
+            use crate::fleet_agent::LocalShieldStartProfile;
+
             let _guard = crate::paths::acquire_shield_action_lock()?;
-            let fleet_policy_active = if command == "Start-PrivacyShield" {
-                crate::fleet_agent::require_single_interactive_shield_session()?;
-                Some(runtime.block_on(crate::fleet_agent::verify_service_shield_profile())?)
-            } else { None };
             let settings = crate::settings::read_settings()?;
-            if let Some(active) = fleet_policy_active {
+            let start_profile = if command == "Start-PrivacyShield" {
+                crate::fleet_agent::require_single_interactive_shield_session()?;
+                Some(runtime.block_on(crate::fleet_agent::verify_local_shield_start_profile(&settings))?)
+            } else { None };
+            if let Some(profile) = start_profile {
+                let active = match profile {
+                    LocalShieldStartProfile::Unbound => None,
+                    LocalShieldStartProfile::FleetBound(policy) => policy,
+                };
                 let delay = crate::fleet_agent::effective_shield_look_away_delay(&settings, active.map(|policy| policy.0))?;
                 set_shield_parameter(&mut params, "LookAwayDelaySeconds", delay.to_string());
                 enforce_shield_look_away_detection(&mut params, active.map(|policy| policy.1));
@@ -5095,14 +5101,22 @@ pub async fn run_backend_script(
                     set_shield_parameter(&mut params, "FleetVideoOnly", "true".into());
                 }
             }
-            if settings.app.fleet.privacy_shield_policy_transaction.is_some() {
+            if start_profile != Some(LocalShieldStartProfile::Unbound)
+                && settings.app.fleet.privacy_shield_policy_transaction.is_some()
+            {
                 if command == "Start-PrivacyShield" {
                     return Err("Shield policy is transitioning; Start will be available after verification".into());
                 }
                 record_local_shield_stop_intent()?;
             }
             let is_start = command == "Start-PrivacyShield";
-            let result = runtime.block_on(run_backend_script_with_timeout(app, command, params, None));
+            let capture_delivery = match start_profile {
+                Some(LocalShieldStartProfile::Unbound) => ShieldCaptureDelivery::LocalOnly,
+                _ => ShieldCaptureDelivery::Configured,
+            };
+            let result = runtime.block_on(run_backend_script_inner(
+                app, command, params, None, capture_delivery,
+            ));
             if is_start { remember_shield_launch(result.as_ref().ok(), Some("local")); }
             result
         })
@@ -5952,8 +5966,54 @@ pub(crate) async fn run_fleet_forensic_projection(
 pub(crate) async fn run_backend_script_with_timeout(
     app: AppHandle,
     command: String,
+    params: HashMap<String, String>,
+    timeout_override: Option<std::time::Duration>,
+) -> Result<serde_json::Value, String> {
+    run_backend_script_inner(
+        app,
+        command,
+        params,
+        timeout_override,
+        ShieldCaptureDelivery::Configured,
+    )
+    .await
+}
+
+#[derive(Clone, Copy)]
+enum ShieldCaptureDelivery {
+    LocalOnly,
+    Configured,
+}
+
+impl ShieldCaptureDelivery {
+    fn read_preferences(
+        self,
+        read: impl FnOnce() -> Result<crate::settings::AppSettings, String>,
+    ) -> Option<crate::settings::AppSettings> {
+        match self {
+            Self::LocalOnly => None,
+            Self::Configured => read().ok(),
+        }
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn unbound_local_shield_never_reads_preferences_for_fleet_capture_delivery() {
+    assert!(ShieldCaptureDelivery::LocalOnly
+        .read_preferences(|| panic!("local-only startup consulted stale Fleet capture preferences"))
+        .is_none());
+    assert!(ShieldCaptureDelivery::Configured
+        .read_preferences(|| Ok(crate::settings::create_default_settings()))
+        .is_some());
+}
+
+async fn run_backend_script_inner(
+    app: AppHandle,
+    command: String,
     mut params: HashMap<String, String>,
     timeout_override: Option<std::time::Duration>,
+    shield_capture_delivery: ShieldCaptureDelivery,
 ) -> Result<serde_json::Value, String> {
     let requested_machine_wide = take_machine_wide_param(&mut params)?;
     let effective_scope = if requested_machine_wide {
@@ -6408,7 +6468,7 @@ pub(crate) async fn run_backend_script_with_timeout(
         // indefinitely or inherits a caller-supplied upload binding.
         cmd.env("WINCMD_SHIELD_CAPTURE_BINDING", "");
         shield_capture_delivery_status = Some("local_only");
-        if let Ok(settings) = crate::settings::read_settings() {
+        if let Some(settings) = shield_capture_delivery.read_preferences(crate::settings::read_settings) {
             if settings
                 .ideal
                 .privacy

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  localShieldFleetEnabled,
   resolveFleetPrivacyShieldControl,
   resolveLocalFleetPrivacyShieldControl,
 } from "./fleetPrivacyShieldControl";
@@ -53,5 +54,23 @@ describe("resolveFleetPrivacyShieldControl", () => {
       sessionOwned: true,
       fleetControl: { managed: true, enabled: false },
     })).toEqual({ stopLocked: false, startLocked: false, settingsLocked: false });
+  });
+
+  test("only explicit service-confirmed unbinding releases a stale Fleet Start lock", () => {
+    const startLocked = (serviceStatus?: unknown) => {
+      const fleetControl = resolveFleetPrivacyShieldControl({
+        fleetEnabled: localShieldFleetEnabled(true, serviceStatus),
+        legacyManaged: true,
+        legacyMonitoringEnabled: true,
+        desiredState: { enabled: true, mode: "notify_only" },
+      });
+      return resolveLocalFleetPrivacyShieldControl({ running: false, sessionOwned: false, fleetControl }).startLocked;
+    };
+
+    expect(startLocked({ trustBound: false, shieldLocalUnbound: true })).toBe(false);
+    expect(startLocked()).toBe(true);
+    expect(startLocked({ trustBound: false })).toBe(true);
+    expect(startLocked({ trustBound: true, shieldLocalUnbound: true })).toBe(true);
+    expect(startLocked({ trustBound: false, shieldLocalUnbound: "true" })).toBe(true);
   });
 });

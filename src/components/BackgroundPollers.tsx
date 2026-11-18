@@ -31,6 +31,7 @@ import useAutoHeal from "../hooks/useAutoHeal";
 import useAdoptCurrentState from "../hooks/useAdoptCurrentState";
 import { fleetShieldDelayPolicyActive, fleetShieldDetectorPolicyActive, privacyShieldDetectorGaze, privacyShieldBlurTriggers, privacyShieldLookAwayDelay, resolvePrivacyShieldMode } from "../lib/privacyShieldMode";
 import {
+  localShieldFleetEnabled,
   resolveFleetPrivacyShieldControl,
   resolveLocalFleetPrivacyShieldControl,
 } from "../lib/fleetPrivacyShieldControl";
@@ -253,8 +254,13 @@ export default function BackgroundPollers({
       // just-delivered Fleet Start still cannot be bypassed through the tray.
       const settings = appSettingsRef.current;
       const shieldSettings = settings?.ideal?.privacy?.privacyShield;
+      let fleetEnabled = settings?.app?.fleet?.enabled === true;
       let desiredState = settings?.app?.fleet?.shieldDesiredState ?? null;
-      if (settings?.app?.fleet?.enabled === true) {
+      if (fleetEnabled) {
+        const binding = await invoke("fleet_machine_trust_status").catch(() => null);
+        fleetEnabled = localShieldFleetEnabled(fleetEnabled, binding);
+      }
+      if (fleetEnabled) {
         try {
           desiredState = await invoke<typeof desiredState>("fleet_sync_shield_state");
         } catch {
@@ -263,7 +269,7 @@ export default function BackgroundPollers({
         }
       }
       const fleetControl = resolveFleetPrivacyShieldControl({
-        fleetEnabled: settings?.app?.fleet?.enabled === true,
+        fleetEnabled,
         legacyManaged: shieldSettings?.fleetManaged === true,
         legacyMonitoringEnabled: shieldSettings?.fleetMonitoringEnabled === true,
         desiredState,
@@ -294,7 +300,7 @@ export default function BackgroundPollers({
           device: shield?.cameraHunterEnabled ?? true,
         };
         const blurTriggers = privacyShieldBlurTriggers(mode, detectorTriggers);
-        const res = await startPrivacyShield(0, privacyShieldDetectorGaze(detectorTriggers.gaze, shield, fleetShieldDetectorPolicyActive(appSettingsRef.current?.app?.fleet?.enabled === true, appSettingsRef.current?.policy?.lockedPaths)), detectorTriggers.faces, detectorTriggers.device, false, false, shield?.modelSize ?? "medium", shield?.confidenceThreshold ?? 0.5, shield?.blurOpacity ?? 200, shield?.wakeDelaySeconds ?? 150, shield?.deviceWakeMultiplier ?? 5, shield?.multiFaceWakeMultiplier ?? 5, shield?.detectionBufferFrames ?? 2, shield?.captureSpeed ?? 1, blurTriggers.gaze, blurTriggers.faces, blurTriggers.device, privacyShieldLookAwayDelay(shield, fleetShieldDelayPolicyActive(appSettingsRef.current?.app?.fleet?.enabled === true, appSettingsRef.current?.policy?.lockedPaths), appSettingsRef.current?.app?.localPrivacyShieldLookAwayDelaySeconds));
+        const res = await startPrivacyShield(0, privacyShieldDetectorGaze(detectorTriggers.gaze, shield, fleetShieldDetectorPolicyActive(fleetEnabled, appSettingsRef.current?.policy?.lockedPaths)), detectorTriggers.faces, detectorTriggers.device, false, false, shield?.modelSize ?? "medium", shield?.confidenceThreshold ?? 0.5, shield?.blurOpacity ?? 200, shield?.wakeDelaySeconds ?? 150, shield?.deviceWakeMultiplier ?? 5, shield?.multiFaceWakeMultiplier ?? 5, shield?.detectionBufferFrames ?? 2, shield?.captureSpeed ?? 1, blurTriggers.gaze, blurTriggers.faces, blurTriggers.device, privacyShieldLookAwayDelay(shield, fleetShieldDelayPolicyActive(fleetEnabled, appSettingsRef.current?.policy?.lockedPaths), appSettingsRef.current?.app?.localPrivacyShieldLookAwayDelaySeconds));
         if (res.success) {
           await invoke("update_tray_shield_label", { running: true });
           recordDiagnostic({ operationId, feature: "privacy_shield", action: "tray_start", stage: "process",

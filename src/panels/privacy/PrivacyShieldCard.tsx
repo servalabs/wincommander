@@ -5,6 +5,7 @@ import { Button, Slider, Switch, Tooltip, Icon } from "@/components/ui/bp";
 import { Segmented } from "@/components/ui/segmented";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { useQuery } from "@tanstack/react-query";
 import { useState, useEffect, useCallback, useRef } from "react";
 import AIRuntimeInstaller from "./AIRuntimeInstaller";
 import useBackend, { executeBackendCommand } from "../../hooks/useBackend";
@@ -17,6 +18,7 @@ import PrivacyShieldIntro from "./PrivacyShieldIntro";
 import SectionCard from "../../components/shared/SectionCard";
 import { fleetShieldDelayPolicyActive, fleetShieldDetectorPolicyActive, privacyShieldDetectorGaze, privacyShieldBlurTriggers, privacyShieldLookAwayDelay, resolvePrivacyShieldMode, type PrivacyShieldMode } from "../../lib/privacyShieldMode";
 import {
+    localShieldFleetEnabled,
     resolveFleetPrivacyShieldControl,
     resolveLocalFleetPrivacyShieldControl,
 } from "../../lib/fleetPrivacyShieldControl";
@@ -92,11 +94,24 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
     // the connected server predates this field.
     const fleetShieldDesiredState = appSettings?.app?.fleet?.shieldDesiredState ?? null;
     const shieldSettings = appSettings?.ideal?.privacy?.privacyShield;
+    const cachedFleetEnabled = appSettings?.app?.fleet?.enabled === true;
+    const fleetBinding = useQuery({
+        queryKey: ["privacy-shield", "fleet-binding"],
+        queryFn: () => invoke("fleet_machine_trust_status"),
+        enabled: cachedFleetEnabled,
+        networkMode: "always",
+        refetchOnMount: "always",
+        refetchOnWindowFocus: "always",
+        refetchInterval: 15_000,
+        retry: false,
+    });
+    const fleetEnabled = localShieldFleetEnabled(cachedFleetEnabled,
+        fleetBinding.isSuccess && fleetBinding.isFetchedAfterMount ? fleetBinding.data : undefined);
     // This dedicated device state supersedes the old policy epoch. The card
     // must resolve it the same way as the supervisor, otherwise a freshly
     // delivered Fleet command can show stale mode and ownership locally.
     const fleetShieldControl = resolveFleetPrivacyShieldControl({
-        fleetEnabled: appSettings?.app?.fleet?.enabled === true,
+        fleetEnabled,
         legacyManaged: shieldSettings?.fleetManaged === true,
         legacyMonitoringEnabled: shieldSettings?.fleetMonitoringEnabled === true,
         desiredState: fleetShieldDesiredState,
@@ -113,7 +128,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
     // A Fleet policy controls whether it may start a session, but it must not
     // take over a session the local user had already started. Only the session
     // supervisor's explicit ownership receipt locks the local Stop control.
-    const fleetShieldSessionOwned = appSettings?.app?.fleet?.enabled === true
+    const fleetShieldSessionOwned = fleetEnabled
         && appSettings?.app?.fleet?.privacyShieldSessionOwned === true;
 
     const { density } = useVisibility();
@@ -588,6 +603,14 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
         }, 60_000);
         try {
             if (targetState) {
+                if (cachedFleetEnabled && !fleetEnabled) {
+                    const binding = await fleetBinding.refetch();
+                    if (!statusGate.current.canApplyAction(actionRevision)) return;
+                    if (localShieldFleetEnabled(true, binding.isSuccess ? binding.data : undefined)) {
+                        setStopError("Could not confirm local Privacy Shield control. Check Fleet status and try again.");
+                        return;
+                    }
+                }
                 // "notify_only" mode still runs full detection (so the Windows
                 // toast + fleet report fire normally) but suppresses the
                 // visual blur/black-out entirely, per the segmented toggle.
@@ -597,7 +620,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                     device: privacyConfig.blurOnCamera,
                 });
                 const res = await startPrivacyShield(
-                    0, privacyShieldDetectorGaze(privacyConfig.blurOnLookAway, shieldSettings, fleetShieldDetectorPolicyActive(appSettings?.app?.fleet?.enabled === true, appSettings?.policy?.lockedPaths)), privacyConfig.blurOnMultipleFaces, privacyConfig.blurOnCamera,
+                    0, privacyShieldDetectorGaze(privacyConfig.blurOnLookAway, shieldSettings, fleetShieldDetectorPolicyActive(fleetEnabled, appSettings?.policy?.lockedPaths)), privacyConfig.blurOnMultipleFaces, privacyConfig.blurOnCamera,
                     privacyConfig.captureOnDevice, privacyConfig.captureOnMultiFace, privacyConfig.modelLevel,
                     privacyConfig.confidence, privacyConfig.overlayOpacity, privacyConfig.wakeDelayMs,
                     privacyConfig.deviceWakeMultiplier, privacyConfig.multiFaceWakeMultiplier,
@@ -605,7 +628,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                     blurTriggers.gaze,
                     blurTriggers.faces,
                     blurTriggers.device,
-                    privacyShieldLookAwayDelay(shieldSettings, fleetShieldDelayPolicyActive(appSettings?.app?.fleet?.enabled === true, appSettings?.policy?.lockedPaths), appSettings?.app?.localPrivacyShieldLookAwayDelaySeconds),
+                    privacyShieldLookAwayDelay(shieldSettings, fleetShieldDelayPolicyActive(fleetEnabled, appSettings?.policy?.lockedPaths), appSettings?.app?.localPrivacyShieldLookAwayDelaySeconds),
                 );
                 if (res.success && res.data?.success === true) {
                     setCaptureDeliveryStatus(res.data.captureDeliveryStatus ?? null);
@@ -937,7 +960,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                                     <p className="text-[10px] text-[var(--shield-text-muted)]">
                                         Saved captures and incident details are in %LOCALAPPDATA%\WinCommander\shield_captures. Paste that path into File Explorer to view them. Captures older than 7 days are removed the next time Shield starts.
                                     </p>
-                                    {appSettings?.app?.fleet?.enabled === true && (
+                                    {fleetEnabled && (
                                         <ShieldOption label="Send incident captures to Fleet"
                                             tooltip="Uploads saved incident screenshots and webcam recordings to this device’s Fleet organization. Off by default; turning this off stops future uploads."
                                             checked={privacyConfig.sendIncidentCapturesToFleet}

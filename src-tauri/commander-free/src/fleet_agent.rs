@@ -723,6 +723,7 @@ pub async fn fleet_machine_trust_status() -> Result<serde_json::Value, String> {
     Ok(serde_json::json!({
         "trustBound": trust_bound,
         "shieldPolicyStatus": shield_policy_status,
+        "shieldLocalUnbound": service_confirms_local_shield_unbound(&response),
         "trustMatchesAgent": trust_matches_agent,
     }))
 }
@@ -2481,7 +2482,49 @@ pub(crate) async fn verify_service_shield_profile(
 ) -> Result<Option<(u32, bool, bool, bool)>, String> {
     let settings = crate::settings::read_settings()?;
     let response = service_shield_policy().await?;
-    verify_shield_profile_against_service(&settings, &response)?;
+    verified_shield_start_policy(&settings, &response)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LocalShieldStartProfile {
+    Unbound,
+    FleetBound(Option<(u32, bool, bool, bool)>),
+}
+
+pub(crate) async fn verify_local_shield_start_profile(
+    settings: &crate::settings::AppSettings,
+) -> Result<LocalShieldStartProfile, String> {
+    local_shield_start_profile(settings, &service_shield_policy().await?)
+}
+
+fn local_shield_start_profile(
+    settings: &crate::settings::AppSettings,
+    response: &Value,
+) -> Result<LocalShieldStartProfile, String> {
+    if response.get("trust_bound").and_then(Value::as_bool) == Some(false) {
+        if service_confirms_local_shield_unbound(response) {
+            return Ok(LocalShieldStartProfile::Unbound);
+        }
+        return Err("The WinCommander service returned inconsistent Fleet policy status. Repair the service, then try Shield again.".into());
+    }
+    verified_shield_start_policy(settings, response).map(LocalShieldStartProfile::FleetBound)
+}
+
+fn service_confirms_local_shield_unbound(response: &Value) -> bool {
+    // Older authenticated services could omit the generation fields, but supplied policy.
+    response.get("trust_bound").and_then(Value::as_bool) == Some(false)
+        && response.get("policy") == Some(&Value::Null)
+        && response.get("trust_generation").is_none_or(Value::is_null)
+        && response
+            .get("trust_generation_confirmed")
+            .is_none_or(|value| value.as_bool() == Some(false))
+}
+
+fn verified_shield_start_policy(
+    settings: &crate::settings::AppSettings,
+    response: &Value,
+) -> Result<Option<(u32, bool, bool, bool)>, String> {
+    verify_shield_profile_against_service(settings, response)?;
     // This is derived from the verified service envelope, not stale local
     // flags or a renderer-provided assertion.
     let Some(shield) = response.pointer("/policy/config/config_json/privacy/privacyShield") else {
@@ -6360,6 +6403,50 @@ mod tests {
             &json!({"trust_bound": false, "policy": null})
         )
         .is_err());
+    }
+
+    #[test]
+    fn local_shield_can_start_with_stale_fleet_settings_only_when_service_confirms_unbound() {
+        use super::LocalShieldStartProfile;
+
+        let (mut stale, _) = signed_shield_envelope();
+        stale.policy.master_config_version = Some(7);
+        stale.app.fleet.enabled = true;
+        let unbound = json!({
+            "trust_bound": false, "policy": null,
+            "trust_generation": null, "trust_generation_confirmed": false,
+        });
+        assert_eq!(
+            super::local_shield_start_profile(&stale, &unbound),
+            Ok(LocalShieldStartProfile::Unbound),
+        );
+        assert!(super::verify_shield_profile_against_service(&stale, &unbound).is_err());
+        for response in [
+            json!({"policy": null}),
+            json!({"trust_bound": false}),
+            json!({"trust_bound": false, "policy": {}}),
+            json!({"trust_bound": false, "policy": null, "trust_generation": "present"}),
+            json!({"trust_bound": false, "policy": null, "trust_generation_confirmed": true}),
+            json!({"trust_bound": true, "policy": null}),
+        ] {
+            assert!(super::local_shield_start_profile(&stale, &response).is_err());
+        }
+    }
+
+    #[test]
+    fn local_shield_on_a_bound_machine_requires_its_verified_fleet_epoch() {
+        use super::LocalShieldStartProfile;
+
+        let (mut settings, mut envelope) = signed_shield_envelope();
+        attach_signed_config(&mut envelope, 5);
+        let service = json!({"trust_bound": true, "policy": envelope});
+        settings.policy.master_config_version = Some(4);
+        assert!(super::local_shield_start_profile(&settings, &service).is_err());
+        settings.policy.master_config_version = Some(5);
+        assert_eq!(
+            super::local_shield_start_profile(&settings, &service),
+            Ok(LocalShieldStartProfile::FleetBound(None)),
+        );
     }
 
     #[test]

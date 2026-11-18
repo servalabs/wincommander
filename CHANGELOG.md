@@ -10,6 +10,12 @@ lists only a selection of those changes.
 
 ## Unreleased
 
+- Let Privacy Shield start locally when the Windows service confirms the
+  device is unbound, even if the profile still holds older Fleet settings.
+- Request Windows administrator approval when a split-token administrator
+  opens WinCommander. Standard users and administrators who decline can
+  continue with their current Windows permissions.
+
 - Start the verified Everything client when WinCommander opens and wait for
   its filename index during the first search if it is still loading. File
   Search shows filename and content index failures separately.

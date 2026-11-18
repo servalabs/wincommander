@@ -8901,7 +8901,9 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/panels/fleet/FleetConnectView.tsx"
+        "src/components/BackgroundPollers.tsx",
+        "src/panels/fleet/FleetConnectView.tsx",
+        "src/panels/privacy/PrivacyShieldCard.tsx"
       ]
     },
     {

@@ -1,5 +1,12 @@
 import type { PrivacyShieldMode } from "./privacyShieldMode";
 
+export function localShieldFleetEnabled(cachedEnabled: boolean, serviceStatus?: unknown): boolean {
+  if (!cachedEnabled) return false;
+  if (!serviceStatus || typeof serviceStatus !== "object") return true;
+  return !("trustBound" in serviceStatus && serviceStatus.trustBound === false
+    && "shieldLocalUnbound" in serviceStatus && serviceStatus.shieldLocalUnbound === true);
+}
+
 /**
  * Resolve the effective Fleet Privacy Shield instruction.
  *
