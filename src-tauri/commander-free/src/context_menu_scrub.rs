@@ -91,7 +91,7 @@ mod tests {
             source
                 .find("context_scrub_notification::run(paths)")
                 .unwrap()
-                < source.find("session_instance::acquire(&cli_args)").unwrap()
+                < source.find("session_instance::acquire(").unwrap()
         );
         assert!(!include_str!("context_menu_scrub.rs").contains(concat!("Message", "BoxW(")));
     }
