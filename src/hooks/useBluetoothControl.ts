@@ -85,7 +85,7 @@ export default function useBluetoothControl(isAdmin: boolean | null | undefined)
 
   const change = useCallback(async (blocked: boolean) => {
     if (operating.current) return;
-    if (!canChangeBluetooth(status, isAdmin)) {
+    if (!verified || !canChangeBluetooth(status, isAdmin)) {
       void showError(isAdmin !== true ? MACHINE_SCOPE_ELEVATION_MESSAGE : "Bluetooth policy cannot be changed until its current state and local service are verified. WinCommander will check again automatically.", undefined, { kind: "notification" }).catch(() => undefined);
       return;
     }
@@ -124,7 +124,7 @@ export default function useBluetoothControl(isAdmin: boolean | null | undefined)
       operating.current = false;
       if (mounted.current) { setBusy(false); void refresh(); }
     }
-  }, [confirm, isAdmin, refresh, reportStatus, status]);
+  }, [confirm, isAdmin, refresh, reportStatus, status, verified]);
 
-  return { status, busy, refreshing, verified, change };
+  return { status, busy, refreshing, verified, change, refresh };
 }

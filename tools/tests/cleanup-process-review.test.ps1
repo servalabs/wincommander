@@ -27,6 +27,7 @@ function Get-AuthenticodeSignature {
 }
 function Get-CimInstance { $null }
 function Get-CleanupProcessElevation { param([int]$ProcessId) if ($script:case -eq 'elevation-error') { throw 'Synthetic elevation denial' }; if ($script:case -eq 'unknown-elevation' -or $script:case -eq 'missing-path') { return 'Unknown' }; 'No' }
+function Get-CleanupProcessImagePath { param([int]$ProcessId, [long]$ExpectedCreationTime) if ($script:case -eq 'fallback-path' -and $ExpectedCreationTime -gt 0) { 'C:\synthetic\process.exe' } }
 $populated = Get-ProcessIntelligence
 if ($populated.error -or -not $populated.partial -or @($populated.processes).Count -ne 1 -or $populated.processes[0].name -ne 'synthetic.exe') {
     throw 'Process Review did not retain an incompletely inspected process.'
@@ -43,6 +44,15 @@ foreach ($case in @('valid', 'unsigned')) {
     if ($result.observedProcesses -ne 1 -or $result.unavailableDetails -ne 0 -or $result.coverage -ne 'complete') { throw 'Complete process coverage was mislabeled.' }
     if ($case -eq 'unsigned' -and $result.processes[0].signed -ne 'NotSigned') { throw 'Unsigned status was lost.' }
 }
+$script:case = 'fallback-path'
+function Get-Process { [CmdletBinding()] param() [pscustomobject]@{ Id = 42; ProcessName = 'synthetic.exe'; MainModule = $null; StartTime = [datetime]::UtcNow } }
+$fallback = Get-ProcessIntelligence
+if ($fallback.partial -or $fallback.processes[0].path -ne 'C:\synthetic\process.exe') { throw 'Limited-access path fallback did not recover process details.' }
+function Get-Process { [CmdletBinding()] param() [pscustomobject]@{ Id = 42; ProcessName = 'synthetic.exe'; MainModule = $null } }
+$unverified = Get-ProcessIntelligence
+if (-not $unverified.partial -or $unverified.processes[0].path) { throw 'A process without a creation time must not receive fallback path details.' }
+$script:case = 'missing-path'
+function Get-Process { [CmdletBinding()] param() throw [UnauthorizedAccessException]::new('Process inventory denied') }
 $script:denied = $true
 $failure = Get-ProcessIntelligence
 if (-not $failure.error -or $failure.message -notmatch 'denied') { throw 'Denied process enumeration appeared as a clean result.' }

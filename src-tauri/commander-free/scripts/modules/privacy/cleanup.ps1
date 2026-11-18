@@ -1595,26 +1595,74 @@ namespace WcCleanup {
     return 'Unknown'
 }
 
+function Get-CleanupProcessImagePath {
+    param([int]$ProcessId, [long]$ExpectedCreationTime)
+    if ($ExpectedCreationTime -le 0) { return $null }
+    try {
+        if (-not ('WcCleanup.ProcessImagePath' -as [type])) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+namespace WcCleanup {
+    public static class ProcessImagePath {
+        [StructLayout(LayoutKind.Sequential)]
+        private struct FILETIME { public uint Low; public uint High; }
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr OpenProcess(uint access, bool inheritHandle, int processId);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool GetProcessTimes(IntPtr process, out FILETIME creation, out FILETIME exit, out FILETIME kernel, out FILETIME user);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool QueryFullProcessImageName(IntPtr process, int flags, StringBuilder path, ref int size);
+        [DllImport("kernel32.dll")]
+        private static extern bool CloseHandle(IntPtr handle);
+        public static string Read(int processId, long expectedCreationTime) {
+            IntPtr process = OpenProcess(0x1000, false, processId);
+            if (process == IntPtr.Zero) return null;
+            try {
+                FILETIME creation, exit, kernel, user;
+                if (!GetProcessTimes(process, out creation, out exit, out kernel, out user)) return null;
+                long actualCreationTime = (long)(((ulong)creation.High << 32) | creation.Low);
+                if (actualCreationTime != expectedCreationTime) return null;
+                int size = 32768;
+                var path = new StringBuilder(size);
+                return QueryFullProcessImageName(process, 0, path, ref size) ? path.ToString() : null;
+            } finally { CloseHandle(process); }
+        }
+    }
+}
+'@ -ErrorAction Stop
+        }
+        return [WcCleanup.ProcessImagePath]::Read($ProcessId, $ExpectedCreationTime)
+    } catch { return $null }
+}
+
 function Get-ProcessIntelligence {
     $entries = [Collections.Generic.List[object]]::new()
     $partial = $false
     $unavailableDetails = 0
+    $skippedProcesses = 0
     try {
         $procs = @(Get-Process -ErrorAction Stop)
         foreach ($p in $procs) {
             try {
             $detailsIncomplete = $false
             $processId = $p.Id
-            if ($processId -le 0) { $partial = $true; continue }
+            if ($processId -le 0) { $partial = $true; $skippedProcesses++; continue }
             $processName = $p.ProcessName
-            if ([string]::IsNullOrWhiteSpace([string]$processName)) { $partial = $true; continue }
+            if ([string]::IsNullOrWhiteSpace([string]$processName)) { $partial = $true; $skippedProcesses++; continue }
+            $creationTime = 0
+            try { $creationTime = $p.StartTime.ToUniversalTime().ToFileTimeUtc() } catch { }
             $path = $null
             $sigStatus = "UnknownError"
             $signer = $null
             try {
                 $path = $p.MainModule.FileName
             }
-            catch { $partial = $true; $detailsIncomplete = $true }
+            catch { }
+            if ([string]::IsNullOrWhiteSpace([string]$path)) {
+                $path = Get-CleanupProcessImagePath -ProcessId $processId -ExpectedCreationTime $creationTime
+            }
             if ([string]::IsNullOrWhiteSpace([string]$path)) { $partial = $true; $detailsIncomplete = $true }
             if ($path -and (Test-Path -LiteralPath $path -ErrorAction SilentlyContinue)) {
                 try {
@@ -1648,10 +1696,10 @@ function Get-ProcessIntelligence {
                 signer   = $signer
                 elevated = $elevated
             })
-            } catch { $partial = $true }
+            } catch { $partial = $true; $skippedProcesses++ }
         }
-        $note = if ($partial) { 'Some process details are unavailable. Windows protects some system processes; processes can also exit during the scan.' } else { $null }
-        @{ processes = @($entries.ToArray()); observedProcesses = $entries.Count; unavailableDetails = $unavailableDetails; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; coverage = if ($partial) { 'limited' } else { 'complete' }; coverageNote = $note; message = $note }
+        $note = if ($partial) { "$unavailableDetails of $($entries.Count) listed processes have unavailable details; $skippedProcesses could not be listed. Windows protects some system processes; processes can also exit during the scan." } else { $null }
+        @{ processes = @($entries.ToArray()); observedProcesses = $entries.Count; unavailableDetails = $unavailableDetails; skippedProcesses = $skippedProcesses; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; coverage = if ($partial) { 'limited' } else { 'complete' }; coverageNote = $note; message = $note }
     }
     catch {
         @{ error = $true; message = "Failed to get process intelligence: $($_.Exception.Message)"; processes = @() }
@@ -4764,7 +4812,9 @@ function Get-CellularHistoryInfo {
                 $adapterInventoryComplete = $true
             } catch { $adapterInventoryComplete = $false }
             if ($adapterInventoryComplete -and $mobileAdapters.Count -eq 0) {
-                return @{ files = @(); total = 0; totalSizeMB = 0; interfaceCount = 0; noHardware = $true; partial = $false; status = 'not_applicable'; coverage = 'limited'; coverageNote = 'Windows reports no mobile broadband adapter. Saved profiles for disconnected devices could not be checked.'; message = 'No mobile broadband adapter is currently reported.' }
+                $service = Get-Service -Name 'WwanSvc' -ErrorAction SilentlyContinue
+                $serviceNote = if (-not $service) { ' The Windows Mobile Broadband service is unavailable.' } elseif ($service.Status -ne 'Running') { ' The Windows Mobile Broadband service is stopped.' } else { '' }
+                return @{ files = @(); total = 0; totalSizeMB = 0; interfaceCount = 0; noHardware = $true; mobileService = if (-not $service) { 'unavailable' } elseif ($service.Status -ne 'Running') { 'stopped' } else { 'running' }; partial = $false; status = 'not_applicable'; coverage = 'limited'; coverageNote = "Windows reports no mobile broadband adapter.$serviceNote Saved profiles for disconnected devices could not be checked. To use cellular, connect a cellular modem and install its driver; check the Windows Mobile Broadband service."; message = 'No mobile broadband adapter is currently reported.' }
             }
             $service = Get-Service -Name 'WwanSvc' -ErrorAction SilentlyContinue
             if (-not $service) { throw 'Windows Mobile Broadband service is unavailable; cellular profiles could not be checked.' }

@@ -93,9 +93,9 @@ function Get-PrivacyShieldRemoteSession {
 function Get-PrivacyShieldCameraAvailability {
     try {
         $devices = @()
-        $uncertain = $false
+        $inventoryIncomplete = $false
+        $hostCameraPresent = $false
         $isRemote = Get-PrivacyShieldRemoteSession
-        if ($null -eq $isRemote) { $uncertain = $true }
         # ProductType 2/3 means Windows Server. Fleet receives only this
         # coarse capability when Privacy Shield cannot use a camera there.
         $isWindowsServer = $false
@@ -104,32 +104,37 @@ function Get-PrivacyShieldCameraAvailability {
             $isWindowsServer = [int]$os.ProductType -ne 1
         } catch {}
 
-        foreach ($className in @("Camera", "Image")) {
+        foreach ($className in @('Camera', 'Image', 'Media', 'SoftwareDevice')) {
             try {
                 $found = @(Get-CimInstance -ClassName Win32_PnPEntity `
                     -Filter "PNPClass='$className'" `
                     -ErrorAction Stop)
                 foreach ($item in $found) {
+                    if ($item.Present -eq $false) { continue }
                     $cameraLike = $className -eq 'Camera' -or $item.Name -match '(?i)camera|webcam' -or $item.CompatibleID -match '(?i)USB\\Class_0E|VideoCapture'
-                    if (-not $cameraLike) { $uncertain = $true; continue }
-                    if ($item.Present -ne $true -or $item.Status -ne 'OK' -or $isRemote -ne $false) { $uncertain = $true; continue }
+                    if (-not $cameraLike) {
+                        if ($className -eq 'Image') { $inventoryIncomplete = $true }
+                        continue
+                    }
+                    if ($item.Present -ne $true) { $inventoryIncomplete = $true; continue }
+                    $hostCameraPresent = $true
+                    if ($item.Status -ne 'OK' -or $isRemote -ne $false) { continue }
                     # Do not send device names or IDs to the status consumer.
                     $devices += 'Camera source'
                 }
-            } catch { $uncertain = $true }
+            } catch { $inventoryIncomplete = $true }
         }
 
         $names = @($devices | Sort-Object -Unique)
         $video = if ($names.Count -eq 0) { Get-PrivacyShieldVideoSourceSummary } else { $null }
         if ($video -and $video.known -and $video.count -gt 0) { $names = @('Camera source') }
-        if ($names.Count -eq 0 -and ($isRemote -ne $false -or -not $video -or -not $video.known -or $video.access -ne 'Allowed')) { $uncertain = $true }
-        if ($names.Count -eq 0 -and -not $uncertain) {
-            # Generic media/software devices may expose a localized or virtual
-            # camera through a path not represented by the two CIM classes.
-            try {
-                $ambiguous = @(Get-PnpDevice -PresentOnly -ErrorAction Stop | Where-Object { $_.Class -in @('Media','SoftwareDevice') })
-                if ($ambiguous.Count -gt 0) { $uncertain = $true }
-            } catch { $uncertain = $true }
+        $cameraPresence = if ($names.Count -gt 0 -or ($hostCameraPresent -and $isRemote -eq $false)) {
+            'present'
+        } elseif (-not $hostCameraPresent -and -not $inventoryIncomplete) {
+            if ($isRemote -eq $false -and $video.known -and $video.access -eq 'Allowed') { 'absent' }
+            else { 'host_absent' }
+        } else {
+            'unknown'
         }
         $policyBlockers = @()
         try {
@@ -157,12 +162,12 @@ function Get-PrivacyShieldCameraAvailability {
             'app_camera_permission_denied'
         } elseif ($blockedByPolicy) {
             'windows_camera_policy_denied'
-        } elseif ($names.Count -eq 0 -and $uncertain) {
-            'unknown'
-        } elseif ($names.Count -eq 0) {
+        } elseif ($cameraPresence -eq 'absent') {
             'hardware_unavailable'
-        } else {
+        } elseif ($names.Count -gt 0) {
             'available'
+        } else {
+            'unknown'
         }
         $policyScope = if ($policyBlockers -match 'Your user') {
             'user'
@@ -171,13 +176,28 @@ function Get-PrivacyShieldCameraAvailability {
         } else {
             $null
         }
+        $cameraMessage = if ($cameraPresence -eq 'host_absent' -and $isRemote -eq $true) {
+            'No camera detected on this computer. Windows could not confirm a camera redirected into this remote session.'
+        } elseif ($cameraPresence -eq 'host_absent') {
+            'No camera device detected. Windows could not verify other video sources.'
+        } elseif ($cameraStatus -eq 'hardware_unavailable') {
+            'No camera detected.'
+        } elseif ($cameraStatus -eq 'available') {
+            'Camera available.'
+        } elseif (-not $blockedByPolicy) {
+            'Windows could not confirm an available camera. Check camera access, then recheck.'
+        }
+        if ($blockedByPolicy) {
+            $cameraMessage = ((@($cameraMessage) + ('Camera is blocked by Windows policy: ' + ($policyBlockers -join ' '))) -join ' ').Trim()
+        }
         @{
             available = if ($cameraStatus -eq 'unknown') { $null } else { ($names.Count -gt 0) -and -not $blockedByPolicy }
             devices   = $names
-            message   = if ($blockedByPolicy) { "Camera is blocked by Windows policy: " + ($policyBlockers -join ' ') } elseif ($names.Count -gt 0) { "Camera available." } elseif ($cameraStatus -eq 'unknown') { 'Camera status could not be confirmed. Check camera access and refresh.' } else { "No usable camera detected." }
+            message   = $cameraMessage
             blockedByPolicy = $blockedByPolicy
             policyBlockers = @($policyBlockers)
             cameraStatus = $cameraStatus
+            cameraPresence = $cameraPresence
             cameraPolicyScope = $policyScope
             isWindowsServer = $isWindowsServer
         }
@@ -185,7 +205,7 @@ function Get-PrivacyShieldCameraAvailability {
     catch {
         # Registry/WMI probe failures are not evidence that the hardware is
         # absent.  Keep the diagnosis honest and do not echo exception text.
-        @{ available = $null; devices = @(); message = 'Camera status could not be read.'; cameraStatus = 'unknown'; cameraPolicyScope = $null; isWindowsServer = $false }
+        @{ available = $null; devices = @(); message = 'Camera status could not be read.'; cameraStatus = 'unknown'; cameraPresence = 'unknown'; cameraPolicyScope = $null; isWindowsServer = $false }
     }
 }
 
@@ -399,11 +419,11 @@ function Get-PrivacyShieldStatus {
         # PS 7, so the fallback is not needed.
 
         $camera = if ($SkipCameraProbe -or ($processRunning -and -not $running)) {
-            @{ available = $null; devices = @(); message = ''; cameraStatus = 'unknown'; cameraPolicyScope = $null; isWindowsServer = $false }
+            @{ available = $null; devices = @(); message = ''; cameraStatus = 'unknown'; cameraPresence = 'unknown'; cameraPolicyScope = $null; isWindowsServer = $false }
         } elseif ($running) {
             # A ready detector has opened and sampled the actual camera.
             # Re-enumerating PnP on every poll adds delay and can contradict it.
-            @{ available = $true; devices = @('Camera source'); message = ''; cameraStatus = 'available'; cameraPolicyScope = $null; isWindowsServer = $false }
+            @{ available = $true; devices = @('Camera source'); message = ''; cameraStatus = 'available'; cameraPresence = 'present'; cameraPolicyScope = $null; isWindowsServer = $false }
         } else { Get-PrivacyShieldCameraAvailability }
         @{
             running         = $running
@@ -420,6 +440,7 @@ function Get-PrivacyShieldStatus {
             cameraMessage   = $camera.message
             cameraPolicyBlockers = @($camera.policyBlockers)
             cameraStatus = $camera.cameraStatus
+            cameraPresence = $camera.cameraPresence
             cameraPolicyScope = $camera.cameraPolicyScope
             shieldLifecycle = if ($running) { 'running' } elseif ($processRunning) { 'starting' } else { 'stopped' }
             isWindowsServer = [bool]$camera.isWindowsServer

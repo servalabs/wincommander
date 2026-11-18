@@ -1218,7 +1218,7 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
           <Icon icon="warning-sign" size={12} />
           <span>
             {isEngineMissingError(search.error)
-              ? fileSearchDiagnostic("service_unavailable").message
+              ? fileSearchDiagnostic("filename_unavailable").message
               : search.error}
           </span>
         </div>

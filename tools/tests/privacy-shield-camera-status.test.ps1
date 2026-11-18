@@ -4,7 +4,9 @@ $ErrorActionPreference = 'Stop'
 $script:cameraFixture = 'present'
 function Get-CimInstance {
     [CmdletBinding()] param([string]$ClassName, [string]$Filter)
-    if ($ClassName -eq 'Win32_OperatingSystem') { return [pscustomobject]@{ ProductType = 1 } }
+    if ($ClassName -eq 'Win32_OperatingSystem') {
+        return [pscustomobject]@{ ProductType = if ($script:cameraFixture -like 'server_*') { 3 } else { 1 } }
+    }
     if ($ClassName -eq 'Win32_Process') { return }
     if ($script:cameraFixture -eq 'wmi_failed') { throw 'fixture WMI failure' }
     if ($Filter -eq "PNPClass='Camera'" -and $script:cameraFixture -in @('present', 'blocked', 'remote_host_camera', 'remote_virtual')) {
@@ -13,10 +15,11 @@ function Get-CimInstance {
 }
 function Get-PrivacyShieldVideoSourceSummary {
     if ($script:cameraFixture -in @('virtual', 'remote_virtual')) { return @{ known=$true; count=1; access='Allowed' } }
-    if ($script:cameraFixture -eq 'restricted') { return @{ known=$true; count=0; access='DeniedByUser' } }
+    if ($script:cameraFixture -in @('restricted', 'server_restricted')) { return @{ known=$true; count=0; access='DeniedByUser' } }
+    if ($script:cameraFixture -eq 'server_api_unavailable') { return @{ known=$false; count=0; access='Unknown' } }
     return @{ known=$true; count=0; access='Allowed' }
 }
-function Get-PrivacyShieldRemoteSession { return ($script:cameraFixture -in @('remote_host_camera', 'remote_virtual')) }
+function Get-PrivacyShieldRemoteSession { return ($script:cameraFixture -like 'remote_*' -or $script:cameraFixture -like 'server_*') }
 function Get-PrivacyShieldPidFromMarker { return $null }
 function Get-PnpDevice {
     [CmdletBinding()] param([switch]$PresentOnly)
@@ -27,24 +30,32 @@ function Get-ItemProperty {
     if ($script:cameraFixture -eq 'blocked' -and $Name -eq 'AllowCamera') { return [pscustomobject]@{ AllowCamera=0 } }
     return $null
 }
-function Assert-Status($fixture, $expected, $available) {
+function Assert-Status($fixture, $expected, $available, $presence) {
     $script:cameraFixture = $fixture
     $result = Get-PrivacyShieldCameraAvailability
     if ($result.cameraStatus -ne $expected -or $result.available -ne $available) {
         throw "$fixture returned status $($result.cameraStatus), available $($result.available)"
     }
+    if ($result.cameraPresence -ne $presence) { throw "$fixture returned presence $($result.cameraPresence)" }
     if (@($result.devices) | Where-Object { $_ -ne 'Camera source' }) { throw 'Device details leaked' }
 }
 
-Assert-Status 'present' 'available' $true
-Assert-Status 'virtual' 'available' $true
-Assert-Status 'remote_host_camera' 'unknown' $null
-Assert-Status 'remote_virtual' 'available' $true
-Assert-Status 'absent' 'hardware_unavailable' $false
-Assert-Status 'wmi_failed' 'unknown' $null
-Assert-Status 'restricted' 'unknown' $null
-Assert-Status 'ambiguous' 'unknown' $null
-Assert-Status 'blocked' 'windows_camera_policy_denied' $false
+Assert-Status 'present' 'available' $true 'present'
+Assert-Status 'virtual' 'available' $true 'present'
+Assert-Status 'remote_host_camera' 'unknown' $null 'unknown'
+Assert-Status 'remote_virtual' 'available' $true 'present'
+Assert-Status 'absent' 'hardware_unavailable' $false 'absent'
+Assert-Status 'wmi_failed' 'unknown' $null 'unknown'
+Assert-Status 'restricted' 'unknown' $null 'host_absent'
+Assert-Status 'server_restricted' 'unknown' $null 'host_absent'
+Assert-Status 'server_api_unavailable' 'unknown' $null 'host_absent'
+Assert-Status 'ambiguous' 'hardware_unavailable' $false 'absent'
+Assert-Status 'blocked' 'windows_camera_policy_denied' $false 'present'
+$script:cameraFixture = 'server_restricted'
+$serverStatus = Get-PrivacyShieldStatus
+if (-not $serverStatus.isWindowsServer -or $serverStatus.cameraAvailable -ne $false -or $serverStatus.cameraStatus -ne 'unknown' -or $serverStatus.cameraPresence -ne 'host_absent' -or $serverStatus.cameraMessage -notmatch 'redirected') {
+    throw 'Server must report host absence without claiming the redirected camera was checked or relaxing the Fleet guard'
+}
 $script:cameraFixture = 'wmi_failed'
 $status = Get-PrivacyShieldStatus
 if ($status.cameraAvailable -ne $false -or $status.cameraStatus -ne 'unknown') {

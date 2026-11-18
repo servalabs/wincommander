@@ -2724,6 +2724,55 @@ impl VaultAccessStore {
             .unwrap_or_default())
     }
 
+    pub(crate) fn reservation_assignments(
+        &self,
+        caller_sid: &str,
+        caller_is_administrator: bool,
+    ) -> HashMap<String, (bool, Option<String>)> {
+        let Ok(state) = self.state.lock() else {
+            return HashMap::new();
+        };
+        if !state.access_directory_healthy
+            || state.status.validation_state != VaultValidationState::Current
+        {
+            return HashMap::new();
+        }
+        let mut assignments = HashMap::new();
+        let mut ambiguous = HashSet::new();
+        for entry in state.active.iter().flat_map(|active| &active.policy.entries) {
+            let Some(letter) = &entry.mount.preferred_letter else {
+                continue;
+            };
+            let key = letter.to_ascii_uppercase();
+            if ambiguous.contains(&key) {
+                continue;
+            }
+            if assignments.remove(&key).is_some() {
+                ambiguous.insert(key);
+                continue;
+            }
+            // Keep an unknown-owner entry in the map so a duplicate is still ambiguous.
+            let owner = entry.primary_owner_sid.as_deref().filter(|sid| valid_windows_sid(sid));
+            let assignment = owner.map(|sid| {
+                let is_caller = sid == caller_sid;
+                let name = (caller_is_administrator && !is_caller)
+                    .then_some(entry.owner_account.as_str())
+                    .filter(|name| {
+                        !name.trim().is_empty()
+                            && name.len() <= 256
+                            && !name.chars().any(char::is_control)
+                    })
+                    .map(str::to_string);
+                (is_caller, name)
+            });
+            assignments.insert(key, assignment);
+        }
+        assignments
+            .into_iter()
+            .filter_map(|(letter, assignment)| assignment.map(|assignment| (letter, assignment)))
+            .collect()
+    }
+
     /// The policy directory is already created and ACL-verified by the
     /// SYSTEM policy store. Active-mount state therefore uses the same atomic
     /// filesystem seam rather than an ad-hoc user-writable registry.
@@ -8538,6 +8587,25 @@ mod tests {
         restarted.load_at_startup();
         assert!(restarted.reserved_letter_conflicts_with_container("V", "different-container"));
         assert!(!restarted.reserved_letter_conflicts_with_container("V", &identity));
+    }
+
+    #[test]
+    fn reservation_report_keeps_another_accounts_name_admin_only() {
+        let store = store(Arc::new(Mutex::new(HashMap::new())));
+        store.apply(policy(1, 0), 7).unwrap();
+        let owner = "S-1-5-21-1-2-3-1001";
+        let other = "S-1-5-21-1-2-3-1002";
+        {
+            let mut state = store.state.lock().unwrap();
+            let entry = &mut state.active.as_mut().unwrap().policy.entries[0];
+            entry.primary_owner_sid = Some(owner.to_string());
+        }
+        assert_eq!(store.reservation_assignments(other, false)["V"], (false, None));
+        assert_eq!(
+            store.reservation_assignments(other, true)["V"],
+            (false, Some("Admin".into()))
+        );
+        assert_eq!(store.reservation_assignments(owner, false)["V"], (true, None));
     }
 
     #[test]

@@ -3856,7 +3856,14 @@ fn handle_release_orphaned_vault_drive_letters(
     let peer = require_personal_mount_peer(peer)?;
     vault_mount.with_exclusive_operation(|| {
         crate::personal_settings::with_quick_mount_letters(peer.caller_sid(), |saved| {
-            vault_mount.cleanup_owned_letters_locked(vault_access, peer.caller_sid(), peer.session_id(), peer.authentication_id(), &saved)
+            vault_mount.cleanup_owned_letters_locked(
+                vault_access,
+                peer.caller_sid(),
+                peer.session_id(),
+                peer.authentication_id(),
+                &saved,
+                token_is_privileged(peer.token()).unwrap_or(false),
+            )
         }).map_err(|_| VerbError::new("vault_drive_letter_cleanup_failed", "Drive ownership, saved shortcuts or Windows state could not be verified. No volume was dismounted."))
     })
 }

@@ -3,7 +3,7 @@ $source = Join-Path $PSScriptRoot '..\..\src-tauri\commander-free\scripts\module
 $tokens = $null; $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $source).Path, [ref]$tokens, [ref]$errors)
 if ($errors.Count) { throw 'Could not parse cleanup module.' }
-foreach ($name in @('Get-CleanupProcessElevation', 'Get-ProcessIntelligence')) {
+foreach ($name in @('Get-CleanupProcessElevation', 'Get-CleanupProcessImagePath', 'Get-ProcessIntelligence')) {
     $definition = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
     . ([scriptblock]::Create($definition.Extent.Text))
 }
@@ -15,6 +15,11 @@ $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.Wind
 $expected = if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { 'Yes' } else { 'No' }
 if ($ownElevation -ne $expected) { throw 'Current process token elevation did not match the Windows identity.' }
 if ((Get-CleanupProcessElevation -ProcessId -1) -ne 'Unknown') { throw 'An inaccessible process must have unknown elevation.' }
+$creationTime = (Get-Process -Id $PID).StartTime.ToUniversalTime().ToFileTimeUtc()
+if (-not (Get-CleanupProcessImagePath -ProcessId $PID -ExpectedCreationTime $creationTime)) { throw 'Limited-access query could not read the current process path.' }
+if (Get-CleanupProcessImagePath -ProcessId $PID -ExpectedCreationTime ($creationTime + 1)) { throw 'A recycled process ID must not be attributed to the earlier process.' }
+if (Get-CleanupProcessImagePath -ProcessId $PID -ExpectedCreationTime 0) { throw 'A process without a verified creation time must not be assigned a path.' }
+if (Get-CleanupProcessImagePath -ProcessId -1 -ExpectedCreationTime $creationTime) { throw 'An inaccessible process must not have an invented path.' }
 
 # Validate output mapping and ensure inaccessible tokens are not called No.
 function Get-CleanupProcessElevation { param([int]$ProcessId) switch ($ProcessId) { 1 { 'Yes' } 2 { 'No' } default { 'Unknown' } } }

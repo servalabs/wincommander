@@ -36,7 +36,7 @@ impl Executor for Fake {
 }
 
 fn healthy() -> Result<Vec<u8>, Failure> {
-    Ok(b"1.4.1.1026\r\n".to_vec())
+    Ok(b"1\r\n".to_vec())
 }
 fn query() -> Vec<String> {
     vec!["-timeout".into(), "4000".into(), "invoice".into()]
@@ -70,8 +70,8 @@ async fn healthy_query_is_not_gated_by_a_slow_version_probe_under_pressure() {
     impl Executor for Pressure {
         async fn run(&self, args: &[String], _: Duration) -> Result<Vec<u8>, Failure> {
             if args
-                .first()
-                .is_some_and(|arg| arg == "-get-everything-version")
+                .iter()
+                .any(|arg| arg == "-get-result-count")
             {
                 Err(Failure::Timeout)
             } else {
@@ -110,7 +110,7 @@ async fn missing_ipc_starts_and_waits_for_readiness_before_query() {
     assert_eq!(calls[0], query());
     assert!(calls[1..4]
         .iter()
-        .all(|args| args == &["-get-everything-version"]));
+        .all(|args| args == &DATABASE_PROBE));
     assert_eq!(calls[4], query());
 }
 
@@ -132,7 +132,7 @@ async fn stopped_service_and_denied_start_never_become_empty_results() {
 async fn persistently_unresponsive_engine_has_bounded_readiness_attempts() {
     let engine = Fake::new(
         std::iter::once(Err(Failure::Unavailable))
-            .chain((0..5).map(|_| Err(Failure::Timeout)))
+            .chain((0..=READINESS_ATTEMPTS).map(|_| Err(Failure::Timeout)))
             .collect(),
         true,
     );
@@ -141,14 +141,14 @@ async fn persistently_unresponsive_engine_has_bounded_readiness_attempts() {
         Err(UNAVAILABLE.into())
     );
     assert_eq!(engine.starts.get(), 1);
-    assert_eq!(engine.calls.borrow().len(), 6);
+    assert_eq!(engine.calls.borrow().len(), READINESS_ATTEMPTS + 2);
     assert!(engine.replies.borrow().is_empty());
 }
 
 #[tokio::test]
-async fn blocked_cross_integrity_ipc_zero_version_is_not_ready() {
+async fn version_reply_does_not_prove_database_readiness() {
     let engine = Fake::new(
-        vec![Err(Failure::Unavailable), Ok(b"0.0.0.0\r\n".to_vec())],
+        vec![Err(Failure::Unavailable), Ok(b"1.4.1.1032\r\n".to_vec())],
         false,
     );
     assert_eq!(
@@ -213,6 +213,18 @@ async fn invalid_cli_is_not_retried_as_missing_engine() {
         Err("invalid switch".into())
     );
     assert_eq!(engine.starts.get(), 0);
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn pending_launch_keeps_database_readiness_polling() {
+    let (finish, pending) = tokio::sync::oneshot::channel();
+    let launch = tokio::spawn(async { pending.await.unwrap_or(false) });
+    assert!(launch_can_be_pending(launch, Duration::from_millis(5)).await);
+    assert!(finish.send(true).is_ok());
+
+    let rejected = tokio::spawn(async { false });
+    assert!(!launch_can_be_pending(rejected, Duration::from_secs(1)).await);
 }
 
 #[cfg(windows)]

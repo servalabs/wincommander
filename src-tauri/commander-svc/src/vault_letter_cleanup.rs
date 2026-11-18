@@ -50,8 +50,9 @@ impl VaultMountBroker {
         session: u32,
         logon: (u32, i32),
         saved: &[String],
+        caller_is_administrator: bool,
     ) -> Result<serde_json::Value, &'static str> {
-        self.cleanup_owned_letters_with(
+        let mut result = self.cleanup_owned_letters_with(
             store,
             sid,
             session,
@@ -86,7 +87,38 @@ impl VaultMountBroker {
                     (self.private_alias_cleanup)(mount) == Ok(true)
                 }
             },
-        )
+        )?;
+        let Some(reports) = result["letters"].as_array_mut() else {
+            return Ok(result);
+        };
+        let mapping_letters = reports
+            .iter()
+            .filter_map(external_letter)
+            .collect::<HashSet<_>>();
+        let mappings = if mapping_letters.is_empty() {
+            HashMap::new()
+        } else {
+            crate::vault_drive_letters::session_drive_mappings(logon, sid, session, &mapping_letters)
+                .unwrap_or_default()
+        };
+        let assignments = store.reservation_assignments(sid, caller_is_administrator);
+        for report in reports {
+            if let Some(mapping) = external_letter(report).and_then(|letter| mappings.get(&letter)) {
+                report["windows_mapping"] = serde_json::json!(mapping);
+            }
+            if report["vault_policy_reservation"] == true {
+                let assignment = report["letter"]
+                    .as_str()
+                    .and_then(|letter| assignments.get(letter));
+                if let Some((is_caller, name)) = assignment {
+                    report["vault_policy_owner_is_caller"] = serde_json::json!(is_caller);
+                    if let Some(name) = name {
+                        report["vault_policy_owner"] = serde_json::json!(name);
+                    }
+                }
+            }
+        }
+        Ok(result)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -177,10 +209,21 @@ impl VaultMountBroker {
                     kind = Category::ExternalOrUnknownOwner;
                 }
             }
-            reports.push(
-                serde_json::json!({ "letter": key, "category": kind, "released": was_released,
-                "saved_entry": saved_count > 0 }),
-            );
+            let mut report = serde_json::json!({ "letter": key, "category": kind, "released": was_released,
+                "saved_entry": saved_count > 0, "vault_policy_reservation": policy.contains(&key) });
+            if kind == Category::ActiveWincommanderMount
+                && matches!(mounts.as_slice(), [(_, mount)]
+                    if mount.personal
+                        && mount.presentation == VaultPresentation::PerUser
+                        && mount.caller_sid != sid
+                        && !mount.cleanup_required
+                        && mount.engine_mount_identity.as_ref().is_some_and(|identity| {
+                            snapshot.get(&mount.internal_drive) == Some(identity)
+                        }))
+            {
+                report["other_account_personal_vault"] = serde_json::json!(true);
+            }
+            reports.push(report);
         }
         // The returned availability is another observation, never the old query cache.
         let mut unavailable = self
@@ -193,6 +236,13 @@ impl VaultMountBroker {
             serde_json::json!({ "released": released, "letters": reports, "unavailable_letters": unavailable }),
         )
     }
+}
+
+fn external_letter(report: &serde_json::Value) -> Option<char> {
+    if report["category"] != "external_or_unknown_owner" {
+        return None;
+    }
+    report["letter"].as_str()?.chars().next()
 }
 
 #[cfg(test)]

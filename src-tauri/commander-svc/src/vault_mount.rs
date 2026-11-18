@@ -4408,6 +4408,8 @@ mod tests {
             "live",
             "missing_logon",
             "foreign_owner",
+            "foreign_personal_live",
+            "foreign_personal_replaced",
             "sync_recovery",
             "saved",
             "duplicate",
@@ -4425,14 +4427,18 @@ mod tests {
             let mut mount = active_mount_for_owner(7, "owner");
             mount.authentication_id = Some((42, 0));
             mount.presentation = VaultPresentation::PerUser;
-            if case == "live" {
+            if matches!(case, "live" | "foreign_personal_live") {
                 broker.engine_snapshot = Some(|| Ok(HashMap::from([(12, "test-mount:12".into())])));
+            }
+            if case == "foreign_personal_replaced" {
+                broker.engine_snapshot = Some(|| Ok(HashMap::from([(12, "another-mount:12".into())])));
             }
             if case == "missing_logon" {
                 mount.authentication_id = None;
             }
-            if case == "foreign_owner" {
+            if matches!(case, "foreign_owner" | "foreign_personal_live" | "foreign_personal_replaced") {
                 mount.caller_sid = "other-owner".into();
+                mount.personal = case != "foreign_owner";
             }
             if case == "sync_recovery" {
                 mount.syncthing_resume_unresolved = true;
@@ -4476,14 +4482,20 @@ mod tests {
                 case == "stale",
                 "{case}"
             );
-            if case == "alias_unknown" {
+            if matches!(case, "alias_unknown" | "foreign_personal_live" | "foreign_personal_replaced") {
                 let report = result["letters"]
                     .as_array()
                     .unwrap()
                     .iter()
                     .find(|report| report["letter"] == "V")
                     .unwrap();
-                assert_eq!(report["category"], "external_or_unknown_owner");
+                if case == "alias_unknown" {
+                    assert_eq!(report["category"], "external_or_unknown_owner");
+                } else if case == "foreign_personal_live" {
+                    assert_eq!(report["other_account_personal_vault"], true);
+                } else {
+                    assert!(report.get("other_account_personal_vault").is_none());
+                }
             }
             if !matches!(case, "stale" | "alias_unknown" | "persistence_failed") {
                 assert_eq!(cleanup_calls, 0, "{case}");

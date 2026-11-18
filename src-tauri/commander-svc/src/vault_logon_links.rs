@@ -9,6 +9,9 @@ pub(crate) use liveness::logon_ended;
 mod native;
 #[path = "vault_logon_links_scope.rs"]
 mod scope;
+#[path = "vault_logon_drive_report.rs"]
+mod drive_report;
+pub(crate) use drive_report::session_drive_mappings;
 #[cfg(test)]
 #[path = "vault_logon_links_tests.rs"]
 mod tests;

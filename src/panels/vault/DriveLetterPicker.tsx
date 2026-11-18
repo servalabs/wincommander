@@ -127,6 +127,7 @@ export default function DriveLetterPicker({
           </select>}
           {onRefresh && <Button minimal disabled={loading || releasingOrphaned} onClick={onRefresh}>Refresh free letters</Button>}
           {onReleaseOrphaned && <Button minimal disabled={loading || releasingOrphaned} loading={releasingOrphaned} onClick={onReleaseOrphaned}>Check and free unavailable Vault letters</Button>}
+          {onReleaseOrphaned && <p className="mount-target-hint">Only free letters from D: to Z: can be selected for a Vault. A: and B: are outside the supported range, even when unused.</p>}
           {loading && <p role="status" className="mount-target-hint">Checking available drive letters…</p>}
           {!loading && unavailable && <VaultOperationNotice message="Free drive letters could not be checked. Refresh the list before continuing." />}
           {!loading && !unavailable && choices.length === 0 && <VaultOperationNotice message="No free drive letters are available. Refresh after a drive letter becomes free." />}

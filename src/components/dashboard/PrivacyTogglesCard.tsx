@@ -1,4 +1,4 @@
-import { Camera, CameraOff, Mic, MicOff, Globe, GlobeLock, VideoOff } from "lucide-react";
+import { Camera, CameraOff, Mic, MicOff, Globe, GlobeLock } from "lucide-react";
 import RadarControlStrip from "./RadarControlStrip";
 import BluetoothControl from "./BluetoothControl";
 import { cameraDisplayState, type CameraPresence } from "../../hooks/cameraPresenceProbe";
@@ -6,6 +6,7 @@ import { cameraDisplayState, type CameraPresence } from "../../hooks/cameraPrese
 interface PrivacyTogglesCardProps {
   cameraBlocked?: boolean | null;
   cameraPresence?: CameraPresence;
+  cameraMixed?: boolean;
   microphoneBlocked?: boolean;
   capabilityPending?: "webcam" | "microphone" | null;
   onCapabilityToggle?: (capability: "webcam" | "microphone", blocked: boolean) => void;
@@ -25,6 +26,7 @@ interface PrivacyTogglesCardProps {
 export default function PrivacyTogglesCard({
   cameraBlocked = null,
   cameraPresence = "unknown",
+  cameraMixed = false,
   microphoneBlocked = false,
   capabilityPending = null,
   onCapabilityToggle,
@@ -33,30 +35,22 @@ export default function PrivacyTogglesCard({
   onToggleInternet,
 }: PrivacyTogglesCardProps) {
   const cameraState = cameraDisplayState(cameraPresence, cameraBlocked);
+  const cameraPresenceLabel = cameraPresence === "absent" ? "NO CAM" : cameraPresence === "host_absent" ? "NO HOST CAM" : null;
+  const cameraPresenceDescription = {
+    present: "Camera detected",
+    absent: "No camera detected",
+    host_absent: "No camera detected on this computer. Windows could not verify other video sources",
+    unknown: "Camera presence could not be confirmed",
+  }[cameraPresence];
   return (
     <div className="privacy-toggles-card">
       <div className="ptc-toggles">
         <div className="ptc-title">PRIVACY</div>
         <div className="dashboard-capability-toggles">
-          {cameraState === "absent" ? (
-            <button
-              type="button"
-              className="dashboard-capability-toggle no-device"
-              disabled
-              title="No camera detected on this device"
-            >
-              <VideoOff size={12} />
-              NO CAM
-            </button>
-          ) : cameraState === "unknown" ? (
-            <button
-              type="button"
-              className="dashboard-capability-toggle no-device"
-              disabled
-              title={cameraPresence === "unknown" ? "Camera presence could not be confirmed" : "Camera access is being checked"}
-            >
-              <Camera size={12} />
-              CAM ?
+          {cameraState === "unknown" ? (
+            <button type="button" className="dashboard-capability-toggle no-device" disabled
+              title={`Camera access could not be confirmed. ${cameraPresenceDescription}.`}>
+              <Camera size={12} /> {cameraPresenceLabel ?? "CAM CHECK"}
             </button>
           ) : (
             <button
@@ -64,12 +58,11 @@ export default function PrivacyTogglesCard({
               className={`dashboard-capability-toggle ${cameraBlocked ? "active" : ""}`}
               onClick={() => onCapabilityToggle?.("webcam", !cameraBlocked)}
               disabled={!onCapabilityToggle || capabilityPending === "webcam"}
-              title={cameraPresence === "unknown"
-                ? `Camera access ${cameraBlocked ? "blocked" : "allowed"}; camera presence could not be confirmed. Individual app permissions may differ.`
-                : cameraBlocked ? "Camera access blocked — click to allow" : "Device camera access allowed — individual app permissions may differ"}
+              title={`${cameraBlocked ? "Camera access blocked. Select to allow" : cameraMixed ? "Camera permissions differ between apps. Select to block" : "Camera access allowed. Select to block"}. ${cameraPresenceDescription}.`}
             >
               {cameraBlocked ? <CameraOff size={12} /> : <Camera size={12} />}
-              CAM {cameraBlocked ? "OFF" : "ON"}
+              CAM {cameraBlocked ? "OFF" : cameraMixed ? "MIXED" : "ON"}
+              {cameraPresenceLabel && <span> · {cameraPresenceLabel}</span>}
             </button>
           )}
           <button

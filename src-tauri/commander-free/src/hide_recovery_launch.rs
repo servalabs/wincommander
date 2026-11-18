@@ -87,7 +87,18 @@ pub(crate) fn verify_interactive_user() -> Result<(), String> {
 }
 
 pub(crate) fn launch(exe: &Path, shortcut: &str) -> Result<(), String> {
+    launch_with_shell(exe, &format!("--hide-recovery-update \"{shortcut}\""), true)
+}
+
+pub(crate) fn launch_everything(exe: &Path) -> Result<(), String> {
+    launch_with_shell(exe, "-startup -first-instance", false)
+}
+
+fn launch_with_shell(exe: &Path, args: &str, wait: bool) -> Result<(), String> {
     let shell = interactive_shell()?;
+    if !wait && crate::process_privileges::query_elevation(user_token(shell.0)?.0)? {
+        return Err("The interactive shell is elevated".into());
+    }
     let mut bytes = 0;
     unsafe { InitializeProcThreadAttributeList(ptr::null_mut(), 1, 0, &mut bytes) };
     if bytes == 0 {
@@ -114,14 +125,10 @@ pub(crate) fn launch(exe: &Path, shortcut: &str) -> Result<(), String> {
             return Err("Could not select the interactive shell token".into());
         }
         let path: Vec<u16> = exe.as_os_str().encode_wide().chain(Some(0)).collect();
-        let command: Vec<u16> = OsStr::new(&format!(
-            "\"{}\" --hide-recovery-update \"{}\"",
-            exe.display(),
-            shortcut
-        ))
-        .encode_wide()
-        .chain(Some(0))
-        .collect();
+        let command: Vec<u16> = OsStr::new(&format!("\"{}\" {args}", exe.display()))
+            .encode_wide()
+            .chain(Some(0))
+            .collect();
         let mut command = command;
         let mut info = STARTUPINFOEXW::default();
         info.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
@@ -146,6 +153,10 @@ pub(crate) fn launch(exe: &Path, shortcut: &str) -> Result<(), String> {
         }
         unsafe {
             CloseHandle(process.hThread);
+        }
+        if !wait {
+            unsafe { CloseHandle(process.hProcess) };
+            return Ok(());
         }
         let status = unsafe { WaitForSingleObject(process.hProcess, 10_000) };
         let mut code = 1;

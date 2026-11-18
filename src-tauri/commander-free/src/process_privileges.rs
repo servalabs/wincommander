@@ -2,7 +2,7 @@
 //! Read the desktop process token without inferring privileges from its account.
 
 #[cfg(windows)]
-fn query_elevation(token: windows_sys::Win32::Foundation::HANDLE) -> Result<bool, String> {
+pub(crate) fn query_elevation(token: windows_sys::Win32::Foundation::HANDLE) -> Result<bool, String> {
     use windows_sys::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION};
     let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
     let mut returned = 0;

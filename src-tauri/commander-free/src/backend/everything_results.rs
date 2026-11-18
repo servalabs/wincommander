@@ -24,9 +24,13 @@ pub(super) async fn search(
     limit: usize,
     mut policy: PublicSearchPolicy,
 ) -> Result<EsResponse, String> {
+    let mut pages = VisiblePages::new(limit);
+    let first_args = build_page_args(&args, 0, pages.page_size);
+    // Cold startup has its own readiness budget before the bounded page scan.
+    let first = run_es_with_daemon_retry(&executable, &first_args, ES_SEARCH_TIMEOUT).await?;
     let deadline = Instant::now() + ES_SEARCH_TIMEOUT;
     let traversal_deadline = deadline - FINAL_POLICY_BUDGET;
-    let mut pages = VisiblePages::new(limit);
+    (pages, policy) = accept_page(traversal_deadline, pages, policy, first).await?;
     while pages.needs_page() {
         let Some(remaining) = traversal_deadline.checked_duration_since(Instant::now()) else {
             pages.provider_timed_out()?;
@@ -46,19 +50,28 @@ pub(super) async fn search(
                 break;
             }
         };
-        (pages, policy) = privacy_task(traversal_deadline, move || {
-            let response = parse_es_output(stdout, String::new())?;
-            pages.add_page(
-                response.results,
-                |row| policy.allows(Path::new(&row.full_path), observe_search_volume),
-                || Instant::now() < traversal_deadline,
-            );
-            Ok::<_, String>((pages, policy))
-        })
-        .await?;
+        (pages, policy) = accept_page(traversal_deadline, pages, policy, stdout).await?;
     }
     privacy_task(deadline, move || {
         pages.finish(query, search_policy_unchanged(&policy))
+    })
+    .await
+}
+
+async fn accept_page(
+    deadline: Instant,
+    mut pages: VisiblePages,
+    mut policy: PublicSearchPolicy,
+    stdout: Vec<u8>,
+) -> Result<(VisiblePages, PublicSearchPolicy), String> {
+    privacy_task(deadline, move || -> Result<_, String> {
+        let response = parse_es_output(stdout, String::new())?;
+        pages.add_page(
+            response.results,
+            |row| policy.allows(Path::new(&row.full_path), observe_search_volume),
+            || Instant::now() < deadline,
+        );
+        Ok((pages, policy))
     })
     .await
 }

@@ -113,5 +113,7 @@ describe("Privacy Shield verified status", () => {
     expect(shouldProbeShieldCamera(100_000, 103_000, false)).toBe(false);
     expect(shouldProbeShieldCamera(100_000, 129_999, false)).toBe(false);
     expect(shouldProbeShieldCamera(100_000, 130_000, false)).toBe(true);
+    expect(shouldProbeShieldCamera(100_000, 200_000, false, true)).toBe(false);
+    expect(shouldProbeShieldCamera(100_000, 200_000, true, true)).toBe(true);
   });
 });

@@ -3,6 +3,8 @@ use std::process::Stdio;
 use std::time::Duration;
 
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(1);
+const READINESS_ATTEMPTS: usize = 16;
+const DATABASE_PROBE: [&str; 6] = ["-timeout", "500", "-n", "1", "-get-result-count", "*"];
 const UNAVAILABLE: &str = "Filename search engine is still loading or not responding. Wait for Everything to finish indexing, then retry the search. If this continues, start the Everything service and reopen Everything under this Windows account.";
 const QUERY_TIMEOUT: &str =
     "Filename search timed out. The engine is responding; try a narrower query or fewer filters.";
@@ -22,19 +24,10 @@ trait Executor {
 }
 
 async fn probe(executor: &impl Executor) -> Result<(), Failure> {
-    let bytes = executor
-        .run(&["-get-everything-version".into()], HEALTH_TIMEOUT)
-        .await?;
-    // A blocked cross-integrity Windows message can print 0.0.0.0 with exit 0.
-    let version = String::from_utf8_lossy(&bytes);
-    if version
-        .trim()
-        .split('.')
-        .next()
-        .and_then(|n| n.parse::<u32>().ok())
-        .unwrap_or(0)
-        == 0
-    {
+    let args = DATABASE_PROBE.map(str::to_owned);
+    let bytes = executor.run(&args, HEALTH_TIMEOUT).await?;
+    // Everything can answer a version probe before its database accepts queries.
+    if !matches!(String::from_utf8_lossy(&bytes).trim(), "0" | "1") {
         return Err(Failure::Unavailable);
     }
     Ok(())
@@ -48,7 +41,7 @@ async fn ready(executor: &impl Executor) -> Result<(), String> {
     }
     if executor.recover().await {
         // Poll readiness, not a blind delay followed by a successful empty query.
-        for _ in 0..4 {
+        for _ in 0..READINESS_ATTEMPTS {
             executor.pause().await;
             match probe(executor).await {
                 Ok(()) => return Ok(()),
@@ -142,25 +135,37 @@ impl Executor for ProcessExecutor<'_> {
     }
 
     async fn recover(&self) -> bool {
-        let Ok(_guard) = tokio::time::timeout(HEALTH_TIMEOUT, START_LOCK.lock()).await else {
-            return false;
-        };
-        // Another search may have started the same-session client while we waited.
-        if probe(self).await.is_ok() {
-            return true;
+        #[cfg(not(windows))]
+        return false;
+        #[cfg(windows)]
+        {
+            let Ok(_guard) = tokio::time::timeout(HEALTH_TIMEOUT, START_LOCK.lock()).await else {
+                return false;
+            };
+            // Another search may have started the same-session client while we waited.
+            if probe(self).await.is_ok() {
+                return true;
+            }
+            // Existing token only: no elevation, service reconfiguration or restarts.
+            // A denied start still allows an already-running service/client to recover.
+            let service = tokio::task::spawn_blocking(start_existing_service);
+            let _ = tokio::time::timeout(HEALTH_TIMEOUT, service).await;
+            let startup = tokio::task::spawn_blocking(super::everything_startup::start);
+            launch_can_be_pending(startup, HEALTH_TIMEOUT).await
         }
-        // Existing token only: no elevation, service reconfiguration or restarts.
-        // A denied start still allows an already-running service/client to recover.
-        let service = tokio::task::spawn_blocking(start_existing_service);
-        let _ = tokio::time::timeout(HEALTH_TIMEOUT, service).await;
-        let startup = tokio::task::spawn_blocking(super::try_start_everything_daemon);
-        tokio::time::timeout(HEALTH_TIMEOUT, startup)
-            .await
-            .is_ok_and(|r| r.unwrap_or(false))
     }
 
     async fn pause(&self) {
         tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
+#[cfg(windows)]
+async fn launch_can_be_pending(launch: tokio::task::JoinHandle<bool>, deadline: Duration) -> bool {
+    // A blocking signature check continues after its initial wait expires.
+    match tokio::time::timeout(deadline, launch).await {
+        Ok(result) => result.unwrap_or(false),
+        Err(_) => true,
     }
 }
 
@@ -184,9 +189,6 @@ fn start_existing_service() {
         CloseServiceHandle(manager);
     }
 }
-
-#[cfg(not(windows))]
-fn start_existing_service() {}
 
 #[cfg(test)]
 #[path = "everything_engine_tests.rs"]

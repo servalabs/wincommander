@@ -19,8 +19,8 @@ export function verifiedShieldStatus(value: unknown): VerifiedShieldStatus | nul
   };
 }
 
-export function shouldProbeShieldCamera(lastProbeAt: number, now: number, force: boolean): boolean {
-  return force || lastProbeAt === 0 || now - lastProbeAt >= 30_000;
+export function shouldProbeShieldCamera(lastProbeAt: number, now: number, force: boolean, cameraAbsent = false): boolean {
+  return force || (!cameraAbsent && (lastProbeAt === 0 || now - lastProbeAt >= 30_000));
 }
 
 export function hasVerifiedRunningDetector(response: { success: boolean; data?: { running?: boolean; detectorProcessRunning?: boolean; shieldLifecycle?: string; error?: boolean | null } }): boolean {

@@ -217,13 +217,15 @@ export function summarizeCleanupResult(input: { id: string; count: number; items
   if (raw?.partial === true || raw?.complete === false || raw?.status === "partial" || raw?.coverage === "partial" || raw?.accessDenied === true) {
     const observed = observedProcessRows(input.id, raw);
     const records = observedPartialRows(input.id, raw);
-    return { ...base, state: "partial", count: null, message: observed !== null ? `${observed} ${observed === 1 ? "process" : "processes"} observed` : records !== null ? `${records} ${records === 1 ? "record" : "records"} observed` : "Scan incomplete", nextStep: observed === null ? "Review coverage and scan again." : "Some process details or processes could not be checked." };
+    const missing = typeof raw?.unavailableDetails === "number" && Number.isInteger(raw.unavailableDetails) && raw.unavailableDetails >= 0 ? raw.unavailableDetails : null;
+    return { ...base, state: "partial", count: null, message: observed !== null ? `${observed} ${observed === 1 ? "process" : "processes"} observed` : records !== null ? `${records} ${records === 1 ? "record" : "records"} observed` : "Scan incomplete", nextStep: observed === null ? "Review coverage and scan again." : missing !== null ? `${missing} listed ${missing === 1 ? "process has" : "processes have"} unavailable details; some processes may have exited during the scan.` : "Some process details or processes could not be checked." };
   }
   if (input.error) return { ...base, state: "error", count: null, message: "Scan failed", nextStep: "Try scanning again or check access." };
   if (input.count < 0 || !Number.isFinite(input.count)) return { ...base, state: "not-scanned", count: null, message: "Not scanned", nextStep: "Select Scan to check this item." };
   if (!raw) return { ...base, state: "unavailable", count: null, message: "Scan details unavailable", nextStep: "Scan again to verify the result." };
   if (input.id === "cellularHistory" && raw.noHardware === true && raw.status === "not_applicable" && input.count === 0 && Array.isArray(raw.files) && raw.files.length === 0) {
-    return { ...base, state: "empty", message: "No mobile broadband adapter detected", nextStep: "Profiles for disconnected devices were not checked." };
+    const service = raw.mobileService === "unavailable" ? " The Windows Mobile Broadband service is unavailable." : raw.mobileService === "stopped" ? " The Windows Mobile Broadband service is stopped." : "";
+    return { ...base, state: "empty", message: "No mobile broadband adapter detected", nextStep: `For cellular, connect a mobile broadband modem and install its driver.${service} Profiles for disconnected devices were not checked.` };
   }
   if (groupedKey && (!accountActivity || Array.isArray(groupedValue))) {
     // Only compare counts that the producer defines in the same units.
