@@ -64,7 +64,7 @@ async fn accept_page(
     mut policy: PublicSearchPolicy,
     stdout: Vec<u8>,
 ) -> Result<(VisiblePages, PublicSearchPolicy), String> {
-    privacy_task(deadline, move || {
+    privacy_task(deadline, move || -> Result<_, String> {
         let response = parse_es_output(stdout, String::new())?;
         pages.add_page(
             response.results,
