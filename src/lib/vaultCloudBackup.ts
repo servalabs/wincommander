@@ -49,6 +49,8 @@ const MESSAGES: Record<string, string> = {
   cloud_backup_verification_changed: "Files changed during the backup check. Wait for backup to finish, then verify again.",
   cloud_backup_no_space: "There is not enough free storage to complete this operation. Check the Vault and Proton Drive storage.",
   cloud_backup_interrupted: "Backup was interrupted. Files already uploaded remain in Proton Drive; the next pass checks the remaining files.",
+  cloud_backup_start_timed_out: "The backup tool did not start in time. Try again.",
+  cloud_backup_start_exited: "The backup tool stopped before it could start. Try again.",
   cloud_backup_engine_download_failed: "The backup tool could not be downloaded. Check the connection and retry setup.",
   cloud_backup_engine_integrity_failed: "The backup tool failed its integrity check. No upload was started.",
   cloud_backup_engine_version_mismatch: "The installed backup tool has an unsupported version. Retry setup.",

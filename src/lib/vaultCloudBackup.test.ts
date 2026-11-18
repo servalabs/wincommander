@@ -31,6 +31,8 @@ describe("Vault cloud backup setup", () => {
     expect(cloudBackupError("cloud_backup_not_signed_in token=secret")).toContain("Reconnect Proton Drive");
     expect(cloudBackupError("cloud_backup_not_permitted")).toContain("Make sure it is still mounted");
     expect(cloudBackupError("cloud_backup_presentation_unavailable")).toBe("The mounted Vault is not accessible in this Windows session. Reopen it and try again.");
+    expect(cloudBackupError("cloud_backup_start_timed_out")).toBe("The backup tool did not start in time. Try again.");
+    expect(cloudBackupError("cloud_backup_start_exited")).toBe("The backup tool stopped before it could start. Try again.");
     const base: VaultCloudBackupResult = { mount_receipt: null, engine_ready: true, connected: true, configured: true,
       automatic: true, watching: true, running: false, can_configure: true, configuration, last_run: null,
       last_backup: null, last_verification: null, last_restore: null, reason_code: null };
