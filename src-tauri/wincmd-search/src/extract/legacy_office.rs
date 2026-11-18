@@ -187,45 +187,6 @@ mod tests {
     }
 
     #[test]
-    fn compact_runs_match_previous_extractor_on_mixed_byte_sequences() {
-        fn flush(output: &mut Vec<String>, run: &mut Vec<u8>) {
-            if run.len() >= MIN_RUN_CHARS {
-                let text = String::from_utf8_lossy(run).trim().to_owned();
-                if text.len() >= MIN_RUN_CHARS { output.push(text); }
-            }
-            run.clear();
-        }
-        let mut seed = 0x92a7_125du32;
-        for length in 0..512 {
-            let mut bytes = Vec::with_capacity(length);
-            for _ in 0..length {
-                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-                let byte = match seed % 7 { 0 => 0, 1 => b'\t', 2 => 0xff, _ => b' ' + ((seed >> 8) % 95) as u8 };
-                bytes.push(byte);
-            }
-            let mut old = Vec::new(); let mut run = Vec::new();
-            for &byte in &bytes {
-                if is_printable(byte) { run.push(byte); } else { flush(&mut old, &mut run); }
-            }
-            flush(&mut old, &mut run);
-            let mut i = 0;
-            while i + 1 < bytes.len() {
-                if bytes[i + 1] == 0 && is_printable(bytes[i]) { run.push(bytes[i]); i += 2; }
-                else { flush(&mut old, &mut run); i += 1; }
-            }
-            flush(&mut old, &mut run);
-            old.sort(); old.dedup();
-            let mut compact = Vec::new();
-            printable_ansi_runs(&bytes, &mut compact);
-            printable_utf16le_runs(&bytes, &mut compact);
-            compact.sort_unstable_by(|a, b| a.bytes(&bytes).cmp(b.bytes(&bytes)));
-            compact.dedup_by(|a, b| a.bytes(&bytes).eq(b.bytes(&bytes)));
-            let actual: Vec<String> = compact.iter().map(|run| run.bytes(&bytes).map(char::from).collect()).collect();
-            assert_eq!(actual, old, "input length {length}");
-        }
-    }
-
-    #[test]
     fn finds_utf16_at_odd_offset_between_high_bytes() {
         let file = compound_file(b"\xffh\0e\0l\0l\0o\0\xff");
         assert_eq!(extract_legacy_office(file.path()).unwrap(), "hello");

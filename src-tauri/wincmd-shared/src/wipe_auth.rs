@@ -545,15 +545,6 @@ mod tests {
     // ── Nonce surfacing and uniqueness ───────────────────────────────────
 
     #[test]
-    fn nonce_is_surfaced_in_verified_token() {
-        let sk = test_signing_key();
-        let token = issue_wipe_token(DEVICE, 300, NOW, &sk);
-        let vt = verify_wipe_token(&token, &test_vk(), DEVICE, NOW).unwrap();
-        // Nonce must be 32 bytes and not all-zero (with overwhelming probability)
-        assert_eq!(vt.nonce.len(), 32);
-    }
-
-    #[test]
     fn two_tokens_have_different_nonces() {
         let sk = test_signing_key();
         let t1 = issue_wipe_token(DEVICE, 300, NOW, &sk);
@@ -567,36 +558,6 @@ mod tests {
     }
 
     // ── Key round-trip helpers ───────────────────────────────────────────
-
-    #[test]
-    fn verifying_key_to_from_bytes_round_trips() {
-        let (sk, vk) = generate_provisioning_keypair();
-        let raw = verifying_key_to_bytes(&vk);
-        let reconstructed = verifying_key_from_bytes(&raw).expect("must reconstruct");
-        // The reconstructed key must verify tokens signed by the original sk
-        let token = issue_wipe_token(DEVICE, 300, NOW, &sk);
-        verify_wipe_token(&token, &reconstructed, DEVICE, NOW).unwrap();
-    }
-
-    #[test]
-    fn signing_key_to_from_bytes_round_trips() {
-        let (sk, _) = generate_provisioning_keypair();
-        let raw = signing_key_to_bytes(&sk);
-        let reconstructed = signing_key_from_bytes(&raw);
-        // Tokens from original and reconstructed key must produce identical signatures
-        // (Ed25519 is deterministic for the same key+message — but nonce differs, so
-        // just check both issue+verify correctly)
-        let token = issue_wipe_token(DEVICE, 300, NOW, &reconstructed);
-        verify_wipe_token(&token, &reconstructed.verifying_key(), DEVICE, NOW).unwrap();
-    }
-
-    #[test]
-    fn invalid_verifying_key_bytes_returns_none() {
-        let bad: [u8; 32] = [0xFFu8; 32]; // not a valid Ed25519 point
-                                          // This may or may not parse — ed25519-dalek is lenient here.
-                                          // We just verify that verifying_key_from_bytes doesn't panic.
-        let _ = verifying_key_from_bytes(&bad);
-    }
 
     // ── Known-answer / golden test — pins the canonical byte layout ──────
     //

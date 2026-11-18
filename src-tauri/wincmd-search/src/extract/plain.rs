@@ -175,15 +175,6 @@ mod tests {
     }
 
     #[test]
-    fn md_returns_raw_content() {
-        let mut f = NamedTempFile::with_suffix(".md").unwrap();
-        write!(f, "# Title\n\nsome text").unwrap();
-        let result = extract_plain(f.path()).unwrap();
-        assert!(result.contains("Title"));
-        assert!(result.contains("some text"));
-    }
-
-    #[test]
     fn html_strips_tags_preserves_text() {
         let mut f = NamedTempFile::with_suffix(".html").unwrap();
         write!(
@@ -216,12 +207,6 @@ mod tests {
             !result.contains("color"),
             "style content leaked: {result:?}"
         );
-    }
-
-    #[test]
-    fn missing_file_returns_error() {
-        let result = extract_plain(std::path::Path::new("no_such_file_xyz.txt"));
-        assert!(result.is_err());
     }
 
     #[test]

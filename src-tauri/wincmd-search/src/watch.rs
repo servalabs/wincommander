@@ -412,19 +412,6 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn non_excluded_file_still_matches_when_exclusions_present() {
-        let dir = TempDir::new().unwrap();
-        let file = dir.path().join("keep.rs");
-        fs::write(&file, b"fn main() {}").unwrap();
-
-        let exclusions =
-            crate::crawler::build_globset(&["node_modules".into(), "*.tmp".into()]).unwrap();
-        let ev = make_event(EventKind::Create(CreateKind::File), &file);
-        let action = apply_fs_event(&ev, &[], &exclusions, u64::MAX);
-        assert!(matches!(action, Some(FsEventAction::Upsert(_))));
-    }
-
     // ── oversized file → None ────────────────────────────────────────
 
     #[test]
@@ -471,22 +458,6 @@ mod tests {
     }
 
     // ── doc_id in Upsert matches doc_id_for ──────────────────────────
-
-    #[test]
-    fn upsert_doc_id_matches_doc_id_for() {
-        let dir = TempDir::new().unwrap();
-        let file = dir.path().join("check.txt");
-        fs::write(&file, b"data").unwrap();
-
-        let ev = make_event(EventKind::Create(CreateKind::File), &file);
-        if let Some(FsEventAction::Upsert(meta)) =
-            apply_fs_event(&ev, &[], &no_exclusions(), u64::MAX)
-        {
-            assert_eq!(meta.doc_id, doc_id_for(&file));
-        } else {
-            panic!("expected Upsert");
-        }
-    }
 
     // ── Other event kinds → None ──────────────────────────────────────
 

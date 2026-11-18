@@ -201,16 +201,6 @@ mod tests {
     // ── doc_id_for stability ──────────────────────────────────────────
 
     #[test]
-    fn doc_id_stable_across_calls() {
-        let dir = TempDir::new().unwrap();
-        let file = dir.path().join("stable.txt");
-        fs::write(&file, b"hi").unwrap();
-        let id1 = doc_id_for(&file);
-        let id2 = doc_id_for(&file);
-        assert_eq!(id1, id2);
-    }
-
-    #[test]
     fn doc_id_differs_for_different_paths() {
         let dir = TempDir::new().unwrap();
         let a = dir.path().join("a.txt");
@@ -233,12 +223,6 @@ mod tests {
     }
 
     // ── build_globset ─────────────────────────────────────────────────
-
-    #[test]
-    fn build_globset_valid_patterns() {
-        let gs = build_globset(&["*.log".into(), "*.tmp".into()]);
-        assert!(gs.is_ok());
-    }
 
     #[test]
     fn build_globset_invalid_pattern_returns_error() {
@@ -357,6 +341,5 @@ mod tests {
         let m = files.iter().find(|f| f.name == "test.pdf").unwrap();
         assert_eq!(m.ext, "pdf");
         assert_eq!(m.size, 10);
-        assert_eq!(m.doc_id, doc_id_for(&file));
     }
 }

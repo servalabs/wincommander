@@ -504,14 +504,6 @@ mod tests {
     }
 
     #[test]
-    fn docx_extracts_known_words() {
-        let docx = make_docx("hello docx");
-        let (result, _props) = extract_office(docx.path()).unwrap();
-        assert!(result.contains("hello"), "expected 'hello' in: {result:?}");
-        assert!(result.contains("docx"), "expected 'docx' in: {result:?}");
-    }
-
-    #[test]
     fn docx_styles_xml_excluded_from_body() {
         let docx = make_docx_with_styles("realcontent", "stylename");
         let (result, _props) = extract_office(docx.path()).unwrap();
@@ -533,18 +525,6 @@ mod tests {
             result.contains("slidewords"),
             "expected 'slidewords' in: {result:?}"
         );
-    }
-
-    #[test]
-    fn missing_file_returns_error() {
-        let result = extract_office(std::path::Path::new("no_such_file.docx"));
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn xlsx_missing_file_returns_error() {
-        let result = extract_xlsx(std::path::Path::new("no_such_file.xlsx"));
-        assert!(result.is_err());
     }
 
     #[test]

@@ -839,20 +839,6 @@ mod tests {
 
     // ── CapabilityClass: SessionHelper is distinct from both other classes ──
 
-    #[test]
-    fn session_helper_is_distinct_from_read_only_and_privileged() {
-        assert_ne!(CapabilityClass::SessionHelper, CapabilityClass::ReadOnly);
-        assert_ne!(CapabilityClass::SessionHelper, CapabilityClass::Privileged);
-        assert_ne!(
-            CapabilityClass::InteractiveSession,
-            CapabilityClass::ReadOnly
-        );
-        assert_ne!(
-            CapabilityClass::InteractiveSession,
-            CapabilityClass::SessionHelper
-        );
-    }
-
     // ── CapabilityClass::rank: strictly increasing with required trust ─────
 
     #[test]

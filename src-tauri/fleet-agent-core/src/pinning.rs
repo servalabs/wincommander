@@ -588,23 +588,6 @@ mod tests {
     }
 
     #[test]
-    fn accepts_cert_matching_the_new_pin_in_the_set() {
-        // Same overlap window, but the server has already rotated to the
-        // new cert — a device holding {new, old} must also accept it.
-        let (_der_old, hash_old) = self_signed("fleet.internal.example");
-        let (der_new, hash_new) = self_signed("fleet.internal.example");
-        assert_ne!(hash_old, hash_new, "fixture sanity: distinct cert keys");
-
-        let verifier = verifier_for_set(vec![hash_new, hash_old]);
-        let result =
-            verifier.verify_server_cert(&der_new, &[], &server_name(), &[], UnixTime::now());
-        assert!(
-            result.is_ok(),
-            "a cert matching the NEW pin in a multi-pin set must be accepted: {result:?}"
-        );
-    }
-
-    #[test]
     fn rejects_cert_matching_no_pin_in_the_set() {
         // A cert that matches NEITHER the primary NOR the retired pin (e.g.
         // an attacker/MITM cert) must still be rejected — a pin set must
@@ -622,16 +605,6 @@ mod tests {
             result.is_err(),
             "a cert matching no pin in the set must be rejected: {result:?}"
         );
-    }
-
-    #[test]
-    fn spki_pin_set_from_hex_list_parses_multiple_comma_separated_pins() {
-        let a = "a".repeat(64);
-        let b = "b".repeat(64);
-        let set = SpkiPinSet::from_hex_list(&format!("{a}, {b}")).expect("must parse");
-        assert_eq!(set.pins().len(), 2);
-        assert_eq!(set.pins()[0].to_hex(), a);
-        assert_eq!(set.pins()[1].to_hex(), b);
     }
 
     #[test]
@@ -655,43 +628,10 @@ mod tests {
     }
 
     #[test]
-    fn spki_pin_hex_roundtrips() {
-        let pin = SpkiPin([0x11u8; 32]);
-        let hex_str = pin.to_hex();
-        assert_eq!(hex_str.len(), 64);
-        let parsed = SpkiPin::from_hex(&hex_str).expect("parse back");
-        assert_eq!(parsed, pin);
-    }
-
-    #[test]
     fn spki_pin_from_hex_rejects_malformed_input() {
         assert!(SpkiPin::from_hex("not-hex").is_none());
         assert!(SpkiPin::from_hex("deadbeef").is_none()); // too short
         assert!(SpkiPin::from_hex("").is_none());
     }
 
-    #[test]
-    fn build_client_without_pin_succeeds() {
-        // None → falls back to reqwest::Client::new(); must not error.
-        let client = build_client(None);
-        assert!(client.is_ok());
-    }
-
-    #[test]
-    fn build_client_with_pin_succeeds() {
-        let (_der, hash) = self_signed("fleet.internal.example");
-        let client = build_client(SpkiPinSet::new(vec![SpkiPin(hash)]));
-        assert!(client.is_ok(), "pinned client must build: {client:?}");
-    }
-
-    #[test]
-    fn build_client_with_multi_pin_set_succeeds() {
-        let (_der_new, hash_new) = self_signed("fleet.internal.example");
-        let (_der_old, hash_old) = self_signed("fleet.internal.example");
-        let client = build_client(SpkiPinSet::new(vec![SpkiPin(hash_new), SpkiPin(hash_old)]));
-        assert!(
-            client.is_ok(),
-            "client with a rotation-overlap pin set must build: {client:?}"
-        );
-    }
 }

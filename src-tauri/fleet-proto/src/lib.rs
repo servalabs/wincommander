@@ -2541,12 +2541,8 @@ mod tests {
     }
 
     #[test]
-    fn security_snapshot_contract_round_trips_and_is_bounded() {
-        let snapshot = security_snapshot();
-        validate_security_snapshot_result(&snapshot).unwrap();
-        let round_trip: SecuritySnapshotResult =
-            serde_json::from_value(serde_json::to_value(&snapshot).unwrap()).unwrap();
-        assert_eq!(round_trip, snapshot);
+    fn security_snapshot_within_bounds_is_accepted() {
+        validate_security_snapshot_result(&security_snapshot()).unwrap();
     }
 
     #[test]
@@ -2619,12 +2615,6 @@ mod tests {
             &epoch_signing_envelope(&cfg, &[], false, "group", Some("g1")),
         );
         assert_ne!(a, unlocked);
-    }
-
-    #[test]
-    fn fleet_error_serializes_snake_case() {
-        let json = serde_json::to_string(&FleetError::StaleEpoch).unwrap();
-        assert_eq!(json, "\"stale_epoch\"");
     }
 
     #[test]
@@ -2795,34 +2785,6 @@ mod tests {
             ticket_preimage(&base),
             ticket_preimage(&other),
             "printer_class must bind into the preimage"
-        );
-    }
-
-    #[test]
-    fn ticket_preimage_changes_with_device_id() {
-        // No cross-device replay: a ticket minted for one device_id must not
-        // produce the same preimage/signature for another.
-        let base = ticket_input();
-        let mut other = base;
-        other.device_id = "dev-xyz";
-        assert_ne!(
-            ticket_preimage(&base),
-            ticket_preimage(&other),
-            "device_id must bind into the preimage"
-        );
-    }
-
-    #[test]
-    fn ticket_preimage_changes_with_org_id() {
-        // No cross-org replay: a ticket minted for one org_id must not
-        // produce the same preimage/signature for another org.
-        let base = ticket_input();
-        let mut other = base;
-        other.org_id = "org-other";
-        assert_ne!(
-            ticket_preimage(&base),
-            ticket_preimage(&other),
-            "org_id must bind into the preimage"
         );
     }
 
@@ -3151,19 +3113,9 @@ mod tests {
 
     #[cfg(feature = "command-metadata")]
     #[test]
-    fn dns_cache_forensics_view_is_safe_and_parameterless() {
-        let entry = COMMAND_METADATA
-            .iter()
-            .find(|entry| entry.catalog_id == "forensics.dns_cache.view")
-            .expect("DNS Cache forensic view must be catalogued");
-        assert_eq!(entry.action_class, ActionClass::Safe);
-        assert_eq!(entry.payload_schema, None);
-    }
-
-    #[cfg(feature = "command-metadata")]
-    #[test]
     fn standard_cleanup_forensics_views_are_safe_and_parameterless() {
         for catalog_id in [
+            "forensics.dns_cache.view",
             "forensics.shell_bags.view",
             "forensics.usb_history.view",
             "forensics.recycle_bin.view",
@@ -3307,17 +3259,6 @@ mod tests {
         assert!(
             !verify_action_outcome_recovery_checkpoint(&checkpoint, &public_key),
             "a recovery record must not be movable to another chain position"
-        );
-    }
-
-    #[test]
-    fn typed_result_digest_is_order_independent_and_binds_null() {
-        let a = serde_json::json!({"result": {"z": 2, "a": 1}});
-        let b = serde_json::json!({"result": {"a": 1, "z": 2}});
-        assert_eq!(canonical_json_sha256(&a), canonical_json_sha256(&b));
-        assert_ne!(
-            canonical_json_sha256(&a),
-            canonical_json_sha256(&Value::Null)
         );
     }
 

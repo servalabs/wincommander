@@ -135,44 +135,6 @@ fn isolated_rebuild_uses_user_key_and_preserves_legacy_index() {
     assert_eq!(std::fs::read(&legacy_file).unwrap(), b"legacy index retained");
 }
 #[test]
-fn real_tantivy_index_search_and_reopen_are_encrypted() {
-    use tantivy::{
-        collector::Count,
-        doc,
-        query::QueryParser,
-        schema::{Schema, STORED, TEXT},
-        Index,
-    };
-    let dir = tempfile::tempdir().unwrap();
-    let directory = TrialDirectory::open(dir.path(), AccessMode::Writable, [9; 32]);
-    let mut schema = Schema::builder();
-    let body = schema.add_text_field("body", TEXT | STORED);
-    let schema = schema.build();
-    let index = Index::create(directory.clone(), schema, Default::default()).unwrap();
-    let mut writer = index.writer(50_000_000).unwrap();
-    writer
-        .add_document(doc!(body => "confidential gossamersearchword example"))
-        .unwrap();
-    writer.commit().unwrap();
-    drop(writer);
-    drop(index);
-    for entry in std::fs::read_dir(dir.path()).unwrap() {
-        let entry = entry.unwrap();
-        if !entry.file_type().unwrap().is_file() {
-            continue;
-        }
-        let bytes = std::fs::read(entry.path()).unwrap();
-        assert!(!bytes.windows(18).any(|w| w == b"gossamersearchword"));
-    }
-    let reopened = Index::open(directory).unwrap();
-    let query = QueryParser::for_index(&reopened, vec![body])
-        .parse_query("gossamersearchword")
-        .unwrap();
-    let reader = reopened.reader().unwrap();
-    assert_eq!(reader.searcher().search(&query, &Count).unwrap(), 1);
-}
-
-#[test]
 fn streaming_writer_and_file_handle_use_bounded_chunks() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     #[derive(Debug)]

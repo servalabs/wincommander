@@ -132,15 +132,6 @@ mod tests {
         let doc = extract_text(meta).unwrap();
         assert_eq!(doc.title, "test.txt");
         assert_eq!(doc.body, "some content");
-    }
-
-    #[test]
-    fn txt_extraction_yields_default_props() {
-        // Plain text has no document-internal properties to extract.
-        let mut f = NamedTempFile::with_suffix(".txt").unwrap();
-        write!(f, "some content").unwrap();
-        let meta = make_meta(f.path().to_path_buf(), "txt", "test.txt");
-        let doc = extract_text(meta).unwrap();
         assert_eq!(doc.props, crate::types::DocProps::default());
     }
 

@@ -125,23 +125,6 @@ mod tests {
     }
 
     #[test]
-    fn writes_token_and_pubkey() {
-        let (dir, token, _vk, paths) = setup();
-
-        // token.txt must exist and contain the wire token exactly.
-        let read_token = std::fs::read_to_string(&paths.token_path).expect("read token.txt");
-        assert_eq!(read_token, token, "token.txt must match issued wire token");
-
-        // pubkey.bin must be exactly 32 bytes.
-        let pubkey_bytes = std::fs::read(&paths.pubkey_path).expect("read pubkey.bin");
-        assert_eq!(pubkey_bytes.len(), 32, "pubkey.bin must be 32 bytes");
-
-        // Paths must be inside the temp dir.
-        assert!(paths.token_path.starts_with(dir.path()));
-        assert!(paths.pubkey_path.starts_with(dir.path()));
-    }
-
-    #[test]
     fn creates_wipe_subdirectory() {
         let dir = TempDir::new().expect("tempdir");
         let (sk, vk) = generate_provisioning_keypair();

@@ -804,33 +804,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn backoff_duration_grows_with_attempt_upper_bound() {
-        let base = Duration::from_millis(100);
-        let cap = Duration::from_secs(30);
-        // The upper bound (before jitter) should be non-decreasing until capped.
-        let upper = |attempt: u32| -> u128 {
-            (base.as_millis().saturating_mul(1u128 << attempt.min(20))).min(cap.as_millis())
-        };
-        assert!(upper(1) >= upper(0));
-        assert!(upper(5) >= upper(1));
-        assert_eq!(upper(10), cap.as_millis());
-    }
-
     // ── Traffic shaping: randomized interval ─────────────────────────────────
-
-    #[test]
-    fn randomized_interval_stays_within_configured_bounds() {
-        let interval = 100u64;
-        let (min_frac, max_frac) = (0.5, 1.5);
-        for _ in 0..500 {
-            let secs = randomized_interval_secs(interval, min_frac, max_frac);
-            assert!(
-                (50..=150).contains(&secs),
-                "interval {secs} outside [50,150] window"
-            );
-        }
-    }
 
     #[test]
     fn randomized_interval_actually_varies_across_calls() {

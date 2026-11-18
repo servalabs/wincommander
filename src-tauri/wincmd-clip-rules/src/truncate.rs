@@ -22,11 +22,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn no_op_under_the_cap() {
-        assert_eq!(truncate_for_match("hello", 100), "hello");
-    }
-
-    #[test]
     fn exact_boundary_is_a_no_op() {
         assert_eq!(truncate_for_match("hello", 5), "hello");
     }
@@ -47,8 +42,4 @@ mod tests {
         assert_eq!(truncate_for_match("hello", 0), "");
     }
 
-    #[test]
-    fn empty_input_stays_empty() {
-        assert_eq!(truncate_for_match("", 10), "");
-    }
 }

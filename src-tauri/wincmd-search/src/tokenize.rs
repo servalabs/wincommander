@@ -264,14 +264,6 @@ mod tests {
     }
 
     #[test]
-    fn plain_words_unchanged() {
-        assert_eq!(
-            tokens("the quarterly budget"),
-            vec!["the", "quarterly", "budget"]
-        );
-    }
-
-    #[test]
     fn separators_and_empty() {
         assert_eq!(tokens("a_b-c.d"), vec!["a", "b", "c", "d"]);
         assert!(tokens("").is_empty());

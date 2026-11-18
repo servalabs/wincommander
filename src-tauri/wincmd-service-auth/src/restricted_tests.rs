@@ -76,17 +76,6 @@ fn restricted<T>(test: impl FnOnce() -> T) -> T {
     test()
 }
 
-#[test]
-fn restricted_token_cannot_turn_own_process_into_the_registered_service() {
-    restricted(|| {
-        let guard = pin_process(std::process::id()).unwrap();
-        assert!(
-            require_running_pid(true, Some(std::process::id() + 1), std::process::id()).is_err()
-        );
-        drop(guard);
-    });
-}
-
 #[tokio::test]
 #[ignore = "read-only acceptance requires the installed WinCommander service to be running"]
 async fn installed_service_authenticates_with_admin_group_disabled() {

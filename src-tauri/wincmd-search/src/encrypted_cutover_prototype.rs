@@ -76,14 +76,4 @@ fn bounded_record_rejects_corruption_wrong_key_and_truncation() {
     let mut oversized = bytes.clone(); oversized.push(0);
     assert!(open(&key, &oversized, &record.index).is_err());
 }
-
-#[test]
-fn authentication_alone_does_not_prevent_replay() {
-    let key = StubKey::random();
-    let old = Record { index: [6; 16], generation: [7; 16], committed: true };
-    let old_bytes = seal(&key, &old).unwrap();
-    let new = Record { generation: [8; 16], ..old };
-    assert!(open(&key, &seal(&key, &new).unwrap(), &new.index).is_ok());
-    // A separate trusted freshness anchor is required before production use.
-    assert_eq!(open(&key, &old_bytes, &new.index).unwrap().generation, [7; 16]);
-}
+

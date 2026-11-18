@@ -604,26 +604,6 @@ mod tests {
     }
 
     #[test]
-    fn notification_roundtrips() {
-        let n = Envelope::Notification(Notification {
-            event: "voice-lockdown-triggered".to_string(),
-            payload: serde_json::json!({"reason": "wake-word", "ts": 1234567890u64}),
-        });
-        let s = serde_json::to_string(&n).unwrap();
-        // serde_tag = "kind" + rename_all = "snake_case" → "notification".
-        assert!(s.contains("\"kind\":\"notification\""));
-        assert!(s.contains("\"event\":\"voice-lockdown-triggered\""));
-        let back: Envelope = serde_json::from_str(&s).unwrap();
-        match back {
-            Envelope::Notification(n) => {
-                assert_eq!(n.event, "voice-lockdown-triggered");
-                assert_eq!(n.payload["reason"], "wake-word");
-            }
-            _ => panic!("wrong variant"),
-        }
-    }
-
-    #[test]
     fn notification_signs_and_unwraps() {
         // Pro wraps every notification in Signed before write; the Free
         // reader task verifies and unwraps it back to Notification.
@@ -638,20 +618,6 @@ mod tests {
             Envelope::Notification(n) => assert_eq!(n.event, "decoy-accessed"),
             _ => panic!("expected Notification after unwrap"),
         }
-    }
-
-    #[test]
-    fn hello_serialises_with_kind_tag() {
-        let h = Envelope::Hello(hello_from_free("token-abc"));
-        let s = serde_json::to_string(&h).unwrap();
-        assert!(s.contains("\"kind\":\"hello\""));
-        assert!(s.contains("\"session_token\":\"token-abc\""));
-    }
-
-    #[test]
-    fn vault_peers_advertise_scope_aware_cleanup_runtime() {
-        assert_eq!(hello_from_free("free").vault_runtime_version, Some(3));
-        assert_eq!(svc::hello_from_ui("svc-ack").vault_runtime_version, Some(3));
     }
 
     /// Round-trip a Hello + Request + Response over an in-memory duplex

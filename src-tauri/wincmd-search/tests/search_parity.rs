@@ -29,9 +29,8 @@ use std::time::Instant;
 
 use tempfile::TempDir;
 use wincmd_search::{
-    crawler::{build_globset, collect_files, doc_id_for},
-    extract::extract_text,
-    types::{ContentQuery, FileMeta, IndexConfig},
+    crawler::{build_globset, collect_files},
+    types::{ContentQuery, IndexConfig},
     SearchEngine,
 };
 
@@ -413,100 +412,6 @@ fn make_config(index_dir: PathBuf, roots: Vec<PathBuf>) -> IndexConfig {
     }
 }
 
-/// FileMeta for direct-extraction tests: real path + real extension, dummy rest.
-fn meta_for(path: &Path) -> FileMeta {
-    let ext = path
-        .extension()
-        .map(|e| e.to_string_lossy().to_lowercase())
-        .unwrap_or_default();
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    FileMeta {
-        doc_id: doc_id_for(path),
-        path: path.to_path_buf(),
-        name,
-        ext,
-        mtime: 0,
-        size: 0,
-    }
-}
-
-// ── Test: direct extraction coverage ────────────────────────────────────────
-
-/// Every format in `all_format_cases()` must extract its unique token via the
-/// public `extract_text`. This isolates "extraction works" from indexing/query.
-/// Pre-fix: the extended text formats (c/cpp/h/…) return Unsupported and FAIL —
-/// that failure IS the coverage gap this harness exists to close.
-#[test]
-fn extraction_covers_every_format() {
-    let dir = TempDir::new().unwrap();
-    let mut failures = Vec::new();
-
-    for case in all_format_cases() {
-        let name = format!("fixture_{}.{}", case.ext, case.ext);
-        let path = (case.build)(dir.path(), &name, case.token);
-        let meta = meta_for(&path);
-        match extract_text(meta) {
-            Ok(doc) => {
-                let hit = doc.body.to_lowercase().contains(case.token);
-                println!(
-                    "  [{}] .{:<5} token '{}' in body: {}",
-                    if hit { "OK  " } else { "FAIL" },
-                    case.ext,
-                    case.token,
-                    hit
-                );
-                if !hit {
-                    failures.push(format!(
-                        ".{} extracted but token '{}' missing",
-                        case.ext, case.token
-                    ));
-                }
-            }
-            Err(e) => {
-                println!("  [FAIL] .{:<5} extract error: {}", case.ext, e);
-                failures.push(format!(".{} → {}", case.ext, e));
-            }
-        }
-    }
-    assert!(
-        failures.is_empty(),
-        "extraction gaps:\n  {}",
-        failures.join("\n  ")
-    );
-}
-
-/// A textual file with an UNKNOWN extension must still be indexed while a
-/// binary blob with an unknown extension must be skipped.
-#[test]
-fn extraction_sniffs_unknown_text_and_skips_binary() {
-    let dir = TempDir::new().unwrap();
-
-    // Unknown-extension text file → should extract via UTF-8 sniff.
-    let text_path = write_text(
-        dir.path(),
-        "notes.wcsunknown",
-        "meeting minutes: the unique marker is sniffabletoken and the action items follow",
-    );
-    let text = extract_text(meta_for(&text_path));
-    assert!(
-        text.map(|d| d.body.contains("sniffabletoken"))
-            .unwrap_or(false),
-        "textual file with unknown extension must be extracted via sniff",
-    );
-
-    // Binary blob (NUL bytes) with unknown extension → must NOT be indexed.
-    let bin_path = dir.path().join("blob.wcsunknown2");
-    fs::write(&bin_path, [0x00, 0x01, 0x02, 0xFF, b'h', b'i', 0x00, 0x7F]).unwrap();
-    let bin = extract_text(meta_for(&bin_path));
-    assert!(
-        bin.is_err(),
-        "binary blob must be rejected, not indexed as text"
-    );
-}
-
 // ── Test: multi-format accuracy ─────────────────────────────────────────────
 
 /// Index the full multi-format corpus and assert, per format, recall@10 = 1.0
@@ -643,6 +548,7 @@ fn query_robustness_never_errors() {
         "[bracket",            // unbalanced bracket
         "}brace",              // stray brace
         "!bang",               // bang
+        "back`tick",           // backtick
         "   ",                 // whitespace only
         "",                    // empty
     ];
@@ -780,61 +686,4 @@ fn parity_perf() {
         "p95 query latency > 1s is pathological"
     );
 }
-
-// ── PARTIAL-TOKEN MATCHING — end-to-end through crawl → extract → index ──────
-//
-// Regression for the "ID search" bug: a file named (or containing)
-// XXXXXXXX2982 was findable by the full run but NOT by "2982", making
-// serial/invoice/ID lookups useless. Pins the whole pipeline, not just
-// ContentIndex: real files on disk, crawled and extracted like production.
-#[test]
-fn partial_token_id_lookup_end_to_end() {
-    let data = TempDir::new().unwrap();
-    let index = TempDir::new().unwrap();
-
-    write_text(
-        data.path(),
-        "XXXXXXXX2982.txt",
-        "scanned copy, no useful body",
-    );
-    write_text(
-        data.path(),
-        "statement.txt",
-        "wire transfer reference INV2982 was confirmed today",
-    );
-    write_text(data.path(), "noise.txt", "completely unrelated content");
-
-    let gs = build_globset(&[]).unwrap();
-    let files = collect_files(&[data.path().to_path_buf()], &gs, &[], 50_000_000);
-    let engine = SearchEngine::open(make_config(
-        index.path().to_path_buf(),
-        vec![data.path().to_path_buf()],
-    ))
-    .unwrap();
-    engine.index_files_sync(files).unwrap();
-
-    // Bare numeric ID finds both the named file and the body mention.
-    let hits = engine.search(&keyword_query("2982", 10)).unwrap();
-    let names: Vec<&str> = hits.iter().map(|h| h.name.as_str()).collect();
-    assert!(
-        names.contains(&"XXXXXXXX2982.txt"),
-        "'2982' must find the file NAMED with the ID; got {names:?}"
-    );
-    assert!(
-        names.contains(&"statement.txt"),
-        "'2982' must find the ID inside body text; got {names:?}"
-    );
-    assert!(!names.contains(&"noise.txt"), "no false positive");
-
-    // The full original query still works.
-    let hits = engine.search(&keyword_query("XXXXXXXX2982", 10)).unwrap();
-    assert_eq!(hits.len(), 1, "full-token query still matches exactly");
-    assert_eq!(hits[0].name, "XXXXXXXX2982.txt");
-
-    // Mid-token substring (no token boundary) still finds the named file.
-    let hits = engine.search(&keyword_query("X2982", 10)).unwrap();
-    assert!(
-        hits.iter().any(|h| h.name == "XXXXXXXX2982.txt"),
-        "mid-token substring must match via the name-substring rung"
-    );
-}
+

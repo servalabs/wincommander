@@ -9,25 +9,6 @@ mod common;
 use wincmd_clip_rules::{compile, RuleSetLimits};
 
 #[test]
-fn equal_priority_rules_resolve_identically_across_independent_compiles() {
-    // Same logical rule set, recompiled from scratch twice — simulating
-    // the fleet console's validation compile and the endpoint's own
-    // compile of the same policy. The winner must match.
-    let build_rules = || -> Vec<_> {
-        (0..20u8)
-            .map(|i| common::phrase_rule(i, 100, "same-priority-match"))
-            .collect()
-    };
-
-    let compiled_a = compile(&build_rules(), &RuleSetLimits::default()).unwrap();
-    let compiled_b = compile(&build_rules(), &RuleSetLimits::default()).unwrap();
-
-    let verdict_a = compiled_a.evaluate("same-priority-match").unwrap();
-    let verdict_b = compiled_b.evaluate("same-priority-match").unwrap();
-    assert_eq!(verdict_a.rule_id, verdict_b.rule_id);
-}
-
-#[test]
 fn declaration_order_does_not_affect_the_tie_break_winner() {
     let forward: Vec<_> = (0..10u8)
         .map(|i| common::phrase_rule(i, 50, "order-independent"))

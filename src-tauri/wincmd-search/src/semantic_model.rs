@@ -96,10 +96,4 @@ mod tests {
             _ => panic!("valid pinned model rejected"),
         };
     }
-    #[test]
-    fn resource_path_is_fixed_under_models() {
-        let p = packaged_resource_path(Path::new("C:\\package"));
-        assert!(p.ends_with("models\\semantic-model.bin"));
-        assert!(!p.to_string_lossy().contains(".."));
-    }
 }

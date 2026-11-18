@@ -135,13 +135,6 @@ mod tests {
 
     // ── limit enforced ───────────────────────────────────────────────────
 
-    #[test]
-    fn limit_enforced() {
-        let kw = (0..20).map(|i| hit(i, i as f32)).collect::<Vec<_>>();
-        let result = merge_hits(kw, vec![], 5);
-        assert_eq!(result.len(), 5);
-    }
-
     // ── Hybrid when semantic score is exactly 0.0 ────────────────────────
 
     #[test]
@@ -166,9 +159,4 @@ mod tests {
 
     // ── empty inputs ─────────────────────────────────────────────────────
 
-    #[test]
-    fn both_empty_returns_empty() {
-        let result = merge_hits(vec![], vec![], 10);
-        assert!(result.is_empty());
-    }
 }

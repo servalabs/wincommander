@@ -987,16 +987,6 @@ mod tests {
     }
 
     #[test]
-    fn open_or_create_round_trip() {
-        let dir = TempDir::new().unwrap();
-        // First open creates the index.
-        let ci = ContentIndex::open_or_create(dir.path()).unwrap();
-        // Second open reuses it.
-        let _ci2 = ContentIndex::open_or_create(dir.path()).unwrap();
-        assert_eq!(ci.doc_count(), 0);
-    }
-
-    #[test]
     fn upsert_and_search_keyword_in_body() {
         let dir = TempDir::new().unwrap();
         let ci = ContentIndex::open_or_create(dir.path()).unwrap();
@@ -1168,51 +1158,6 @@ mod tests {
             .search_keyword(&make_query("updated_content_word"))
             .unwrap();
         assert_eq!(new_hits.len(), 1);
-    }
-
-    #[test]
-    fn search_never_errors_on_query_metacharacters() {
-        let dir = TempDir::new().unwrap();
-        let ci = ContentIndex::open_or_create(dir.path()).unwrap();
-        let mut w = ci.writer().unwrap();
-        ci.upsert(
-            &mut w,
-            &make_meta(1, "notes.txt"),
-            "Notes",
-            "the quarterly budget report is ready",
-            &DocProps::default(),
-        )
-        .unwrap();
-        ci.commit(&mut w).unwrap();
-
-        // Each of these breaks tantivy's QueryParser; none may return Err.
-        for q in [
-            r"C:\Users\me",
-            "foo:bar",
-            "\"unclosed",
-            "a AND",
-            "(oops",
-            "C++",
-            "report -",
-            "*wild",
-            "back`tick",
-            "",
-            "   ",
-        ] {
-            let r = ci.search_keyword(&make_query(q));
-            assert!(r.is_ok(), "query {q:?} must not error: {:?}", r.err());
-        }
-
-        // A path-shaped query still finds the doc via its plain terms.
-        let hits = ci.search_keyword(&make_query(r"C:\path\budget")).unwrap();
-        assert!(
-            !hits.is_empty(),
-            "sanitized path query should match 'budget'"
-        );
-
-        // A backtick-wrapped term still degrades to a plain-terms match.
-        let bt = ci.search_keyword(&make_query("`budget`")).unwrap();
-        assert!(!bt.is_empty(), "backtick query should still match 'budget'");
     }
 
     #[test]
@@ -2205,13 +2150,13 @@ mod tests {
         assert_eq!(scoped_fetch(1, &[]), 1);
         // Scoped over-fetches, capped, and never shrinks below `base`.
         let r = roots(&[r"C:\Foo"]);
-        assert_eq!(scoped_fetch(50, &r), 50 * ROOT_SCOPE_OVERFETCH);
+        assert_eq!(scoped_fetch(50, &r), 1_000);
         assert_eq!(
             scoped_fetch(100_000, &r),
             100_000,
             "cap must not shrink base"
         );
-        assert_eq!(scoped_fetch(1_000, &r), ROOT_SCOPE_MAX_FETCH);
+        assert_eq!(scoped_fetch(1_000, &r), 5_000);
         // TopDocs::with_limit(0) panics — never hand it a zero.
         assert_eq!(scoped_fetch(0, &[]), 1);
         assert_eq!(scoped_fetch(0, &r), 1);

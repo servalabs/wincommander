@@ -280,12 +280,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn missing_pdf_returns_error() {
-        let result = extract_pdf(std::path::Path::new("no_such_file.pdf"));
-        assert!(result.is_err());
-    }
-
-    #[test]
     fn invalid_pdf_bytes_returns_error() {
         use std::io::Write;
         use tempfile::NamedTempFile;

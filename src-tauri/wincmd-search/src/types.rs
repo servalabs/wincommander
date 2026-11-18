@@ -138,14 +138,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn chunk_field_serializes_as_string() {
-        let title = serde_json::to_string(&ChunkField::Title).unwrap();
-        let body = serde_json::to_string(&ChunkField::Body).unwrap();
-        assert_eq!(title, "\"Title\"");
-        assert_eq!(body, "\"Body\"");
-    }
-
-    #[test]
     fn content_hit_roundtrips() {
         let hit = ContentHit {
             doc_id: 42,

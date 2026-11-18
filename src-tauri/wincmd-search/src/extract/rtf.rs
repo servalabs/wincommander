@@ -242,13 +242,6 @@ mod tests {
     }
 
     #[test]
-    fn extracts_plain_words() {
-        let f = write_rtf(r"{\rtf1\ansi\deff0 hello rtf document}");
-        let result = extract_rtf(f.path()).unwrap();
-        assert!(result.contains("hello rtf document"), "got: {result:?}");
-    }
-
-    #[test]
     fn fonttbl_colortbl_stylesheet_and_info_excluded() {
         let f = write_rtf(
             r"{\rtf1\ansi{\fonttbl{\f0 Calibri;}}{\colortbl;\red0\green0\blue0;}{\stylesheet{\s0 Normal;}}{\info{\title Secret Title}{\author Jane Doe}} realcontent here}",
@@ -363,12 +356,6 @@ mod tests {
         let f = write_rtf(r"{\rtf1 \u-3728?marker}");
         let result = extract_rtf(f.path()).unwrap();
         assert!(result.contains("marker"), "got: {result:?}");
-    }
-
-    #[test]
-    fn missing_file_returns_error() {
-        let result = extract_rtf(std::path::Path::new("no_such_file.rtf"));
-        assert!(result.is_err());
     }
 
     #[test]

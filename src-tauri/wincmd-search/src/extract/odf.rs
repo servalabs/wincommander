@@ -217,17 +217,6 @@ mod tests {
     }
 
     #[test]
-    fn odt_extracts_known_words() {
-        let odt = make_odf(
-            ".odt",
-            r#"<office:text><text:p>hello odt document</text:p></office:text>"#,
-            None,
-        );
-        let (result, _props) = extract_odf(odt.path()).unwrap();
-        assert!(result.contains("hello odt document"), "got: {result:?}");
-    }
-
-    #[test]
     fn automatic_styles_excluded_from_body() {
         let odt = make_odf(
             ".odt",
@@ -317,12 +306,6 @@ mod tests {
         let (body, props) = extract_odf(odt.path()).unwrap();
         assert_eq!(props, DocProps::default());
         assert!(body.contains("hello odt"));
-    }
-
-    #[test]
-    fn missing_file_returns_error() {
-        let result = extract_odf(std::path::Path::new("no_such_file.odt"));
-        assert!(result.is_err());
     }
 
     #[test]

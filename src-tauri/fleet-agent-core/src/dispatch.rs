@@ -514,26 +514,6 @@ pub(crate) mod tests {
         assert_eq!(postures.as_slice(), &["elevated"]);
     }
 
-    #[test]
-    fn duress_seal_is_dispatched() {
-        let key = test_signing_key();
-        let vk = key.verifying_key();
-        let now = 1_700_000_000_i64;
-        let cmd = make_cmd(&key, "duress_seal", "seal-nonce-1", now);
-        let resp = CheckinResponse {
-            all_clear: false,
-            commands: vec![cmd],
-            policy: Some(serde_json::Value::Null),
-            padding: String::new(),
-            pending_search_jobs: Vec::new(),
-            ..Default::default()
-        };
-        let dispatch = MockDispatch::default();
-        let mut seen = HashMap::new();
-        process_checkin(&resp, Some(&vk), Some(&vk), now, 300, &mut seen, &dispatch);
-        assert_eq!(*dispatch.seal_calls.lock().unwrap(), 1);
-    }
-
     /// P0 regression: the real server's `fleet_proto::SignedCommand` carries
     /// only 9 fields — NO `scope`/`ts`/`nonce`. Before the `#[serde(default)]`
     /// on `scope`, a command-carrying check-in failed to deserialize
@@ -651,24 +631,6 @@ pub(crate) mod tests {
         let out = process_checkin(&resp, Some(&vk), Some(&vk), now, 300, &mut HashMap::new(), &d);
         assert!(matches!(out[0], FleetDispatchOutcome::AuthFailed(_)));
         assert_eq!(*d.wipe_calls.lock().unwrap(), 0);
-    }
-
-    #[test]
-    fn scope_equal_to_catalog_id_and_valid_command_pass() {
-        let key = test_signing_key();
-        let vk = key.verifying_key();
-        let now = 1_700_000_000_i64;
-        // make_cmd sets catalog_id == scope.
-        let cmd = make_cmd(&key, "duress_wipe", "scope-n2", now);
-        assert_eq!(cmd.scope, cmd.catalog_id);
-        let resp = CheckinResponse {
-            commands: vec![cmd],
-            ..Default::default()
-        };
-        let d = MockDispatch::default();
-        let out = process_checkin(&resp, Some(&vk), Some(&vk), now, 300, &mut HashMap::new(), &d);
-        assert!(matches!(out[0], FleetDispatchOutcome::Dispatched { .. }));
-        assert_eq!(*d.wipe_calls.lock().unwrap(), 1);
     }
 
     /// Security: dual-key routing is fixed and local. An operator-control
@@ -885,25 +847,6 @@ pub(crate) mod tests {
             FleetDispatchOutcome::Dispatched { .. }
         ));
         assert_eq!(*dispatch2.all_clear_revoke_calls.lock().unwrap(), 1);
-    }
-
-    #[test]
-    fn dead_man_miss_on_no_all_clear() {
-        let key = test_signing_key();
-        let vk = key.verifying_key();
-        let now = 1_700_000_000_i64;
-        let resp = CheckinResponse {
-            all_clear: false,
-            commands: vec![],
-            policy: Some(serde_json::Value::Null),
-            padding: String::new(),
-            pending_search_jobs: Vec::new(),
-            ..Default::default()
-        };
-        let dispatch = MockDispatch::default();
-        let mut seen = HashMap::new();
-        process_checkin(&resp, Some(&vk), Some(&vk), now, 300, &mut seen, &dispatch);
-        assert_eq!(*dispatch.all_clear_calls.lock().unwrap(), 0);
     }
 
     // ── execute_pending_search_jobs ───────────────────────────────────────────

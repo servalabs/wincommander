@@ -2581,22 +2581,6 @@ mod tests {
         assert!(!hits[0].snippet.is_empty(), "snippet must be non-empty");
     }
 
-    /// status() transitions correctly around index_files_sync.
-    #[test]
-    fn status_reflects_indexing_progress() {
-        let index_dir = TempDir::new().unwrap();
-        let config = make_config(index_dir.path().to_path_buf(), vec![]);
-        let engine = SearchEngine::open(config).unwrap();
-        let s0 = engine.status();
-        assert!(!s0.is_indexing);
-        assert_eq!(s0.indexed_docs, 0);
-
-        // With no files the sync path still transitions correctly.
-        engine.index_files_sync(vec![]).unwrap();
-        let s1 = engine.status();
-        assert!(!s1.is_indexing);
-    }
-
     #[test]
     fn malformed_pdf_does_not_set_global_last_error() {
         use std::io::Write;

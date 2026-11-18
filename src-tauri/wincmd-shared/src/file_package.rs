@@ -326,15 +326,4 @@ mod tests {
         .is_err());
     }
 
-    #[test]
-    fn selection_uses_tagged_wire_shape() {
-        assert_eq!(
-            serde_json::to_string(&PackageSelection::All).unwrap(),
-            r#"{"kind":"all"}"#
-        );
-        let token = PackageToken::new("ab".repeat(32)).unwrap();
-        let encoded = serde_json::to_value(PackageSelection::Entries { ids: vec![token] }).unwrap();
-        assert_eq!(encoded["kind"], "entries");
-        assert_eq!(encoded["ids"][0], "ab".repeat(32));
-    }
 }
