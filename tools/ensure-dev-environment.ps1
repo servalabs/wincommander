@@ -158,7 +158,7 @@ $channel = Get-TomlString -Toml $toolchainToml -Key "channel"
 $components = Get-TomlStringArray -Toml $toolchainToml -Key "components"
 $targets = Get-TomlStringArray -Toml $toolchainToml -Key "targets"
 
-Ensure-Bun | Out-Null
+$bun = Ensure-Bun
 . (Join-Path $PSScriptRoot 'dev-perl.ps1')
 Ensure-DevPerl | Out-Null
 $rustup = Ensure-Rustup
@@ -216,6 +216,20 @@ $requiredAssets = @(
 foreach ($requiredAsset in $requiredAssets) {
     if (-not (Test-Path -LiteralPath $requiredAsset)) {
         throw "The assets submodule is missing required file: $requiredAsset"
+    }
+}
+
+# Tauri resolves the bundle globs during development even though debug uses
+# the plaintext modules at runtime. First-run checkouts need the bundle files.
+$backendScripts = Join-Path $repoRoot 'src-tauri\commander-free\scripts'
+if (-not (Test-Path -LiteralPath (Join-Path $backendScripts 'core\router.enc') -PathType Leaf) -or
+    -not (Test-Path -LiteralPath (Join-Path $backendScripts 'modules\privacy\privacy_shield.enc') -PathType Leaf)) {
+    Push-Location -LiteralPath $repoRoot
+    try {
+        & $bun run encrypt-backend
+        if ($LASTEXITCODE -ne 0) { throw "Failed to prepare the Tauri backend bundle resources." }
+    } finally {
+        Pop-Location
     }
 }
 
