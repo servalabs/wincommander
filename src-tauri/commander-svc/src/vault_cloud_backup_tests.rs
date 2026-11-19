@@ -2,6 +2,19 @@
 use super::*;
 
 #[test]
+fn personal_backup_accepts_only_same_logon_or_its_linked_uac_token() {
+    let mount = example_mount();
+    let owner = "S-1-5-21-owner";
+    assert!(same_backup_mount_owner(&mount, 7, owner, Some((11, 12)), None));
+    assert!(same_backup_mount_owner(&mount, 7, owner, Some((21, 22)), Some((11, 12))));
+    assert!(!same_backup_mount_owner(&mount, 7, owner, Some((21, 22)), None));
+    assert!(!same_backup_mount_owner(&mount, 7, owner, Some((21, 22)), Some((31, 32))));
+    assert!(!same_backup_mount_owner(&mount, 7, owner, None, Some((11, 12))));
+    assert!(!same_backup_mount_owner(&mount, 8, owner, Some((21, 22)), Some((11, 12))));
+    assert!(!same_backup_mount_owner(&mount, 7, "S-1-5-21-other", Some((21, 22)), Some((11, 12))));
+}
+
+#[test]
 fn backup_presentation_distinguishes_unavailable_drive_from_denied_access() {
     assert_eq!(backup_presentation_result(CallerPresentationAttestation::Available), Ok(()));
     for attestation in [CallerPresentationAttestation::MappingUnavailable, CallerPresentationAttestation::RootReadFailed] {

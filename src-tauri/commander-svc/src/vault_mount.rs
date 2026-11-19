@@ -3611,6 +3611,38 @@ fn authenticated_logon_id(token: windows_sys::Win32::Foundation::HANDLE) -> Opti
     ))
 }
 
+/// Windows supplies the paired filtered/elevated token for a split UAC logon.
+/// A missing or inaccessible linked token never grants additional access.
+fn linked_authentication_id(token: windows_sys::Win32::Foundation::HANDLE) -> Option<(u32, i32)> {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::Security::{GetTokenInformation, TokenLinkedToken, TOKEN_LINKED_TOKEN};
+    if token.is_null() {
+        return None;
+    }
+    let mut linked: TOKEN_LINKED_TOKEN = unsafe { std::mem::zeroed() };
+    let mut returned = 0;
+    let size = std::mem::size_of_val(&linked) as u32;
+    if unsafe {
+        GetTokenInformation(
+            token,
+            TokenLinkedToken,
+            (&mut linked as *mut TOKEN_LINKED_TOKEN).cast(),
+            size,
+            &mut returned,
+        )
+    } == 0
+        || returned != size
+        || linked.LinkedToken.is_null()
+    {
+        return None;
+    }
+    let id = authenticated_logon_id(linked.LinkedToken);
+    unsafe {
+        CloseHandle(linked.LinkedToken);
+    }
+    id
+}
+
 fn quick_mount_receipt_for_caller(
     entry_id: &str,
     active: &ActiveMount,

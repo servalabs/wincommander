@@ -132,11 +132,12 @@ impl VaultMountBroker {
         }
         if active.personal {
             if active.authentication_id.is_none()
-                || !same_mount_owner(
+                || !same_backup_mount_owner(
                     &active,
                     caller_session,
                     caller_sid,
                     authenticated_logon_id(caller_token),
+                    linked_authentication_id(caller_token),
                 )
                 || active.access != VaultAccess::Write
             {
@@ -213,6 +214,20 @@ impl VaultMountBroker {
     ) {
         supervisor::start(std::sync::Arc::clone(self), store);
     }
+}
+
+fn same_backup_mount_owner(
+    active: &ActiveMount,
+    session: u32,
+    sid: &str,
+    authentication_id: Option<(u32, i32)>,
+    linked_id: Option<(u32, i32)>,
+) -> bool {
+    if active.authentication_id.is_none() || authentication_id.is_none() {
+        return false;
+    }
+    same_mount_owner(active, session, sid, authentication_id)
+        || linked_id.is_some_and(|id| same_mount_owner(active, session, sid, Some(id)))
 }
 
 fn backup_presentation_result(attestation: CallerPresentationAttestation) -> Result<(), VaultMountReason> {
