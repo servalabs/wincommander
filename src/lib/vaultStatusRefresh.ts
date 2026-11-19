@@ -1,11 +1,14 @@
 import { vaultOperationError } from "./vaultOperationFeedback";
 
+const VAULT_STATUS_TIMEOUT_MS = 15_000;
+
 /** Read-only observation coordinator; never substitutes stale data for a failed read. */
 export function createVaultStatusRefresh<T>(
   publish: (value: T | null) => void,
   setRefreshing: (value: boolean) => void = () => {},
   onError: (error: unknown | null) => void = () => {},
   setForegroundRefreshing: (value: boolean) => void = () => {},
+  timeoutMs = VAULT_STATUS_TIMEOUT_MS,
 ) {
   let latestRequest = 0;
   let pending = 0;
@@ -19,8 +22,16 @@ export function createVaultStatusRefresh<T>(
     if (++pending === 1) setRefreshing(true);
     if (!background && ++foregroundPending === 1) setForegroundRefreshing(true);
     const operation = (async () => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        const value = await Promise.resolve().then(read);
+        // A stalled native call must not leave the UI waiting forever. This
+        // limits the observation only; it does not assert or change mount state.
+        const value = await Promise.race([
+          Promise.resolve().then(read),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error("vault_inventory_timeout")), timeoutMs);
+          }),
+        ]);
         if (request !== latestRequest) return null;
         if (value !== null) { publish(value); onError(null); }
         else onError(new Error("vault_inventory_unavailable"));
@@ -29,6 +40,7 @@ export function createVaultStatusRefresh<T>(
         if (request === latestRequest) onError(error);
         return null;
       } finally {
+        if (timer !== undefined) clearTimeout(timer);
         if (--pending === 0) setRefreshing(false);
         if (!background && --foregroundPending === 0) setForegroundRefreshing(false);
         if (request === latestRequest) active = null;
@@ -42,6 +54,7 @@ export function createVaultStatusRefresh<T>(
 
 export function vaultInventoryFailureMessage(error: unknown): string {
   const detail = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  if (detail.includes("vault_inventory_timeout")) return "Checking mounted volumes took too long. Any listed drives are from the last confirmed check and may have changed. Refresh to try again.";
   if (detail.includes("vault_runtime_update_required") || detail.includes("vault_service_personal_status_invalid")) return vaultOperationError(detail);
   if (detail.includes("vault_mount_state_unknown")) return `${vaultOperationError(detail, "dismount")} Any listed drives are from the last confirmed check and may have changed.`;
   if (detail.includes("caller_root_unavailable")) return "Windows could not verify this account's mounted drive. This does not prove that the encrypted volume was dismounted. Refresh status before using it.";

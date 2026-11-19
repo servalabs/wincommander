@@ -107,3 +107,24 @@ test("refresh stays busy until every outstanding read settles, including failure
   await refresh(async () => []);
   expect(busy).toEqual([true, false, true, false]);
 });
+
+test("a stuck inventory times out, preserves the last result and permits a retry", async () => {
+  const values: Array<string[] | null> = [];
+  const busy: boolean[] = [];
+  const errors: unknown[] = [];
+  const refresh = createVaultStatusRefresh<string[]>(
+    value => values.push(value), value => busy.push(value), error => errors.push(error), () => {}, 20,
+  );
+  await refresh(async () => ["J:"]);
+  let release!: (value: string[]) => void;
+  const stuck = refresh(() => new Promise(resolve => { release = resolve; }));
+  expect(await stuck).toBe(null);
+  expect(values).toEqual([["J:"]]);
+  expect(busy.at(-1)).toBe(false);
+  expect(vaultInventoryFailureMessage(errors.at(-1))).toContain("took too long");
+  expect(await refresh(async () => ["K:"])).toEqual(["K:"]);
+  release(["old"]);
+  await Promise.resolve();
+  expect(values).toEqual([["J:"], ["K:"]]);
+  expect(errors.at(-1)).toBe(null);
+});
