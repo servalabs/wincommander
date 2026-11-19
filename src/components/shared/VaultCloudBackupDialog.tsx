@@ -61,10 +61,10 @@ export default function VaultCloudBackupDialog({ isOpen, onClose, internalDrive,
           <dl className="vault-cloud-backup__summary"><dt>Backup tool</dt><dd>{result.engine_ready ? "Ready" : "Not set up"}</dd>
             <dt>Proton account</dt><dd>{result.running ? "Not checked during operation" : result.connection_check === "connected" ? "Proton connection checked" : result.connection_check === "signed_out" ? "Sign-in required" : result.connected ? "Saved login; connection not checked" : "Not connected"}</dd>
             {cloudBackupDisplayPath(result.remote_path) && <><dt>Destination</dt><dd>{cloudBackupDisplayPath(result.remote_path)}</dd></>}
-            {result.configured && <><dt>Backup folder</dt><dd>{result.running ? "Not checked during operation" : result.remote_check === "present" ? "Proton reported folder present" : result.remote_check === "missing" ? "Not found on last check" : "Not checked"}</dd></>}</dl>
+            {result.configured && <><dt>Backup folder</dt><dd>{result.running ? "Not checked during operation" : result.remote_check === "present" ? "Proton CLI reports folder present" : result.remote_check === "missing" ? "Not found on last check" : "Not checked"}</dd></>}</dl>
           {checkedAt && !result.running && <p className="vault-cloud-backup__muted">Last check: <time dateTime={checkedAt}>{new Date(checkedAt).toLocaleString()}</time></p>}
-          {!result.running && result.remote_check === "present" && <p className="vault-cloud-backup__muted">Proton reported the folder was present; verify backup to check file contents.</p>}
-          {!result.running && result.remote_check === "missing" && <p role="status">Proton did not find the backup folder on the last check. Check the destination or back up again.</p>}
+          {!result.running && result.remote_check === "present" && <p className="vault-cloud-backup__muted">The Proton CLI may use cached results. Verify backup to check file contents.</p>}
+          {!result.running && result.remote_check === "missing" && <p role="status">The Proton CLI did not find the folder on its last check; its result may be cached. Check the destination or back up again.</p>}
           <div className="vault-cloud-backup__actions">
             {!result.engine_ready && <Button disabled={busy || !result.can_configure} onClick={() => void perform("prepare")}>Set up backup tool</Button>}
             {result.engine_ready && (!result.connected || result?.connection_check === "signed_out") && <Button disabled={busy || !result.can_configure} onClick={() => void perform("connect")}>Connect Proton Drive</Button>}
