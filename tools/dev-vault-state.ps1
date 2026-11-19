@@ -1,7 +1,18 @@
 [CmdletBinding()]
 param([switch]$InspectOnly)
 
+function Test-WcMachineWideVaultInventoryAccess {
+    # The VeraCrypt driver filters its mount list by the caller's security
+    # context. A standard token can see zero even while other slots exist.
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
 function Get-WcNativeVaultCount {
+    if (-not (Test-WcMachineWideVaultInventoryAccess)) {
+        throw 'A machine-wide VeraCrypt inventory requires elevation'
+    }
     # Query the driver directly: its mount list includes slots not owned by the
     # WinCommander service. Never print or retain the returned container paths.
     if (-not ('WcDevVaultInventory' -as [type])) {

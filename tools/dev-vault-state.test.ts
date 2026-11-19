@@ -41,6 +41,20 @@ ConvertTo-Json -Compress -InputObject @($results)
   expect(JSON.parse(result.stdout.trim())).toEqual([0, "blocked", "blocked", 2]);
 });
 
+test.skipIf(process.platform !== "win32")("filtered user-token inventory is never treated as machine-wide empty", () => {
+  const probe = `
+. ./tools/dev-vault-state.ps1
+function Test-WcMachineWideVaultInventoryAccess { return $false }
+$state = (Get-WcDevelopmentVaultState).state
+try { Assert-WcNativeVaultsUnmounted; $guard = 'allowed' } catch { $guard = 'blocked' }
+ConvertTo-Json -Compress -InputObject @($state, $guard)
+`;
+  const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", probe],
+    { cwd: process.cwd(), encoding: "utf8", timeout: 10_000 });
+  expect(result.status).toBe(0);
+  expect(JSON.parse(result.stdout.trim())).toEqual(["unknown", "blocked"]);
+});
+
 test("failed, malformed and inconsistent observations preserve native processes", () => {
   for (const [output, code] of [["", 0], ['{"state":"free","mountedCount":1}', 0],
     ['{"state":"mounted","mountedCount":0}', 0], ['{"state":"free","mountedCount":0}', 1],
