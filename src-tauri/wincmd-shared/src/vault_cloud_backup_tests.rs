@@ -169,3 +169,15 @@ fn confirmation_requires_completed_matching_operation_and_destination() {
     result.last_backup = Some(run);
     assert!(!result.valid());
 }
+#[test]
+fn old_status_payload_defaults_live_checks_to_unknown() {
+    let original = VaultCloudBackupResult::default();
+    let mut value = serde_json::to_value(&original).unwrap();
+    let object = value.as_object_mut().unwrap();
+    for key in ["connection_check", "remote_check", "checked_at", "remote_path"] { object.remove(key); }
+    let restored: VaultCloudBackupResult = serde_json::from_value(value).unwrap();
+    assert_eq!(restored.connection_check, VaultCloudConnectionCheck::Unknown);
+    assert_eq!(restored.remote_check, VaultCloudRemoteCheck::Unknown);
+    assert!(restored.checked_at.is_none() && restored.remote_path.is_none());
+    assert!(restored.valid());
+}

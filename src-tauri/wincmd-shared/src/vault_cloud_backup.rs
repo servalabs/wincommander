@@ -167,11 +167,31 @@ fn valid_observed_time(value: &str) -> bool {
     !value.is_empty() && value.len() <= 40 && !value.chars().any(char::is_control)
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "ipc.ts"))]
+#[serde(rename_all = "snake_case")]
+pub enum VaultCloudConnectionCheck { #[default] Unknown, Connected, SignedOut }
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "ipc.ts"))]
+#[serde(rename_all = "snake_case")]
+pub enum VaultCloudRemoteCheck { #[default] Unknown, Present, Missing }
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
 #[cfg_attr(feature = "ts-codegen", ts(export, export_to = "ipc.ts"))]
 #[serde(deny_unknown_fields)]
 pub struct VaultCloudBackupResult {
+    #[serde(default)]
+    pub connection_check: VaultCloudConnectionCheck,
+    #[serde(default)]
+    pub remote_check: VaultCloudRemoteCheck,
+    #[serde(default)]
+    pub checked_at: Option<String>,
+    #[serde(default)]
+    pub remote_path: Option<String>,
     pub mount_receipt: Option<String>,
     pub engine_ready: bool,
     pub connected: bool,
@@ -193,7 +213,9 @@ pub struct VaultCloudBackupResult {
 
 impl VaultCloudBackupResult {
     pub fn valid(&self) -> bool {
-        self.mount_receipt
+        self.checked_at.as_deref().is_none_or(valid_observed_time)
+            && self.remote_path.as_deref().is_none_or(|path| path.starts_with("/my-files/") && path.len() <= 512 && !path.chars().any(char::is_control))
+            && self.mount_receipt
             .as_deref()
             .is_none_or(valid_sync_mount_receipt)
             && self.configured == self.configuration.is_some()

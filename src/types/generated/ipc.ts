@@ -223,7 +223,11 @@ export type VaultCloudBackupReceipt = { action: VaultCloudBackupAction | null, r
 
 export type VaultCloudBackupRequest = { personal: boolean, internal_drive: number, action: VaultCloudBackupAction, expected_mount_receipt: string | null, configuration: VaultCloudBackupConfiguration | null, restore_relative_path: string | null, };
 
-export type VaultCloudBackupResult = { mount_receipt: string | null, engine_ready: boolean, connected: boolean, configured: boolean, automatic: boolean, watching: boolean, running: boolean, can_configure: boolean, configuration: VaultCloudBackupConfiguration | null, last_run: VaultCloudBackupReceipt | null, last_backup: VaultCloudBackupReceipt | null, last_verification: VaultCloudBackupReceipt | null, last_restore: VaultCloudBackupReceipt | null, reason_code: string | null, };
+export type VaultCloudBackupResult = { connection_check: VaultCloudConnectionCheck, remote_check: VaultCloudRemoteCheck, checked_at: string | null, remote_path: string | null, mount_receipt: string | null, engine_ready: boolean, connected: boolean, configured: boolean, automatic: boolean, watching: boolean, running: boolean, can_configure: boolean, configuration: VaultCloudBackupConfiguration | null, last_run: VaultCloudBackupReceipt | null, last_backup: VaultCloudBackupReceipt | null, last_verification: VaultCloudBackupReceipt | null, last_restore: VaultCloudBackupReceipt | null, reason_code: string | null, };
+
+export type VaultCloudConnectionCheck = "unknown" | "connected" | "signed_out";
+
+export type VaultCloudRemoteCheck = "unknown" | "present" | "missing";
 
 export type VaultSyncAction = "enable" | "list" | "rename" | "remove";
 
