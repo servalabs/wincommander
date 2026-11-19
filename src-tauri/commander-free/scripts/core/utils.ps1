@@ -130,11 +130,9 @@ function Split-ListParam {
 function Test-ImDiskInstallerSignature {
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    # REQUIRED-OWNER-INPUT: confirm this subject pattern against the signer
-    # certificate of a real https://www.ltr-data.se/files/imdiskinst.exe
-    # download (Get-AuthenticodeSignature <file>).SignerCertificate.Subject.
-    # Until it matches, the installer is rejected (fail closed).
-    $expectedSignerPattern = '(?:^|,\s*)CN=Olof Lagerkvist(?:,|$)'
+    # Subject CN of the signer on https://www.ltr-data.se/files/imdiskinst.exe,
+    # confirmed from a real download (Authenticode status Valid, 2026-11-19).
+    $expectedSignerPattern = '(?:^|,\s*)CN=LAGERKVIST TEKNISK R.DGIVNING I BOR.S HB(?:,|$)'
 
     try {
         $signature = Get-AuthenticodeSignature -FilePath $Path -ErrorAction Stop
