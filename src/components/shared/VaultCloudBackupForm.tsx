@@ -23,6 +23,7 @@ export default function VaultCloudBackupForm({ configuration, disabled, canSave,
   const [consent, setConsent] = useState(false);
   const [error, setError] = useState("");
   const [picking, setPicking] = useState(false);
+  const selectedSources = sources.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
   const pickSources = async (directory: boolean) => {
     setPicking(true);
     try {
@@ -33,12 +34,12 @@ export default function VaultCloudBackupForm({ configuration, disabled, canSave,
       setSources(next);
       setError("");
     } catch {
-      setError("The file picker could not be opened. Enter paths inside this Vault below.");
+      setError("The file picker could not be opened. Please try again.");
     } finally { setPicking(false); }
   };
   const save = () => {
     const next: VaultCloudBackupConfiguration = {
-      whole_vault: wholeVault, source_relative_paths: wholeVault ? [] : sources.split(/\r?\n/).map(value => value.trim()).filter(Boolean),
+      whole_vault: wholeVault, source_relative_paths: wholeVault ? [] : selectedSources,
       remote_folder_name: name.trim(), automatic,
     };
     const failure = validateCloudBackupDraft(next);
@@ -54,10 +55,15 @@ export default function VaultCloudBackupForm({ configuration, disabled, canSave,
       {!wholeVault && <div><div className="vault-cloud-backup__actions">
         <Button disabled={picking} onClick={() => void pickSources(true)}>Choose folders</Button>
         <Button disabled={picking} onClick={() => void pickSources(false)}>Choose files</Button>
-      </div><label htmlFor={`${id}-sources`}>Selected paths inside this Vault — one per line</label>
-        <textarea id={`${id}-sources`} value={sources} onChange={event => setSources(event.target.value)} maxLength={8000} rows={4} placeholder={"Documents\nPhotos"} aria-describedby={`${id}-help`} />
+      </div><p id={`${id}-sources`}>Selected files and folders</p>
+        {selectedSources.length ? <ul className="vault-cloud-backup__sources" aria-labelledby={`${id}-sources`}>
+          {selectedSources.map((path, index) => <li key={`${path}-${index}`}>
+            <span>{path}</span>
+            <Button aria-label={`Remove ${path}`} onClick={() => { setSources(selectedSources.filter((_, selectedIndex) => selectedIndex !== index).join("\n")); setError(""); }}>Remove</Button>
+          </li>)}
+        </ul> : <p className="vault-cloud-backup__muted">No files or folders selected.</p>}
       </div>}
-      <p id={`${id}-help`} className="vault-cloud-backup__muted">Choose files or folders inside this Vault, or enter paths such as Documents. Backup settings and system folders are excluded.</p>
+      <p className="vault-cloud-backup__muted">Choose files or folders inside this Vault. Backup settings and system folders are excluded.</p>
       <label htmlFor={`${id}-name`}>Proton backup folder name</label>
       <Input id={`${id}-name`} value={name} maxLength={128} onChange={event => setName(event.target.value)} />
       <p className="vault-cloud-backup__muted">Destination: My files / WinCommander Vault Backups / {name || "your folder"}</p>
