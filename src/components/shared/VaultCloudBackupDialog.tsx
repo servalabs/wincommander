@@ -23,6 +23,7 @@ export default function VaultCloudBackupDialog({ isOpen, onClose, internalDrive,
   const [confirmation, setConfirmation] = useState<"disconnect" | "remove_setup" | null>(null);
   // The backend's read-only check is distinct from the saved login and historical receipts.
   const checks = result as (typeof result & { connection_check?: "unknown" | "connected" | "signed_out"; remote_check?: "unknown" | "present" | "missing"; checked_at?: string | null; remote_path?: string | null });
+  const stoppingPossible = Boolean((result?.running || result?.watching || result?.reason_code === "cloud_backup_sign_in_pending") && (!busy || action === "status"));
   const ready = Boolean(result?.engine_ready && result.connected && result.configured && checks?.connection_check !== "signed_out");
   const runs = result ? cloudBackupRecordedRuns(result) : null;
   const restoreSummary = runs?.restore ? cloudBackupRunSummary(runs.restore) : null;
@@ -43,12 +44,12 @@ export default function VaultCloudBackupDialog({ isOpen, onClose, internalDrive,
   const run = (operation: "disconnect" | "remove_setup") => {
     setConfirmation(null); void perform(operation);
   };
-  return <Dialog isOpen={isOpen} onClose={close} title={`Cloud backup â€” ${driveLabel}`} className="vault-cloud-backup"
+  return <Dialog isOpen={isOpen} onClose={close} title={`Cloud backup - ${driveLabel}`} className="vault-cloud-backup"
     style={{ width: "min(45rem, calc(100vw - 2rem))" }} canEscapeKeyClose canOutsideClickClose isCloseButtonShown
     onOpenAutoFocus={() => { returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; }}
     onCloseAutoFocus={event => { if (returnFocus.current?.isConnected) { event.preventDefault(); returnFocus.current.focus({ preventScroll: true }); } }}>
     <DialogBody className="vault-cloud-backup__body">
-      <div className="vault-cloud-backup__hero"><div><p className="vault-cloud-backup__eyebrow">PROTON DRIVE</p><p className="vault-cloud-backup__intro">Back up files from this Vault</p></div><div className="vault-cloud-backup__status" role="status" aria-live="polite">{(busy || result?.running) && <span className="vault-cloud-backup__spinner" aria-hidden="true" />}{busy ? action === "connect" ? "Complete the one-time Proton sign-in in your browser. Keep this Vault open." : action === "prepare" ? "Setting up the backup tool inside this Vaultâ€¦" : action === "status" ? "Checking backup statusâ€¦" : "Applying backup actionâ€¦ Keep this Vault open." : result ? cloudBackupStateLabel(result) : "Backup status is unavailable."}</div></div>
+      <div className="vault-cloud-backup__hero"><div><p className="vault-cloud-backup__eyebrow">PROTON DRIVE</p><p className="vault-cloud-backup__intro">Back up files from this Vault</p></div><div className="vault-cloud-backup__status" role="status" aria-live="polite">{(busy || result?.running) && <span className="vault-cloud-backup__spinner" aria-hidden="true" />}{busy ? action === "connect" ? "Complete the one-time Proton sign-in in your browser. Keep this Vault open." : action === "prepare" ? "Setting up the backup tool inside this Vault..." : action === "status" ? "Checking backup status..." : action === "start" ? "Starting backup..." : "Applying backup action... Keep this Vault open." : result ? cloudBackupStateLabel(result) : "Backup status is unavailable."}</div></div>
       <VaultOperationNotice message={error} />
       {result && <>
         <nav className="vault-cloud-backup__nav" aria-label="Cloud backup sections">
@@ -81,7 +82,7 @@ export default function VaultCloudBackupDialog({ isOpen, onClose, internalDrive,
           {restoreSummary && <button type="button" className="vault-cloud-backup__link" onClick={() => setView("restore")}>Last restore: {restoreSummary.title}</button>}
           <div className="vault-cloud-backup__actions">
             <Button disabled={busy || !ready || result.running} onClick={() => void perform("start")}>Back up now</Button>
-            <Button disabled={busy || (!result.running && !result.watching && result.reason_code !== "cloud_backup_sign_in_pending")} onClick={() => void perform("stop")}>Stop backup</Button>
+            <Button disabled={!stoppingPossible || action === "stop"} onClick={() => void perform("stop")}>Stop backup</Button>
             <Button disabled={busy || !ready || result.running} onClick={() => void perform("verify")}>Verify backup</Button>
           </div>
         </section>
