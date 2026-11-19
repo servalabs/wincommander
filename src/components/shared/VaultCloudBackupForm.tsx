@@ -53,20 +53,19 @@ export default function VaultCloudBackupForm({ configuration, disabled, canSave,
       <label><input type="radio" name={`${id}-source`} checked={wholeVault} onChange={() => setWholeVault(true)} /> Whole Vault</label>
       <label><input type="radio" name={`${id}-source`} checked={!wholeVault} onChange={() => setWholeVault(false)} /> Choose files or folders</label>
       {!wholeVault && <div><div className="vault-cloud-backup__actions">
-        <Button disabled={picking} onClick={() => void pickSources(true)}>Choose folders</Button>
-        <Button disabled={picking} onClick={() => void pickSources(false)}>Choose files</Button>
+        <Button icon="folder-open" aria-label="Choose folders" title="Choose folders" disabled={picking} onClick={() => void pickSources(true)} />
+        <Button icon="document" aria-label="Choose files" title="Choose files" disabled={picking} onClick={() => void pickSources(false)} />
       </div><p id={`${id}-sources`}>Selected files and folders</p>
         {selectedSources.length ? <ul className="vault-cloud-backup__sources" aria-labelledby={`${id}-sources`}>
           {selectedSources.map((path, index) => <li key={`${path}-${index}`}>
             <span>{path}</span>
-            <Button aria-label={`Remove ${path}`} onClick={() => { setSources(selectedSources.filter((_, selectedIndex) => selectedIndex !== index).join("\n")); setError(""); }}>Remove</Button>
+            <Button icon="cross" minimal aria-label={`Remove ${path}`} title={`Remove ${path}`} onClick={() => { setSources(selectedSources.filter((_, selectedIndex) => selectedIndex !== index).join("\n")); setError(""); }} />
           </li>)}
         </ul> : <p className="vault-cloud-backup__muted">No files or folders selected.</p>}
       </div>}
       <p className="vault-cloud-backup__muted">Choose files or folders inside this Vault. Backup settings and system folders are excluded.</p>
       <label htmlFor={`${id}-name`}>Proton backup folder name</label>
       <Input id={`${id}-name`} value={name} maxLength={128} onChange={event => setName(event.target.value)} />
-      <p className="vault-cloud-backup__muted">Destination: My files / WinCommander Vault Backups / {name || "your folder"}</p>
       <label><input type="checkbox" checked={automatic} onChange={event => setAutomatic(event.target.checked)} /> Back up changes automatically while this Vault is open</label>
       <p className="vault-cloud-backup__muted">Resumes when you reopen the Vault.</p>
       <label><input type="checkbox" checked={consent} onChange={event => setConsent(event.target.checked)} /> I agree to copy these files to my Proton Drive account.</label>

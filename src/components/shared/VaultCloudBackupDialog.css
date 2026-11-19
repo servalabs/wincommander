@@ -26,3 +26,25 @@
 .vault-cloud-backup__summary dd { margin: 0; overflow-wrap: anywhere; }
 .vault-cloud-backup__actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .vault-cloud-backup__section > button { justify-self: start; }
+.vault-cloud-backup__body { padding: 20px 24px !important; }
+.vault-cloud-backup__hero { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px; border: 1px solid var(--border); border-radius: var(--r); background: var(--surface-2); }
+.vault-cloud-backup__eyebrow { font-size: 11px; font-weight: 700; letter-spacing: .08em; color: var(--text-dim); margin: 0 0 4px; }
+.vault-cloud-backup__intro { font-weight: 600; margin: 0; }
+.vault-cloud-backup__status { font-size: 13px; color: var(--text-dim); text-align: right; }
+.vault-cloud-backup__nav { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin: 16px 0; }
+.vault-cloud-backup__nav button { padding: 10px 14px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--text-dim); cursor: pointer; font: inherit; }
+.vault-cloud-backup__nav button[aria-pressed="true"] { border-bottom-color: var(--color-accent, #008b67); color: var(--text); font-weight: 600; }
+.vault-cloud-backup__nav button:focus-visible, .vault-cloud-backup__link:focus-visible { outline: 2px solid var(--color-accent, #008b67); outline-offset: 2px; }
+.vault-cloud-backup__panel { display: grid; gap: 12px; }
+.vault-cloud-backup__panel[hidden] { display: none; }
+.vault-cloud-backup__panel > .vault-cloud-backup__section, .vault-cloud-backup__card { padding: 16px; border: 1px solid var(--border); border-radius: var(--r); }
+.vault-cloud-backup__card summary { font-size: 13px; font-weight: 600; color: var(--text); }
+.vault-cloud-backup__disclosure { margin-top: 12px; }
+.vault-cloud-backup__link { padding: 0; border: 0; background: transparent; color: var(--color-accent, #008b67); font: inherit; text-align: left; cursor: pointer; }
+.vault-cloud-backup__sources li { padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--r-sm); }
+@media (max-width: 600px) { .vault-cloud-backup__hero { align-items: flex-start; flex-direction: column; } .vault-cloud-backup__status { text-align: left; } }
+
+.vault-cloud-backup__status { display: flex; align-items: center; gap: 8px; }
+.vault-cloud-backup__spinner { display: inline-block; width: 14px; height: 14px; flex: none; border: 2px solid var(--border); border-top-color: var(--color-accent, #008b67); border-radius: 50%; animation: vault-cloud-spin .8s linear infinite; }
+@keyframes vault-cloud-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .vault-cloud-backup__spinner { animation-duration: 2s; } }

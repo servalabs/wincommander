@@ -20,7 +20,7 @@ test("backup picker adds selected Vault paths and rejects paths outside it", asy
     const { createRoot } = await import('react-dom/client');
     let chosen = ['X:\\Docs', 'X:\\Notes.txt']; const calls = [];
     mock.module('@tauri-apps/plugin-dialog', () => ({ open: async options => { calls.push(options); return chosen; } }));
-    mock.module('@/components/ui/bp', () => ({ Button: ({ children, ...props }) => h('button', props, children) }));
+    mock.module('@/components/ui/bp', () => ({ Button: ({ children, icon, minimal, ...props }) => h('button', props, children) }));
     mock.module('@/components/ui/input', () => ({ Input: props => h('input', props) }));
     const { default: Form } = await import('./src/components/shared/VaultCloudBackupForm');
     const host = document.getElementById('root'); const root = createRoot(host);
@@ -28,7 +28,7 @@ test("backup picker adds selected Vault paths and rejects paths outside it", asy
     const configuration = { whole_vault: false, source_relative_paths: ['Existing'], remote_folder_name: 'Test Vault', automatic: true };
     await act(async () => root.render(h(Form, { configuration, driveLabel: 'X:', disabled: false, canSave: true, onSave: value => saved.push(value) })));
     const buttons = () => [...host.querySelectorAll('button')];
-    const named = text => buttons().find(button => button.textContent === text);
+    const named = text => buttons().find(button => button.textContent === text || button.getAttribute('aria-label') === text);
     const selected = () => [...host.querySelectorAll('.vault-cloud-backup__sources li span')].map(item => item.textContent);
     assert.equal(host.querySelector('textarea'), null);
     assert.deepEqual(selected(), ['Existing']);

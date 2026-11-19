@@ -108,3 +108,31 @@ test("slow backup status keeps setup editable and cannot overwrite a newer user 
     expect({ code: await child.exited, stderr }).toEqual({ code: 0, stderr: "" });
   } finally { clearTimeout(timer); }
 }, 40_000);
+
+test("closing a dialog during an active request never sends stop", async () => {
+  const script = String.raw`
+    import { mock } from 'bun:test'; import { strict as assert } from 'node:assert'; import { JSDOM } from 'jsdom';
+    const dom = new JSDOM('<div id="root"></div>', { url: 'http://localhost' });
+    globalThis.window = dom.window; globalThis.document = dom.window.document; globalThis.navigator = dom.window.navigator; globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+    const React = await import('react'); const { act, createElement: h } = React; const { createRoot } = await import('react-dom/client');
+    const calls = []; let finish; let current;
+    const status = { mount_receipt: 'a'.repeat(64), engine_ready: true, connected: true, configured: true, automatic: false, watching: false, running: false, can_configure: true, configuration: null, last_run: null, reason_code: null };
+    const backend = { manageVaultCloudBackup: async req => { calls.push(req.action); if (req.action === 'start') return new Promise(resolve => { finish = resolve; }); return status; } };
+    mock.module('./src/hooks/useBackend', () => ({ default: () => backend }));
+    const { default: useBackup } = await import('./src/hooks/useVaultCloudBackup');
+    function Harness({ open }) { current = useBackup(open, true, 4); return null; }
+    const root = createRoot(document.getElementById('root'));
+    await act(async () => root.render(h(Harness, { open: true })));
+    await act(async () => { void current.perform('start'); });
+    assert.equal(current.busy, true);
+    await act(async () => root.render(h(Harness, { open: false })));
+    assert.deepEqual(calls, ['status', 'start']);
+    await act(async () => finish({ ...status, running: true }));
+    assert.deepEqual(calls, ['status', 'start'], 'closing must not send stop or cancel the backend request');
+    await act(async () => root.unmount()); dom.window.close();
+  `;
+  const child = Bun.spawn([Bun.which("bun")!, "-e", script], { stdout: "pipe", stderr: "pipe" });
+  const timer = setTimeout(() => child.kill(), 30_000);
+  try { const stderr = await new Response(child.stderr).text(); expect({ code: await child.exited, stderr }).toEqual({ code: 0, stderr: "" }); }
+  finally { clearTimeout(timer); }
+}, 40_000);
