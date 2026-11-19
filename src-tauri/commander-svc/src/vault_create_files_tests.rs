@@ -104,3 +104,14 @@ fn held_destination_allows_existing_owner_acl_and_identity_completion() {
     WindowsAclApplier.restore(&original).unwrap();
     reserved.commit();
 }
+
+#[test]
+fn held_destination_allows_service_identity_readback() {
+    use crate::vault_access::{VaultFs, WindowsVaultFs};
+    let fixture = Fixture::new();
+    let target = fixture.0.join("new.bin");
+    let mut reserved = Destination::create(&target).unwrap();
+    let identity = WindowsVaultFs.personal_creation_target_identity(&target);
+    assert!(identity.is_ok(), "identity readback failed: {identity:?}");
+    reserved.commit();
+}

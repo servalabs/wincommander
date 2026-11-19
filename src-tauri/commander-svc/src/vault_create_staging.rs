@@ -22,6 +22,33 @@ pub(super) struct Creation {
     expected_bytes: u64,
 }
 
+#[derive(Debug)]
+pub(super) enum PublishFailure {
+    BrokerPath,
+    SourceOpen,
+    SourceSize,
+    Copy,
+    Flush,
+    SourceHash,
+    DestinationHash,
+    ContentMismatch,
+}
+
+impl PublishFailure {
+    pub(super) fn diagnostic_code(&self) -> &'static str {
+        match self {
+            Self::BrokerPath => "VLT.CREATE.STAGE_PATH_FAILED",
+            Self::SourceOpen => "VLT.CREATE.STAGE_OPEN_FAILED",
+            Self::SourceSize => "VLT.CREATE.STAGE_SIZE_FAILED",
+            Self::Copy => "VLT.CREATE.STAGE_COPY_FAILED",
+            Self::Flush => "VLT.CREATE.STAGE_FLUSH_FAILED",
+            Self::SourceHash => "VLT.CREATE.STAGE_SOURCE_HASH_FAILED",
+            Self::DestinationHash => "VLT.CREATE.STAGE_DEST_HASH_FAILED",
+            Self::ContentMismatch => "VLT.CREATE.STAGE_CONTENT_MISMATCH",
+        }
+    }
+}
+
 fn expected_bytes(args: &Value) -> Result<u64, VaultError> {
     let size = args
         .get("HostSizeMB")
@@ -176,28 +203,31 @@ impl Creation {
         Ok(())
     }
 
-    pub(super) fn publish(&mut self, result: &mut Value) -> Result<(), VaultError> {
+    pub(super) fn publish(&mut self, result: &mut Value) -> Result<(), PublishFailure> {
         let path = self.stage.path.join("container.bin");
         if result.get("path").and_then(Value::as_str) != path.to_str() {
-            return Err(VaultError::ContainerIdentity);
+            return Err(PublishFailure::BrokerPath);
         }
-        let (mut source, _parents) = files::read_file(&path)?;
-        if files::regular(&source)? != self.expected_bytes {
-            return Err(VaultError::ContainerIdentity);
+        let (mut source, _parents) =
+            files::read_file(&path).map_err(|_| PublishFailure::SourceOpen)?;
+        if files::regular(&source).map_err(|_| PublishFailure::SourceSize)? != self.expected_bytes {
+            return Err(PublishFailure::SourceSize);
         }
         if std::io::copy(&mut source, &mut self.destination.file)
-            .map_err(|_| VaultError::Persistence)?
+            .map_err(|_| PublishFailure::Copy)?
             != self.expected_bytes
         {
-            return Err(VaultError::ContainerIdentity);
+            return Err(PublishFailure::Copy);
         }
         self.destination
             .file
             .sync_all()
-            .map_err(|_| VaultError::Persistence)?;
-        let source_hash = file_hash(&mut source)?;
-        if file_hash(&mut self.destination.file)? != source_hash {
-            return Err(VaultError::ContainerIdentity);
+            .map_err(|_| PublishFailure::Flush)?;
+        let source_hash = file_hash(&mut source).map_err(|_| PublishFailure::SourceHash)?;
+        if file_hash(&mut self.destination.file).map_err(|_| PublishFailure::DestinationHash)?
+            != source_hash
+        {
+            return Err(PublishFailure::ContentMismatch);
         }
         result["path"] = Value::String(self.output_path.clone());
         Ok(())
@@ -236,6 +266,64 @@ fn check_capacity(bytes: u64, staging_free: u64, destination_free: u64) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "requires elevated Windows test runner"]
+    fn staging_publish_and_identity_readback_with_held_destination() {
+        use crate::vault_access::{VaultFs, WindowsVaultFs};
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::Security::{TOKEN_DUPLICATE, TOKEN_QUERY};
+        use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+        let directory =
+            std::env::temp_dir().join(format!("wc-stage-test-{}", rand::random::<u64>()));
+        std::fs::create_dir(&directory).unwrap();
+        let target = directory.join("container.bin");
+        let mut token = std::ptr::null_mut();
+        assert_ne!(
+            unsafe {
+                OpenProcessToken(
+                    GetCurrentProcess(),
+                    TOKEN_DUPLICATE | TOKEN_QUERY,
+                    &mut token,
+                )
+            },
+            0
+        );
+        let mut args = serde_json::json!({"SizeMB":1});
+        let mut creation =
+            Creation::prepare(&mut args, target.to_str().unwrap(), token).expect("prepare");
+        let staged = args["Path"].as_str().unwrap();
+        std::fs::write(staged, vec![42u8; 1024 * 1024]).unwrap();
+        let mut result = serde_json::json!({"path": staged});
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
+        let writer = OpenOptions::new()
+            .write(true)
+            .share_mode(FILE_SHARE_READ)
+            .open(staged)
+            .unwrap();
+        assert!(matches!(
+            creation.publish(&mut result),
+            Err(PublishFailure::SourceOpen)
+        ));
+        assert_eq!(
+            std::fs::metadata(&target).unwrap().len(),
+            0,
+            "a locked source must not be copied"
+        );
+        drop(writer);
+        creation.publish(&mut result).expect("publish");
+        with_caller_impersonation(token, || {
+            WindowsVaultFs.personal_creation_target_identity(&target)
+        })
+        .expect("caller identity");
+        creation.commit();
+        drop(creation);
+        unsafe {
+            CloseHandle(token);
+        }
+        std::fs::remove_file(target).unwrap();
+        std::fs::remove_dir(directory).unwrap();
+    }
     #[test]
     fn creation_sizes_are_positive_and_bounded_before_formatting() {
         assert_eq!(

@@ -2640,8 +2640,16 @@ async fn handle_personal_vault_create(
         personal_vault_creation_failure(reason)
     })?;
     if let Some(staging) = &mut staging {
-        staging.publish(&mut result).map_err(|_| {
+        staging.publish(&mut result).map_err(|failure| {
             if let Some(registration) = &registration { vault_access.cancel_personal_registration(registration); }
+            crate::diagnostics::record_vault_failure(
+                &diagnostic_operation_id,
+                "create",
+                failure.diagnostic_code(),
+                "review_create_diagnostics",
+                false,
+                started,
+            );
             VerbError::new("vault_creation_verification_failed", "The encrypted Vault could not be copied and verified at the selected destination. No completed Vault was saved.")
         })?;
     }
