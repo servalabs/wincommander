@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/bp";
 import { useCallback, useEffect, useState, useMemo, useRef } from "react";
 import { motion } from "framer-motion";
+import RemoteSupportSection from "./RemoteSupportSection";
 import { panelVariants, panelTransition, DURATION_S, EASE } from "../../components/shared/motion";
 import useBackend, { MeshVPNStatus, MeshVPNPeer, executeBackendCommand } from "../../hooks/useBackend";
 import {
@@ -1324,6 +1325,7 @@ function PrivateMeshPanel() {
                     />
                 </DialogFooter>
             </Dialog>
+            <RemoteSupportSection />
         </motion.div>
         </>
     );

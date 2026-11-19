@@ -84,6 +84,7 @@ mod disk_backup_privilege;
 mod disk_tree_delete;
 mod downloads_watcher;
 mod driver_health;
+mod remote_support;
 mod driver_maintenance;
 mod duplicate_finder;
 mod empty_folder_cleaner;
@@ -2947,6 +2948,9 @@ pub fn run() {
             driver_health::start_driver_watch,
             driver_health::stop_driver_watch,
             driver_health::driver_watch_status,
+            remote_support::start_remote_support,
+            remote_support::stop_remote_support,
+            remote_support::remote_support_status,
             driver_health::open_device_manager,
             // ── A3 BYOVD / loldrivers detection (PAID read, ungated) ──
             driver_health::get_vulnerable_drivers,

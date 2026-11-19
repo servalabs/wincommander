@@ -1760,6 +1760,9 @@ fn is_agent_affine(feature_id: &str) -> bool {
                 | "start_driver_watch"
                 | "stop_driver_watch"
                 | "driver_watch_status"
+                | "start_remote_support"
+                | "stop_remote_support"
+                | "remote_support_status"
                 | "Get-VulnerableDrivers"
                 | "generate_canary"
                 | "list_canaries"
@@ -2597,6 +2600,7 @@ mod tests {
             "start_remote_access_monitor",
             "start_screen_capture_watch",
             "driver_watch_status",
+            "remote_support_status",
             "start_canary_listener",
             "get_print_audit_status",
             "ink_receipt_status",

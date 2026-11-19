@@ -25,6 +25,10 @@ roadmap owns all planned work, public and paid.
   Fleet may request fixed, typed views and Investigator may collect approved
   evidence. Neither becomes unrestricted remote shell, arbitrary disk
   acquisition, or a substitute for specialist lab tooling.
+- **No unattended or hidden remote shell.** The one exception is a paid,
+  user-started, visible, time-boxed (59 minute), logged support session with
+  fixed trusted-code parameters that ends and restores prior state on stop,
+  expiry, or restart.
 - **Explicit risk, not a one-click optimizer.** Destructive or
   security-reducing actions remain visible, classified, confirmed, and
   auditable.
