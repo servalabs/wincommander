@@ -72,6 +72,10 @@ export default function useVaultCloudBackup(isOpen: boolean, personal: boolean, 
   }, [internalDrive, personal, observe]);
   useEffect(() => {
     generation.current++; receipt.current = null; invalidated.current = false; inFlight.current = false;
+    // The new mount has no usable observation yet. Reset the synchronous ref
+    // too, so its first pending status shows loading rather than inheriting
+    // the previous Vault's nonblocking-refresh state.
+    latestResult.current = null;
     setResult(null); setBusy(false); setAction(null); setError("");
     if (!isOpen) return;
     void perform("status");
