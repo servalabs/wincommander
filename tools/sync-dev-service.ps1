@@ -43,8 +43,13 @@ $driverNtPath = '\??\C:\ProgramData\WinCommander\bin\engine\EncVolKm.sys'
 $driverSha256 = '1F0C6DB3559D1356C38A1486A967CD90DB5E6202E433FEA1DFE510DDB884FFB6'
 $driverAccessRepair = Join-Path $PSScriptRoot 'repair-vault-driver-access.ps1'
 $activeMountRegistry = Join-Path $env:ProgramData 'WinCommander\policy\vault-active-mounts-v1.json'
+. (Join-Path $PSScriptRoot 'dev-vault-state.ps1')
 
 function Assert-NoActiveVaultsUnlessAllowed {
+    # The journal contains only service-owned mounts. Untracked VeraCrypt
+    # slots must also block service replacement, including explicit managed
+    # Vault cleanup, because their ownership and lifecycle are unknown.
+    Assert-WcNativeVaultsUnmounted
     if ($AllowVaultDismount -or -not (Test-Path -LiteralPath $activeMountRegistry -PathType Leaf)) {
         return
     }
