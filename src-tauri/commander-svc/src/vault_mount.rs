@@ -3630,13 +3630,12 @@ fn linked_authentication_id(token: windows_sys::Win32::Foundation::HANDLE) -> Op
             size,
             &mut returned,
         )
-    } == 0
-        || returned != size
-        || linked.LinkedToken.is_null()
-    {
+    } == 0 || linked.LinkedToken.is_null() {
         return None;
     }
-    let id = authenticated_logon_id(linked.LinkedToken);
+    let id = (returned == size)
+        .then(|| authenticated_logon_id(linked.LinkedToken))
+        .flatten();
     unsafe {
         CloseHandle(linked.LinkedToken);
     }
