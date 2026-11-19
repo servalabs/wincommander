@@ -8,9 +8,9 @@ test("backup dialog separates current checks, historical results and controls", 
     const dom = new JSDOM('<div id="root"></div>', { url: 'http://localhost' });
     globalThis.window = dom.window; globalThis.document = dom.window.document; globalThis.navigator = dom.window.navigator; globalThis.IS_REACT_ACT_ENVIRONMENT = true;
     const React = await import('react'); const { act, createElement: h } = React; const { createRoot } = await import('react-dom/client');
-    let closed = 0; const actions = [];
+    let closed = 0, action = null; const actions = [];
     const result = { mount_receipt:'a'.repeat(64), engine_ready:true, connected:true, configured:true, running:true, watching:true, can_configure:true, configuration:null, connection_check:'connected', remote_check:'missing', last_run:null, last_backup:null, last_verification:null, last_restore:null };
-    mock.module('./src/hooks/useVaultCloudBackup', () => ({ default: () => ({ result, busy:false, action:null, error:'', perform: op => { actions.push(op); } }) }));
+    mock.module('./src/hooks/useVaultCloudBackup', () => ({ default: () => ({ result, busy:false, action, error:'', perform: op => { actions.push(op); } }) }));
     mock.module('@/components/ui/bp', () => ({ Button: ({children, icon, intent, minimal, ...props}) => h('button', props, children), Dialog: ({children}) => h('div', null, children), DialogBody: ({children}) => h('div', null, children), DialogFooter: ({actions}) => h('footer', null, actions) }));
     mock.module('@/components/ui/input', () => ({ Input: props => h('input', props) }));
     const {default: Dialog} = await import('./src/components/shared/VaultCloudBackupDialog');
@@ -19,6 +19,8 @@ test("backup dialog separates current checks, historical results and controls", 
     assert.match(host.textContent, /Not checked during operation/); assert.doesNotMatch(host.textContent, /Not found on last check/); assert.match(host.textContent, /earlier checks/); assert.ok(host.querySelector('.vault-cloud-backup__spinner'));
     assert.equal(btn('Stop backup').disabled, false); await act(async () => btn('Stop backup').click()); assert.deepEqual(actions, ['stop']);
     result.running=false; result.connection_check='unknown'; await act(async () => root.render(h(Dialog, { isOpen:true, onClose:() => closed++, internalDrive:4, driveLabel:'E:', personal:true }))); assert.match(host.textContent, /Not found on last check/); assert.match(host.textContent, /result may be cached/); assert.match(host.textContent, /Saved login; connection not checked/); assert.equal(btn('Back up now').disabled, false); assert.equal(btn('Verify backup').disabled, false);
+    action='status'; await act(async () => root.render(h(Dialog, { isOpen:true, onClose:() => closed++, internalDrive:4, driveLabel:'E:', personal:true }))); assert.match(host.textContent, /Checking backup status/); assert.ok(host.querySelector('.vault-cloud-backup__spinner')); assert.equal(btn('Back up now').disabled, false); assert.equal(btn('Stop backup').disabled, false);
+    action=null;
     result.remote_check='present'; await act(async () => root.render(h(Dialog, { isOpen:true, onClose:() => closed++, internalDrive:4, driveLabel:'E:', personal:true }))); assert.match(host.textContent, /Proton CLI reports folder present/); assert.match(host.textContent, /may use cached results/);
     await act(async () => btn('Settings').click()); assert.equal(btn('Settings').getAttribute('aria-pressed'), 'true');
     await act(async () => btn('Close').click()); assert.equal(closed, 1); assert.deepEqual(actions, ['stop']);

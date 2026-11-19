@@ -215,3 +215,13 @@ fn mount_receipts_change_when_slot_is_reused_or_logon_changes() {
         );
     }
 }
+
+#[test]
+fn status_snapshot_is_unbound_but_a_followup_receipt_is_verified() {
+    let original = example_mount();
+    let receipt = sync_management::mount_receipt("id", &original);
+    assert!(sync_management::require_mount_receipt(None, "id", &original, false).is_ok());
+    assert!(sync_management::require_mount_receipt(Some(&receipt), "id", &original, false).is_ok());
+    let replacement = ActiveMount { container_identity: "replacement".into(), ..original };
+    assert!(sync_management::require_mount_receipt(Some(&receipt), "id", &replacement, false).is_err());
+}

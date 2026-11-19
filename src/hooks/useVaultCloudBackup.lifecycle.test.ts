@@ -126,9 +126,79 @@ test("closing a dialog during an active request never sends stop", async () => {
     await act(async () => { void current.perform('start'); });
     assert.equal(current.busy, true);
     await act(async () => root.render(h(Harness, { open: false })));
-    assert.deepEqual(calls, ['status', 'start']);
+    assert.deepEqual(calls, ['status', 'status', 'start']);
     await act(async () => finish({ ...status, running: true }));
-    assert.deepEqual(calls, ['status', 'start'], 'closing must not send stop or cancel the backend request');
+    assert.deepEqual(calls, ['status', 'status', 'start'], 'closing must not send stop or cancel the backend request');
+    await act(async () => root.unmount()); dom.window.close();
+  `;
+  const child = Bun.spawn([Bun.which("bun")!, "-e", script], { stdout: "pipe", stderr: "pipe" });
+  const timer = setTimeout(() => child.kill(), 30_000);
+  try { const stderr = await new Response(child.stderr).text(); expect({ code: await child.exited, stderr }).toEqual({ code: 0, stderr: "" }); }
+  finally { clearTimeout(timer); }
+}, 40_000);
+
+test("initial snapshot unlocks setup before the mount-bound network check and Stop supersedes it", async () => {
+  const script = String.raw`
+    import { mock } from 'bun:test'; import { strict as assert } from 'node:assert'; import { JSDOM } from 'jsdom';
+    const dom = new JSDOM('<div id="root"></div>', { url: 'http://localhost' });
+    globalThis.window = dom.window; globalThis.document = dom.window.document; globalThis.navigator = dom.window.navigator; globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+    const React = await import('react'); const { act, createElement: h } = React; const { createRoot } = await import('react-dom/client');
+    const receipt = 'a'.repeat(64); let current, finishObservation, statusCount = 0; const calls = [];
+    const snapshot = { mount_receipt: receipt, engine_ready: true, connected: true, configured: true, automatic: true, watching: true, running: false, can_configure: true, configuration: null, last_run: null, reason_code: null };
+    const backend = { manageVaultCloudBackup: async req => {
+      calls.push({ action: req.action, receipt: req.expected_mount_receipt });
+      if (req.action === 'stop') return { ...snapshot, watching: false };
+      if (++statusCount === 1) return snapshot;
+      if (statusCount === 2) return new Promise(resolve => { finishObservation = resolve; });
+      return { ...snapshot, watching: false };
+    } };
+    mock.module('./src/hooks/useBackend', () => ({ default: () => backend }));
+    const { default: useBackup } = await import('./src/hooks/useVaultCloudBackup');
+    function Harness({ open }) { current = useBackup(open, true, 4); return null; }
+    const root = createRoot(document.getElementById('root'));
+    await act(async () => root.render(h(Harness, { open: true })));
+    assert.equal(current.result.mount_receipt, receipt);
+    assert.equal(current.busy, false, 'a delayed network check must not block setup');
+    assert.deepEqual(calls.slice(0, 2), [{ action: 'status', receipt: null }, { action: 'status', receipt }]);
+    await act(async () => { await current.perform('stop'); });
+    assert.equal(current.result.watching, false);
+    await act(async () => finishObservation({ ...snapshot, watching: true }));
+    assert.equal(current.result.watching, false, 'late observation must not undo Stop');
+    assert.equal(calls.filter(call => call.action === 'stop').length, 1);
+    await act(async () => root.unmount()); dom.window.close();
+  `;
+  const child = Bun.spawn([Bun.which("bun")!, "-e", script], { stdout: "pipe", stderr: "pipe" });
+  const timer = setTimeout(() => child.kill(), 30_000);
+  try { const stderr = await new Response(child.stderr).text(); expect({ code: await child.exited, stderr }).toEqual({ code: 0, stderr: "" }); }
+  finally { clearTimeout(timer); }
+}, 40_000);
+
+test("closing or switching Vaults leaves a check running without applying its stale result", async () => {
+  const script = String.raw`
+    import { mock } from 'bun:test'; import { strict as assert } from 'node:assert'; import { JSDOM } from 'jsdom';
+    const dom = new JSDOM('<div id="root"></div>', { url: 'http://localhost' });
+    globalThis.window = dom.window; globalThis.document = dom.window.document; globalThis.navigator = dom.window.navigator; globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+    const React = await import('react'); const { act, createElement: h } = React; const { createRoot } = await import('react-dom/client');
+    let current; const waiting = new Map(), calls = [];
+    const snapshot = drive => ({ mount_receipt: (drive === 4 ? 'a' : 'b').repeat(64), engine_ready: true, connected: true, configured: true, automatic: false, watching: false, running: false, can_configure: true, configuration: null, last_run: null, reason_code: null });
+    const backend = { manageVaultCloudBackup: async req => {
+      calls.push(req.action);
+      if (!req.expected_mount_receipt) return snapshot(req.internal_drive);
+      return new Promise(resolve => waiting.set(req.internal_drive, resolve));
+    } };
+    mock.module('./src/hooks/useBackend', () => ({ default: () => backend }));
+    const { default: useBackup } = await import('./src/hooks/useVaultCloudBackup');
+    function Harness({ open, drive }) { current = useBackup(open, true, drive); return null; }
+    const root = createRoot(document.getElementById('root'));
+    await act(async () => root.render(h(Harness, { open: true, drive: 4 })));
+    await act(async () => root.render(h(Harness, { open: true, drive: 5 })));
+    assert.equal(current.result.mount_receipt, 'b'.repeat(64));
+    await act(async () => waiting.get(4)({ ...snapshot(4), reason_code: 'stale' }));
+    assert.equal(current.result.mount_receipt, 'b'.repeat(64));
+    await act(async () => root.render(h(Harness, { open: false, drive: 5 })));
+    await act(async () => waiting.get(5)({ ...snapshot(5), reason_code: null }));
+    assert.equal(calls.filter(action => action === 'stop').length, 0, 'closing must not stop the check or backup');
+    assert.equal(current.result, null, 'a closed dialog must not adopt a late result');
     await act(async () => root.unmount()); dom.window.close();
   `;
   const child = Bun.spawn([Bun.which("bun")!, "-e", script], { stdout: "pipe", stderr: "pipe" });

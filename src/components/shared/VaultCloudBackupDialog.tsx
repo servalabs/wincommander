@@ -21,6 +21,7 @@ export default function VaultCloudBackupDialog({ isOpen, onClose, internalDrive,
   const [pickingRestore, setPickingRestore] = useState(false);
   const [view, setView] = useState<"overview" | "settings" | "restore">("overview");
   const [confirmation, setConfirmation] = useState<"disconnect" | "remove_setup" | null>(null);
+  const checkingStatus = action === "status";
   const stoppingPossible = Boolean((result?.running || result?.watching || result?.reason_code === "cloud_backup_sign_in_pending") && (!busy || action === "status"));
   const ready = Boolean(result?.engine_ready && result.connected && result.configured && result?.connection_check !== "signed_out");
   const checkedAt = result?.checked_at && !Number.isNaN(Date.parse(result.checked_at)) ? result.checked_at : null;
@@ -48,7 +49,7 @@ export default function VaultCloudBackupDialog({ isOpen, onClose, internalDrive,
     onOpenAutoFocus={() => { returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; }}
     onCloseAutoFocus={event => { if (returnFocus.current?.isConnected) { event.preventDefault(); returnFocus.current.focus({ preventScroll: true }); } }}>
     <DialogBody className="vault-cloud-backup__body">
-      <div className="vault-cloud-backup__hero"><div><p className="vault-cloud-backup__eyebrow">PROTON DRIVE</p><p className="vault-cloud-backup__intro">Back up files from this Vault</p></div><div className="vault-cloud-backup__status" role="status" aria-live="polite">{(busy || result?.running) && <span className="vault-cloud-backup__spinner" aria-hidden="true" />}{busy ? action === "connect" ? "Complete the one-time Proton sign-in in your browser. Keep this Vault open." : action === "prepare" ? "Setting up the backup tool inside this Vault..." : action === "status" ? "Checking backup status..." : action === "start" ? "Starting backup..." : "Applying backup action... Keep this Vault open." : result ? cloudBackupStateLabel(result) : "Backup status is unavailable."}</div></div>
+      <div className="vault-cloud-backup__hero"><div><p className="vault-cloud-backup__eyebrow">PROTON DRIVE</p><p className="vault-cloud-backup__intro">Back up files from this Vault</p></div><div className="vault-cloud-backup__status" role="status" aria-live="polite">{(busy || result?.running || checkingStatus) && <span className="vault-cloud-backup__spinner" aria-hidden="true" />}{busy ? action === "connect" ? "Complete the one-time Proton sign-in in your browser. Keep this Vault open." : action === "prepare" ? "Setting up the backup tool inside this Vault..." : action === "status" ? "Checking backup status..." : action === "start" ? "Starting backup..." : "Applying backup action... Keep this Vault open." : result?.running ? cloudBackupStateLabel(result) : checkingStatus ? "Checking backup status..." : result ? cloudBackupStateLabel(result) : "Backup status is unavailable."}</div></div>
       <VaultOperationNotice message={error} />
       {result && <>
         <nav className="vault-cloud-backup__nav" aria-label="Cloud backup sections">

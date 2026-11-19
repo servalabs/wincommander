@@ -24,6 +24,8 @@ export default function useVaultCloudBackup(isOpen: boolean, personal: boolean, 
       invalidated.current = true; setResult(null); throw new Error("cloud_backup_mount_changed");
     }
     receipt.current = incoming.mount_receipt;
+    // The next background status may start before React commits this render.
+    latestResult.current = incoming;
     setResult(incoming);
   }, []);
   const perform = useCallback(async (operation: VaultCloudBackupAction, configuration?: VaultCloudBackupConfiguration, restoreRelativePath?: string) => {
@@ -44,6 +46,7 @@ export default function useVaultCloudBackup(isOpen: boolean, personal: boolean, 
       personal, internal_drive: internalDrive, action: operation, expected_mount_receipt: receipt.current,
       configuration: configuration ?? null, restore_relative_path: restoreRelativePath ?? null,
     };
+    let followUpObservation = false;
     try {
       let response = await (["prepare", "connect", "configure"].includes(operation)
         ? latest.current.setupVaultCloudBackup(request) : latest.current.manageVaultCloudBackup(request));
@@ -59,6 +62,11 @@ export default function useVaultCloudBackup(isOpen: boolean, personal: boolean, 
       observe(response);
       const reason = operationReason ?? response.reason_code;
       if (reason && reason !== "cloud_backup_sign_in_pending") setError(cloudBackupError(reason));
+      // The first receipt-less Status is a quick local snapshot. Once the
+      // service has bound the mounted Vault, observe Proton separately so
+      // setup is usable while the network check is pending.
+      followUpObservation = operation === "status" && !request.expected_mount_receipt
+        && Boolean(response.mount_receipt && response.engine_ready && response.connected && !response.running && !reason);
       return !reason;
     } catch (cause) {
       if (epoch === generation.current) {
@@ -67,7 +75,10 @@ export default function useVaultCloudBackup(isOpen: boolean, personal: boolean, 
       }
       return false;
     } finally {
-      if (epoch === generation.current) { inFlight.current = false; activeOperation.current = null; setBusy(false); setAction(null); }
+      if (epoch === generation.current) {
+        inFlight.current = false; activeOperation.current = null; setBusy(false); setAction(null);
+        if (followUpObservation) void perform("status");
+      }
     }
   }, [internalDrive, personal, observe]);
   useEffect(() => {
