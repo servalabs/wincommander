@@ -57,7 +57,7 @@ test("backup dialog shows the recorded restore location and never labels a legac
       .find(item => /RestoredCheck/.test(item.textContent));
     assert.ok(restored, 'a later automatic backup must not hide the restore confirmation');
     assert.equal(restored.dataset.tone, 'success');
-    assert.ok([...dom.window.document.querySelectorAll('a')].some(item => /Last restore:/.test(item.textContent)));
+    assert.ok([...dom.window.document.querySelectorAll('button')].some(item => /Last restore:/.test(item.textContent)));
     dom.window.close();
   `;
   const child = Bun.spawn([Bun.which("bun")!, "-e", script], { stdout: "pipe", stderr: "pipe" });
