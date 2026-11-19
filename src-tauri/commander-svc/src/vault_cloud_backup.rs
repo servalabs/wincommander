@@ -27,9 +27,14 @@ impl VaultMountBroker {
         if !request.valid() {
             return Err(VaultMountReason::InvalidRequest);
         }
-        let operation = operations::for_target(caller_sid, caller_session, request.internal_drive)?;
-        let _operation = tokio::task::block_in_place(|| operation.lock())
-            .map_err(|_| VaultMountReason::BrokerRejected)?;
+        let operation = operations::for_action(request.action, caller_sid, caller_session, request.internal_drive)?;
+        // Status may perform a bounded network check. It must never hold the
+        // mutation lock or delay an explicit Stop request.
+        let _operation = match operation.as_ref() {
+            Some(operation) => Some(tokio::task::block_in_place(|| operation.lock())
+                .map_err(|_| VaultMountReason::BrokerRejected)?),
+            None => None,
+        };
         let (entry_id, active) = self.with_exclusive_operation(|| {
             let (id, active) = self.eligible_cloud_backup_mount(
                 store,

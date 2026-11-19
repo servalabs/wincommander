@@ -6,6 +6,11 @@ use std::sync::{Arc, OnceLock, Weak};
 type Operation = Arc<Mutex<()>>;
 static OPERATIONS: OnceLock<Mutex<HashMap<String, Weak<Mutex<()>>>>> = OnceLock::new();
 
+pub(super) fn for_action(action: Action, caller_sid: &str, session: u32, slot: u8) -> Result<Option<Operation>, VaultMountReason> {
+    if action == Action::Status { return Ok(None); }
+    for_target(caller_sid, session, slot).map(Some)
+}
+
 pub(super) fn for_target(
     caller_sid: &str,
     session: u32,
@@ -31,6 +36,16 @@ mod tests {
     use super::*;
     use std::sync::mpsc;
     use std::time::Duration;
+
+    #[test]
+    fn a_stalled_status_does_not_hold_the_stop_operation_lock() {
+        assert!(for_action(Action::Status, "status-lock-test", 7, 12).unwrap().is_none());
+        let start = for_action(Action::Start, "status-lock-test", 7, 12).unwrap().unwrap();
+        let stop = for_action(Action::Stop, "status-lock-test", 7, 12).unwrap().unwrap();
+        assert!(Arc::ptr_eq(&start, &stop));
+        let _guard = start.lock().unwrap();
+        assert!(stop.try_lock().is_err(), "mutating operations must remain serialized");
+    }
 
     #[test]
     fn concurrent_actions_share_only_the_same_caller_session_and_slot() {
