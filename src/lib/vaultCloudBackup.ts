@@ -2,6 +2,22 @@
 import type { VaultCloudBackupConfiguration, VaultCloudBackupReceipt, VaultCloudBackupResult } from "@/types/generated/ipc";
 
 const RESERVED = new Set([".wincommander", "system volume information", "$recycle.bin"]);
+
+/** Display only a provider path whose root is known; never invent a legacy destination. */
+export function cloudBackupDisplayPath(remotePath: string | null): string | null {
+  if (!remotePath?.startsWith("/my-files/")) return null;
+  const parts = remotePath.slice("/my-files/".length).split("/");
+  if (!parts.length || parts.some(part => !part)) return null;
+  return ["My files", ...parts].join(" / ");
+}
+
+/** Existing unchanged names keep their saved location; a renamed/new setup targets My files. */
+export function cloudBackupDestinationPreview(name: string, configuration: VaultCloudBackupConfiguration | null, remotePath: string | null): string | null {
+  const candidate = name.trim();
+  if (configuration && candidate === configuration.remote_folder_name) return cloudBackupDisplayPath(remotePath);
+  return candidate ? `My files / ${candidate}` : "My files / (enter a folder name)";
+}
+
 export function validCloudBackupPath(path: string): boolean {
   const parts = path.split(/[\\/]/);
   return path.length > 0 && new TextEncoder().encode(path).length <= 240
@@ -83,7 +99,7 @@ export function cloudBackupRunSummary(run: VaultCloudBackupReceipt) {
     source_relative_paths: [], remote_folder_name: run.remote_folder_name, automatic: false });
   const destination = action === "restore" ? run.restore_relative_path && validCloudBackupPath(run.restore_relative_path)
     ? `This Vault / ${run.restore_relative_path}` : null
-    : safeRemote ? `Proton Drive / WinCommander Vault Backups / ${run.remote_folder_name}` : null;
+    : safeRemote ? `Proton Drive folder: ${run.remote_folder_name}` : null;
   const summary = (title: string, detail: string, tone: "success" | "warning" | "neutral") =>
     ({ title, detail, tone, destination, finishedAt });
   if (!action) return summary("Previous result needs a new check", "Run a new backup, check or restore to confirm its result.", "neutral");

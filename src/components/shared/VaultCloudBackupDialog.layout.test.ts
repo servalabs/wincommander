@@ -16,8 +16,9 @@ test("backup dialog separates current checks, historical results and controls", 
     const {default: Dialog} = await import('./src/components/shared/VaultCloudBackupDialog');
     const root = createRoot(document.getElementById('root')); await act(async () => root.render(h(Dialog, { isOpen:true, onClose:() => closed++, internalDrive:4, driveLabel:'E:', personal:true })));
     const host = document.getElementById('root'); const btn = label => [...host.querySelectorAll('button')].find(x => x.textContent === label);
-    assert.match(host.textContent, /Not found in Proton Drive/); assert.match(host.textContent, /earlier checks/); assert.ok(host.querySelector('.vault-cloud-backup__spinner'));
+    assert.match(host.textContent, /Not checked during operation/); assert.doesNotMatch(host.textContent, /Not found on last check/); assert.match(host.textContent, /earlier checks/); assert.ok(host.querySelector('.vault-cloud-backup__spinner'));
     assert.equal(btn('Stop backup').disabled, false); await act(async () => btn('Stop backup').click()); assert.deepEqual(actions, ['stop']);
+    result.running=false; await act(async () => root.render(h(Dialog, { isOpen:true, onClose:() => closed++, internalDrive:4, driveLabel:'E:', personal:true }))); assert.match(host.textContent, /Not found on last check/);
     await act(async () => btn('Settings').click()); assert.equal(btn('Settings').getAttribute('aria-pressed'), 'true');
     await act(async () => btn('Close').click()); assert.equal(closed, 1); assert.deepEqual(actions, ['stop']);
     await act(async () => root.unmount()); dom.window.close();

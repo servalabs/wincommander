@@ -4,7 +4,7 @@ import { Button, Dialog, DialogBody, DialogFooter } from "@/components/ui/bp";
 import { Input } from "@/components/ui/input";
 import { open } from "@tauri-apps/plugin-dialog";
 import useVaultCloudBackup from "@/hooks/useVaultCloudBackup";
-import { cloudBackupRecordedRuns, cloudBackupRunSummary, cloudBackupStateLabel, validCloudBackupPath } from "@/lib/vaultCloudBackup";
+import { cloudBackupDisplayPath, cloudBackupRecordedRuns, cloudBackupRunSummary, cloudBackupStateLabel, validCloudBackupPath } from "@/lib/vaultCloudBackup";
 import { restorePathInPickedFolder } from "@/lib/vaultCloudBackupPicker";
 import VaultCloudBackupForm from "./VaultCloudBackupForm";
 import VaultCloudBackupRunResult from "./VaultCloudBackupRunResult";
@@ -21,10 +21,9 @@ export default function VaultCloudBackupDialog({ isOpen, onClose, internalDrive,
   const [pickingRestore, setPickingRestore] = useState(false);
   const [view, setView] = useState<"overview" | "settings" | "restore">("overview");
   const [confirmation, setConfirmation] = useState<"disconnect" | "remove_setup" | null>(null);
-  // The backend's read-only check is distinct from the saved login and historical receipts.
-  const checks = result as (typeof result & { connection_check?: "unknown" | "connected" | "signed_out"; remote_check?: "unknown" | "present" | "missing"; checked_at?: string | null; remote_path?: string | null });
   const stoppingPossible = Boolean((result?.running || result?.watching || result?.reason_code === "cloud_backup_sign_in_pending") && (!busy || action === "status"));
-  const ready = Boolean(result?.engine_ready && result.connected && result.configured && checks?.connection_check !== "signed_out");
+  const ready = Boolean(result?.engine_ready && result.connected && result.configured && result?.connection_check !== "signed_out");
+  const checkedAt = result?.checked_at && !Number.isNaN(Date.parse(result.checked_at)) ? result.checked_at : null;
   const runs = result ? cloudBackupRecordedRuns(result) : null;
   const restoreSummary = runs?.restore ? cloudBackupRunSummary(runs.restore) : null;
   const close = () => { setConfirmation(null); setRestorePath(""); setRestorePickerError(""); onClose(); };
@@ -60,15 +59,16 @@ export default function VaultCloudBackupDialog({ isOpen, onClose, internalDrive,
         <section className="vault-cloud-backup__section" aria-labelledby={`${id}-connection`}>
           <h3 id={`${id}-connection`}>Connection</h3>
           <dl className="vault-cloud-backup__summary"><dt>Backup tool</dt><dd>{result.engine_ready ? "Ready" : "Not set up"}</dd>
-            <dt>Proton account</dt><dd>{checks?.connection_check === "connected" ? "Connected and checked" : checks?.connection_check === "signed_out" ? "Sign-in required" : result.connected ? "Saved login; connection not checked" : "Not connected"}</dd>
-            {checks?.remote_path && <><dt>Destination</dt><dd>{["My files", ...checks.remote_path.replace(/^\/my-files\/?/i, "").split("/").filter(Boolean)].join(" / ")}</dd></>}
-            {result.configured && <><dt>Backup folder</dt><dd>{checks?.remote_check === "present" ? "Found in Proton Drive" : checks?.remote_check === "missing" ? "Not found in Proton Drive" : "Not checked"}</dd></>}</dl>
-          {checks?.remote_check === "present" && <p className="vault-cloud-backup__muted">Folder found; verify backup to check file contents.</p>}
-          {checks?.remote_check === "missing" && <p role="status">The backup folder was not found. Back up again to create it.</p>}
+            <dt>Proton account</dt><dd>{result.running ? "Not checked during operation" : result.connection_check === "connected" ? "Proton connection checked" : result.connection_check === "signed_out" ? "Sign-in required" : result.connected ? "Saved login; connection not checked" : "Not connected"}</dd>
+            {cloudBackupDisplayPath(result.remote_path) && <><dt>Destination</dt><dd>{cloudBackupDisplayPath(result.remote_path)}</dd></>}
+            {result.configured && <><dt>Backup folder</dt><dd>{result.running ? "Not checked during operation" : result.remote_check === "present" ? "Proton reported folder present" : result.remote_check === "missing" ? "Not found on last check" : "Not checked"}</dd></>}</dl>
+          {checkedAt && !result.running && <p className="vault-cloud-backup__muted">Last check: <time dateTime={checkedAt}>{new Date(checkedAt).toLocaleString()}</time></p>}
+          {!result.running && result.remote_check === "present" && <p className="vault-cloud-backup__muted">Proton reported the folder was present; verify backup to check file contents.</p>}
+          {!result.running && result.remote_check === "missing" && <p role="status">Proton did not find the backup folder on the last check. Check the destination or back up again.</p>}
           <div className="vault-cloud-backup__actions">
             {!result.engine_ready && <Button disabled={busy || !result.can_configure} onClick={() => void perform("prepare")}>Set up backup tool</Button>}
-            {result.engine_ready && (!result.connected || checks?.connection_check === "signed_out") && <Button disabled={busy || !result.can_configure} onClick={() => void perform("connect")}>Connect Proton Drive</Button>}
-            {result.engine_ready && result.connected && checks?.connection_check !== "signed_out" && !result.configured && <Button intent="primary" disabled={!result.can_configure} onClick={() => setView("settings")}>Configure backup</Button>}
+            {result.engine_ready && (!result.connected || result?.connection_check === "signed_out") && <Button disabled={busy || !result.can_configure} onClick={() => void perform("connect")}>Connect Proton Drive</Button>}
+            {result.engine_ready && result.connected && result?.connection_check !== "signed_out" && !result.configured && <Button intent="primary" disabled={!result.can_configure} onClick={() => setView("settings")}>Configure backup</Button>}
           </div>
         </section>
         {!result.can_configure && <p role="status">Cloud backup is not available to configure for this Windows account. Ask the Vault owner to enable it and grant write access.</p>}
@@ -89,8 +89,8 @@ export default function VaultCloudBackupDialog({ isOpen, onClose, internalDrive,
         </div>
         <div hidden={view !== "settings"} className="vault-cloud-backup__panel">
         <VaultCloudBackupForm key={`${result.mount_receipt}-${result.configured}`} configuration={result.configuration}
-          driveLabel={driveLabel}
-          disabled={busy || !result.can_configure} canSave={result.engine_ready && result.connected && checks?.connection_check !== "signed_out" && result.can_configure}
+          driveLabel={driveLabel} remotePath={result.remote_path}
+          disabled={busy || !result.can_configure} canSave={result.engine_ready && result.connected && result?.connection_check !== "signed_out" && result.can_configure}
           onSave={configuration => void perform("configure", configuration)} />
         <details className="vault-cloud-backup__details vault-cloud-backup__card"><summary>About this backup</summary>
           <p>Proton protects cloud copies independently of your Vault password. Deleting local files keeps their cloud backups.</p>

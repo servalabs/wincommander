@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/bp";
 import { Input } from "@/components/ui/input";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { VaultCloudBackupConfiguration } from "@/types/generated/ipc";
-import { validateCloudBackupDraft } from "@/lib/vaultCloudBackup";
+import { cloudBackupDestinationPreview, validateCloudBackupDraft } from "@/lib/vaultCloudBackup";
 import { addPickedVaultSources } from "@/lib/vaultCloudBackupPicker";
 
 interface Props {
@@ -12,9 +12,10 @@ interface Props {
   disabled: boolean;
   canSave: boolean;
   driveLabel: string;
+  remotePath: string | null;
   onSave: (configuration: VaultCloudBackupConfiguration) => void;
 }
-export default function VaultCloudBackupForm({ configuration, disabled, canSave, driveLabel, onSave }: Props) {
+export default function VaultCloudBackupForm({ configuration, disabled, canSave, driveLabel, remotePath, onSave }: Props) {
   const id = useId();
   const [wholeVault, setWholeVault] = useState(configuration?.whole_vault ?? true);
   const [sources, setSources] = useState(configuration?.source_relative_paths.join("\n") ?? "");
@@ -66,6 +67,7 @@ export default function VaultCloudBackupForm({ configuration, disabled, canSave,
       <p className="vault-cloud-backup__muted">Choose files or folders inside this Vault. Backup settings and system folders are excluded.</p>
       <label htmlFor={`${id}-name`}>Proton backup folder name</label>
       <Input id={`${id}-name`} value={name} maxLength={128} onChange={event => setName(event.target.value)} />
+      <p className="vault-cloud-backup__muted">Destination: {cloudBackupDestinationPreview(name, configuration, remotePath) ?? "Unavailable. Refresh to check the saved destination."}</p>
       <label><input type="checkbox" checked={automatic} onChange={event => setAutomatic(event.target.checked)} /> Back up changes automatically while this Vault is open</label>
       <p className="vault-cloud-backup__muted">Resumes when you reopen the Vault.</p>
       <label><input type="checkbox" checked={consent} onChange={event => setConsent(event.target.checked)} /> I agree to copy these files to my Proton Drive account.</label>

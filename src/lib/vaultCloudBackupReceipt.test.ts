@@ -9,6 +9,7 @@ const run: VaultCloudBackupReceipt = {
   transferred_items: 2, transferred_bytes: "5", skipped_items: 0, failed_items: 0,
 };
 const result: VaultCloudBackupResult = {
+  connection_check: "unknown", remote_check: "unknown", checked_at: null, remote_path: null,
   mount_receipt: null, engine_ready: true, connected: true, configured: false,
   automatic: false, watching: false, running: false, can_configure: true,
   configuration: null, last_run: null, last_backup: null, last_verification: null,
@@ -17,7 +18,7 @@ const result: VaultCloudBackupResult = {
 describe("backup confirmation evidence", () => {
   test("uses recorded destinations and distinguishes sampled cloud checks from restored checks", () => {
     expect(cloudBackupRunSummary(run)).toMatchObject({ tone: "success",
-      destination: "Proton Drive / WinCommander Vault Backups / Recorded backup",
+      destination: "Proton Drive folder: Recorded backup",
       detail: "1 sampled file matches your Vault." });
     const restored = { ...run, action: "restore" as const, confirmation: "restored_sample_matched" as const,
       restore_relative_path: "Restored check" };
