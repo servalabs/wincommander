@@ -35,13 +35,19 @@ try {
     if (Test-Path -LiteralPath $fixture) { Remove-Item -LiteralPath $fixture -Recurse -Force }
 }
 'Passed: selected remote-access and game-launcher sources, empty scope and nonrecursive TeamViewer folder.'
-$fleet = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-FleetForensicProjection' }, $true)
-. ([scriptblock]::Create($fleet.Extent.Text))
+foreach ($name in @('New-FleetForensicProjection', 'Get-FleetForensicProjection')) {
+    $fleet = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
+    . ([scriptblock]::Create($fleet.Extent.Text))
+}
 function Get-RemoteAccessLogsInfo { @{ partial = $true; files = @(); total = 0 } }
 function Get-GameLauncherLogsInfo { @{ partial = $true; files = @(); total = 0 } }
-function Get-CellularHistoryInfo { @{ noHardware = $true; files = @(); total = 0 } }
-foreach ($category in @('remote_access_logs', 'game_launcher_logs', 'cellular_history')) {
+function Get-CellularHistoryInfo { @{ noHardware = $true; files = @(); total = 0; partial = $false; status = 'not_applicable'; coverageNote = 'Disconnected-device profiles could not be checked.' } }
+foreach ($category in @('remote_access_logs', 'game_launcher_logs')) {
     $projection = Get-FleetForensicProjection -Category $category
     if (-not $projection.error -or $projection.total -ne 0) { throw "$category incomplete Fleet data was presented as a complete empty inventory." }
 }
-'Passed: Fleet rejects incomplete selected-source and no-adapter projections.'
+# No mobile-broadband hardware is a legitimate empty state, but it is labelled not applicable
+# rather than presented as a verified complete inventory of saved profiles.
+$cellular = Get-FleetForensicProjection -Category cellular_history
+if ($cellular.error -or $cellular.total -ne 0 -or @($cellular.records).Count -ne 0 -or $cellular.status -ne 'not_applicable' -or -not $cellular.noHardware -or $cellular.coverageNote -notmatch 'could not be checked') { throw 'No mobile-broadband hardware must be an empty not-applicable table, not a failure or a complete inventory.' }
+'Passed: Fleet rejects incomplete selected-source projections and labels no-adapter as not applicable.'
