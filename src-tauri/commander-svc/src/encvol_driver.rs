@@ -8,6 +8,11 @@
 use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::sync::{Mutex, OnceLock};
+use wincmd_shared::encvol_driver_activation::{ActivationRecord, ActivationStatus};
+
+#[path = "encvol_driver_activation.rs"]
+mod activation;
+use activation::{ActivationStore, RunningAction};
 
 const SERVICE_NAME: &str = "WinCommanderEncVol";
 const COMPATIBLE_VERA_CRYPT_SERVICE_NAME: &str = "VeraCrypt";
@@ -19,7 +24,7 @@ const DRIVER_PATH: &str = r"C:\ProgramData\WinCommander\bin\engine\EncVolKm.sys"
 // fails with ERROR_INVALID_NAME (123) on every attempt. Only user-mode
 // service ImagePaths (which are command lines) may be quoted.
 const NT_DRIVER_PATH: &str = r"\??\C:\ProgramData\WinCommander\bin\engine\EncVolKm.sys";
-const DRIVER_SHA256: &str = "1F0C6DB3559D1356C38A1486A967CD90DB5E6202E433FEA1DFE510DDB884FFB6";
+const DRIVER_SHA256: &str = "7745B5194E5B4659CF3F8DD57096A18EE4C810899DAD69081168D43E3683501E";
 const ERROR_SERVICE_DOES_NOT_EXIST: i32 = 1060;
 const ERROR_SERVICE_EXISTS: i32 = 1073;
 const ERROR_SERVICE_ALREADY_RUNNING: i32 = 1056;
@@ -31,7 +36,6 @@ struct DriverIdentity {
 }
 
 static VALIDATED_DRIVER: OnceLock<Mutex<Option<DriverIdentity>>> = OnceLock::new();
-static READY_DRIVER: OnceLock<Mutex<Option<DriverIdentity>>> = OnceLock::new();
 
 #[derive(Debug)]
 pub(crate) enum EnsureDriverError {
@@ -41,6 +45,8 @@ pub(crate) enum EnsureDriverError {
     ServiceCreate,
     ServiceConfigure,
     ServiceStart,
+    ActivationState,
+    RestartRequired,
 }
 
 impl EnsureDriverError {
@@ -52,6 +58,8 @@ impl EnsureDriverError {
             Self::ServiceCreate => "encryption driver service could not be created",
             Self::ServiceConfigure => "encryption driver service could not be configured",
             Self::ServiceStart => "encryption driver service could not be started",
+            Self::ActivationState => "encryption driver activation state could not be verified; retry or repair the installation",
+            Self::RestartRequired => "encryption_driver_restart_required: Restart Windows to activate the updated encryption driver. Existing vaults can still be dismounted.",
         }
     }
 }
@@ -68,9 +76,6 @@ pub(crate) fn fixed_payload_present() -> bool {
 /// influence the service name, driver path, signer policy, or ACL policy.
 pub(crate) fn ensure_for_vault_mount() -> Result<(), EnsureDriverError> {
     let identity = driver_identity().map_err(|_| EnsureDriverError::PayloadValidation)?;
-    if cached_identity_matches(&READY_DRIVER, &identity) {
-        return Ok(());
-    }
     validate_payload_cached(&identity).map_err(|_| EnsureDriverError::PayloadValidation)?;
 
     // VeraCrypt exposes one machine-wide `\\.\VeraCrypt` control device.
@@ -82,13 +87,18 @@ pub(crate) fn ensure_for_vault_mount() -> Result<(), EnsureDriverError> {
     // first. This is a fixed, system-owned service/device probe -- no caller
     // input selects an alternate driver or path.
     if compatible_veracrypt_driver_is_ready() {
-        cache_identity(&READY_DRIVER, identity);
+        // Compatibility with an externally managed driver is not bundled-driver activation.
         return Ok(());
     }
 
+    let activation = ActivationStore::open()?;
+    let identity = driver_identity().map_err(|_| EnsureDriverError::PayloadValidation)?;
+    validate_payload_cached(&identity).map_err(|_| EnsureDriverError::PayloadValidation)?;
+    let record = activation.read()?;
+
     let query =
         run_sc(&["query", SERVICE_NAME]).map_err(|_| EnsureDriverError::ServiceInspection)?;
-    let created = match query.status.code() {
+    let was_running = match query.status.code() {
         Some(0) => {
             let config =
                 run_sc(&["qc", SERVICE_NAME]).map_err(|_| EnsureDriverError::ServiceInspection)?;
@@ -100,15 +110,17 @@ pub(crate) fn ensure_for_vault_mount() -> Result<(), EnsureDriverError> {
             // not demand SERVICE_CHANGE_CONFIG merely to reconfirm that known
             // good state: normal users are correctly denied that right.
             if service_config_is_fixed(&config) && service_is_running(&query) {
-                cache_identity(&READY_DRIVER, identity);
-                return Ok(());
+                if !veracrypt_control_device_is_open() {
+                    return Err(EnsureDriverError::ServiceInspection);
+                }
+                return confirm_running_activation(&activation, record.as_ref());
             }
             // Older builds registered the same fixed service name with a
             // build-tree path.  The fixed payload has already passed hash,
             // signer, ownership, and ACL validation above, so repair that
             // stale SCM record below instead of making every mount fail.
             // Nothing from the caller determines the replacement path.
-            false
+            service_is_running(&query)
         }
         Some(ERROR_SERVICE_DOES_NOT_EXIST) => {
             let create = run_sc(&[
@@ -125,7 +137,7 @@ pub(crate) fn ensure_for_vault_mount() -> Result<(), EnsureDriverError> {
             if !create.status.success() && create.status.code() != Some(ERROR_SERVICE_EXISTS) {
                 return Err(EnsureDriverError::ServiceCreate);
             }
-            true
+            false
         }
         _ => return Err(EnsureDriverError::ServiceInspection),
     };
@@ -142,7 +154,6 @@ pub(crate) fn ensure_for_vault_mount() -> Result<(), EnsureDriverError> {
     ])
     .map_err(|_| EnsureDriverError::ServiceConfigure)?;
     if !configure.status.success() {
-        rollback_new_service(created);
         return Err(EnsureDriverError::ServiceConfigure);
     }
 
@@ -152,17 +163,57 @@ pub(crate) fn ensure_for_vault_mount() -> Result<(), EnsureDriverError> {
     let repaired =
         run_sc(&["qc", SERVICE_NAME]).map_err(|_| EnsureDriverError::ServiceInspection)?;
     if !repaired.status.success() || !service_config_is_fixed(&repaired) {
-        rollback_new_service(created);
+        return Err(EnsureDriverError::ServiceOwnership);
+    }
+
+    // Changing ImagePath does not replace the already-loaded image.
+    if was_running {
+        activation.write(DRIVER_SHA256, ActivationStatus::PendingReboot)?;
+        return Err(EnsureDriverError::RestartRequired);
+    }
+    if veracrypt_control_device_is_open() {
         return Err(EnsureDriverError::ServiceOwnership);
     }
 
     let start = run_sc(&["start", SERVICE_NAME]).map_err(|_| EnsureDriverError::ServiceStart)?;
-    if !start.status.success() && start.status.code() != Some(ERROR_SERVICE_ALREADY_RUNNING) {
-        rollback_new_service(created);
+    if start.status.code() == Some(ERROR_SERVICE_ALREADY_RUNNING) {
+        activation.write(DRIVER_SHA256, ActivationStatus::PendingReboot)?;
+        return Err(EnsureDriverError::RestartRequired);
+    }
+    if !start.status.success() {
         return Err(EnsureDriverError::ServiceStart);
     }
-    cache_identity(&READY_DRIVER, identity);
+    let readback =
+        run_sc(&["query", SERVICE_NAME]).map_err(|_| EnsureDriverError::ServiceInspection)?;
+    if !readback.status.success()
+        || !service_is_running(&readback)
+        || !veracrypt_control_device_is_open()
+    {
+        return Err(EnsureDriverError::ServiceStart);
+    }
+    activation.write(DRIVER_SHA256, ActivationStatus::Active)?;
     Ok(())
+}
+
+fn confirm_running_activation(
+    store: &ActivationStore,
+    record: Option<&ActivationRecord>,
+) -> Result<(), EnsureDriverError> {
+    match activation::running_action(record, DRIVER_SHA256, &store.boot_id) {
+        RunningAction::RecordPending => {
+            store.write(DRIVER_SHA256, ActivationStatus::PendingReboot)?;
+            Err(EnsureDriverError::RestartRequired)
+        }
+        RunningAction::RestartRequired => Err(EnsureDriverError::RestartRequired),
+        RunningAction::ConfirmActive => {
+            if !record.is_some_and(|record| {
+                record.status == ActivationStatus::Active && record.is_current_boot(&store.boot_id)
+            }) {
+                store.write(DRIVER_SHA256, ActivationStatus::Active)?;
+            }
+            Ok(())
+        }
+    }
 }
 
 /// Validation is expensive (hash, signature, and ACL inspection) but the
@@ -200,12 +251,6 @@ fn validate_payload_cached(identity: &DriverIdentity) -> std::io::Result<()> {
     validate_payload()?;
     cache_identity(&VALIDATED_DRIVER, identity.clone());
     Ok(())
-}
-
-fn rollback_new_service(created: bool) {
-    if created {
-        let _ = run_sc(&["delete", SERVICE_NAME]);
-    }
 }
 
 fn run_sc(args: &[&str]) -> std::io::Result<Output> {

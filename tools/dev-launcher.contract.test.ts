@@ -200,7 +200,7 @@ ConvertTo-Json -Compress -InputObject @($results)
 
   test("repairs the fixed encrypted-volume driver when its pinned payload is present", () => {
     expect(serviceSync).toContain("$driverServiceName = 'WinCommanderEncVol'");
-    expect(serviceSync).toContain("$driverSha256 = '1F0C6DB3559D1356C38A1486A967CD90DB5E6202E433FEA1DFE510DDB884FFB6'");
+    expect(serviceSync).toContain("$driverSha256 = '7745B5194E5B4659CF3F8DD57096A18EE4C810899DAD69081168D43E3683501E'");
     expect(serviceSync).toContain('Ensure-EncryptedVolumeDriver');
     expect(serviceSync).toContain('Test-EncryptedVolumeDriverReady');
     expect(serviceSync).toContain('Test-CompatibleVeraCryptDriverReady');

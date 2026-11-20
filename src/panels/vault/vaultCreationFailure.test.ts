@@ -2,6 +2,15 @@ import { describe, expect, test } from "bun:test";
 import { vaultCreationFailureDetail } from "./vaultCreationFailure";
 
 describe("Vault creation failure presentation", () => {
+  test("pending driver activation requires Windows restart without exposing service details", () => {
+    const detail = vaultCreationFailureDetail(new Error("vault_driver_unavailable (encryption_driver_restart_required: C:\\private\\vault.hc secret-value)"));
+    expect(detail).toContain("restart Windows");
+    expect(detail).toContain("try creating the Vault again");
+    expect(detail).toContain("still dismount existing vaults");
+    expect(detail).toContain("Restarting WinCommander alone will not activate");
+    for (const raw of ["repair", "private", "secret-value"]) expect(detail).not.toContain(raw);
+  });
+
   test("turns driver and helper failures into safe, actionable guidance", () => {
     expect(vaultCreationFailureDetail("vault_driver_unavailable")).toContain("driver could not be prepared");
     expect(vaultCreationFailureDetail("vault_broker_unavailable")).toContain("helper is missing");

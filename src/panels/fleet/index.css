@@ -2110,7 +2110,7 @@
 
 .fleet-vault-policy-grid {
   width: 100%;
-  min-width: 1120px;
+  min-width: 0;
   border-collapse: separate;
   border-spacing: 0;
   font-size: 11px;
@@ -2163,15 +2163,23 @@
 .fleet-vault-policy-actions { flex-wrap: wrap; }
 .fleet-vault-existing-path > input { min-width: 0; flex: 1; }
 
-/* At high Windows display scaling, a seven-column table makes its action
-   buttons fall outside the visible panel. Turn each saved Vault into a
-   labelled record using the space the table actually receives. */
+/* Saved Vaults stay a table for as long as the panel can show it without
+   clipping, then become a compact record, and only the narrowest panels
+   (high Windows display scaling, small windows) fall back to one column.
+   Each step uses the width the panel actually receives. */
 @container (max-width: 1100px) {
-  .fleet-vault-policy-grid {
-    min-width: 0;
-    font-size: 12px;
+  .fleet-vault-policy-grid th,
+  .fleet-vault-policy-grid td {
+    max-width: 190px;
+    padding: 7px 8px;
+    overflow-wrap: anywhere;
   }
 
+  .fleet-vault-policy-path { max-width: 170px; }
+  .fleet-vault-policy-actions { gap: 6px; }
+}
+
+@container (max-width: 760px) {
   .fleet-vault-policy-grid thead {
     position: absolute;
     width: 1px;
@@ -2183,14 +2191,17 @@
   }
 
   .fleet-vault-policy-grid,
-  .fleet-vault-policy-grid tbody,
-  .fleet-vault-policy-grid tr {
+  .fleet-vault-policy-grid tbody {
     display: block;
     width: 100%;
   }
 
   .fleet-vault-policy-grid tr {
-    padding: 12px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    grid-auto-flow: row dense;
+    gap: 6px 14px;
+    padding: 10px 12px;
     border-bottom: 1px solid var(--border);
   }
 
@@ -2198,16 +2209,17 @@
 
   .fleet-vault-policy-grid td,
   .fleet-vault-policy-grid td:last-child {
-    display: grid;
-    grid-template-columns: minmax(130px, .8fr) minmax(0, 1.7fr);
-    gap: 10px;
+    display: block;
+    min-width: 0;
     max-width: none;
-    padding: 7px 0;
+    padding: 0;
     border: 0;
     overflow-wrap: anywhere;
   }
 
   .fleet-vault-policy-grid td::before {
+    display: block;
+    margin-bottom: 2px;
     content: attr(data-label);
     color: var(--text-mute);
     font-family: var(--font-mono);
@@ -2217,23 +2229,22 @@
     text-transform: uppercase;
   }
 
+  .fleet-vault-policy-grid td[data-label="Container path"],
+  .fleet-vault-policy-grid td[data-label="Allowed users / groups"],
+  .fleet-vault-policy-grid td[data-label="Actions"] { grid-column: 1 / -1; }
+
   .fleet-vault-policy-path {
+    max-width: none;
     overflow: visible;
     text-overflow: clip;
     white-space: normal;
   }
 
-  .fleet-vault-policy-actions {
-    min-width: 0;
-  }
+  .fleet-vault-policy-actions { min-width: 0; }
 }
 
-@container (max-width: 620px) {
-  .fleet-vault-policy-grid td,
-  .fleet-vault-policy-grid td:last-child {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 4px;
-  }
+@container (max-width: 420px) {
+  .fleet-vault-policy-grid tr { grid-template-columns: minmax(0, 1fr); }
 }
 
 .fleet-vault-grants {
