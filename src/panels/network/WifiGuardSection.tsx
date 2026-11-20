@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import useDeviceStateRefresh from '@/hooks/useDeviceStateRefresh';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { Button, Switch, Tag } from '@/components/ui/bp';
@@ -42,6 +43,8 @@ export default function WifiGuardSection({ embedded = false }: { expanded?: bool
       else setReadError(`Recent Wi-Fi alerts could not be read: ${String(recentResult.reason)}`);
     } finally { refreshPending.current = false; }
   }, []);
+
+  useDeviceStateRefresh(refresh);
 
   useEffect(() => {
     mounted.current = true;

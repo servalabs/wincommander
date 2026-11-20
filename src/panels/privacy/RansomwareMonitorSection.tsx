@@ -12,6 +12,7 @@ import { Switch, Icon, Slider, Button } from "@/components/ui/bp";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useCallback, useEffect, useState } from "react";
+import useDeviceStateRefresh from '@/hooks/useDeviceStateRefresh';
 import { showError, showSuccess } from "../../utils/toast";
 import { RansomwareMonitorIntro } from "./MonitorIntros";
 import {
@@ -139,6 +140,8 @@ export default function RansomwareMonitorSection({
       setWatchedDirs([]);
     }
   }, []);
+
+  useDeviceStateRefresh(() => (enabled ? refreshRecent() : undefined));
 
   useEffect(() => {
     if (!enabled) {

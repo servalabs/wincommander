@@ -11,6 +11,7 @@
 // Fleet wire: fleet_push.rs + session_monitor::take_pending_sample()
 
 import { useCallback, useEffect, useState } from 'react';
+import useDeviceStateRefresh from '@/hooks/useDeviceStateRefresh';
 import { Button, Icon, Spinner, Tag } from '@/components/ui/bp';
 import useEntitlements from '@/hooks/useEntitlements';
 import { argus, type ArgusAppUsageStatus, type ArgusWindowSlot } from '@/hooks/useArgus';
@@ -67,6 +68,8 @@ export default function ArgusAppUsageSection() {
       setMonitorError(String(e));
     }
   }, []);
+
+  useDeviceStateRefresh(refreshStatus);
 
   useEffect(() => {
     void refreshStatus();

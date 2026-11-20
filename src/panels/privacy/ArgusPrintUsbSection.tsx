@@ -13,6 +13,7 @@
 // Fleet wire: fleet_push.rs drains argus_signals::take_pending() each heartbeat.
 
 import { useCallback, useEffect, useState } from 'react';
+import useDeviceStateRefresh from '@/hooks/useDeviceStateRefresh';
 import { Button, Icon, Spinner, Switch, Tag } from '@/components/ui/bp';
 import useEntitlements from '@/hooks/useEntitlements';
 import { argus, type ArgusCollectorStatus, type ArgusSignalEntry } from '@/hooks/useArgus';
@@ -85,6 +86,8 @@ export default function ArgusPrintUsbSection() {
       setMonitorError(String(e));
     }
   }, []);
+
+  useDeviceStateRefresh(refreshStatus);
 
   useEffect(() => {
     void refreshStatus();

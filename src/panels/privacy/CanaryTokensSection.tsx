@@ -16,6 +16,7 @@
 // Live updates arrive on the "canary-token-fired" Tauri event.
 
 import { useCallback, useEffect, useState } from 'react';
+import useDeviceStateRefresh from '@/hooks/useDeviceStateRefresh';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type Event } from '@tauri-apps/api/event';
 import { createAsyncListenerScope } from '../../lib/asyncListeners';
@@ -136,6 +137,8 @@ export default function CanaryTokensSection() {
       // Non-fatal — listener may not be running yet.
     }
   }, [hasPaid]);
+
+  useDeviceStateRefresh(refreshStatus);
 
   // ── Mount ──────────────────────────────────────────────────────────────────
 

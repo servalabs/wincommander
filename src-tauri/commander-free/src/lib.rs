@@ -105,6 +105,7 @@ mod firewall_audit;
 mod fleet_agent;
 mod fleet_contact_relay;
 mod fleet_local_arming;
+mod fleet_state_wake;
 mod flow_bridge;
 mod flow_bundle;
 mod flow_capabilities;
@@ -2578,10 +2579,15 @@ pub fn run() {
                                 () = tokio::time::sleep(std::time::Duration::from_secs(sleep_secs)) => false,
                                 () = fleet_agent::epoch_adoption_requested() => true,
                             };
+                            // A device-state notice from Pro (a Fleet command just
+                            // finished) is the one wake that must not sit behind
+                            // the generic 10 s floor: the user is watching the UI.
+                            let state_notice = fleet_state_wake::take_state_notice();
                             if woke_early {
+                                let gap = fleet_state_wake::early_wake_gap(state_notice);
                                 let since = last_pass.elapsed();
-                                if since < std::time::Duration::from_secs(10) {
-                                    tokio::time::sleep(std::time::Duration::from_secs(10) - since).await;
+                                if since < gap {
+                                    tokio::time::sleep(gap - since).await;
                                 }
                             }
                             last_pass = std::time::Instant::now();
@@ -2600,10 +2606,18 @@ pub fn run() {
                                 continue;
                             }
 
-                            let posture_result =
-                                fleet_agent::fleet_update_posture_snapshot_typed().await;
-                            let epoch_result =
-                                fleet_agent::fleet_apply_pending_epoch_typed().await;
+                            // After a device-state notice, adopt the command state
+                            // first so the UI sees it without waiting for the posture
+                            // upload, and so the uploaded snapshot is the new one.
+                            let (posture_result, epoch_result) = if state_notice {
+                                let epoch = fleet_agent::fleet_apply_pending_epoch_typed().await;
+                                let posture = fleet_agent::fleet_update_posture_snapshot_typed().await;
+                                (posture, epoch)
+                            } else {
+                                let posture = fleet_agent::fleet_update_posture_snapshot_typed().await;
+                                let epoch = fleet_agent::fleet_apply_pending_epoch_typed().await;
+                                (posture, epoch)
+                            };
 
                             // KT: only genuine IPC/transport failures (Pro unreachable,
                             // pipe dead, spawn failed) count toward fail_streak and the

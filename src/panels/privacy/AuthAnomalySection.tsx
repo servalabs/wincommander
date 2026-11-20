@@ -7,6 +7,7 @@
 // surface (the owner's "access-session" merge of login-anomaly + remote-access).
 
 import { useCallback, useEffect, useState } from 'react';
+import useDeviceStateRefresh from '@/hooks/useDeviceStateRefresh';
 import { invoke } from '@tauri-apps/api/core';
 import { Button, Spinner, Switch, Tag } from '@/components/ui/bp';
 import type { Intent } from '@/components/ui/bp';
@@ -91,6 +92,8 @@ export default function AuthAnomalySection({
       setError(String(e));
     }
   }, []);
+
+  useDeviceStateRefresh(refresh);
 
   useEffect(() => {
     void refresh();

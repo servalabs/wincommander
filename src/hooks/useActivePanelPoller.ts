@@ -7,7 +7,10 @@
 //   1. On panel ENTER: one-shot refresh (Vault only on first unloaded visit)
 //   2. While on panel: silent refresh every 10s (Vault every 5s while visible)
 //   3. On panel LEAVE: interval is cleared (zero CPU for hidden panels)
-//   4. Dashboard special case: refreshLiveMetrics runs every 2s (Rust-native,
+//   4. A device change made outside the UI (a Fleet command; see
+//      lib/deviceStateRefresh.ts) refreshes the active panel at once; the
+//      10s poll stays as the fallback if that event is missed.
+//   5. Dashboard special case: refreshLiveMetrics runs every 2s (Rust-native,
 //      zero PS spawns) so CPU/RAM gauges stay live.
 //
 // Panels without auto-poll (apps, cleanup, server-apps, search-files, system-identity):
@@ -20,6 +23,7 @@ import { useAppState } from '../context/AppContext';
 import { useLiveMetricsRefresh } from '../context/LiveMetricsContext';
 import { getModuleForPanel, isModuleEnabled } from '../types/modules';
 import { usePageVisible } from './usePageVisible';
+import { onDeviceStateRefresh, refreshWhenIdle } from '../lib/deviceStateRefresh';
 
 const LIVE_METRICS_INTERVAL = 2_000;  // 2s — Rust sysinfo, <1ms cost
 // Drive health is fetched once per app lifetime — smartctl+PS spin up ~1s
@@ -200,4 +204,21 @@ export function useActivePanelPoller({ activePanel, paused: externallyPaused = f
         getPanelRefresh,
         paused,
     ]);
+
+    // ── Device changed outside the UI (e.g. a Fleet command applied) ─────
+    // Re-read the visible panel now instead of at the next 10s tick. Reads
+    // back; the poll above stays as the fallback if the event is missed.
+    useEffect(() => {
+        if (paused) return;
+        const panelRefresh = getPanelRefresh();
+        if (!panelRefresh) return;
+        // The network refresh skips a read taken within its TTL; a device change
+        // must bypass that, as a manual refresh does.
+        const refreshFn = activePanel === 'network'
+            ? async () => { await refreshNetwork(true, true); }
+            : panelRefresh;
+        return onDeviceStateRefresh(() => {
+            void refreshWhenIdle(() => runRefreshIfIdle(panelRefreshInFlightRef, refreshFn));
+        });
+    }, [activePanel, getPanelRefresh, paused, refreshNetwork]);
 }

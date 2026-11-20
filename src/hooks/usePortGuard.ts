@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useCallback, useEffect, useRef, useState } from 'react';
+import useDeviceStateRefresh from './useDeviceStateRefresh';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { PortEntry, PortGuardHit, PortGuardStatus } from '@/lib/portGuard';
@@ -29,6 +30,8 @@ export default function usePortGuard() {
       if (mounted.current && request === sequence.current) { setReadError(String(reason)); setStale(true); }
     }
   }, []);
+  useDeviceStateRefresh(refresh);
+
   useEffect(() => {
     const requests = sequence;
     mounted.current = true; void refresh();

@@ -78,6 +78,21 @@ test('actual polling hooks respect startup, visibility, resume, and in-flight ow
             now = end;
         };
 
+        // Device-change announcements travel on the window (see lib/deviceStateRefresh).
+        const deviceListeners = new Set();
+        globalThis.window = {
+            addEventListener: (type, callback) => {
+                assert.equal(type, 'wincommander:device-state-refresh');
+                deviceListeners.add(callback);
+            },
+            removeEventListener: (type, callback) => deviceListeners.delete(callback),
+            dispatchEvent: event => { for (const callback of [...deviceListeners]) callback(event); return true; },
+        };
+        const announceDeviceChange = async () => {
+            window.dispatchEvent(new Event('wincommander:device-state-refresh'));
+            await settle();
+        };
+
         const visibilityListeners = new Set();
         globalThis.document = {
             visibilityState: 'visible',
@@ -98,13 +113,15 @@ test('actual polling hooks respect startup, visibility, resume, and in-flight ow
         let peakRequests = 0;
         let releaseNetwork;
         let delayNetwork = false;
+        let lastNetworkArgs = [];
         const state = {
             startupComplete: false,
             appSettings: { app: { modules: { network: true, privacy: true, vault: true } } },
             refreshDashboard: async () => { calls.dashboard++; },
             refreshDriveHealth: async () => { calls.drive++; },
-            refreshNetwork: async () => {
+            refreshNetwork: async (...args) => {
                 calls.network++;
+                lastNetworkArgs = args;
                 peakRequests = Math.max(peakRequests, ++activeRequests);
                 try {
                     if (delayNetwork) await new Promise(resolve => { releaseNetwork = resolve; });
@@ -215,10 +232,36 @@ test('actual polling hooks respect startup, visibility, resume, and in-flight ow
         await advance(5_000);
         assert.equal(calls.vault, 2);
 
+        // A device change (a Fleet command applied) refreshes the visible panel at once,
+        // not at the next 10 s tick, and the Network refresh bypasses its 5 min TTL.
+        activePanel = 'privacy';
+        render();
+        await settle();
+        const beforeDeviceChange = calls.privacy;
+        await announceDeviceChange();
+        assert.equal(calls.privacy, beforeDeviceChange + 1, 'device change refreshes the active panel immediately');
+        activePanel = 'network';
+        render();
+        await settle();
+        const networkBeforeChange = calls.network;
+        await announceDeviceChange();
+        assert.equal(calls.network, networkBeforeChange + 1);
+        assert.deepEqual(lastNetworkArgs, [true, true], 'network refresh is forced past its TTL guard');
+        paused = true;
+        render();
+        await settle();
+        const pausedCalls = calls.network;
+        await announceDeviceChange();
+        assert.equal(calls.network, pausedCalls, 'a paused poller does not refresh on a device change');
+        paused = false;
+        render();
+        await settle();
+
         mounted = false;
         slots.forEach(slot => slot?.cleanup?.());
         assert.equal(visibilityListeners.size, 0, 'unmount removes the real visibility subscription');
         assert.equal(timers.size, 0, 'unmount cancels scheduled refreshes');
+        assert.equal(deviceListeners.size, 0, 'unmount removes the device-change subscription');
     `;
     const process = Bun.spawn([Bun.which('bun')!, '-e', script], {
         stdout: 'pipe', stderr: 'pipe',

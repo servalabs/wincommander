@@ -19,6 +19,7 @@ import { Switch, Icon, Button } from "@/components/ui/bp";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useCallback, useEffect, useState } from "react";
+import useDeviceStateRefresh from "@/hooks/useDeviceStateRefresh";
 import { showSuccess, showError } from "../../utils/toast";
 import { DecoyMonitorIntro } from "./MonitorIntros";
 import SectionCard from "../../components/shared/SectionCard";
@@ -119,6 +120,8 @@ export default function DecoyMonitorSection({
       setRecent([]);
     }
   }, [hasPaid]);
+
+  useDeviceStateRefresh(() => { void refreshDecoys(); if (enabled) void refreshRecent(); });
 
   // Refresh on mount + whenever the settings list changes — handles
   // the case where the user just dropped standard decoys (which

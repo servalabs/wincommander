@@ -31,6 +31,7 @@ import { SearchProvider } from "./context/SearchContext";
 import BackgroundPollers from "./components/BackgroundPollers";
 import DiagnosticEventBridge from "./components/DiagnosticEventBridge";
 import EvidenceStatusBridge from "./components/EvidenceStatusBridge";
+import DeviceStateBridge from "./components/DeviceStateBridge";
 import CalculatorGate from "./components/startup/CalculatorGate";
 import useBackend from "./hooks/useBackend";
 import { shouldReconcileCalculatorShortcuts, syncCalculatorShortcuts } from "./panels/privacy/calculatorShortcuts";
@@ -1476,6 +1477,7 @@ function AppContent({ splashDone, onSplashComplete }: {
       />
       <DiagnosticEventBridge />
       <EvidenceStatusBridge />
+      <DeviceStateBridge />
       <UsbHidApprovalDialog />
 
       <RdpIdleWarningDialog

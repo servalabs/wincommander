@@ -1400,6 +1400,9 @@ async fn spawn_pro_session_unlocked(role: SessionRole) -> Result<ProSession, Str
     // alert window on Pro's behalf. Other notification events flow to the
     // frontend via app.emit() unchanged.
     let on_notification: NotificationSink = Box::new(|event, payload| {
+        // A finished Fleet command wakes the apply loop here, whether or not a
+        // window exists; the generic emit below then reaches any open window.
+        crate::fleet_state_wake::on_pro_notification(&event);
         // Safe Copy runs headlessly, so its scrub progress must reach the
         // path-free observer even when this process has no Tauri AppHandle.
         // Only forward numeric counters here; the Pro payload's `file` field

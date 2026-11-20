@@ -10,6 +10,11 @@ lists only a selection of those changes.
 
 ## Unreleased
 
+- Show a Fleet command's effect in WinCommander within about two seconds. The
+  app now re-reads settings and the open panel when settings change or the
+  Pro agent reports a finished command, and the Fleet apply loop adopts that
+  command immediately instead of at its next 60 second tick. The existing polls
+  remain as the fallback.
 - Let Privacy Shield start locally when the Windows service confirms the
   device is unbound, even if the profile still holds older Fleet settings.
 - Request Windows administrator approval when a split-token administrator
