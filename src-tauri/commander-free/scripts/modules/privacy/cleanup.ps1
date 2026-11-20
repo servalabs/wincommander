@@ -1313,11 +1313,27 @@ function Get-FleetForensicProjection {
 
             'amcache' {
                 $result = Get-AmcacheEntries -FleetProjection
-                if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read complete Amcache summaries.') }
+                if ($result.error) { return (& $empty 'System Cleanup could not read complete Amcache summaries.') }
                 $sourceRows = @($result.entries | Where-Object { $null -ne $_ })
-                $records = @($sourceRows | ForEach-Object { @{ category = (& $sanitizeText $_.category 96); count = [int]$_.count; sample = (& $sanitizeText (($_.sample | ConvertTo-Json -Compress -Depth 3)) 256) } })
-                $columns = @(@{ key = 'category'; label = 'Category'; type = 'text' }, @{ key = 'count'; label = 'Records'; type = 'number' }, @{ key = 'sample'; label = 'Sample'; type = 'text'; sensitive = $true })
+                $columns = @(@{ key = 'category'; label = 'Category'; type = 'text' }, @{ key = 'count'; label = 'Records'; type = 'number' }, @{ key = 'sample'; label = 'Sample'; type = 'text'; sensitive = $true }, @{ key = 'state'; label = 'State'; type = 'text' })
                 $extra = @{}
+                if ($result.partial) {
+                    # Windows does not mount Amcache.hve in the live registry, and
+                    # Fleet never authorises the offline snapshot helper. The
+                    # collector therefore cannot count anything. That is an honest
+                    # per-category "unavailable" (cells left out, never a zero),
+                    # not a failed view, and it keeps the rest of Fleet's table
+                    # contract (typed columns, row/total bounds) intact.
+                    if ($sourceRows.Count -eq 0) { return (& $empty 'System Cleanup could not read complete Amcache summaries.') }
+                    $unavailableState = if ($result.hveFileExists -eq $true) { 'Unavailable: the Amcache hive is not mounted for this read-only scan' } else { 'Unavailable: Windows could not verify access to Amcache' }
+                    $records = @($sourceRows | ForEach-Object { @{ category = (& $sanitizeText $_.category 96); state = $unavailableState } })
+                    $extra.status = 'unavailable'
+                    if ($null -ne $result.hveFileExists) { $extra.hveFileExists = [bool]$result.hveFileExists }
+                    if ($null -ne $result.hveFileSizeMb) { $extra.hveFileSizeMb = [double]$result.hveFileSizeMb }
+                    if ($result.coverageNote) { $extra.coverageNote = [string]$result.coverageNote }
+                    return (New-FleetForensicProjection -Category 'amcache' -Label 'Amcache' -Columns $columns -Records $records -Total $records.Count -Extra $extra)
+                }
+                $records = @($sourceRows | ForEach-Object { @{ category = (& $sanitizeText $_.category 96); count = [int]$_.count; sample = (& $sanitizeText (($_.sample | ConvertTo-Json -Compress -Depth 3)) 256); state = 'Available' } })
                 if ($null -ne $result.hveFileExists) { $extra.hveFileExists = [bool]$result.hveFileExists }
                 if ($null -ne $result.hveFileSizeMb) { $extra.hveFileSizeMb = [double]$result.hveFileSizeMb }
                 if ($result.coverageNote) { $extra.coverageNote = [string]$result.coverageNote }

@@ -4569,6 +4569,37 @@ mod fleet_forensic_projection_tests {
         );
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn fleet_collector_stdout_is_utf8_for_non_ascii_values() {
+        // Regression: process_review failed on a signer containing an umlaut
+        // because stdout was OEM-encoded, which is not valid UTF-8.
+        let script = fleet_forensic_collector_script().expect("load collector modules");
+        assert!(
+            script.starts_with(POWERSHELL_UTF8_OUTPUT),
+            "the Fleet collector must force UTF-8 stdout like the regular runner"
+        );
+        let prefix = script
+            .strip_suffix("Invoke-BackendCommand")
+            .expect("fixed collector entry point");
+        let fixture = "ConvertTo-JsonOutput @{ signer = ('CN=Baden-W' + [char]0x00FC + 'rttemberg') }";
+        let (mut command, _) = build_powershell_command();
+        let mut child = command.spawn().expect("start PowerShell fixture");
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(format!("{prefix}\n{fixture}\n").as_bytes())
+            .unwrap();
+        let output = child
+            .wait_with_output()
+            .expect("wait for PowerShell fixture");
+        assert!(output.status.success(), "PowerShell fixture failed");
+        let stdout = std::str::from_utf8(&output.stdout)
+            .expect("collector stdout must be valid UTF-8 for a non-ASCII value");
+        assert!(stdout.contains("Baden-W\u{fc}rttemberg"), "unexpected stdout: {stdout}");
+    }
+
     #[test]
     fn debug_cleanup_collector_embeds_the_current_source() {
         // Debug is the Fleet development path. It must use the same current
@@ -5839,9 +5870,14 @@ fn fleet_forensic_collector_script() -> Result<String, String> {
     let shared_cleanup = load_module("core/auto-erase")?;
     let cleanup = load_module("privacy/cleanup")?;
     let security = load_module("tweaks/security")?;
+    // Windows PowerShell writes a redirected stdout in the OEM code page unless
+    // told otherwise. Any non-ASCII value in a table (a signer such as
+    // "Baden-Wuerttemberg" with its umlaut, a profile or file name) would then be
+    // an invalid UTF-8 byte sequence and the whole projection would be rejected
+    // as "an invalid cleanup record set". Match the regular backend runner.
     Ok(format!(
-        "{}\n\n{}\n\n{}\n\n{}\n\n{}\n\nInvoke-BackendCommand",
-        core_utils, security, shared_cleanup, cleanup, core_router
+        "{}{}\n\n{}\n\n{}\n\n{}\n\n{}\n\nInvoke-BackendCommand",
+        POWERSHELL_UTF8_OUTPUT, core_utils, security, shared_cleanup, cleanup, core_router
     ))
 }
 

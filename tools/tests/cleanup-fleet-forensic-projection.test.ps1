@@ -91,6 +91,40 @@ function Get-CellularHistoryInfo { @{ error = $true; message = 'Windows Mobile B
 if (-not (Get-FleetForensicProjection -Category cellular_history -FullDetail $true).error) { throw 'A real cellular read failure must remain an error.' }
 
 }
+Test-Section 'amcache' {
+# --- 7. An unmounted Amcache hive is an unavailable table, not a failed view
+$categories = @('InventoryApplication', 'InventoryApplicationFile', 'InventoryApplicationShortcut', 'InventoryDeviceContainer', 'InventoryDriverBinary')
+# Shape returned by Get-AmcacheEntries when the hive file exists but Windows
+# has not mounted it (the common case) and no offline snapshot is authorised.
+function Get-AmcacheEntries {
+    param([switch]$FleetProjection)
+    @{ entries = @($categories | ForEach-Object { @{ category = $_; count = 0; sample = @() } }); hveFileSizeMb = 8; hveFileExists = $true; inventoryRoot = $null; total = $null; partial = $true; status = 'unavailable'; message = 'App Launch Cache inventory is unavailable.'; coverage = 'limited'; coverageNote = 'Reads the available mounted Windows registry inventory only.' }
+}
+$unavailable = Get-FleetForensicProjection -Category amcache -FullDetail $true
+Assert-ProjectionContract $unavailable 'amcache (unmounted)'
+if ($unavailable.error) { throw 'An unmounted Amcache hive must not be a hard failure.' }
+if (@($unavailable.records).Count -ne 5 -or $unavailable.total -ne 5 -or $unavailable.truncated) { throw 'Unavailable Amcache must list its five categories.' }
+foreach ($record in @($unavailable.records)) {
+    if ($record.ContainsKey('count') -or $record.ContainsKey('sample')) { throw 'Unavailable Amcache rows must omit the counts instead of reporting zero.' }
+    if ($record.state -notmatch '^Unavailable: ') { throw 'Unavailable Amcache rows must say they are unavailable.' }
+}
+if ($unavailable.status -ne 'unavailable' -or $unavailable.hveFileExists -ne $true) { throw 'Unavailable Amcache must keep its status and hive facts.' }
+$stateColumns = @($unavailable.columns | ForEach-Object { $_.key })
+if (($stateColumns -join ',') -ne 'category,count,sample,state') { throw "Amcache columns changed: $($stateColumns -join ',')" }
+# A readable inventory keeps its counts and is marked available.
+function Get-AmcacheEntries {
+    param([switch]$FleetProjection)
+    @{ entries = @(@{ category = 'InventoryApplication'; count = 2; sample = @(@{ id = 'a'; name = 'App' }) }, @{ category = 'InventoryDriverBinary'; count = 0; sample = @() }); hveFileSizeMb = 8; hveFileExists = $true; inventoryRoot = 'HKLM:\Amcache\Root'; total = 2; partial = $false; status = 'complete' }
+}
+$readable = Get-FleetForensicProjection -Category amcache -FullDetail $true
+Assert-ProjectionContract $readable 'amcache (readable)'
+if ($readable.total -ne 2 -or $readable.records[0].count -ne 2 -or $readable.records[0].state -ne 'Available' -or $readable.records[1].count -ne 0) { throw 'A readable Amcache inventory lost its counts.' }
+# A collector exception is still a failure.
+function Get-AmcacheEntries { param([switch]$FleetProjection) @{ error = $true; message = 'boom at C:\secret' } }
+$failed = Get-FleetForensicProjection -Category amcache -FullDetail $true
+if (-not $failed.error -or $failed.message -notmatch '^System Cleanup could not ' -or $failed.message -match 'secret') { throw 'A real Amcache collector failure must stay a bounded error.' }
+
+}
 Test-Section 'truncation' {
 # --- 6. A preview capped at the row limit reports the real total ------------
 $previewFiles = @(1..200 | ForEach-Object { @{ name = "npm cache: file-$_"; sizeKB = 1; modified = '2026-11-20 10:00:00' } })
@@ -148,4 +182,4 @@ foreach ($entry in @($walk.entries)) { if ($entry.source -ne 'ShellBags' -or [st
 
 }
 if ($script:failures.Count) { throw ($script:failures -join [Environment]::NewLine) }
-'PASS: Fleet forensic projections: supported column types, empty sources, phantom rows, not-applicable cellular, truncation and bounded collectors.'
+'PASS: Fleet forensic projections: supported column types, empty sources, phantom rows, not-applicable cellular, unavailable Amcache, truncation and bounded collectors.'

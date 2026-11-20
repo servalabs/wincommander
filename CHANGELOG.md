@@ -23,6 +23,13 @@ lists only a selection of those changes.
   real total and `truncated`. Process review checks each executable once and,
   like ShellBags, stops at a row cap and a 30 s budget, and ShellBags no
   longer re-scans the whole Bags tree for every key.
+- Fix Fleet process review and Amcache views failing on a live device. The Fleet
+  collector read Windows PowerShell's stdout in the OEM code page, so one
+  non-ASCII value (a signer such as `Baden-Württemberg`) made the whole table
+  invalid UTF-8; it now forces UTF-8 like the regular backend runner. When
+  Windows has not mounted the Amcache hive, the Amcache view lists its five
+  categories as unavailable (counts left out, never zero) with a State column
+  instead of failing.
 
 - Let Privacy Shield start locally when the Windows service confirms the
   device is unbound, even if the profile still holds older Fleet settings.
