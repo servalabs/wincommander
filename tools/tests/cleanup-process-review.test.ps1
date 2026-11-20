@@ -53,6 +53,38 @@ $unverified = Get-ProcessIntelligence
 if (-not $unverified.partial -or $unverified.processes[0].path) { throw 'A process without a creation time must not receive fallback path details.' }
 $script:case = 'missing-path'
 function Get-Process { [CmdletBinding()] param() throw [UnauthorizedAccessException]::new('Process inventory denied') }
+# Fleet bounds: one verification per distinct image, a process cap and a time budget.
+$script:case = 'valid'
+$script:signatureCalls = 0; $script:signatureDelayMs = 0
+function Test-Path { return $true }
+function Get-AuthenticodeSignature {
+    [CmdletBinding()] param($LiteralPath)
+    $script:signatureCalls++
+    if ($script:signatureDelayMs) { Start-Sleep -Milliseconds $script:signatureDelayMs }
+    [pscustomobject]@{ Status = 'Valid'; SignerCertificate = [pscustomobject]@{ Subject = 'Synthetic signer' } }
+}
+function Get-Process {
+    [CmdletBinding()] param()
+    1..40 | ForEach-Object { [pscustomobject]@{ Id = 100 + $_; ProcessName = 'shared'; MainModule = [pscustomobject]@{ FileName = $(if ($_ % 2) { 'C:\synthetic\shared.exe' } else { 'C:\SYNTHETIC\SHARED.EXE' }) } } }
+    [pscustomobject]@{ Id = 200; ProcessName = 'other'; MainModule = [pscustomobject]@{ FileName = 'C:\synthetic\other.exe' } }
+}
+$shared = Get-ProcessIntelligence
+if ($shared.error -or @($shared.processes).Count -ne 41 -or $shared.totalProcesses -ne 41 -or $shared.truncated) { throw 'The unbounded Process Review must still list every process.' }
+if ($script:signatureCalls -ne 2) { throw "Signatures must be verified once per distinct image, not once per process (calls=$($script:signatureCalls))." }
+if (@($shared.processes | Where-Object { $_.signed -ne 'Valid' }).Count) { throw 'A cached signature result was not applied to every process sharing the image.' }
+$capped = Get-ProcessIntelligence -MaxProcesses 10
+if (@($capped.processes).Count -ne 10 -or $capped.totalProcesses -ne 41 -or -not $capped.truncated -or $capped.observedProcesses -ne 10) { throw 'The process cap must bound the rows and still report the full process count.' }
+function Get-Process {
+    [CmdletBinding()] param()
+    1..3 | ForEach-Object { [pscustomobject]@{ Id = 300 + $_; ProcessName = "image$_"; MainModule = [pscustomobject]@{ FileName = "C:\synthetic\image$_.exe" } } }
+}
+$script:signatureCalls = 0; $script:signatureDelayMs = 1200
+$budgeted = Get-ProcessIntelligence -TimeBudgetSeconds 1
+if ($script:signatureCalls -ne 1 -or $budgeted.processes[0].signed -ne 'Valid' -or $budgeted.processes[1].signed -ne 'NotChecked' -or $budgeted.processes[2].signed -ne 'NotChecked') { throw 'Signature checks must stop once the time budget is spent.' }
+if (-not $budgeted.partial -or $budgeted.signatureChecksSkipped -ne 2 -or $budgeted.coverageNote -notmatch 'time budget' -or @($budgeted.processes).Count -ne 3) { throw 'A budget-limited review must stay listed, partial and explained.' }
+$script:signatureDelayMs = 0
+$script:case = 'missing-path'
+function Get-Process { [CmdletBinding()] param() throw [UnauthorizedAccessException]::new('Process inventory denied') }
 $script:denied = $true
 $failure = Get-ProcessIntelligence
 if (-not $failure.error -or $failure.message -notmatch 'denied') { throw 'Denied process enumeration appeared as a clean result.' }

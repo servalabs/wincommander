@@ -696,7 +696,7 @@ function New-FleetForensicProjection {
         # A successful local collector may legitimately have no artifacts.  An
         # empty table must remain a valid Fleet result (0 shown / 0 total), not
         # be rejected by PowerShell's mandatory-parameter binder.
-        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Records,
+        [Parameter(Mandatory)][AllowNull()][AllowEmptyCollection()][object[]]$Records,
         [Parameter(Mandatory)][int]$Total,
         [bool]$Truncated = $false,
         [bool]$Redacted = $false,
@@ -707,7 +707,11 @@ function New-FleetForensicProjection {
     $byteLimit = 512KB
     $shown = @()
     $usedBytes = 0
-    foreach ($record in @($Records | Select-Object -First $rowLimit)) {
+    # A collector with nothing to report hands over $null (an empty pipeline
+    # result), never a one-element array holding $null.  Normalise both to a
+    # real, possibly empty, list so "no artifacts" is a 0-row table.
+    $sourceRecords = @($Records | Where-Object { $null -ne $_ })
+    foreach ($record in @($sourceRecords | Select-Object -First $rowLimit)) {
         # Values are already scalar/sanitised by the per-category branch.  A
         # serialised-size check keeps a pathological local cache from making
         # the authenticated IPC reply unbounded.
@@ -722,7 +726,13 @@ function New-FleetForensicProjection {
         $shown += $record
         $usedBytes += $recordBytes
     }
-    if ($shown.Count -lt @($Records).Count) { $Truncated = $true }
+    if ($shown.Count -lt $sourceRecords.Count) { $Truncated = $true }
+    # The table can never claim fewer source rows than it carries, and a total
+    # larger than the carried rows is by definition a truncated table. A cap
+    # that lands exactly on the row limit must not report truncated=false while
+    # rows were dropped.
+    if ($Total -lt $shown.Count) { $Total = $shown.Count }
+    if ($Total -gt $shown.Count) { $Truncated = $true }
 
     $projection = [ordered]@{
         # Fleet rejects earlier projection contracts rather than accepting a
@@ -864,14 +874,29 @@ function Get-FleetForensicProjection {
     }
 
     $metadataProjection = {
-        param([string]$ProjectionCategory, [string]$ProjectionLabel, [hashtable]$Result, [string]$Source)
+        param([string]$ProjectionCategory, [string]$ProjectionLabel, [hashtable]$Result, [string]$Source, [hashtable]$Extra = @{})
         # Each switch arm below calls its collector literally. This helper only
         # normalises the fixed local metadata shape.
-        $items = @($Result.files)
-        if ($items.Count -eq 0) { $items = @($Result.entries) }
-        $records = & $metadataRows $items $Source
+        # `@($null)` is a one-element array, so a missing `files` property (and
+        # the `entries` fallback) must be filtered, not wrapped: an absent
+        # artifact list is zero rows, never a phantom size-0 row.
+        $items = @($Result.files | Where-Object { $null -ne $_ })
+        if ($items.Count -eq 0) { $items = @($Result.entries | Where-Object { $null -ne $_ }) }
+        # An incomplete scan that found nothing cannot be reported as an empty
+        # inventory. Keep that unavailable state distinct from a verified zero.
+        if ($Result.partial -eq $true -and $items.Count -eq 0) {
+            return (& $empty "System Cleanup could not read complete $ProjectionLabel summaries.")
+        }
+        $records = @(& $metadataRows $items $Source)
+        # Collectors that preview a larger inventory (developer caches returns
+        # at most 200 of possibly thousands of files) report the real count.
+        $total = $items.Count
+        $reportedTotal = 0
+        try { $reportedTotal = [int]$Result.total } catch { }
+        if ($reportedTotal -gt $total) { $total = $reportedTotal }
+        $truncated = ($total -gt $items.Count) -or ($Result.truncated -eq $true)
         $columns = @(@{ key = 'source'; label = 'Source'; type = 'text' }, @{ key = 'artifact'; label = 'Artifact'; type = 'text'; sensitive = $true }, @{ key = 'sizeKB'; label = 'Size (KB)'; type = 'number' }, @{ key = 'modified'; label = 'Modified'; type = 'timestamp' })
-        return (New-FleetForensicProjection -Category $ProjectionCategory -Label $ProjectionLabel -Columns $columns -Records $records -Total $items.Count)
+        return (New-FleetForensicProjection -Category $ProjectionCategory -Label $ProjectionLabel -Columns $columns -Records $records -Total $total -Truncated $truncated -Extra $Extra)
     }
 
     $empty = {
@@ -893,7 +918,7 @@ function Get-FleetForensicProjection {
                 $result = Get-DnsCacheEntries -FleetFiltered
                 if ($result.error) { return (& $empty 'System Cleanup could not read the DNS cache.') }
 
-                $sourceRows = @($result.entries)
+                $sourceRows = @($result.entries | Where-Object { $null -ne $_ })
                 $records = @($sourceRows | Select-Object -First $rowLimit | ForEach-Object {
                     $rawData = ([string]$_.data) -replace '[\r\n\t]+', ' '
                     $dataLength = 0
@@ -966,7 +991,7 @@ function Get-FleetForensicProjection {
                 $result = Get-EventLogSummary
                 if ($result.error) { return (& $empty 'System Cleanup could not read event-log totals.') }
 
-                $sourceRows = @($result.logs)
+                $sourceRows = @($result.logs | Where-Object { $null -ne $_ })
                 $records = @($sourceRows | Select-Object -First $rowLimit | ForEach-Object {
                     $count = 0
                     $sizeMb = 0
@@ -992,7 +1017,7 @@ function Get-FleetForensicProjection {
                 $result = Get-PrefetchFiles
                 if ($result.error) { return (& $empty 'System Cleanup could not read Prefetch summaries.') }
 
-                $sourceRows = @($result.entries)
+                $sourceRows = @($result.entries | Where-Object { $null -ne $_ })
                 $records = @($sourceRows | Select-Object -First $rowLimit | ForEach-Object {
                     $sizeKB = 0
                     try { $sizeKB = [double]$_.sizeKB } catch {}
@@ -1015,9 +1040,12 @@ function Get-FleetForensicProjection {
             }
 
             'shell_bags' {
-                $result = Get-ShellBags
+                # A large BagMRU tree is counted in full but only the first
+                # $rowLimit entries are expanded, inside a fixed time budget.
+                $result = Get-ShellBags -MaxEntries $rowLimit -TimeBudgetSeconds 30
                 if ($result.error) { return (& $empty 'System Cleanup could not read ShellBag summaries.') }
-                $sourceRows = @($result.entries)
+                $sourceRows = @($result.entries | Where-Object { $null -ne $_ })
+                $shellBagTotal = [Math]::Max($sourceRows.Count, [int]$result.total)
                 $records = @($sourceRows | ForEach-Object {
                     @{ record = (& $sanitizeText $_.path 256); lastModified = (& $sanitizeText $_.lastModified 64) }
                 })
@@ -1026,13 +1054,13 @@ function Get-FleetForensicProjection {
                     @{ key = 'lastModified'; label = 'Last modified'; type = 'timestamp' }
                 )
                 $columns[0].sensitive = $true
-                return (New-FleetForensicProjection -Category 'shell_bags' -Label 'ShellBags' -Columns $columns -Records $records -Total $sourceRows.Count)
+                return (New-FleetForensicProjection -Category 'shell_bags' -Label 'ShellBags' -Columns $columns -Records $records -Total $shellBagTotal -Truncated ([bool]$result.truncated))
             }
 
             'usb_history' {
                 $result = Get-USBDeviceHistory
                 if ($result.error) { return (& $empty 'System Cleanup could not read USB-history summaries.') }
-                $sourceRows = @($result.devices)
+                $sourceRows = @($result.devices | Where-Object { $null -ne $_ })
                 $records = @($sourceRows | ForEach-Object {
                     @{
                         deviceId = (& $sanitizeText $_.deviceId 256)
@@ -1053,7 +1081,7 @@ function Get-FleetForensicProjection {
             'recycle_bin' {
                 $result = Get-RecycleBinInfo
                 if ($result.error) { return (& $empty 'System Cleanup could not read Recycle Bin summaries.') }
-                $sourceRows = @($result.items)
+                $sourceRows = @($result.items | Where-Object { $null -ne $_ })
                 $records = @($sourceRows | ForEach-Object {
                     $sizeBytes = 0
                     $sizeKB = 0
@@ -1083,7 +1111,7 @@ function Get-FleetForensicProjection {
             'clipboard_history' {
                 $result = Get-ClipboardHistoryStatus
                 if ($result.error) { return (& $empty 'System Cleanup could not read clipboard-history status.') }
-                $sourceRows = @($result.historyItems)
+                $sourceRows = @($result.historyItems | Where-Object { $null -ne $_ })
                 $records = @($sourceRows | ForEach-Object {
                     $count = 0
                     try { $count = [int]$_.charCount } catch {}
@@ -1103,7 +1131,7 @@ function Get-FleetForensicProjection {
             'execution_audit' {
                 $result = Get-ExecutionCache
                 if ($result.error) { return (& $empty 'System Cleanup could not read execution-audit summaries.') }
-                $sourceRows = @($result.entries)
+                $sourceRows = @($result.entries | Where-Object { $null -ne $_ })
                 $records = @($sourceRows | ForEach-Object {
                     @{ source = (& $sanitizeText $_.source 64); record = (& $sanitizeText $_.path 256) }
                 })
@@ -1118,7 +1146,7 @@ function Get-FleetForensicProjection {
                 # Fleet needs profile evidence, never Wi-Fi credentials.
                 $result = Get-WlanProfiles -IncludeSecrets:$false
                 if ($result.error) { return (& $empty 'System Cleanup could not read WLAN-profile summaries.') }
-                $sourceRows = @($result.profiles)
+                $sourceRows = @($result.profiles | Where-Object { $null -ne $_ })
                 $records = @($sourceRows | ForEach-Object {
                     $name = (& $sanitizeText $_.name 128)
                     if ([string]::IsNullOrWhiteSpace($name)) { $name = 'Not recorded locally' }
@@ -1131,7 +1159,7 @@ function Get-FleetForensicProjection {
             'net_drives' {
                 $result = Get-NetworkDrives
                 if ($result.error) { return (& $empty 'System Cleanup could not read network-drive summaries.') }
-                $sourceRows = @($result.drives)
+                $sourceRows = @($result.drives | Where-Object { $null -ne $_ })
                 $records = @($sourceRows | ForEach-Object {
                     @{ drive = (& $sanitizeText $_.Name 16); remote = (& $sanitizeText $_.DisplayRoot 256) }
                 })
@@ -1145,7 +1173,7 @@ function Get-FleetForensicProjection {
             'command_history' {
                 $result = Get-PSHistory
                 if ($result.error) { return (& $empty 'System Cleanup could not read command-history summaries.') }
-                $sourceRows = @($result.entries)
+                $sourceRows = @($result.entries | Where-Object { $null -ne $_ })
                 $records = @($sourceRows | ForEach-Object { @{ id = [int]$_.id; command = (& $sanitizeText $_.command 256) } })
                 $columns = @(
                     @{ key = 'id'; label = 'Record'; type = 'number' },
@@ -1157,7 +1185,7 @@ function Get-FleetForensicProjection {
             'recent_files' {
                 $result = Get-RecentFiles
                 if ($result.error) { return (& $empty 'System Cleanup could not read recent-file summaries.') }
-                $sourceRows = @($result.entries)
+                $sourceRows = @($result.entries | Where-Object { $null -ne $_ })
                 $records = @($sourceRows | ForEach-Object {
                     $sizeBytes = 0
                     try { $sizeBytes = [int64]$_.sizeBytes } catch {}
@@ -1182,7 +1210,7 @@ function Get-FleetForensicProjection {
             'rdp_history' {
                 $result = Get-RDPHistory
                 if ($result.error) { return (& $empty 'System Cleanup could not read RDP-history summaries.') }
-                $sourceRows = @($result.entries)
+                $sourceRows = @($result.entries | Where-Object { $null -ne $_ })
                 $records = @($sourceRows | ForEach-Object {
                     $endpoint = (& $sanitizeText $_.host 256)
                     if ([string]::IsNullOrWhiteSpace($endpoint)) { $endpoint = 'Not recorded locally' }
@@ -1208,7 +1236,7 @@ function Get-FleetForensicProjection {
             'jump_lists' {
                 $result = Get-JumpLists
                 if ($result.error) { return (& $empty 'System Cleanup could not read Jump List summaries.') }
-                $sourceRows = @($result.entries)
+                $sourceRows = @($result.entries | Where-Object { $null -ne $_ })
                 $records = @($sourceRows | ForEach-Object {
                     $sizeKB = 0
                     try { $sizeKB = [double]$_.sizeKB } catch {}
@@ -1226,7 +1254,7 @@ function Get-FleetForensicProjection {
             'connectivity_history' {
                 $result = Get-ConnectivityHistory
                 if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read complete connectivity-history summaries.') }
-                $sourceRows = @($result.entries)
+                $sourceRows = @($result.entries | Where-Object { $null -ne $_ })
                 $records = @($sourceRows | ForEach-Object {
                     @{ source = (& $sanitizeText $_.source 64); type = (& $sanitizeText $_.type 32); category = (& $sanitizeText $_.category 32); network = (& $sanitizeText $_.name 256); key = (& $sanitizeText $_.key 256); description = (& $sanitizeText $_.description 256); dnsSuffix = (& $sanitizeText $_.dnsSuffix 256) }
                 })
@@ -1245,14 +1273,14 @@ function Get-FleetForensicProjection {
             'shadow_copies' {
                 $result = Get-ShadowCopies
                 if ($result.error) { return (& $empty 'System Cleanup could not read shadow-copy summaries.') }
-                $sourceRows = @($result.copies)
+                $sourceRows = @($result.copies | Where-Object { $null -ne $_ })
                 $records = @($sourceRows | ForEach-Object {
                     @{
                         id = (& $sanitizeText $_.id 256)
                         drive = (& $sanitizeText $_.drive 16)
                         created = (& $sanitizeText $_.created 64)
-                        clientAccessible = [bool]$_.clientAccessible
-                        persistent = [bool]$_.persistent
+                        clientAccessible = $(if ([bool]$_.clientAccessible) { 'Yes' } else { 'No' })
+                        persistent = $(if ([bool]$_.persistent) { 'Yes' } else { 'No' })
                         state = (& $sanitizeText $_.stateStr 64)
                     }
                 })
@@ -1260,8 +1288,8 @@ function Get-FleetForensicProjection {
                     @{ key = 'id'; label = 'Copy ID'; type = 'text'; sensitive = $true },
                     @{ key = 'drive'; label = 'Drive'; type = 'text' },
                     @{ key = 'created'; label = 'Created'; type = 'timestamp' },
-                    @{ key = 'clientAccessible'; label = 'Client accessible'; type = 'boolean' },
-                    @{ key = 'persistent'; label = 'Persistent'; type = 'boolean' },
+                    @{ key = 'clientAccessible'; label = 'Client accessible'; type = 'text' },
+                    @{ key = 'persistent'; label = 'Persistent'; type = 'text' },
                     @{ key = 'state'; label = 'State'; type = 'text' }
                 )
                 return (New-FleetForensicProjection -Category 'shadow_copies' -Label 'Shadow copies' -Columns $columns -Records $records -Total $sourceRows.Count -Extra @{ vssRunning = [bool]$result.vssRunning })
@@ -1270,13 +1298,13 @@ function Get-FleetForensicProjection {
             'ntfs_journals' {
                 $result = Get-NTFSJournals
                 if ($result.error) { return (& $empty 'System Cleanup could not read NTFS-journal summaries.') }
-                $sourceRows = @($result.journals)
+                $sourceRows = @($result.journals | Where-Object { $null -ne $_ })
                 $records = @($sourceRows | ForEach-Object {
-                    @{ drive = (& $sanitizeText $_.drive 16); present = [bool]$_.present; journalId = (& $sanitizeText $_.journalId 128); maxSize = (& $sanitizeText $_.maxSize 64) }
+                    @{ drive = (& $sanitizeText $_.drive 16); present = $(if ([bool]$_.present) { 'Yes' } else { 'No' }); journalId = (& $sanitizeText $_.journalId 128); maxSize = (& $sanitizeText $_.maxSize 64) }
                 })
                 $columns = @(
                     @{ key = 'drive'; label = 'Drive'; type = 'text' },
-                    @{ key = 'present'; label = 'Present'; type = 'boolean' },
+                    @{ key = 'present'; label = 'Present'; type = 'text' },
                     @{ key = 'journalId'; label = 'Journal ID'; type = 'text'; sensitive = $true },
                     @{ key = 'maxSize'; label = 'Maximum size'; type = 'text' }
                 )
@@ -1286,7 +1314,7 @@ function Get-FleetForensicProjection {
             'amcache' {
                 $result = Get-AmcacheEntries -FleetProjection
                 if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read complete Amcache summaries.') }
-                $sourceRows = @($result.entries)
+                $sourceRows = @($result.entries | Where-Object { $null -ne $_ })
                 $records = @($sourceRows | ForEach-Object { @{ category = (& $sanitizeText $_.category 96); count = [int]$_.count; sample = (& $sanitizeText (($_.sample | ConvertTo-Json -Compress -Depth 3)) 256) } })
                 $columns = @(@{ key = 'category'; label = 'Category'; type = 'text' }, @{ key = 'count'; label = 'Records'; type = 'number' }, @{ key = 'sample'; label = 'Sample'; type = 'text'; sensitive = $true })
                 $extra = @{}
@@ -1324,8 +1352,8 @@ function Get-FleetForensicProjection {
             'notepad_state' {
                 $result = Get-NotepadStateFiles
                 if ($result.error) { return (& $empty 'System Cleanup could not read Notepad-state summaries.') }
-                $sourceRows = @($result.files)
-                $records = & $metadataRows $sourceRows 'Notepad state'
+                $sourceRows = @($result.files | Where-Object { $null -ne $_ })
+                $records = @(& $metadataRows $sourceRows 'Notepad state')
                 $columns = @(@{ key = 'source'; label = 'Source'; type = 'text' }, @{ key = 'artifact'; label = 'Artifact'; type = 'redacted' }, @{ key = 'sizeKB'; label = 'Size (KB)'; type = 'number' }, @{ key = 'modified'; label = 'Modified'; type = 'timestamp' })
                 return (New-FleetForensicProjection -Category 'notepad_state' -Label 'Notepad state' -Columns $columns -Records $records -Total $sourceRows.Count -Redacted $true)
             }
@@ -1333,8 +1361,8 @@ function Get-FleetForensicProjection {
             'compatibility_cache' {
                 $result = Get-PCAInfo
                 if ($result.error) { return (& $empty 'System Cleanup could not read compatibility-cache summaries.') }
-                $sourceRows = @($result.files)
-                $records = & $metadataRows $sourceRows 'Compatibility cache'
+                $sourceRows = @($result.files | Where-Object { $null -ne $_ })
+                $records = @(& $metadataRows $sourceRows 'Compatibility cache')
                 $columns = @(@{ key = 'source'; label = 'Source'; type = 'text' }, @{ key = 'artifact'; label = 'Artifact'; type = 'redacted' }, @{ key = 'sizeKB'; label = 'Size (KB)'; type = 'number' }, @{ key = 'modified'; label = 'Modified'; type = 'timestamp' })
                 return (New-FleetForensicProjection -Category 'compatibility_cache' -Label 'Compatibility cache' -Columns $columns -Records $records -Total $sourceRows.Count -Redacted $true -Extra @{ serviceState = (& $sanitizeText $result.pcaSvcState 32) })
             }
@@ -1342,8 +1370,8 @@ function Get-FleetForensicProjection {
             'crash_dumps' {
                 $result = Get-CrashDumpList
                 if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read crash-dump summaries.') }
-                $sourceRows = @($result.dumps)
-                $records = & $metadataRows $sourceRows 'Crash dump'
+                $sourceRows = @($result.dumps | Where-Object { $null -ne $_ })
+                $records = @(& $metadataRows $sourceRows 'Crash dump')
                 $columns = @(@{ key = 'source'; label = 'Source'; type = 'text' }, @{ key = 'artifact'; label = 'Artifact'; type = 'redacted' }, @{ key = 'sizeKB'; label = 'Size (KB)'; type = 'number' }, @{ key = 'modified'; label = 'Modified'; type = 'timestamp' })
                 return (New-FleetForensicProjection -Category 'crash_dumps' -Label 'Crash dumps' -Columns $columns -Records $records -Total $sourceRows.Count -Redacted $true)
             }
@@ -1351,8 +1379,8 @@ function Get-FleetForensicProjection {
             'search_index' {
                 $result = Get-SearchIndexInfo
                 if ($result.error) { return (& $empty 'System Cleanup could not read search-index summaries.') }
-                $sourceRows = @($result.files)
-                $records = & $metadataRows $sourceRows 'Search index'
+                $sourceRows = @($result.files | Where-Object { $null -ne $_ })
+                $records = @(& $metadataRows $sourceRows 'Search index')
                 $columns = @(@{ key = 'source'; label = 'Source'; type = 'text' }, @{ key = 'artifact'; label = 'Artifact'; type = 'redacted' }, @{ key = 'sizeKB'; label = 'Size (KB)'; type = 'number' }, @{ key = 'modified'; label = 'Modified'; type = 'timestamp' })
                 return (New-FleetForensicProjection -Category 'search_index' -Label 'Search index' -Columns $columns -Records $records -Total $sourceRows.Count -Redacted $true -Extra @{ serviceState = (& $sanitizeText $result.wsearchState 32) })
             }
@@ -1360,8 +1388,8 @@ function Get-FleetForensicProjection {
             'print_spooler' {
                 $result = Get-PrintSpoolerInfo
                 if ($result.error) { return (& $empty 'System Cleanup could not read print-spooler summaries.') }
-                $sourceRows = @($result.files)
-                $records = & $metadataRows $sourceRows 'Print spooler'
+                $sourceRows = @($result.files | Where-Object { $null -ne $_ })
+                $records = @(& $metadataRows $sourceRows 'Print spooler')
                 $columns = @(@{ key = 'source'; label = 'Source'; type = 'text' }, @{ key = 'artifact'; label = 'Artifact'; type = 'redacted' }, @{ key = 'sizeKB'; label = 'Size (KB)'; type = 'number' }, @{ key = 'modified'; label = 'Modified'; type = 'timestamp' })
                 return (New-FleetForensicProjection -Category 'print_spooler' -Label 'Print spooler' -Columns $columns -Records $records -Total $sourceRows.Count -Redacted $true -Extra @{ serviceState = (& $sanitizeText $result.spoolerState 32) })
             }
@@ -1369,7 +1397,7 @@ function Get-FleetForensicProjection {
             'resource_usage_history' {
                 $result = Get-SRUMData
                 if ($result.error) { return (& $empty 'System Cleanup could not read resource-usage summaries.') }
-                $sourceRows = @($result.entries)
+                $sourceRows = @($result.entries | Where-Object { $null -ne $_ })
                 $records = @($sourceRows | ForEach-Object {
                     @{ name = (& $sanitizeText $_.name 128); pid = [int]$_.pid; cpuTime = (& $sanitizeText $_.cpuTime 32); memoryKB = [double]$_.memoryKB; threadCount = [int]$_.threadCount; path = (& $sanitizeText $_.path 256); owner = (& $sanitizeText $_.owner 128) }
                 })
@@ -1380,8 +1408,8 @@ function Get-FleetForensicProjection {
             'temp_database_files' {
                 $result = Get-SQLiteWALList
                 if ($result.error) { return (& $empty 'System Cleanup could not read temporary-database summaries.') }
-                $sourceRows = @($result.files)
-                $records = & $metadataRows $sourceRows 'Temporary database'
+                $sourceRows = @($result.files | Where-Object { $null -ne $_ })
+                $records = @(& $metadataRows $sourceRows 'Temporary database')
                 $columns = @(@{ key = 'source'; label = 'Source'; type = 'text' }, @{ key = 'artifact'; label = 'Artifact'; type = 'redacted' }, @{ key = 'sizeKB'; label = 'Size (KB)'; type = 'number' }, @{ key = 'modified'; label = 'Modified'; type = 'timestamp' })
                 return (New-FleetForensicProjection -Category 'temp_database_files' -Label 'Temporary database files' -Columns $columns -Records $records -Total $sourceRows.Count -Redacted $true)
             }
@@ -1389,8 +1417,8 @@ function Get-FleetForensicProjection {
             'activity_timeline' {
                 $result = Get-RecallDatabaseInfo
                 if ($result.error) { return (& $empty 'System Cleanup could not read activity-timeline summaries.') }
-                $sourceRows = @($result.databases)
-                $records = & $metadataRows $sourceRows 'Activity timeline'
+                $sourceRows = @($result.databases | Where-Object { $null -ne $_ })
+                $records = @(& $metadataRows $sourceRows 'Activity timeline')
                 $columns = @(@{ key = 'source'; label = 'Source'; type = 'text' }, @{ key = 'artifact'; label = 'Artifact'; type = 'redacted' }, @{ key = 'sizeKB'; label = 'Size (KB)'; type = 'number' }, @{ key = 'modified'; label = 'Modified'; type = 'timestamp' })
                 return (New-FleetForensicProjection -Category 'activity_timeline' -Label 'Activity timeline' -Columns $columns -Records $records -Total $sourceRows.Count -Redacted $true)
             }
@@ -1398,8 +1426,8 @@ function Get-FleetForensicProjection {
             'web_cache_database' {
                 $result = Get-WebCacheInfo
                 if ($result.error) { return (& $empty 'System Cleanup could not read web-cache summaries.') }
-                $sourceRows = @($result.files)
-                $records = & $metadataRows $sourceRows 'Web cache'
+                $sourceRows = @($result.files | Where-Object { $null -ne $_ })
+                $records = @(& $metadataRows $sourceRows 'Web cache')
                 $columns = @(@{ key = 'source'; label = 'Source'; type = 'text' }, @{ key = 'artifact'; label = 'Artifact'; type = 'redacted' }, @{ key = 'sizeKB'; label = 'Size (KB)'; type = 'number' }, @{ key = 'modified'; label = 'Modified'; type = 'timestamp' })
                 return (New-FleetForensicProjection -Category 'web_cache_database' -Label 'Web cache database' -Columns $columns -Records $records -Total $sourceRows.Count -Redacted $true)
             }
@@ -1407,8 +1435,8 @@ function Get-FleetForensicProjection {
             'thumbnail_icon_cache' {
                 $result = Get-ThumbnailCacheInfo
                 if ($result.error) { return (& $empty 'System Cleanup could not read thumbnail-cache summaries.') }
-                $sourceRows = @($result.files)
-                $records = & $metadataRows $sourceRows 'Thumbnail or icon cache'
+                $sourceRows = @($result.files | Where-Object { $null -ne $_ })
+                $records = @(& $metadataRows $sourceRows 'Thumbnail or icon cache')
                 $columns = @(@{ key = 'source'; label = 'Source'; type = 'text' }, @{ key = 'artifact'; label = 'Artifact'; type = 'redacted' }, @{ key = 'sizeKB'; label = 'Size (KB)'; type = 'number' }, @{ key = 'modified'; label = 'Modified'; type = 'timestamp' })
                 return (New-FleetForensicProjection -Category 'thumbnail_icon_cache' -Label 'Thumbnail and icon cache' -Columns $columns -Records $records -Total $sourceRows.Count -Redacted $true)
             }
@@ -1416,8 +1444,8 @@ function Get-FleetForensicProjection {
             'notification_history' {
                 $result = Get-NotificationDatabaseInfo
                 if ($result.error) { return (& $empty 'System Cleanup could not read notification-history summaries.') }
-                $sourceRows = @($result.files)
-                $records = & $metadataRows $sourceRows 'Notification history'
+                $sourceRows = @($result.files | Where-Object { $null -ne $_ })
+                $records = @(& $metadataRows $sourceRows 'Notification history')
                 $columns = @(@{ key = 'source'; label = 'Source'; type = 'text' }, @{ key = 'artifact'; label = 'Artifact'; type = 'redacted' }, @{ key = 'sizeKB'; label = 'Size (KB)'; type = 'number' }, @{ key = 'modified'; label = 'Modified'; type = 'timestamp' })
                 return (New-FleetForensicProjection -Category 'notification_history' -Label 'Notification history' -Columns $columns -Records $records -Total $sourceRows.Count -Redacted $true)
             }
@@ -1425,8 +1453,8 @@ function Get-FleetForensicProjection {
             'peer_distribution_cache' {
                 $result = Get-BranchCacheInfo
                 if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read peer-distribution summaries.') }
-                $sourceRows = @($result.files)
-                $records = & $metadataRows $sourceRows 'Peer distribution cache'
+                $sourceRows = @($result.files | Where-Object { $null -ne $_ })
+                $records = @(& $metadataRows $sourceRows 'Peer distribution cache')
                 $columns = @(@{ key = 'source'; label = 'Source'; type = 'text' }, @{ key = 'artifact'; label = 'Artifact'; type = 'redacted' }, @{ key = 'sizeKB'; label = 'Size (KB)'; type = 'number' }, @{ key = 'modified'; label = 'Modified'; type = 'timestamp' })
                 return (New-FleetForensicProjection -Category 'peer_distribution_cache' -Label 'Peer distribution cache' -Columns $columns -Records $records -Total $sourceRows.Count -Redacted $true)
             }
@@ -1434,8 +1462,8 @@ function Get-FleetForensicProjection {
             'diagnostics_timeline' {
                 $result = Get-EventTranscriptInfo
                 if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read diagnostics-timeline summaries.') }
-                $sourceRows = @($result.files)
-                $records = & $metadataRows $sourceRows 'Diagnostics timeline'
+                $sourceRows = @($result.files | Where-Object { $null -ne $_ })
+                $records = @(& $metadataRows $sourceRows 'Diagnostics timeline')
                 $columns = @(@{ key = 'source'; label = 'Source'; type = 'text' }, @{ key = 'artifact'; label = 'Artifact'; type = 'redacted' }, @{ key = 'sizeKB'; label = 'Size (KB)'; type = 'number' }, @{ key = 'modified'; label = 'Modified'; type = 'timestamp' })
                 return (New-FleetForensicProjection -Category 'diagnostics_timeline' -Label 'Diagnostics timeline' -Columns $columns -Records $records -Total $sourceRows.Count -Redacted $true)
             }
@@ -1443,8 +1471,8 @@ function Get-FleetForensicProjection {
             'timeline_cache' {
                 $result = Get-ActivitiesTimelineInfo
                 if ($result.error) { return (& $empty 'System Cleanup could not read timeline-cache summaries.') }
-                $sourceRows = @($result.files)
-                $records = & $metadataRows $sourceRows 'Timeline cache'
+                $sourceRows = @($result.files | Where-Object { $null -ne $_ })
+                $records = @(& $metadataRows $sourceRows 'Timeline cache')
                 $columns = @(@{ key = 'source'; label = 'Source'; type = 'text' }, @{ key = 'artifact'; label = 'Artifact'; type = 'redacted' }, @{ key = 'sizeKB'; label = 'Size (KB)'; type = 'number' }, @{ key = 'modified'; label = 'Modified'; type = 'timestamp' })
                 return (New-FleetForensicProjection -Category 'timeline_cache' -Label 'Timeline cache' -Columns $columns -Records $records -Total $sourceRows.Count -Redacted $true)
             }
@@ -1452,8 +1480,8 @@ function Get-FleetForensicProjection {
             'rdp_bitmap_cache' {
                 $result = Get-RdpBitmapCacheInfo
                 if ($result.error) { return (& $empty 'System Cleanup could not read RDP bitmap-cache summaries.') }
-                $sourceRows = @($result.files)
-                $records = & $metadataRows $sourceRows 'RDP bitmap cache'
+                $sourceRows = @($result.files | Where-Object { $null -ne $_ })
+                $records = @(& $metadataRows $sourceRows 'RDP bitmap cache')
                 $columns = @(@{ key = 'source'; label = 'Source'; type = 'text' }, @{ key = 'artifact'; label = 'Artifact'; type = 'redacted' }, @{ key = 'sizeKB'; label = 'Size (KB)'; type = 'number' }, @{ key = 'modified'; label = 'Modified'; type = 'timestamp' })
                 return (New-FleetForensicProjection -Category 'rdp_bitmap_cache' -Label 'RDP bitmap cache' -Columns $columns -Records $records -Total $sourceRows.Count -Redacted $true)
             }
@@ -1461,8 +1489,8 @@ function Get-FleetForensicProjection {
             'servicing_logs' {
                 $result = Get-ServicingLogsInfo
                 if ($result.error) { return (& $empty 'System Cleanup could not read servicing-log summaries.') }
-                $sourceRows = @($result.files)
-                $records = & $metadataRows $sourceRows 'Servicing log'
+                $sourceRows = @($result.files | Where-Object { $null -ne $_ })
+                $records = @(& $metadataRows $sourceRows 'Servicing log')
                 $columns = @(@{ key = 'source'; label = 'Source'; type = 'text' }, @{ key = 'artifact'; label = 'Artifact'; type = 'redacted' }, @{ key = 'sizeKB'; label = 'Size (KB)'; type = 'number' }, @{ key = 'modified'; label = 'Modified'; type = 'timestamp' })
                 return (New-FleetForensicProjection -Category 'servicing_logs' -Label 'Servicing logs' -Columns $columns -Records $records -Total $sourceRows.Count -Redacted $true)
             }
@@ -1470,8 +1498,8 @@ function Get-FleetForensicProjection {
             'device_install_logs' {
                 $result = Get-DeviceInstallLogsInfo
                 if ($result.error) { return (& $empty 'System Cleanup could not read device-install-log summaries.') }
-                $sourceRows = @($result.files)
-                $records = & $metadataRows $sourceRows 'Device installation log'
+                $sourceRows = @($result.files | Where-Object { $null -ne $_ })
+                $records = @(& $metadataRows $sourceRows 'Device installation log')
                 $columns = @(@{ key = 'source'; label = 'Source'; type = 'text' }, @{ key = 'artifact'; label = 'Artifact'; type = 'redacted' }, @{ key = 'sizeKB'; label = 'Size (KB)'; type = 'number' }, @{ key = 'modified'; label = 'Modified'; type = 'timestamp' })
                 return (New-FleetForensicProjection -Category 'device_install_logs' -Label 'Device installation logs' -Columns $columns -Records $records -Total $sourceRows.Count -Redacted $true)
             }
@@ -1479,8 +1507,8 @@ function Get-FleetForensicProjection {
             'usage_trace_logs' {
                 $result = Get-UsageTraceLogsInfo
                 if ($result.error) { return (& $empty 'System Cleanup could not read usage-trace-log summaries.') }
-                $sourceRows = @($result.files)
-                $records = & $metadataRows $sourceRows 'Usage trace log'
+                $sourceRows = @($result.files | Where-Object { $null -ne $_ })
+                $records = @(& $metadataRows $sourceRows 'Usage trace log')
                 $columns = @(@{ key = 'source'; label = 'Source'; type = 'text' }, @{ key = 'artifact'; label = 'Artifact'; type = 'redacted' }, @{ key = 'sizeKB'; label = 'Size (KB)'; type = 'number' }, @{ key = 'modified'; label = 'Modified'; type = 'timestamp' })
                 return (New-FleetForensicProjection -Category 'usage_trace_logs' -Label 'Usage trace logs' -Columns $columns -Records $records -Total $sourceRows.Count -Redacted $true)
             }
@@ -1488,8 +1516,8 @@ function Get-FleetForensicProjection {
             'protection_history' {
                 $result = Get-DefenderHistoryInfo
                 if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read complete protection-history summaries.') }
-                $sourceRows = @($result.files)
-                $records = & $metadataRows $sourceRows 'Protection history'
+                $sourceRows = @($result.files | Where-Object { $null -ne $_ })
+                $records = @(& $metadataRows $sourceRows 'Protection history')
                 $columns = @(@{ key = 'source'; label = 'Source'; type = 'text' }, @{ key = 'artifact'; label = 'Artifact'; type = 'redacted' }, @{ key = 'sizeKB'; label = 'Size (KB)'; type = 'number' }, @{ key = 'modified'; label = 'Modified'; type = 'timestamp' })
                 return (New-FleetForensicProjection -Category 'protection_history' -Label 'Protection history' -Columns $columns -Records $records -Total $sourceRows.Count -Redacted $true)
             }
@@ -1527,7 +1555,7 @@ function Get-FleetForensicProjection {
             'proxy_cache' { $result = Get-ProxyCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read proxy-cache summaries.') }; return (& $metadataProjection 'proxy_cache' 'Proxy cache' $result 'Proxy metadata') }
             'cloud_placeholders' { $result = Get-CloudPlaceholdersInfo; if ($result.error) { return (& $empty 'System Cleanup could not read cloud-placeholder summaries.') }; return (& $metadataProjection 'cloud_placeholders' 'Cloud placeholders' $result 'Cloud placeholder metadata') }
             'bits_queue' { $result = Get-BITSQueueInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read complete BITS-queue summaries.') }; return (& $metadataProjection 'bits_queue' 'BITS queue' $result 'BITS metadata') }
-            'cellular_history' { $result = Get-CellularHistoryInfo; if ($result.noHardware) { return (& $empty 'No mobile broadband adapter is currently reported; profiles for disconnected devices could not be checked.') }; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read cellular-profile summaries.') }; return (& $metadataProjection 'cellular_history' 'Cellular profiles' $result 'Cellular profile metadata') }
+            'cellular_history' { $result = Get-CellularHistoryInfo; if ($result.noHardware) { return (& $metadataProjection 'cellular_history' 'Cellular profiles' $result 'Cellular profile metadata' @{ status = 'not_applicable'; noHardware = $true; coverageNote = [string]$result.coverageNote }) }; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read cellular-profile summaries.') }; return (& $metadataProjection 'cellular_history' 'Cellular profiles' $result 'Cellular profile metadata') }
             'app_launch_history' { $result = Get-AppLaunchHistoryInfo; if ($result.error -or $result.partial) { return (& $empty 'System Cleanup could not read complete app-launch-history summaries.') }; return (& $metadataProjection 'app_launch_history' 'App launch history' $result 'App launch metadata') }
             'office_mru' { $result = Get-OfficeMruInfo; if ($result.error) { return (& $empty 'System Cleanup could not read Office-MRU summaries.') }; return (& $metadataProjection 'office_mru' 'Office MRU' $result 'Office MRU metadata') }
             'embedded_web_cache' { $result = Get-EmbeddedWebCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read embedded-web-cache summaries.') }; return (& $metadataProjection 'embedded_web_cache' 'Embedded web cache' $result 'Embedded web metadata') }
@@ -1537,12 +1565,16 @@ function Get-FleetForensicProjection {
             'search_personalization' { $result = Get-SearchPersonalizationInfo; if ($result.error) { return (& $empty 'System Cleanup could not read search-personalisation summaries.') }; return (& $metadataProjection 'search_personalization' 'Search personalisation' $result 'Search personalisation metadata') }
 
             'process_review' {
-                $result = Get-ProcessIntelligence
+                # Only $rowLimit rows can be shown, so do not spend per-process
+                # signature checks on the rest, and stop checking after a fixed
+                # time budget so the collector answers inside its timeout.
+                $result = Get-ProcessIntelligence -MaxProcesses $rowLimit -TimeBudgetSeconds 30
                 if ($result.error) { return (& $empty 'System Cleanup could not read process summaries.') }
-                $sourceRows = @($result.processes)
+                $sourceRows = @($result.processes | Where-Object { $null -ne $_ })
+                $processTotal = [Math]::Max($sourceRows.Count, [int]$result.totalProcesses)
                 $records = @($sourceRows | ForEach-Object { @{ name = (& $sanitizeText $_.name 128); pid = [int]$_.pid; signed = (& $sanitizeText $_.signed 32); signer = (& $sanitizeText $_.signer 128); elevated = (& $sanitizeText $_.elevated 16); path = (& $sanitizeText $_.path 256) } })
                 $columns = @(@{ key = 'name'; label = 'Process'; type = 'text' }, @{ key = 'pid'; label = 'PID'; type = 'number' }, @{ key = 'signed'; label = 'Signature'; type = 'text' }, @{ key = 'signer'; label = 'Signer'; type = 'text' }, @{ key = 'elevated'; label = 'Elevated'; type = 'text' }, @{ key = 'path'; label = 'Path'; type = 'redacted' })
-                return (New-FleetForensicProjection -Category 'process_review' -Label 'Process review' -Columns $columns -Records $records -Total $sourceRows.Count)
+                return (New-FleetForensicProjection -Category 'process_review' -Label 'Process review' -Columns $columns -Records $records -Total $processTotal -Truncated ([bool]$result.truncated))
             }
         }
     }
@@ -1638,12 +1670,31 @@ namespace WcCleanup {
 }
 
 function Get-ProcessIntelligence {
+    [CmdletBinding()]
+    param(
+        # 0 inspects every process (local viewer). Fleet passes its row limit so
+        # the expensive per-process checks are not spent on rows it would drop;
+        # the full process count is still reported.
+        [int]$MaxProcesses = 0,
+        # 0 means no limit. Once the budget is spent, executables not yet
+        # checked are reported as NotChecked (and the result as partial)
+        # instead of letting the whole collection time out.
+        [int]$TimeBudgetSeconds = 0
+    )
     $entries = [Collections.Generic.List[object]]::new()
     $partial = $false
     $unavailableDetails = 0
     $skippedProcesses = 0
+    $signaturesSkipped = 0
+    # Many processes share one executable (svchost, browsers, helpers).
+    # Authenticode verification is by far the slowest step, so verify each
+    # distinct image once per collection.
+    $signatureCache = @{}
+    $clock = [System.Diagnostics.Stopwatch]::StartNew()
     try {
         $procs = @(Get-Process -ErrorAction Stop)
+        $listedProcesses = $procs.Count
+        if ($MaxProcesses -gt 0 -and $procs.Count -gt $MaxProcesses) { $procs = @($procs | Select-Object -First $MaxProcesses) }
         foreach ($p in $procs) {
             try {
             $detailsIncomplete = $false
@@ -1656,33 +1707,53 @@ function Get-ProcessIntelligence {
             $path = $null
             $sigStatus = "UnknownError"
             $signer = $null
-            try {
-                $path = $p.MainModule.FileName
-            }
-            catch { }
-            if ([string]::IsNullOrWhiteSpace([string]$path)) {
+            # The verified native image-path query is cheap and does not throw
+            # for protected processes the way MainModule enumeration does.
+            if ($creationTime -gt 0) {
                 $path = Get-CleanupProcessImagePath -ProcessId $processId -ExpectedCreationTime $creationTime
             }
-            if ([string]::IsNullOrWhiteSpace([string]$path)) { $partial = $true; $detailsIncomplete = $true }
-            if ($path -and (Test-Path -LiteralPath $path -ErrorAction SilentlyContinue)) {
+            if ([string]::IsNullOrWhiteSpace([string]$path)) {
                 try {
-                    $sig = Get-AuthenticodeSignature -LiteralPath $path -ErrorAction Stop
-                    if ($sig) {
-                        $sigStatus = $sig.Status.ToString()
-                        if ($sig.Status -eq 'Valid' -and $sig.SignerCertificate) {
-                            $signer = $sig.SignerCertificate.Subject
-                        }
-                        if ($sigStatus -in @('UnknownError', 'NotSupportedFileFormat', 'Incompatible') -or
-                            ($sigStatus -eq 'Valid' -and [string]::IsNullOrWhiteSpace([string]$signer))) { $partial = $true; $detailsIncomplete = $true }
+                    $path = $p.MainModule.FileName
+                }
+                catch { }
+            }
+            if ([string]::IsNullOrWhiteSpace([string]$path)) { $partial = $true; $detailsIncomplete = $true }
+            if ($path) {
+                $cacheKey = ([string]$path).ToLowerInvariant()
+                $cached = $signatureCache[$cacheKey]
+                if ($null -eq $cached) {
+                    if ($TimeBudgetSeconds -gt 0 -and $clock.Elapsed.TotalSeconds -ge $TimeBudgetSeconds) {
+                        $cached = @{ status = 'NotChecked'; signer = $null; incomplete = $true }
+                        $signaturesSkipped++
                     } else {
-                        $partial = $true; $detailsIncomplete = $true
+                        $cached = @{ status = 'UnknownError'; signer = $null; incomplete = $false }
+                        if (Test-Path -LiteralPath $path -ErrorAction SilentlyContinue) {
+                            try {
+                                $sig = Get-AuthenticodeSignature -LiteralPath $path -ErrorAction Stop
+                                if ($sig) {
+                                    $cached.status = $sig.Status.ToString()
+                                    if ($sig.Status -eq 'Valid' -and $sig.SignerCertificate) {
+                                        $cached.signer = $sig.SignerCertificate.Subject
+                                    }
+                                    if ($cached.status -in @('UnknownError', 'NotSupportedFileFormat', 'Incompatible') -or
+                                        ($cached.status -eq 'Valid' -and [string]::IsNullOrWhiteSpace([string]$cached.signer))) { $cached.incomplete = $true }
+                                } else {
+                                    $cached.incomplete = $true
+                                }
+                            }
+                            catch {
+                                $cached.status = 'UnknownError'
+                                $cached.incomplete = $true
+                            }
+                        } else { $cached.incomplete = $true }
+                        $signatureCache[$cacheKey] = $cached
                     }
                 }
-                catch {
-                    $sigStatus = "UnknownError"
-                    $partial = $true; $detailsIncomplete = $true
-                }
-            } elseif ($path) { $partial = $true; $detailsIncomplete = $true }
+                $sigStatus = $cached.status
+                $signer = $cached.signer
+                if ($cached.incomplete) { $partial = $true; $detailsIncomplete = $true }
+            }
             try { $elevated = Get-CleanupProcessElevation -ProcessId $processId }
             catch { $elevated = 'Unknown'; $partial = $true; $detailsIncomplete = $true }
             if ($elevated -notin @('Yes', 'No')) { $partial = $true; $detailsIncomplete = $true }
@@ -1698,8 +1769,10 @@ function Get-ProcessIntelligence {
             })
             } catch { $partial = $true; $skippedProcesses++ }
         }
+        $truncated = $listedProcesses -gt $procs.Count
         $note = if ($partial) { "$unavailableDetails of $($entries.Count) listed processes have unavailable details; $skippedProcesses could not be listed. Windows protects some system processes; processes can also exit during the scan." } else { $null }
-        @{ processes = @($entries.ToArray()); observedProcesses = $entries.Count; unavailableDetails = $unavailableDetails; skippedProcesses = $skippedProcesses; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; coverage = if ($partial) { 'limited' } else { 'complete' }; coverageNote = $note; message = $note }
+        if ($signaturesSkipped -gt 0) { $note = "$note $signaturesSkipped signature checks were skipped to stay within the collection time budget.".Trim() }
+        @{ processes = @($entries.ToArray()); observedProcesses = $entries.Count; totalProcesses = $listedProcesses; truncated = $truncated; signatureChecksSkipped = $signaturesSkipped; unavailableDetails = $unavailableDetails; skippedProcesses = $skippedProcesses; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; coverage = if ($partial) { 'limited' } else { 'complete' }; coverageNote = $note; message = $note }
     }
     catch {
         @{ error = $true; message = "Failed to get process intelligence: $($_.Exception.Message)"; processes = @() }
@@ -2109,62 +2182,83 @@ function Enable-ThumbnailCache {
 # --- High-Intensity Privacy Clean ---
 
 function Get-ShellBags {
+    [CmdletBinding()]
+    param(
+        # 0 materialises every entry (local viewer). Fleet passes its row limit:
+        # keys beyond it are still counted but not expanded, because the
+        # per-entry Bags lookup is the expensive part of a large BagMRU tree.
+        [int]$MaxEntries = 0,
+        # 0 means no limit. When the budget is spent the walk stops, the result
+        # is flagged truncated and `total` is a lower bound.
+        [int]$TimeBudgetSeconds = 0
+    )
     try {
-        $entries = @()
-        $seen = @{}
+        $entries = [System.Collections.Generic.List[object]]::new()
+        $total = 0
+        $truncated = $false
+        $partial = $false
+        $maxDepth = 64
+        $clock = [System.Diagnostics.Stopwatch]::StartNew()
+        $hive = [Microsoft.Win32.Registry]::CurrentUser
         # Use only primary BagMRU (Local Settings) - the second path often duplicates or is empty
-        $mruRoots = @("HKCU:\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\BagMRU")
-        foreach ($root in $mruRoots) {
-            if (-not (Test-Path $root)) { continue }
-            $rootItem = Get-Item $root -ErrorAction SilentlyContinue
-            if (-not $rootItem) { continue }
-            $stack = @(@{ key = $rootItem; path = "" })
-            while ($stack.Count -gt 0) {
-                $cur = $stack[-1]
-                if ($stack.Count -eq 1) { $stack = @() } else { $stack = $stack[0..($stack.Count - 2)] }
-                $key = $cur.key
-                $relPath = $cur.path
-                $fullPath = if ($relPath) { $relPath } else { "(root)" }
-                $lastMod = if ($key.LastWriteTime) { $key.LastWriteTime.ToString("o") } else { "" }
-                $id = $key.PSPath
-                if (-not $seen.ContainsKey($id)) {
-                    $seen[$id] = $true
-                    $pathHint = $fullPath
+        $mruRoots = @('Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\BagMRU')
+        # The Bags view-state roots are opened once. Looking each BagMRU key's
+        # NodeSlot up by recursively enumerating Bags per key is quadratic on a
+        # large profile; the slot is a direct child key name.
+        $bagRoots = [System.Collections.Generic.List[object]]::new()
+        foreach ($bagPath in @('Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags', 'Software\Microsoft\Windows\Shell\Bags')) {
+            try { $bagRoot = $hive.OpenSubKey($bagPath); if ($bagRoot) { $bagRoots.Add($bagRoot) } } catch { $partial = $true }
+        }
+        try {
+            foreach ($root in $mruRoots) {
+                $stack = [System.Collections.Generic.Stack[object]]::new()
+                $stack.Push(@($root, '', 0))
+                while ($stack.Count -gt 0) {
+                    if ($TimeBudgetSeconds -gt 0 -and $clock.Elapsed.TotalSeconds -ge $TimeBudgetSeconds) { $truncated = $true; break }
+                    $cur = $stack.Pop()
+                    $subPath = [string]$cur[0]
+                    $relPath = [string]$cur[1]
+                    $depth = [int]$cur[2]
+                    $key = $null
+                    try { $key = $hive.OpenSubKey($subPath) } catch { $partial = $true; continue }
+                    if (-not $key) { continue }
                     try {
-                        $props = Get-ItemProperty -Path $key.PSPath -ErrorAction SilentlyContinue
-                        if ($props -and $props.PSObject.Properties["NodeSlot"]) {
-                            $nodeSlot = $props.NodeSlot
-                            $bagsPaths = @(
-                                "HKCU:\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags",
-                                "HKCU:\Software\Microsoft\Windows\Shell\Bags"
-                            )
-                            foreach ($bp in $bagsPaths) {
-                                if (Test-Path $bp) {
-                                    $bagKeys = Get-ChildItem $bp -Recurse -ErrorAction SilentlyContinue | Where-Object { [string]$_.PSChildName -eq [string]$nodeSlot }
-                                    foreach ($bk in $bagKeys) {
-                                        $itemPos = (Get-ItemProperty -Path $bk.PSPath -Name "ItemPos" -ErrorAction SilentlyContinue).ItemPos
-                                        if ($itemPos -and [string]::IsNullOrWhiteSpace([string]$itemPos) -eq $false) {
-                                            $pathHint = [string]$itemPos
-                                            break
-                                        }
+                        $total++
+                        if ($MaxEntries -le 0 -or $entries.Count -lt $MaxEntries) {
+                            $pathHint = if ($relPath) { $relPath } else { '(root)' }
+                            try {
+                                $nodeSlot = $key.GetValue('NodeSlot')
+                                if ($null -ne $nodeSlot) {
+                                    foreach ($bagRoot in $bagRoots) {
+                                        $bag = $null
+                                        try { $bag = $bagRoot.OpenSubKey([string]$nodeSlot) } catch { }
+                                        if (-not $bag) { continue }
+                                        try { $itemPos = $bag.GetValue('ItemPos') } finally { $bag.Dispose() }
+                                        if ($itemPos -and -not [string]::IsNullOrWhiteSpace([string]$itemPos)) { $pathHint = [string]$itemPos; break }
                                     }
-                                    if ($pathHint -ne $fullPath) { break }
                                 }
                             }
+                            catch { }
+                            # Use friendly labels for internal registry structure
+                            $displayPath = if ($pathHint -eq '(root)') { 'ShellBag root' } elseif ($pathHint -match '^\d+(\\\d+)*$') { "Folder view ($pathHint)" } else { $pathHint }
+                            # The registry API does not expose a key write time; the
+                            # field stays empty rather than inventing one.
+                            $entries.Add(@{ path = $displayPath; lastModified = ''; source = 'ShellBags' })
                         }
+                        if ($depth -lt $maxDepth) {
+                            foreach ($childName in $key.GetSubKeyNames()) {
+                                $childRel = if ($relPath) { "$relPath\$childName" } else { $childName }
+                                $stack.Push(@("$subPath\$childName", $childRel, ($depth + 1)))
+                            }
+                        } else { $partial = $true }
                     }
-                    catch {}
-                    # Use friendly labels for internal registry structure
-                    $displayPath = if ($pathHint -eq "(root)") { "ShellBag root" } elseif ($pathHint -match '^\d+(\\\d+)*$') { "Folder view ($pathHint)" } else { $pathHint }
-                    $entries += @{ path = $displayPath; lastModified = $lastMod; source = "ShellBags" }
-                }
-                Get-ChildItem $key.PSPath -ErrorAction SilentlyContinue | ForEach-Object {
-                    $childPath = if ($relPath) { "$relPath\$($_.PSChildName)" } else { $_.PSChildName }
-                    $stack += @{ key = $_; path = $childPath }
+                    catch { $partial = $true }
+                    finally { $key.Dispose() }
                 }
             }
         }
-        @{ entries = $entries }
+        finally { foreach ($bagRoot in $bagRoots) { $bagRoot.Dispose() } }
+        @{ entries = @($entries.ToArray()); total = $total; truncated = $truncated; partial = $partial }
     }
     catch {
         @{ error = $true; message = "Failed to get ShellBags: $($_.Exception.Message)" }

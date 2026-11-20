@@ -4654,6 +4654,28 @@ mod fleet_forensic_projection_tests {
         assert!(projection.contains("command = (& $sanitizeText $_.command 256)"));
         assert!(projection.contains("path = (& $sanitizeText $_.path 256)"));
         assert!(!projection.contains("'[redacted]'"));
+        // Fleet's table contract is text, number or timestamp. A boolean column
+        // makes Pro reject the whole view, so flags must be Yes/No text.
+        assert!(
+            !projection.contains("type = 'boolean'"),
+            "Fleet projections may not declare a boolean column type"
+        );
+        // An empty collector pipeline yields $null, which must still bind.
+        assert!(
+            envelope.contains("[AllowNull()][AllowEmptyCollection()][object[]]$Records"),
+            "a collector with no rows hands New-FleetForensicProjection $null"
+        );
+        // A missing file list is zero rows: `@($null)` would be a phantom row.
+        assert!(
+            !projection.contains("$items = @($Result.files)\r\n")
+                && !projection.contains("$items = @($Result.files)\n"),
+            "an absent artifact list must not be wrapped into a one-element array"
+        );
+        assert!(
+            projection.contains("-MaxProcesses $rowLimit -TimeBudgetSeconds")
+                && projection.contains("-MaxEntries $rowLimit -TimeBudgetSeconds"),
+            "Process review and ShellBags must run inside the Fleet collector time budget"
+        );
     }
 
     #[test]

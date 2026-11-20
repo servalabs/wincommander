@@ -15,6 +15,15 @@ lists only a selection of those changes.
   Pro agent reports a finished command, and the Fleet apply loop adopts that
   command immediately instead of at its next 60 second tick. The existing polls
   remain as the fallback.
+- Fix the Fleet forensic System Cleanup projections. Shadow copies and NTFS
+  journals send Yes/No text instead of an unsupported boolean column; empty
+  sources and categories with nothing to report return a zero-row table
+  (no phantom size-0 row); a device without mobile broadband returns an empty
+  not-applicable Cellular table; a table cut at the 200-row limit reports its
+  real total and `truncated`. Process review checks each executable once and,
+  like ShellBags, stops at a row cap and a 30 s budget, and ShellBags no
+  longer re-scans the whole Bags tree for every key.
+
 - Let Privacy Shield start locally when the Windows service confirms the
   device is unbound, even if the profile still holds older Fleet settings.
 - Request Windows administrator approval when a split-token administrator
