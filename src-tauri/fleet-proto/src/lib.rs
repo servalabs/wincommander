@@ -856,7 +856,7 @@ pub const COMMAND_METADATA: &[CommandMeta] = &[
         payload_schema: Some(r#"{"type":"object","additionalProperties":false}"#),
     },
     // ── Privacy toggles: 21 on/off pairs. enable = apply protection (Safe),
-    // disable = remove it (Destructive → confirm gate). Must stay 1:1 with
+    // disable = remove it (Destructive: no confirm gate, that is Irreversible only). Must stay 1:1 with
     // commander-pro's COMMAND_CATALOG (a drift-guard test enforces it).
     CommandMeta { catalog_id: "privacy.telemetry.enable", action_class: ActionClass::Safe, summary: "Apply privacy protection: Block Telemetry", payload_schema: None },
     CommandMeta { catalog_id: "privacy.telemetry.disable", action_class: ActionClass::Destructive, summary: "Remove privacy protection: Block Telemetry", payload_schema: None },
