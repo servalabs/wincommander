@@ -45,6 +45,10 @@ use removal::PendingRemoval;
 mod startup;
 pub(crate) use startup::resume_from_settings;
 
+#[cfg(test)]
+#[path = "fleet_agent_monitor_mirror_tests.rs"]
+mod monitor_mirror_tests;
+
 fn record_fleet_lifecycle(
     operation_id: &str,
     lifecycle: DiagnosticLifecycle,
@@ -1013,6 +1017,8 @@ async fn fleet_connect_inner_locked(
     };
     // Recheck the observed authority under the settings lock before persisting.
     let committed = plan.commit(confirmed)?;
+    // Enrolling after launch must not wait for a restart to start applying policy.
+    crate::ensure_fleet_apply_loop();
     // A newly authorized connection supersedes any in-memory removal retry.
     *pending_removal()
         .lock()
@@ -1528,6 +1534,26 @@ fn remote_command_settings_patch(update: &RemoteCommandStateUpdate) -> Option<Va
         "monitoring.screen_capture.stop" => {
             ("privacy.screenCapture.detectionEnabled", Value::Bool(false))
         }
+        // Only the on/off preference follows Fleet; the UI reconcile hooks
+        // would otherwise revert the monitor to the stale preference.
+        "monitoring.ransomware.start" => ("privacy.ransomwareMonitor.enabled", Value::Bool(true)),
+        "monitoring.ransomware.stop" => ("privacy.ransomwareMonitor.enabled", Value::Bool(false)),
+        "monitoring.auth_anomaly.start" => {
+            ("privacy.authAnomalyMonitor.enabled", Value::Bool(true))
+        }
+        "monitoring.auth_anomaly.stop" => {
+            ("privacy.authAnomalyMonitor.enabled", Value::Bool(false))
+        }
+        "monitoring.remote_access.start" => {
+            ("privacy.remoteAccessMonitor.enabled", Value::Bool(true))
+        }
+        "monitoring.remote_access.stop" => {
+            ("privacy.remoteAccessMonitor.enabled", Value::Bool(false))
+        }
+        "monitoring.wifi_guard.start" => ("network.wifiGuard.enabled", Value::Bool(true)),
+        "monitoring.wifi_guard.stop" => ("network.wifiGuard.enabled", Value::Bool(false)),
+        "monitoring.driver_watch.start" => ("security.drivers.watchEnabled", Value::Bool(true)),
+        "monitoring.driver_watch.stop" => ("security.drivers.watchEnabled", Value::Bool(false)),
         "defender.enable" => ("tweaks.security.defenderDisabled", Value::Bool(false)),
         "defender.disable" => ("tweaks.security.defenderDisabled", Value::Bool(true)),
         "usb.writeprotect.enable" => ("tweaks.security.usbWriteProtect", Value::Bool(true)),

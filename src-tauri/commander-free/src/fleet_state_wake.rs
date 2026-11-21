@@ -21,6 +21,20 @@ const GENERIC_WAKE_GAP: Duration = Duration::from_secs(10);
 const STATE_WAKE_GAP: Duration = Duration::from_secs(2);
 
 static STATE_NOTICE_PENDING: AtomicBool = AtomicBool::new(false);
+static APPLY_LOOP_STARTED: AtomicBool = AtomicBool::new(false);
+
+/// Run `start` only the first time this is called in the process.
+pub(crate) fn ensure_apply_loop_started(start: impl FnOnce()) -> bool {
+    start_once(&APPLY_LOOP_STARTED, start)
+}
+
+fn start_once(started: &AtomicBool, start: impl FnOnce()) -> bool {
+    if started.swap(true, Ordering::SeqCst) {
+        return false;
+    }
+    start();
+    true
+}
 
 /// Handle a verified Pro notification. Returns whether it asked for a pass.
 /// Safe from any thread: it only sets a flag and signals the loop.
@@ -64,6 +78,16 @@ mod tests {
         assert!(on_pro_notification("device-state-changed"));
         assert!(take_state_notice(), "a notice is remembered until a pass takes it");
         assert!(!take_state_notice(), "and consumed exactly once");
+    }
+
+    #[test]
+    fn the_apply_loop_is_started_once_however_often_fleet_is_enabled() {
+        let started = AtomicBool::new(false);
+        let mut spawned = 0;
+        assert!(start_once(&started, || spawned += 1));
+        assert!(!start_once(&started, || spawned += 1));
+        assert!(!start_once(&started, || spawned += 1));
+        assert_eq!(spawned, 1);
     }
 
     #[test]

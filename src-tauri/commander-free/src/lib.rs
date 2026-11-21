@@ -1635,6 +1635,182 @@ fn setup_tauri_cli_runtime(app: &mut tauri::App) -> Result<(), Box<dyn std::erro
 
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
 pub mod search_migration_cli;
+/// Starts the periodic Fleet policy apply loop. Safe to call repeatedly: only the
+/// first call spawns it, so it can run at launch and again when Fleet is enabled later.
+///
+/// P2: periodic fleet policy apply. Pull the latest signed
+/// epoch the agent holds and apply it (values + locked paths)
+/// through the signature-verifying apply path.
+///
+/// Happy-path cadence: 60s (2× the agent heartbeat).
+/// On consecutive Pro-sidecar failures: exponential backoff
+/// capped at 15 min, plus deterministic jitter derived from
+/// the failure count so parallel restarts don't thunderherd.
+/// Resets to 60s on the first successful round-trip.
+pub(crate) fn ensure_fleet_apply_loop() {
+    fleet_state_wake::ensure_apply_loop_started(|| {
+        tauri::async_runtime::spawn(async move {
+            // Base delay and cap in seconds.
+            const BASE_SECS: u64 = 60;
+            const MAX_SECS: u64 = 900; // 15 min
+            let mut fail_streak: u32 = 0;
+            let mut last_pass = std::time::Instant::now();
+
+            loop {
+                // Compute next sleep: 60s normally; backed-off on failures.
+                let sleep_secs = if fail_streak == 0 {
+                    BASE_SECS
+                } else {
+                    // 60 * 2^(streak-1) capped at 900, plus jitter
+                    // seeded from the streak count so it's deterministic
+                    // and avoids wall-clock-dependent panics.
+                    let exp = BASE_SECS.saturating_mul(1u64 << fail_streak.min(10).saturating_sub(1));
+                    let capped = exp.min(MAX_SECS);
+                    // Jitter: ±20% of the window, derived from fail_streak
+                    // using a simple LCG (no rand dep needed for this range).
+                    let jitter_range = capped / 5;
+                    let jitter = if jitter_range > 0 {
+
+                        (u64::from(fail_streak).wrapping_mul(6364136223846793005)
+                            .wrapping_add(1442695040888963407))
+                            % jitter_range
+                    } else {
+                        0
+                    };
+                    capped + jitter
+                };
+                // Normally the next 60 s tick, but freshly established
+                // trust or a Shield tick that finds the profile behind
+                // the signed epoch asks for a pass right away.
+                // An early wake is not a licence to hammer a failing
+                // sidecar: whatever woke the pass, keep at least 10 s
+                // between passes (the failure back-off still governs
+                // the normal cadence above).
+                let woke_early = tokio::select! {
+                    () = tokio::time::sleep(std::time::Duration::from_secs(sleep_secs)) => false,
+                    () = fleet_agent::epoch_adoption_requested() => true,
+                };
+                // A device-state notice from Pro (a Fleet command just
+                // finished) is the one wake that must not sit behind
+                // the generic 10 s floor: the user is watching the UI.
+                let state_notice = fleet_state_wake::take_state_notice();
+                if woke_early {
+                    let gap = fleet_state_wake::early_wake_gap(state_notice);
+                    let since = last_pass.elapsed();
+                    if since < gap {
+                        tokio::time::sleep(gap - since).await;
+                    }
+                }
+                last_pass = std::time::Instant::now();
+
+                let still_on = settings::read_settings()
+                    .map(|s| s.app.fleet.enabled && !s.app.fleet.server_url.is_empty())
+                    .unwrap_or(false);
+                if !still_on || license::require_service_feature("fleet").is_err() {
+                    // Not enrolled or unlicensed — reset streak and keep
+                    // checking at the normal cadence.
+                    fleet_agent::clear_epoch_adoption_issue();
+                    if fail_streak > 0 {
+                        fleet_agent::clear_sidecar_error();
+                    }
+                    fail_streak = 0;
+                    continue;
+                }
+
+                // After a device-state notice, adopt the command state
+                // first so the UI sees it without waiting for the posture
+                // upload, and so the uploaded snapshot is the new one.
+                let (posture_result, epoch_result) = if state_notice {
+                    let epoch = fleet_agent::fleet_apply_pending_epoch_typed().await;
+                    let posture = fleet_agent::fleet_update_posture_snapshot_typed().await;
+                    (posture, epoch)
+                } else {
+                    let posture = fleet_agent::fleet_update_posture_snapshot_typed().await;
+                    let epoch = fleet_agent::fleet_apply_pending_epoch_typed().await;
+                    (posture, epoch)
+                };
+
+                // KT: only genuine IPC/transport failures (Pro unreachable,
+                // pipe dead, spawn failed) count toward fail_streak and the
+                // "pro_unreachable" status. Policy errors (no pinned key,
+                // bad signature, epoch not newer) mean Pro IS reachable but
+                // the epoch can't/shouldn't apply — escalating the unreachable
+                // backoff for these would falsely show "Pro unreachable" while
+                // Pro is fully functional.
+                let posture_transport_fail = matches!(
+                    &posture_result,
+                    Err(e) if e.is_transport()
+                );
+                let epoch_transport_fail = matches!(
+                    &epoch_result,
+                    Err(e) if e.is_transport()
+                );
+                let is_sidecar_failure = posture_transport_fail || epoch_transport_fail;
+
+                if is_sidecar_failure {
+                    fail_streak = fail_streak.saturating_add(1);
+                    // KT: surface the ACTUAL transport error (e.g.
+                    // "PRO_NOT_INSTALLED: ...", "Pro spawn failed: ...",
+                    // "Pro response timeout") instead of a generic label —
+                    // it's already specific, don't throw it away. Prefer the
+                    // posture failure's text; fall back to the epoch failure's.
+                    let detail = match (&posture_result, &epoch_result) {
+                        (Err(e), _) if e.is_transport() => e.to_string(),
+                        (_, Err(e)) if e.is_transport() => e.to_string(),
+                        _ => "pro_unreachable".to_string(),
+                    };
+                    let msg = format!("{detail} (streak {})", fail_streak);
+                    fleet_agent::set_sidecar_error(msg.clone());
+                    log_message(
+                        if fail_streak >= 3 { "error" } else { "warn" },
+                        &format!("[Fleet] {msg}"),
+                    );
+                } else {
+                    if fail_streak > 0 {
+                        log_message("info", "[Fleet] Pro sidecar recovered");
+                        fleet_agent::clear_sidecar_error();
+                    }
+                    fail_streak = 0;
+                }
+
+                // Log policy-level errors separately (no backoff impact).
+                if let Err(ref e) = posture_result {
+                    if !e.is_transport() {
+                        log_message(
+                            "warn",
+                            &format!("[Fleet] posture update skipped: {e}"),
+                        );
+                    }
+                }
+
+                match epoch_result {
+                    Ok(v)
+                        if v.get("applied")
+                            .and_then(|b| b.as_bool())
+                            .unwrap_or(false) =>
+                    {
+                        log_message(
+                            "info",
+                            &format!(
+                                "[Fleet] applied policy epoch v{}",
+                                v.get("version").and_then(|x| x.as_i64()).unwrap_or(0)
+                            ),
+                        );
+                    }
+                    Ok(_) => {}
+                    // KT: policy errors (no key, bad sig) are logged as warn
+                    // but do NOT latch pro_unreachable — the condition above
+                    // already handled the transport branch.
+                    Err(e) => log_message(
+                        "warn",
+                        &format!("[Fleet] policy apply skipped: {e}"),
+                    ),
+                }
+            }
+        });
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(all(windows, feature = "experimental-settings-generation"))]
@@ -2529,174 +2705,7 @@ pub fn run() {
                         }
                     });
 
-                    // P2: periodic fleet policy apply. Pull the latest signed
-                    // epoch the agent holds and apply it (values + locked paths)
-                    // through the signature-verifying apply path.
-                    //
-                    // Happy-path cadence: 60s (2× the agent heartbeat).
-                    // On consecutive Pro-sidecar failures: exponential backoff
-                    // capped at 15 min, plus deterministic jitter derived from
-                    // the failure count so parallel restarts don't thunderherd.
-                    // Resets to 60s on the first successful round-trip.
-                    tauri::async_runtime::spawn(async move {
-                        // Base delay and cap in seconds.
-                        const BASE_SECS: u64 = 60;
-                        const MAX_SECS: u64 = 900; // 15 min
-                        let mut fail_streak: u32 = 0;
-                        let mut last_pass = std::time::Instant::now();
-
-                        loop {
-                            // Compute next sleep: 60s normally; backed-off on failures.
-                            let sleep_secs = if fail_streak == 0 {
-                                BASE_SECS
-                            } else {
-                                // 60 * 2^(streak-1) capped at 900, plus jitter
-                                // seeded from the streak count so it's deterministic
-                                // and avoids wall-clock-dependent panics.
-                                let exp = BASE_SECS.saturating_mul(1u64 << fail_streak.min(10).saturating_sub(1));
-                                let capped = exp.min(MAX_SECS);
-                                // Jitter: ±20% of the window, derived from fail_streak
-                                // using a simple LCG (no rand dep needed for this range).
-                                let jitter_range = capped / 5;
-                                let jitter = if jitter_range > 0 {
-
-                                    (u64::from(fail_streak).wrapping_mul(6364136223846793005)
-                                        .wrapping_add(1442695040888963407))
-                                        % jitter_range
-                                } else {
-                                    0
-                                };
-                                capped + jitter
-                            };
-                            // Normally the next 60 s tick, but freshly established
-                            // trust or a Shield tick that finds the profile behind
-                            // the signed epoch asks for a pass right away.
-                            // An early wake is not a licence to hammer a failing
-                            // sidecar: whatever woke the pass, keep at least 10 s
-                            // between passes (the failure back-off still governs
-                            // the normal cadence above).
-                            let woke_early = tokio::select! {
-                                () = tokio::time::sleep(std::time::Duration::from_secs(sleep_secs)) => false,
-                                () = fleet_agent::epoch_adoption_requested() => true,
-                            };
-                            // A device-state notice from Pro (a Fleet command just
-                            // finished) is the one wake that must not sit behind
-                            // the generic 10 s floor: the user is watching the UI.
-                            let state_notice = fleet_state_wake::take_state_notice();
-                            if woke_early {
-                                let gap = fleet_state_wake::early_wake_gap(state_notice);
-                                let since = last_pass.elapsed();
-                                if since < gap {
-                                    tokio::time::sleep(gap - since).await;
-                                }
-                            }
-                            last_pass = std::time::Instant::now();
-
-                            let still_on = settings::read_settings()
-                                .map(|s| s.app.fleet.enabled && !s.app.fleet.server_url.is_empty())
-                                .unwrap_or(false);
-                            if !still_on || license::require_service_feature("fleet").is_err() {
-                                // Not enrolled or unlicensed — reset streak and keep
-                                // checking at the normal cadence.
-                                fleet_agent::clear_epoch_adoption_issue();
-                                if fail_streak > 0 {
-                                    fleet_agent::clear_sidecar_error();
-                                }
-                                fail_streak = 0;
-                                continue;
-                            }
-
-                            // After a device-state notice, adopt the command state
-                            // first so the UI sees it without waiting for the posture
-                            // upload, and so the uploaded snapshot is the new one.
-                            let (posture_result, epoch_result) = if state_notice {
-                                let epoch = fleet_agent::fleet_apply_pending_epoch_typed().await;
-                                let posture = fleet_agent::fleet_update_posture_snapshot_typed().await;
-                                (posture, epoch)
-                            } else {
-                                let posture = fleet_agent::fleet_update_posture_snapshot_typed().await;
-                                let epoch = fleet_agent::fleet_apply_pending_epoch_typed().await;
-                                (posture, epoch)
-                            };
-
-                            // KT: only genuine IPC/transport failures (Pro unreachable,
-                            // pipe dead, spawn failed) count toward fail_streak and the
-                            // "pro_unreachable" status. Policy errors (no pinned key,
-                            // bad signature, epoch not newer) mean Pro IS reachable but
-                            // the epoch can't/shouldn't apply — escalating the unreachable
-                            // backoff for these would falsely show "Pro unreachable" while
-                            // Pro is fully functional.
-                            let posture_transport_fail = matches!(
-                                &posture_result,
-                                Err(e) if e.is_transport()
-                            );
-                            let epoch_transport_fail = matches!(
-                                &epoch_result,
-                                Err(e) if e.is_transport()
-                            );
-                            let is_sidecar_failure = posture_transport_fail || epoch_transport_fail;
-
-                            if is_sidecar_failure {
-                                fail_streak = fail_streak.saturating_add(1);
-                                // KT: surface the ACTUAL transport error (e.g.
-                                // "PRO_NOT_INSTALLED: ...", "Pro spawn failed: ...",
-                                // "Pro response timeout") instead of a generic label —
-                                // it's already specific, don't throw it away. Prefer the
-                                // posture failure's text; fall back to the epoch failure's.
-                                let detail = match (&posture_result, &epoch_result) {
-                                    (Err(e), _) if e.is_transport() => e.to_string(),
-                                    (_, Err(e)) if e.is_transport() => e.to_string(),
-                                    _ => "pro_unreachable".to_string(),
-                                };
-                                let msg = format!("{detail} (streak {})", fail_streak);
-                                fleet_agent::set_sidecar_error(msg.clone());
-                                log_message(
-                                    if fail_streak >= 3 { "error" } else { "warn" },
-                                    &format!("[Fleet] {msg}"),
-                                );
-                            } else {
-                                if fail_streak > 0 {
-                                    log_message("info", "[Fleet] Pro sidecar recovered");
-                                    fleet_agent::clear_sidecar_error();
-                                }
-                                fail_streak = 0;
-                            }
-
-                            // Log policy-level errors separately (no backoff impact).
-                            if let Err(ref e) = posture_result {
-                                if !e.is_transport() {
-                                    log_message(
-                                        "warn",
-                                        &format!("[Fleet] posture update skipped: {e}"),
-                                    );
-                                }
-                            }
-
-                            match epoch_result {
-                                Ok(v)
-                                    if v.get("applied")
-                                        .and_then(|b| b.as_bool())
-                                        .unwrap_or(false) =>
-                                {
-                                    log_message(
-                                        "info",
-                                        &format!(
-                                            "[Fleet] applied policy epoch v{}",
-                                            v.get("version").and_then(|x| x.as_i64()).unwrap_or(0)
-                                        ),
-                                    );
-                                }
-                                Ok(_) => {}
-                                // KT: policy errors (no key, bad sig) are logged as warn
-                                // but do NOT latch pro_unreachable — the condition above
-                                // already handled the transport branch.
-                                Err(e) => log_message(
-                                    "warn",
-                                    &format!("[Fleet] policy apply skipped: {e}"),
-                                ),
-                            }
-                        }
-                    });
+                    ensure_fleet_apply_loop();
                 }
             }
 
