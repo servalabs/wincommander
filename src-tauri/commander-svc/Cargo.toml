@@ -16,7 +16,7 @@ description = "WinCommander SYSTEM service — endpoint enforcement and fleet co
 authors = ["ServaLabs"]
 license = "AGPL-3.0-or-later"
 edition = "2021"
-rust-version = "1.77"
+rust-version = "1.100.0"
 
 [[bin]]
 name = "wincommander-svc"

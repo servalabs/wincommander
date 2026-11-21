@@ -5,7 +5,7 @@ description = "Pure clipboard-guard rule engine — rule types, compilation, mat
 authors = ["ServaLabs"]
 license = "AGPL-3.0-or-later"
 edition = "2021"
-rust-version = "1.93.1"
+rust-version = "1.100.0"
 
 # I/O-free engine; regex-automata exposes fixed-program memory accounting,
 # Aho-Corasick provides the shared keyword filter. Hashing validates public

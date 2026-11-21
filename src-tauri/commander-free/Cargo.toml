@@ -6,7 +6,7 @@ authors = ["ServaLabs"]
 license = "AGPL-3.0-or-later"
 repository = ""
 edition = "2021"
-rust-version = "1.93.1"
+rust-version = "1.100.0"
 
 [lib]
 # The desktop executable consumes this library as an rlib. Avoid generating
