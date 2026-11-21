@@ -10821,6 +10821,16 @@
       ]
     },
     {
+      "id": "tauri:remote_support_status",
+      "name": "remote_support_status",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/panels/mesh/RemoteSupportSection.tsx"
+      ]
+    },
+    {
       "id": "tauri:remove_attend_watch_task",
       "name": "remove_attend_watch_task",
       "transport": "tauri",
@@ -11789,6 +11799,16 @@
       ]
     },
     {
+      "id": "tauri:start_remote_support",
+      "name": "start_remote_support",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/panels/mesh/RemoteSupportSection.tsx"
+      ]
+    },
+    {
       "id": "tauri:start_screen_capture_watch",
       "name": "start_screen_capture_watch",
       "transport": "tauri",
@@ -11992,6 +12012,16 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/hooks/useRemoteAccessMonitor.ts"
+      ]
+    },
+    {
+      "id": "tauri:stop_remote_support",
+      "name": "stop_remote_support",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/panels/mesh/RemoteSupportSection.tsx"
       ]
     },
     {
