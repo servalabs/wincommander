@@ -65,6 +65,10 @@ pub enum VaultError {
     /// tell an administrator to retarget or remove the policy, while siblings
     /// in the same directory remain valid personal-container targets.
     PolicyPathReserved,
+    /// A personal Vault creation named a path where a file or folder already
+    /// exists. Distinct from `Validation` so the UI can say the name is taken
+    /// instead of reporting an unrecorded owner.
+    PersonalTargetExists,
     VersionConflict,
     /// The rejected principal or Windows local-group name, exactly as the
     /// admin supplied it (a grant/owner account name, or a managed/admin
@@ -1134,7 +1138,7 @@ impl VaultAccessStore {
         // The ordinary, non-brokered entry point is retained for tests and
         // callers that deliberately run as the destination owner.
         if self.fs.personal_creation_target_exists(&normalized)? {
-            return Err(VaultError::Validation);
+            return Err(VaultError::PersonalTargetExists);
         }
         self.reserve_personal_registration(normalized, caller, operation_id, now)
     }
@@ -1165,10 +1169,11 @@ impl VaultAccessStore {
             let normalized = self
                 .fs
                 .normalize_personal_creation_path(Path::new(container_path))?;
-            if !valid_creation_path(&normalized)
-                || self.fs.personal_creation_target_exists(&normalized)?
-            {
+            if !valid_creation_path(&normalized) {
                 return Err(VaultError::Validation);
+            }
+            if self.fs.personal_creation_target_exists(&normalized)? {
+                return Err(VaultError::PersonalTargetExists);
             }
             Ok(normalized)
         })?;
@@ -5881,6 +5886,7 @@ fn startup_validation_result(error: &VaultError) -> VaultEntryResult {
         | VaultError::GroupInUse
         | VaultError::GroupNameConflict
         | VaultError::PolicyPathReserved
+        | VaultError::PersonalTargetExists
         | VaultError::VersionConflict => VaultEntryResult::ValidationFailed,
         VaultError::PrincipalResolution(_) => VaultEntryResult::PrincipalResolutionFailed,
         VaultError::ContainerIdentity => VaultEntryResult::ContainerIdentityFailed,
@@ -7560,6 +7566,16 @@ mod tests {
                 41,
                 100,
             ),
+            Err(VaultError::PersonalTargetExists)
+        ));
+        // A taken name is reported as such; an unusable path stays a plain validation failure.
+        assert!(matches!(
+            store.begin_personal_registration(
+                "C:\\vaults\\..\\escape.hc",
+                personal_caller(),
+                40,
+                100,
+            ),
             Err(VaultError::Validation)
         ));
 
@@ -7686,7 +7702,7 @@ mod tests {
             store
                 .begin_personal_registration(&path.to_string_lossy(), personal_caller(), 41, 100)
                 .err(),
-            Some(VaultError::Validation)
+            Some(VaultError::PersonalTargetExists)
         );
         let state = store.state.lock().unwrap();
         assert!(state.personal.contains_key(&key));

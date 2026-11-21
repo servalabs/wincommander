@@ -2569,19 +2569,17 @@ async fn handle_personal_vault_create(
                 operation_id,
                 now,
             )
-            .map_err(|_| {
+            .map_err(|error| {
+                let (diagnostic_code, next, verb_error) = personal_reservation_failure(&error);
                 crate::diagnostics::record_vault_failure(
                     &diagnostic_operation_id,
                     "create",
-                    "VLT.CREATE.OWNER_RECORD_FAILED",
-                    "review_destination",
+                    diagnostic_code,
+                    next,
                     false,
                     started,
                 );
-                VerbError::new(
-                    "vault_owner_record_failed",
-                    "personal vault ownership could not be recorded",
-                )
+                verb_error
             })?;
         args["Path"] = serde_json::Value::String(registration.normalized_path().to_string());
         Some(registration)
@@ -3921,12 +3919,77 @@ fn handle_vault_list_authorized(
     })
 }
 
+#[cfg(test)]
+mod reservation_failure_tests {
+    use super::personal_reservation_failure;
+    use crate::vault_access::VaultError;
+
+    #[test]
+    fn a_taken_name_is_reported_as_taken_not_as_an_unrecorded_owner() {
+        let (code, _, error) = personal_reservation_failure(&VaultError::PersonalTargetExists);
+        assert_eq!(code, "VLT.CREATE.TARGET_EXISTS");
+        assert_eq!(error.kind, "vault_target_exists");
+    }
+
+    #[test]
+    fn a_policy_governed_path_is_reported_as_reserved() {
+        let (code, _, error) = personal_reservation_failure(&VaultError::PolicyPathReserved);
+        assert_eq!(code, "VLT.CREATE.PATH_RESERVED");
+        assert_eq!(error.kind, "vault_path_reserved");
+    }
+
+    #[test]
+    fn other_failures_keep_the_generic_owner_record_error() {
+        for failure in [VaultError::Validation, VaultError::Persistence] {
+            let (code, _, error) = personal_reservation_failure(&failure);
+            assert_eq!(code, "VLT.CREATE.OWNER_RECORD_FAILED");
+            assert_eq!(error.kind, "vault_owner_record_failed");
+        }
+    }
+}
+
+/// Why reserving a new personal Vault's file name failed. The name being
+/// taken or governed by a Fleet policy is the user's to fix and is reported
+/// as such; every other failure keeps the generic ownership-record message.
+/// Fixed strings only: the chosen path is never echoed.
+fn personal_reservation_failure(
+    error: &crate::vault_access::VaultError,
+) -> (&'static str, &'static str, VerbError) {
+    match error {
+        crate::vault_access::VaultError::PersonalTargetExists => (
+            "VLT.CREATE.TARGET_EXISTS",
+            "choose_another_name",
+            VerbError::new(
+                "vault_target_exists",
+                "a file or folder with that name already exists",
+            ),
+        ),
+        crate::vault_access::VaultError::PolicyPathReserved => (
+            "VLT.CREATE.PATH_RESERVED",
+            "choose_another_name",
+            VerbError::new(
+                "vault_path_reserved",
+                "the chosen file is governed by Vault permissions",
+            ),
+        ),
+        _ => (
+            "VLT.CREATE.OWNER_RECORD_FAILED",
+            "review_destination",
+            VerbError::new(
+                "vault_owner_record_failed",
+                "personal vault ownership could not be recorded",
+            ),
+        ),
+    }
+}
+
 /// Renders a [`crate::vault_access::VaultError`] for an `ErrorReply.message`.
 ///
 /// PRIVACY BOUNDARY: errors use fixed stage descriptions. Never format
 /// principal names, resolved SIDs, container paths, or ACL/SDDL details.
 fn vault_error_message(error: crate::vault_access::VaultError) -> String {
     match error {
+        crate::vault_access::VaultError::PersonalTargetExists => "a file or folder with that name already exists — choose a different name".to_string(),
         crate::vault_access::VaultError::Forbidden => "You are not a member of this Fleet access group. Its settings were not changed.".to_string(),
         crate::vault_access::VaultError::Mounted => "Dismount the Vault before changing its access groups. No drive was dismounted automatically.".to_string(),
         crate::vault_access::VaultError::GroupInUse => "This group is assigned to a Vault policy. Remove its Vault assignments before deleting or renaming the Windows group.".to_string(),

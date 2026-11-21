@@ -19,6 +19,15 @@ export function vaultCreationFailureDetail(cause: unknown): string {
   if (normalized.includes("vault_entitlement_denied")) {
     return "WinCommander could not verify the Pro licence for this Vault operation. Refresh the licence status, then try again.";
   }
+  if (normalized.includes("vault_target_exists")) {
+    return "A file or folder with that name already exists in the chosen location, so no Vault was created and nothing was changed. Choose a different name or location, then try again.";
+  }
+  if (normalized.includes("vault_path_reserved")) {
+    return "The chosen file is already governed by Vault permissions, so no Vault was created. Choose a different file name, or manage that Vault from Secure Storage.";
+  }
+  if (normalized.includes("vault_owner_record_failed")) {
+    return "WinCommander could not record ownership of the new Vault, so none was created. Choose a different location and try again; if it repeats, send the diagnostic reference. Diagnostic code: VLT.CREATE.OWNER_RECORD_FAILED.";
+  }
   if (normalized.includes("vault_creation_verification_failed")) {
     return "WinCommander could not verify the newly created Vault. Do not use the selected file until Secure Storage confirms it.";
   }

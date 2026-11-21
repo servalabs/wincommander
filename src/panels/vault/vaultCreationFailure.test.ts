@@ -16,6 +16,26 @@ describe("Vault creation failure presentation", () => {
     expect(vaultCreationFailureDetail("vault_broker_unavailable")).toContain("helper is missing");
   });
 
+  test("tells the user when the chosen Vault name is already taken", () => {
+    const detail = vaultCreationFailureDetail(new Error("service rejected request: vault_target_exists (a file or folder with that name already exists)"));
+    expect(detail).toContain("already exists");
+    expect(detail).toContain("Choose a different name");
+    expect(detail).not.toContain("ownership");
+    expect(detail).not.toContain("vault_target_exists");
+  });
+
+  test("tells the user when the chosen file is governed by Vault permissions", () => {
+    const detail = vaultCreationFailureDetail("vault_path_reserved");
+    expect(detail).toContain("governed by Vault permissions");
+    expect(detail).not.toContain("vault_path_reserved");
+  });
+
+  test("an unrecorded owner is its own failure, never confused with a taken name", () => {
+    const detail = vaultCreationFailureDetail("vault_owner_record_failed");
+    expect(detail).toContain("ownership");
+    expect(detail).not.toContain("already exists");
+  });
+
   test("does not surface legacy opaque failure keys", () => {
     expect(vaultCreationFailureDetail("vault_create_failed")).not.toContain("vault_create_failed");
   });
