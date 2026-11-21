@@ -209,6 +209,47 @@ ConvertTo-Json -Compress -InputObject @($results)
     expect(serviceSync).toContain('(Get-DriverImagePath) -cne $driverNtPath');
   });
 
+  test.skipIf(process.platform !== "win32")("an earlier WinCommander driver payload is left for the sidecar, an unknown one is refused", () => {
+    const script = String.raw`
+$tokens = $null; $errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(
+  (Join-Path (Get-Location) 'tools/sync-dev-service.ps1'), [ref]$tokens, [ref]$errors)
+if ($errors.Count) { throw 'PowerShell parse failed' }
+foreach ($name in 'Ensure-EncryptedVolumeDriver', 'Test-EncryptedVolumeDriverReady') {
+  $definition = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
+  if (-not $definition) { throw "$name was not found" }
+  . ([scriptblock]::Create($definition.Extent.Text))
+}
+$assignment = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '$previousDriverSha256' }, $true)
+if (-not $assignment) { throw 'previous driver hashes were not found' }
+. ([scriptblock]::Create($assignment.Extent.Text))
+$driverSha256 = 'PINNED'
+$driverPath = 'C:\fixture\EncVolKm.sys'
+$driverServiceName = 'fixture'
+$global:Hash = ''
+function Write-Diagnostic { param($Message) $global:Diagnostic = $Message }
+function Test-CompatibleVeraCryptDriverReady { return $false }
+function Test-Path { return $true }
+function Get-VerifiedDriverHash { return $global:Hash }
+function Get-Sha256 { return $global:Hash }
+function sc.exe { throw 'the driver service must not be touched' }
+$global:Hash = $previousDriverSha256[0]
+Ensure-EncryptedVolumeDriver
+if ($global:Diagnostic -notmatch 'earlier WinCommander') { throw 'older payload was not reported' }
+if (-not (Test-EncryptedVolumeDriverReady)) { throw 'older payload must not force an elevated repair' }
+$global:Hash = 'UNKNOWN'
+try { Ensure-EncryptedVolumeDriver; throw 'unknown payload was accepted' } catch {
+  if ($_.Exception.Message -notmatch 'neither WinCommander') { throw }
+}
+if (Test-EncryptedVolumeDriverReady) { throw 'unknown payload was treated as ready' }
+Write-Output 'driver-payload-ok'
+`;
+    const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand",
+      Buffer.from(script, "utf16le").toString("base64")], { encoding: "utf8" });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("driver-payload-ok");
+  });
+
   test("verifies or safely repairs the pinned driver before starting the development service", () => {
     expect(serviceSync).toContain('Repair-WcPinnedDriverAccess -Path $driverPath');
     expect(serviceSync).toContain('catch [System.UnauthorizedAccessException]');

@@ -41,6 +41,11 @@ $driverServiceName = 'WinCommanderEncVol'
 $driverPath = Join-Path $env:ProgramData 'WinCommander\bin\engine\EncVolKm.sys'
 $driverNtPath = '\??\C:\ProgramData\WinCommander\bin\engine\EncVolKm.sys'
 $driverSha256 = '7745B5194E5B4659CF3F8DD57096A18EE4C810899DAD69081168D43E3683501E'
+# Earlier WinCommander payloads this script has pinned. A PC that last ran an
+# older checkout still has one of them at the fixed ProgramData path; the
+# sidecar replaces it with the pinned payload on first use, so the sync must
+# not treat it as corruption.
+$previousDriverSha256 = @('1F0C6DB3559D1356C38A1486A967CD90DB5E6202E433FEA1DFE510DDB884FFB6')
 $driverAccessRepair = Join-Path $PSScriptRoot 'repair-vault-driver-access.ps1'
 $activeMountRegistry = Join-Path $env:ProgramData 'WinCommander\policy\vault-active-mounts-v1.json'
 . (Join-Path $PSScriptRoot 'dev-vault-state.ps1')
@@ -369,8 +374,16 @@ function Ensure-EncryptedVolumeDriver {
         Write-Diagnostic "Encrypted-volume driver payload is not present yet: $driverPath"
         return
     }
-    if ((Get-VerifiedDriverHash) -ne $driverSha256) {
-        throw "The encrypted-volume driver does not match WinCommander's pinned payload: $driverPath"
+    $installedHash = Get-VerifiedDriverHash
+    if ($installedHash -ne $driverSha256) {
+        if ($previousDriverSha256 -contains $installedHash) {
+            # The sidecar stages the pinned payload atomically on the first
+            # mount or create (a loaded older driver is activated by a Windows
+            # restart). Leave the file and the driver service untouched here.
+            Write-Diagnostic "An earlier WinCommander encrypted-volume driver is installed at $driverPath; it will be replaced by the pinned payload on first use. Restart Windows afterwards if the update asks for it."
+            return
+        }
+        throw "The encrypted-volume driver is neither WinCommander's pinned payload nor a recognised earlier one: $driverPath. Repair WinCommander with its installer; do not replace this file by hand."
     }
 
     & sc.exe qc $driverServiceName 2>$null
@@ -427,7 +440,13 @@ function Test-EncryptedVolumeDriverReady {
         return $true
     }
     try {
-        if ((Get-Sha256 $driverPath) -ne $driverSha256) {
+        $installedHash = Get-Sha256 $driverPath
+        if ($previousDriverSha256 -contains $installedHash) {
+            # Nothing for an elevated sync to repair; the sidecar stages the
+            # pinned payload on first use.
+            return $true
+        }
+        if ($installedHash -ne $driverSha256) {
             return $false
         }
     }
