@@ -35,7 +35,9 @@ function Get-Item {
         $item | Add-Member ScriptMethod GetValueKind { param($name) 'Binary' }
         return $item
     }
-    [pscustomobject]@{ Name=($LiteralPath -split '\\')[-1]; FullName=$LiteralPath; Length=0; LastWriteTime=[DateTime]'2026-10-01' }
+    # Like a real directory item: Get-SRUMData verifies the SRUM path is a plain (non-reparse) directory before trusting it.
+    $attributes = if ($script:mode -eq 'srumReparse') { [IO.FileAttributes]::Directory -bor [IO.FileAttributes]::ReparsePoint } else { [IO.FileAttributes]::Directory }
+    [pscustomobject]@{ Name=($LiteralPath -split '\\')[-1]; FullName=$LiteralPath; Length=0; LastWriteTime=[DateTime]'2026-10-01'; PSIsContainer=$true; Attributes=$attributes }
 }
 function Get-ChildItem {
     [CmdletBinding()] param([string]$LiteralPath, [switch]$File, [switch]$Force, [switch]$Recurse, [string]$Filter)
@@ -46,6 +48,12 @@ function Get-ChildItem {
         return
     }
     if ($script:mode -eq 'deniedChild') { throw [UnauthorizedAccessException]::new('Denied enumeration') }
+    if ($LiteralPath -like '*\System32\sru') {
+        # The SRUM directory holds the database next to unrelated journal files; only SRUDB.dat may be counted.
+        [pscustomobject]@{ Name='SRU.log'; FullName="$LiteralPath\SRU.log"; Length=4096; LastWriteTime=[DateTime]'2026-10-01'; PSIsContainer=$false }
+        [pscustomobject]@{ Name='SRUDB.dat'; FullName="$LiteralPath\SRUDB.dat"; Length=0; LastWriteTime=[DateTime]'2026-10-01'; PSIsContainer=$false }
+        return
+    }
     $name = if ($Filter) { 'Windows.db' } else { 'Gather.log' }
     [pscustomobject]@{ Name=$name; FullName="$LiteralPath\$name"; Length=1024; LastWriteTime=[DateTime]'2026-10-01' }
 }
@@ -59,6 +67,9 @@ if (-not (Get-EventLogSummary).partial) { throw 'Unknown enabled-channel count w
 $script:mode = 'populated'
 $srum = Get-SRUMData
 if ($srum.error -or $srum.total -ne 1 -or $srum.files.Count -ne 1 -or -not $srum.databaseExists -or $srum.historicalRecordsAvailable -or $srum.srumSizeMb -ne 0) { throw 'SRUM file existence was confused with usage records or zero-byte absence.' }
+$script:mode = 'srumReparse'
+if (-not (Get-SRUMData).error) { throw 'A reparse-point SRUM directory was trusted instead of reported as unverifiable.' }
+$script:mode = 'populated'
 if ($srum.ContainsKey('entries')) { throw 'SRUM fabricated historical entries from live processes.' }
 $bam = Get-AppLaunchHistoryInfo
 if ($bam.error -or $bam.partial -or $bam.total -ne 3 -or $bam.files.Count -ne 3 -or @($bam.files | Where-Object { $_.name -in @('Version', 'SequenceNumber') }).Count -or -not $bam.files[0].lastRun -or @($bam.files[0].value).Count -ne 8) { throw 'BAM tracked programs or their timestamp data were not preserved.' }
