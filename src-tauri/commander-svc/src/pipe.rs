@@ -2958,12 +2958,12 @@ async fn handle_personal_vault_mount(
             "The Vault engine module is unavailable. Check the Pro installation in License settings.",
         ));
     }
-    let driver = tokio::task::spawn_blocking(crate::encvol_driver::ensure_for_vault_mount)
-        .await
-        .unwrap_or(Err(
-            crate::encvol_driver::EnsureDriverError::ServiceInspection,
-        ));
-    if let Err(error) = driver {
+    // Same preparation as creation: a PC that still holds an earlier driver
+    // file fails the fixed-payload check, and only the signed Pro helper can
+    // stage the pinned payload (or report that a restart activates it). A bare
+    // check here left such a PC unable to mount until the sidecar happened to
+    // run for another reason.
+    if let Err(error) = ensure_vault_driver_for_personal_operation(operation_id).await {
         zeroize_personal_mount(&mut request);
         return Err(VerbError::new(
             PERSONAL_VAULT_DRIVER_STOPPED,
@@ -3917,6 +3917,30 @@ fn handle_vault_list_authorized(
             "authorized vault list could not be created",
         )
     })
+}
+
+#[cfg(test)]
+mod personal_mount_driver_tests {
+    /// A personal mount must go through the retrying driver preparation, not the
+    /// bare check, or a PC holding an earlier driver file can never mount.
+    #[test]
+    fn personal_mount_prepares_the_driver_like_creation_does() {
+        let source = include_str!("pipe.rs")
+            .lines()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let start = source
+            .find("async fn handle_personal_vault_mount(")
+            .expect("personal mount handler");
+        let body = &source[start..];
+        let end = body[1..]
+            .find(" async fn ")
+            .map(|index| index + 1)
+            .unwrap_or(body.len());
+        let handler = &body[..end];
+        assert!(handler.contains("ensure_vault_driver_for_personal_operation(operation_id)"));
+        assert!(!handler.contains("spawn_blocking(crate::encvol_driver::ensure_for_vault_mount)"));
+    }
 }
 
 #[cfg(test)]
