@@ -68,6 +68,7 @@ const MESSAGES: Record<string, string> = {
   cloud_backup_start_timed_out: "The backup tool did not start in time. Try again.",
   cloud_backup_start_exited: "The backup tool stopped before it could start. Try again.",
   cloud_backup_engine_download_failed: "The backup tool could not be downloaded. Check the connection and retry setup.",
+  cloud_backup_engine_write_failed: "The backup tool downloaded but could not be saved into the Vault. Check that the Vault is writable and has free space, that security software is not blocking it, then retry setup.",
   cloud_backup_engine_integrity_failed: "The backup tool failed its integrity check. No upload was started.",
   cloud_backup_engine_version_mismatch: "The installed backup tool has an unsupported version. Retry setup.",
   cloud_backup_cli_output_unrecognized: "The backup tool returned an unrecognized result. Completion has not been confirmed.",
