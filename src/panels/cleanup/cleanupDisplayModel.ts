@@ -196,6 +196,7 @@ export function summarizeCleanupGroups(count: number, groups: Array<{ count: num
   if (count === 0 && groups.some(group => object(group.rawData) && group.rawData.coverage === "limited")) {
     if (id === "remoteAccessLogs" || id === "gameLauncherLogs") return { ...base, count, state: "empty", message: "No logs found in selected locations", nextStep: "Other products and custom locations were not checked." };
     if (["credentialManager", "gitActivity", "wslData"].includes(id ?? "")) return { ...base, count, state: "empty", message: "No records found in checked sources", nextStep: "Review Scan scope for the sources included." };
+    if (id === "recycleBin") return { ...base, count, state: "empty", message: "No deleted items found", nextStep: "Other accounts' Recycle Bins were not checked." };
     return { ...base, count, state: "limited", message: "No items found in checked locations", nextStep: "" };
   }
   if (count === 0) return { ...base, count, state: "empty", message: "No items found", nextStep: "No action is needed from this scan." };
@@ -245,8 +246,8 @@ export function summarizeCleanupResult(input: { id: string; count: number; items
   if (input.count < 0 || !Number.isFinite(input.count)) return { ...base, state: "not-scanned", count: null, message: "Not scanned", nextStep: "Select Scan to check this item." };
   if (!raw) return { ...base, state: "unavailable", count: null, message: "Scan details unavailable", nextStep: "Scan again to verify the result." };
   if (input.id === "cellularHistory" && raw.noHardware === true && raw.status === "not_applicable" && input.count === 0 && Array.isArray(raw.files) && raw.files.length === 0) {
-    const service = raw.mobileService === "unavailable" ? " The Windows Mobile Broadband service is unavailable." : raw.mobileService === "stopped" ? " The Windows Mobile Broadband service is stopped." : "";
-    return { ...base, state: "empty", message: "No mobile broadband adapter detected", nextStep: `For cellular, connect a mobile broadband modem and install its driver.${service} Profiles for disconnected devices were not checked.` };
+    // A PC without a cellular modem is a normal state: nothing to review, not a failed or partial scan.
+    return { ...base, state: "empty", message: "Not applicable: no cellular adapter", nextStep: "This PC has no mobile broadband adapter, so there is no cellular connection history to review." };
   }
   if (groupedKey && (!accountActivity || Array.isArray(groupedValue))) {
     // Only compare counts that the producer defines in the same units.
@@ -264,6 +265,7 @@ export function summarizeCleanupResult(input: { id: string; count: number; items
   if (input.count === 0 && hasLimitedCleanupCoverage(input.id, raw)) {
     if (input.id === "remoteAccessLogs" || input.id === "gameLauncherLogs") return { ...base, state: "empty", message: "No logs found in selected locations", nextStep: "Other products and custom locations were not checked." };
     if (["credentialManager", "gitActivity", "wslData"].includes(input.id)) return { ...base, state: "empty", message: "No records found in checked sources", nextStep: "Review Scan scope for the sources included." };
+    if (input.id === "recycleBin") return { ...base, state: "empty", message: "No deleted items found", nextStep: "Other accounts' Recycle Bins were not checked." };
     return { ...base, state: "limited", message: "No items found in checked locations", nextStep: "" };
   }
   if (input.count === 0) return { ...base, state: "empty", message: "No items found", nextStep: "No action is needed from this scan." };

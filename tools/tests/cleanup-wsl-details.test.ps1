@@ -75,7 +75,9 @@ $unknownExecutable = Get-WSLDataInfo
 if (-not $unknownExecutable.partial -or $unknownExecutable.message -notmatch 'could not be verified') { throw 'An unverified system executable must not be treated as absent.' }
 $script:wslPresent = $true; $script:wslUnknown = $false
 $script:featureState = 1
-if (-not (Get-WSLDataInfo).partial) { throw 'An enabled WSL feature with a failed query must stay partial.' }
+# wsl.exe fails every listing when no distribution is installed. With nothing registered and no disks, that is nothing to scan, not a coverage gap.
+$noDistros = Get-WSLDataInfo
+if ($noDistros.partial -or $noDistros.status -ne 'complete' -or $noDistros.total -ne 0 -or $noDistros.message) { throw 'WSL with no registration, no disk and failing listings must report a complete empty scan.' }
 $script:wslMode = 'quietEmpty'; $script:verboseCalls = 0
 $quietEmpty = Get-WSLDataInfo
 if ($quietEmpty.error -or $quietEmpty.partial -or $quietEmpty.total -ne 0 -or $script:verboseCalls -ne 0) { throw 'A successful empty quiet listing must not parse verbose output as a distribution.' }
@@ -87,9 +89,13 @@ $fallback = Get-WSLDataInfo
 if (-not $fallback.partial -or $fallback.total -ne 1 -or $fallback.files[0].name -ne 'Registered WSL distro: Ubuntu') { throw 'A recognized verbose listing must retain its observed distro while reporting the failed quiet query.' }
 $script:wslMode = 'failure'
 $script:featureState = 2; $script:hasWslRuntime = $true
-if (-not (Get-WSLDataInfo).partial) { throw 'A present WSL runtime with a failed query must stay partial.' }
+if ((Get-WSLDataInfo).partial) { throw 'A present WSL runtime with no registration or disk and failing listings has nothing to scan.' }
 $script:hasWslRuntime = $false; $script:hasWslPackage = $true
-if (-not (Get-WSLDataInfo).partial) { throw 'A present Store WSL package with a failed query must stay partial.' }
+if ((Get-WSLDataInfo).partial) { throw 'A present Store WSL package with no registration or disk and failing listings has nothing to scan.' }
+# ...but a registration or disk that cannot be listed, or an unreadable storage location, stays partial.
+$script:noRecords = $false
+if (-not (Get-WSLDataInfo).partial) { throw 'A failed listing with observed registrations must stay partial.' }
+$script:noRecords = $true
 $script:hasWslPackage = $false; $script:denyPackages = $true
 if (-not (Get-WSLDataInfo).partial) { throw 'An unreadable WSL storage location must not be treated as a verified empty inventory.' }
 Write-Output 'Passed: WSL Store and imported disk paths are retained.'

@@ -3378,17 +3378,35 @@ function Get-RecycleBinInfo {
         $partial = $false
         $unreadableRecords = 0
         $inaccessibleLocations = 0
+        # Other accounts' Recycle Bin folders are private to those accounts. Not being able to
+        # open them is a scope limit, not a failed scan of this account's own records.
+        $otherAccountLocations = 0
+        $currentSid = $null
+        try { $currentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value } catch { }
 
         $drives = [System.IO.DriveInfo]::GetDrives() |
             Where-Object { $_.DriveType -in @('Fixed','Removable') -and $_.IsReady }
         foreach ($drv in $drives) {
             $binRoot = Join-Path $drv.RootDirectory.FullName '$Recycle.Bin'
+            $rootItem = $null
             try {
                 $rootItem = Get-Item -LiteralPath $binRoot -Force -ErrorAction Stop
                 if (-not $rootItem.PSIsContainer -or ($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Recycle Bin root unavailable.' }
                 $sidDirs = @(Get-ChildItem -LiteralPath $binRoot -Directory -Force -ErrorAction Stop)
             } catch [System.Management.Automation.ItemNotFoundException] { continue }
-            catch { $partial = $true; $inaccessibleLocations++; continue }
+            catch {
+                $rootError = $_
+                $sidDirs = $null
+                # A standard account cannot list the shared root but can open its own folder by name.
+                if ($rootItem -and $currentSid -and $rootError.Exception -is [UnauthorizedAccessException]) {
+                    try {
+                        $sidDirs = @(Get-Item -LiteralPath (Join-Path $binRoot $currentSid) -Force -ErrorAction Stop)
+                        $otherAccountLocations++
+                    } catch [System.Management.Automation.ItemNotFoundException] { $otherAccountLocations++; continue }
+                    catch { $sidDirs = $null }
+                }
+                if ($null -eq $sidDirs) { $partial = $true; $inaccessibleLocations++; continue }
+            }
             foreach ($sidDir in $sidDirs) {
                 if ($sidDir.Attributes -band [IO.FileAttributes]::ReparsePoint) { $partial = $true; $inaccessibleLocations++; continue }
                 $sid = $sidDir.Name
@@ -3403,7 +3421,10 @@ function Get-RecycleBinInfo {
                 $account = $sidNameCache[$sid]
 
                 try { $iFiles = @(Get-ChildItem -LiteralPath $sidDir.FullName -Filter '$I*' -File -Force -ErrorAction Stop) }
-                catch { $partial = $true; $inaccessibleLocations++; continue }
+                catch {
+                    if ($sid -ne $currentSid -and $_.Exception -is [UnauthorizedAccessException]) { $otherAccountLocations++; continue }
+                    $partial = $true; $inaccessibleLocations++; continue
+                }
                 foreach ($iFile in $iFiles) {
                     try {
                         if (($iFile.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $iFile.Length -gt 1MB) { throw 'Recycle Bin metadata unavailable.' }
@@ -3457,6 +3478,9 @@ function Get-RecycleBinInfo {
             totalSizeKB = [Math]::Round($totalSizeKB, 1)
             unreadableRecords = $unreadableRecords
             inaccessibleLocations = $inaccessibleLocations
+            otherAccountLocations = $otherAccountLocations
+            coverage    = if ($otherAccountLocations -gt 0) { 'limited' } else { $null }
+            coverageNote = if ($otherAccountLocations -gt 0) { "Recycle Bin records for $otherAccountLocations other-account $(if ($otherAccountLocations -eq 1) { 'location' } else { 'locations' }) need administrator access and were not checked." } else { $null }
             partial     = $partial
             status      = if ($partial) { 'partial' } else { 'complete' }
             message     = if ($partial) { "Read $($items.Count) records; $unreadableRecords records and $inaccessibleLocations locations could not be read." } else { $null }
@@ -3853,6 +3877,7 @@ function Get-WSLDataInfo {
         $partial = $false
         $wslFailure = $null
         $registrationCount = 0
+        $verboseListFailed = $false
         $registeredDistros = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
         $distrosWithDisk = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
         $seenVhdx = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
@@ -3946,6 +3971,7 @@ function Get-WSLDataInfo {
                 $verboseResult = @(& $wsl.path -l -v 2>$null)
                 if ($LASTEXITCODE -ne 0) {
                     $partial = $true
+                    $verboseListFailed = $true
                     $wslFailure = 'Windows could not list WSL distributions; some WSL data may be unavailable.'
                     $verboseResult = @()
                 }
@@ -3968,6 +3994,14 @@ function Get-WSLDataInfo {
             $partial = $false
             $wslFailure = $null
             $confirmedAbsent = $true
+        }
+        # wsl.exe exits non-zero for every listing when WSL has no installed distribution (or is
+        # not set up), so a failed listing alone is not a coverage gap. The per-user registrations
+        # and the Store package disks were readable and empty, and both listings failed: there is
+        # nothing to scan. Any registration, disk or unreadable location keeps the scan partial.
+        if ($wslFailure -and $verboseListFailed -and $wsl.available -and $storageVerified -and $registrationCount -eq 0 -and $files.Count -eq 0) {
+            $partial = $false
+            $wslFailure = $null
         }
         @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; coverage = if ($confirmedAbsent) { 'limited' } else { $null }; coverageNote = if ($confirmedAbsent) { 'The WSL feature, Store runtime, WSL services, registrations and selected disk locations were not present or were disabled.' } else { $null }; message = if ($wslFailure) { $wslFailure } elseif ($partial) { 'Some WSL sources could not be checked.' } else { $null } }
     }
@@ -4928,7 +4962,7 @@ function Get-CellularHistoryInfo {
             if ($adapterInventoryComplete -and $mobileAdapters.Count -eq 0) {
                 $service = Get-Service -Name 'WwanSvc' -ErrorAction SilentlyContinue
                 $serviceNote = if (-not $service) { ' The Windows Mobile Broadband service is unavailable.' } elseif ($service.Status -ne 'Running') { ' The Windows Mobile Broadband service is stopped.' } else { '' }
-                return @{ files = @(); total = 0; totalSizeMB = 0; interfaceCount = 0; noHardware = $true; mobileService = if (-not $service) { 'unavailable' } elseif ($service.Status -ne 'Running') { 'stopped' } else { 'running' }; partial = $false; status = 'not_applicable'; coverage = 'limited'; coverageNote = "Windows reports no mobile broadband adapter.$serviceNote Saved profiles for disconnected devices could not be checked. To use cellular, connect a cellular modem and install its driver; check the Windows Mobile Broadband service."; message = 'No mobile broadband adapter is currently reported.' }
+                return @{ files = @(); total = 0; totalSizeMB = 0; interfaceCount = 0; noHardware = $true; mobileService = if (-not $service) { 'unavailable' } elseif ($service.Status -ne 'Running') { 'stopped' } else { 'running' }; partial = $false; status = 'not_applicable'; coverageNote = "Windows reports no mobile broadband adapter.$serviceNote Saved profiles for disconnected devices could not be checked. To use cellular, connect a cellular modem and install its driver; check the Windows Mobile Broadband service."; message = 'No mobile broadband adapter is currently reported.' }
             }
             $service = Get-Service -Name 'WwanSvc' -ErrorAction SilentlyContinue
             if (-not $service) { throw 'Windows Mobile Broadband service is unavailable; cellular profiles could not be checked.' }

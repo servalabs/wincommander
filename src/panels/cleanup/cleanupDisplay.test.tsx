@@ -25,14 +25,13 @@ describe("System Cleanup display projection", () => {
   });
 
   test("distinguishes no current cellular adapter from verified empty profiles", () => {
-    const raw = { total: 0, files: [], noHardware: true, status: "not_applicable", coverage: "limited" };
+    const raw = { total: 0, files: [], noHardware: true, status: "not_applicable" };
     const result = summarizeCleanupResult({ id: "cellularHistory", count: 0, raw });
     expect(result.state).toBe("empty");
+    expect(result.message).toContain("Not applicable");
     expect(result.message).toContain("adapter");
-    expect(result.nextStep).toContain("disconnected");
-    expect(result.nextStep).toContain("install its driver");
-    expect(summarizeCleanupResult({ id: "cellularHistory", count: 0, raw: { ...raw, mobileService: "unavailable" } }).nextStep).toContain("service is unavailable");
-    expect(summarizeCleanupResult({ id: "cellularHistory", count: 0, raw: { ...raw, mobileService: "stopped" } }).nextStep).toContain("service is stopped");
+    expect(result.nextStep).toContain("no cellular connection history to review");
+    expect(result.nextStep).not.toContain("install its driver");
     expect(summarizeCleanupResult({ id: "cellularHistory", count: 0, raw: { ...raw, partial: true } }).state).toBe("partial");
   });
 

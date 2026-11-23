@@ -12,12 +12,13 @@ function Get-Item {
     param($LiteralPath, [switch]$Force, $ErrorAction)
     if ($script:mode -eq 'absent') { throw [Management.Automation.ItemNotFoundException]::new('Synthetic absent root') }
     if ($script:mode -eq 'denied') { throw [UnauthorizedAccessException]::new('Synthetic denied root') }
-    [pscustomobject]@{ PSIsContainer = $true; Attributes = [IO.FileAttributes]::Directory }
+    [pscustomobject]@{ PSIsContainer = $true; Attributes = [IO.FileAttributes]::Directory; Name = $script:ownSid; FullName = 'C:\fixture\user' }
 }
 function Get-ChildItem {
     param($LiteralPath, $Filter, [switch]$Directory, [switch]$File, [switch]$Force, $ErrorAction)
-    if ($Directory) { return [pscustomobject]@{ Name = 'invalid-sid'; FullName = 'C:\fixture\user'; Attributes = [IO.FileAttributes]::Directory } }
-    if ($script:mode -eq 'enumeration-denied') { throw [UnauthorizedAccessException]::new('Synthetic denied metadata inventory') }
+    if ($Directory -and $script:mode -eq 'root-listing-denied') { throw [UnauthorizedAccessException]::new('Synthetic denied root listing') }
+    if ($Directory) { return [pscustomobject]@{ Name = if ($script:mode -eq 'own-denied') { $script:ownSid } else { 'invalid-sid' }; FullName = 'C:\fixture\user'; Attributes = [IO.FileAttributes]::Directory } }
+    if ($script:mode -in @('enumeration-denied', 'own-denied')) { throw [UnauthorizedAccessException]::new('Synthetic denied metadata inventory') }
     return [pscustomobject]@{ FullName = 'C:\fixture\user\$Itest'; Length = 32; Attributes = [IO.FileAttributes]::Normal }
 }
 function Read-FakeRecycleBytes {
@@ -29,10 +30,17 @@ function Read-FakeRecycleBytes {
     [Text.Encoding]::Unicode.GetBytes('X').CopyTo($bytes, 28)
     return ,$bytes
 }
+$script:ownSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $script:mode = 'valid'
 $result = Get-RecycleBinInfo
 if ($result.partial -or $result.total -ne 1 -or $result.items[0].originalPath -ne 'X') { throw 'Readable metadata was not reported accurately.' }
-foreach ($mode in @('denied', 'enumeration-denied', 'short')) {
+$script:mode = 'enumeration-denied'; $result = Get-RecycleBinInfo
+if ($result.partial -or $result.status -ne 'complete' -or $result.inaccessibleLocations -ne 0 -or $result.otherAccountLocations -ne 1 -or $result.coverage -ne 'limited' -or $result.coverageNote -notmatch 'administrator') { throw 'Another account''s unreadable Recycle Bin must be a scope limit, not an incomplete scan.' }
+$script:mode = 'own-denied'; $result = Get-RecycleBinInfo
+if (-not $result.partial -or $result.status -ne 'partial' -or $result.inaccessibleLocations -ne 1) { throw 'The current account''s unreadable Recycle Bin must stay incomplete.' }
+$script:mode = 'root-listing-denied'; $result = Get-RecycleBinInfo
+if ($result.partial -or $result.total -ne 1 -or $result.coverage -ne 'limited') { throw 'A standard account must still read its own bin when the shared root cannot be listed.' }
+foreach ($mode in @('denied', 'short')) {
     $script:mode = $mode; $result = Get-RecycleBinInfo
     if (-not $result.partial -or $result.status -ne 'partial') { throw "An incomplete scan was reported complete: $mode" }
     if ($mode -eq 'short' -and ($result.unreadableRecords -ne 1 -or $result.inaccessibleLocations -ne 0)) { throw 'Malformed metadata was not counted as an unreadable record.' }

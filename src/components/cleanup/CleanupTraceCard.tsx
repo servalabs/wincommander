@@ -51,7 +51,7 @@ interface CleanupTraceCardProps {
 
 const TRACE_CARD_HEIGHT = "168px";
 
-type BandState = "has" | "clean" | "empty" | "unavailable" | "scanning" | "error" | "incomplete" | "limited" | "disabled" | "not-scanned" | "action-only" | "schedule-only";
+type BandState = "has" | "clean" | "empty" | "unavailable" | "scanning" | "error" | "incomplete" | "limited" | "disabled" | "not-scanned" | "action-only" | "schedule-only" | "not-applicable";
 interface BandDef {
   bg: string;
   borderColor: string;
@@ -108,6 +108,13 @@ const BAND: Record<BandState, BandDef> = {
   limited: {
     bg: "var(--color-warning-dim)", borderColor: "color-mix(in srgb, var(--color-warning) 28%, transparent)",
     labelColor: "var(--color-warning)", icon: "info-sign", label: "Limited scan",
+  },
+  "not-applicable": {
+    bg: "var(--color-bg-secondary)",
+    borderColor: "var(--color-border)",
+    labelColor: "var(--color-text-muted)",
+    icon: "info-sign",
+    label: "Not applicable",
   },
   "not-scanned": {
     bg: "var(--color-bg-secondary)",
@@ -171,6 +178,8 @@ export default function CleanupTraceCard({
   const limited = hasLimitedCleanupCoverage(category.id, rawData) || !!groupedItems?.some(group => hasLimitedCleanupCoverage(category.id, group.rawData));
   const resultSummary = summarizeCleanupResult({ id: category.id, count, raw: rawData, error });
   const scopedEmpty = limited && resultSummary.state === "empty";
+  // Nothing to review on this PC (for example no cellular modem) is a normal state, not a warning or failure.
+  const notApplicable = scanFlags?.status === "not_applicable" && count === 0 && !error && !limited && resultSummary.state === "empty";
   const isEmpty = count === 0 && !limited;
   const isActionOnly = category.actionOnly;
   const hasData = count > 0;
@@ -191,6 +200,8 @@ export default function CleanupTraceCard({
         ? "disabled"
       : scanFlags?.status === "unavailable"
         ? "unavailable"
+      : notApplicable
+        ? "not-applicable"
       : incomplete
         ? "incomplete"
       : error
@@ -209,7 +220,7 @@ export default function CleanupTraceCard({
     ? `${observedProcesses} ${observedProcesses === 1 ? "process" : "processes"} observed; scan incomplete`
     : bandState === "incomplete" && observedRecords !== null
     ? `${observedRecords} ${observedRecords === 1 ? "record" : "records"} observed; scan incomplete`
-    : bandState === "empty" ? resultSummary.message
+    : bandState === "empty" || bandState === "not-applicable" ? resultSummary.message
     : bandState === "has"
     ? `${count} ${countUnit} found`
     : band.label;
@@ -303,7 +314,7 @@ export default function CleanupTraceCard({
   const iconBg = `${category.color}1e`;
 
   // ── CLEAN STATE — scanned, zero traces, nothing to action. ──
-  if (bandState === "clean" || bandState === "empty" || bandState === "disabled" || (bandState === "limited" && count === 0)) {
+  if (bandState === "clean" || bandState === "empty" || bandState === "not-applicable" || bandState === "disabled" || (bandState === "limited" && count === 0)) {
     return (
       <motion.div
         initial={{ opacity: 0, scale: 0.95 }}
@@ -330,9 +341,9 @@ export default function CleanupTraceCard({
         {compact ? (
           <div className="flex h-full items-center gap-1.5 px-2">
             <Icon
-              icon={limited || clipboardOff ? "info-sign" : "tick-circle"}
+              icon={limited || clipboardOff || notApplicable ? "info-sign" : "tick-circle"}
               size={14}
-              style={{ color: clipboardOff ? "var(--color-text-muted)" : limited ? "var(--color-warning)" : "var(--color-success)" }}
+              style={{ color: clipboardOff || notApplicable ? "var(--color-text-muted)" : limited ? "var(--color-warning)" : "var(--color-success)" }}
             />
             <span
               className="min-w-0 flex-1 text-left font-bold uppercase leading-tight"
@@ -384,10 +395,10 @@ export default function CleanupTraceCard({
               style={{ padding: "6px 12px" }}
             >
               <Icon
-                icon={limited || clipboardOff ? "info-sign" : "tick-circle"}
+                icon={limited || clipboardOff || notApplicable ? "info-sign" : "tick-circle"}
                 size={26}
                 style={{
-                  color: clipboardOff ? "var(--color-text-muted)" : limited ? "var(--color-warning)" : "color-mix(in srgb, var(--color-success) 60%, var(--color-text-muted))",
+                  color: clipboardOff || notApplicable ? "var(--color-text-muted)" : limited ? "var(--color-warning)" : "color-mix(in srgb, var(--color-success) 60%, var(--color-text-muted))",
                 }}
               />
               <div
