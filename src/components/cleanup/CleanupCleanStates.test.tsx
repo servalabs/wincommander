@@ -51,8 +51,24 @@ describe("clean, empty and not-applicable cleanup scans", () => {
     expect(summarizeCleanupResult({ id: "recycleBin", count: 0, raw: result.raw }).message).toBe("No deleted items found");
   });
 
-  test("unreadable Recycle Bin records still report an incomplete scan", () => {
-    const { html } = card("recycleBin", { items: [], total: 0, unreadableRecords: 1, inaccessibleLocations: 1, partial: true, status: "partial", message: "Read 0 records; 1 records and 1 locations could not be read." });
+  test("a genuinely incomplete Recycle Bin scan says what could not be read", () => {
+    const message = "Read 12 records; 2 records could not be read.";
+    const { html, result } = card("recycleBin", { items: [], total: 0, unreadableRecords: 2, inaccessibleLocations: 0, partial: true, status: "partial", message });
     expect(html).toContain("Scan incomplete");
+    expect(html).toContain(message);
+    expect(html).not.toContain("Open details to review coverage");
+    expect(summarizeCleanupResult({ id: "recycleBin", count: -1, raw: result.raw }).nextStep).toBe(message);
+  });
+
+  test("Recycle Bin records with unreadable metadata are a coverage note when the scan itself finished", () => {
+    const coverageNote = "2 Recycle Bin records have unreadable metadata and were skipped.";
+    const { html } = card("recycleBin", { items: [], total: 0, totalSizeKB: 0, unreadableRecords: 2, inaccessibleLocations: 0, otherAccountLocations: 0, coverage: "limited", coverageNote, partial: false, status: "complete", message: null });
+    expect(html).not.toContain("Scan incomplete");
+    expect(html).not.toContain("Scan failed");
+  });
+
+  test("a generic partial scan of another category keeps the generic card text", () => {
+    const { html } = card("crashDumps", { dumps: [], total: 0, totalSizeMB: 0, partial: true, status: "partial", message: "Some crash dump locations could not be checked." });
+    expect(html).toContain("Scan incomplete. Open details to review coverage.");
   });
 });

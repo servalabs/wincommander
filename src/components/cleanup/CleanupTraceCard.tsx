@@ -8,7 +8,7 @@ import {
 } from "@/components/ui/tooltip";
 import { getCleanupScheduleUnavailableReason, type CleanupCategory } from "../../panels/cleanup/cleanupCategories";
 import { isDefaultExcludedCleanup } from "../../panels/cleanup/cleanupManualPolicy";
-import { hasLimitedCleanupCoverage, isClipboardHistoryOff, observedPartialRows, observedProcessRows, processReviewLimitedNote, summarizeCleanupResult, type CleanupVerification } from "../../panels/cleanup/cleanupDisplayModel";
+import { hasLimitedCleanupCoverage, isClipboardHistoryOff, observedPartialRows, observedProcessRows, processReviewLimitedNote, recycleBinPartialNote, summarizeCleanupResult, type CleanupVerification } from "../../panels/cleanup/cleanupDisplayModel";
 import CleanupScheduleControl from "./CleanupScheduleControl";
 import { getSafeCleanupPreview } from "./CleanupRecordPreview";
 import { cleanupCardPreview } from "./cleanupPreviewPresentation";
@@ -171,6 +171,7 @@ export default function CleanupTraceCard({
     ((!!scheduleMinutes || !!scheduleExists) && !!onClearSchedule) || !!scheduleDisabled;
   const scanFlags = rawData && typeof rawData === "object" && !Array.isArray(rawData) ? rawData as Record<string, unknown> : undefined;
   const processLimitedNote = processReviewLimitedNote(category.id, rawData);
+  const recycleBinNote = recycleBinPartialNote(category.id, rawData);
   const incomplete = processLimitedNote === null && (scanFlags?.partial === true || scanFlags?.complete === false || scanFlags?.status === "partial" || scanFlags?.coverage === "partial" || scanFlags?.accessDenied === true);
   const observedProcesses = observedProcessRows(category.id, rawData);
   const observedRecords = observedPartialRows(category.id, rawData);
@@ -608,7 +609,7 @@ export default function CleanupTraceCard({
                 color: incomplete ? "var(--color-warning)" : "var(--color-danger)",
               }}
             >
-              {bandState === "unavailable" ? "Inventory unavailable. Open details for the reason." : incomplete ? observedProcesses !== null && typeof scanFlags?.coverageNote === "string" ? `${observedProcesses} ${observedProcesses === 1 ? "process" : "processes"} observed. ${scanFlags.coverageNote}` : observedProcesses !== null ? `${observedProcesses} ${observedProcesses === 1 ? "process" : "processes"} observed. Scan incomplete; open details.` : observedRecords !== null ? `${observedRecords} ${observedRecords === 1 ? "record" : "records"} observed. Scan incomplete; open details.` : "Scan incomplete. Open details to review coverage." : "Scan failed. Try again or check access."}
+              {bandState === "unavailable" ? "Inventory unavailable. Open details for the reason." : incomplete ? observedProcesses !== null && typeof scanFlags?.coverageNote === "string" ? `${observedProcesses} ${observedProcesses === 1 ? "process" : "processes"} observed. ${scanFlags.coverageNote}` : observedProcesses !== null ? `${observedProcesses} ${observedProcesses === 1 ? "process" : "processes"} observed. Scan incomplete; open details.` : observedRecords !== null ? `${observedRecords} ${observedRecords === 1 ? "record" : "records"} observed. Scan incomplete; open details.` : recycleBinNote ?? "Scan incomplete. Open details to review coverage." : "Scan failed. Try again or check access."}
             </div>
           )}
           {/* Owner: manual-only view-only cards (Process Review) were stuck at

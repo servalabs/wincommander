@@ -131,6 +131,12 @@ export function processReviewLimitedNote(id: string, raw: unknown): string | nul
   return `${head} (Windows protects some system processes; others may exit during the scan).${tail}`;
 }
 
+/** The collector's own explanation of why a Recycle Bin scan is incomplete, for cards that would otherwise say only "Scan incomplete". */
+export function recycleBinPartialNote(id: string, raw: unknown): string | null {
+  if (id !== 'recycleBin' || !object(raw) || raw.error === true || raw.partial !== true) return null;
+  return typeof raw.message === 'string' && raw.message.trim() ? raw.message.trim() : null;
+}
+
 /** Count returned metadata rows without presenting them as a complete inventory. */
 export function observedPartialRows(id: string, raw: unknown): number | null {
   if (!['wslData', 'credentialManager', 'gitActivity'].includes(id) || !object(raw) || raw.error || raw.status !== 'partial' || raw.partial !== true) return null;
@@ -239,8 +245,9 @@ export function summarizeCleanupResult(input: { id: string; count: number; items
   if (raw?.partial === true || raw?.complete === false || raw?.status === "partial" || raw?.coverage === "partial" || raw?.accessDenied === true) {
     const observed = observedProcessRows(input.id, raw);
     const records = observedPartialRows(input.id, raw);
+    const binNote = recycleBinPartialNote(input.id, raw);
     const missing = typeof raw?.unavailableDetails === "number" && Number.isInteger(raw.unavailableDetails) && raw.unavailableDetails >= 0 ? raw.unavailableDetails : null;
-    return { ...base, state: "partial", count: null, message: observed !== null ? `${observed} ${observed === 1 ? "process" : "processes"} observed` : records !== null ? `${records} ${records === 1 ? "record" : "records"} observed` : "Scan incomplete", nextStep: observed === null ? "Review coverage and scan again." : missing !== null ? `${missing} listed ${missing === 1 ? "process has" : "processes have"} unavailable details; some processes may have exited during the scan.` : "Some process details or processes could not be checked." };
+    return { ...base, state: "partial", count: null, message: observed !== null ? `${observed} ${observed === 1 ? "process" : "processes"} observed` : records !== null ? `${records} ${records === 1 ? "record" : "records"} observed` : "Scan incomplete", nextStep: observed === null ? binNote ?? "Review coverage and scan again." : missing !== null ? `${missing} listed ${missing === 1 ? "process has" : "processes have"} unavailable details; some processes may have exited during the scan.` : "Some process details or processes could not be checked." };
   }
   if (input.error) return { ...base, state: "error", count: null, message: "Scan failed", nextStep: "Try scanning again or check access." };
   if (input.count < 0 || !Number.isFinite(input.count)) return { ...base, state: "not-scanned", count: null, message: "Not scanned", nextStep: "Select Scan to check this item." };

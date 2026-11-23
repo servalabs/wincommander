@@ -3378,6 +3378,9 @@ function Get-RecycleBinInfo {
         $partial = $false
         $unreadableRecords = 0
         $inaccessibleLocations = 0
+        # Windows leaves empty, truncated or locked $I files behind and purges records while we
+        # scan. They are counted and noted but do not make the scan incomplete.
+        $skippedLocations = 0
         # Other accounts' Recycle Bin folders are private to those accounts. Not being able to
         # open them is a scope limit, not a failed scan of this account's own records.
         $otherAccountLocations = 0
@@ -3396,6 +3399,8 @@ function Get-RecycleBinInfo {
             } catch [System.Management.Automation.ItemNotFoundException] { continue }
             catch {
                 $rootError = $_
+                # Media removed mid-scan is not a failure to read this account's bin.
+                if ($drv.DriveType -eq 'Removable' -and $rootError.Exception -is [System.IO.IOException]) { continue }
                 $sidDirs = $null
                 # A standard account cannot list the shared root but can open its own folder by name.
                 if ($rootItem -and $currentSid -and $rootError.Exception -is [UnauthorizedAccessException]) {
@@ -3408,8 +3413,12 @@ function Get-RecycleBinInfo {
                 if ($null -eq $sidDirs) { $partial = $true; $inaccessibleLocations++; continue }
             }
             foreach ($sidDir in $sidDirs) {
-                if ($sidDir.Attributes -band [IO.FileAttributes]::ReparsePoint) { $partial = $true; $inaccessibleLocations++; continue }
                 $sid = $sidDir.Name
+                if ($sidDir.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                    # Never followed. Only the current account's own bin is a scan failure.
+                    if ($sid -eq $currentSid) { $partial = $true; $inaccessibleLocations++ } else { $skippedLocations++ }
+                    continue
+                }
                 if (-not $sidNameCache.ContainsKey($sid)) {
                     $resolved = $sid
                     try {
@@ -3421,33 +3430,34 @@ function Get-RecycleBinInfo {
                 $account = $sidNameCache[$sid]
 
                 try { $iFiles = @(Get-ChildItem -LiteralPath $sidDir.FullName -Filter '$I*' -File -Force -ErrorAction Stop) }
+                catch [System.Management.Automation.ItemNotFoundException] { continue }
                 catch {
                     if ($sid -ne $currentSid -and $_.Exception -is [UnauthorizedAccessException]) { $otherAccountLocations++; continue }
                     $partial = $true; $inaccessibleLocations++; continue
                 }
                 foreach ($iFile in $iFiles) {
                     try {
-                        if (($iFile.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $iFile.Length -gt 1MB) { throw 'Recycle Bin metadata unavailable.' }
+                        if (($iFile.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $iFile.Length -gt 1MB) { throw [System.FormatException]::new('Recycle Bin metadata unavailable.') }
                         $bytes = [System.IO.File]::ReadAllBytes($iFile.FullName)
-                        if ($bytes.Length -lt 24) { throw 'Recycle Bin metadata is incomplete.' }
+                        if ($bytes.Length -lt 24) { throw [System.FormatException]::new('Recycle Bin metadata is incomplete.') }
                         $version   = [System.BitConverter]::ToInt64($bytes, 0)
-                        if ($version -notin @(1, 2)) { throw 'Recycle Bin metadata has an unknown format.' }
+                        if ($version -notin @(1, 2)) { throw [System.FormatException]::new('Recycle Bin metadata has an unknown format.') }
                         $sizeBytes = [System.BitConverter]::ToInt64($bytes, 8)
-                        if ($sizeBytes -lt 0) { throw 'Recycle Bin metadata has an invalid size.' }
+                        if ($sizeBytes -lt 0) { throw [System.FormatException]::new('Recycle Bin metadata has an invalid size.') }
                         $ft        = [System.BitConverter]::ToInt64($bytes, 16)
                         $deleted   = [System.DateTime]::FromFileTime($ft).ToString('yyyy-MM-dd HH:mm:ss')
 
                         $origPath = ''
                         if ($version -eq 2) {
-                            if ($bytes.Length -lt 28) { throw 'Recycle Bin path metadata is incomplete.' }
+                            if ($bytes.Length -lt 28) { throw [System.FormatException]::new('Recycle Bin path metadata is incomplete.') }
                             # Win10+: int32 path length (wchars incl. NUL) at 24, UTF-16 path at 28
                             $pathChars = [System.BitConverter]::ToInt32($bytes, 24)
                             $byteLen   = [Math]::Max(0, ($pathChars - 1) * 2)
-                            if ($pathChars -lt 1 -or $bytes.Length -lt (28 + $byteLen)) { throw 'Recycle Bin path metadata is incomplete.' }
+                            if ($pathChars -lt 1 -or $bytes.Length -lt (28 + $byteLen)) { throw [System.FormatException]::new('Recycle Bin path metadata is incomplete.') }
                             $origPath = [System.Text.Encoding]::Unicode.GetString($bytes, 28, $byteLen)
                         } else {
                             # Legacy: fixed 520-byte (260 wchar) UTF-16 path at offset 24
-                            if ($bytes.Length -lt 544) { throw 'Recycle Bin path metadata is incomplete.' }
+                            if ($bytes.Length -lt 544) { throw [System.FormatException]::new('Recycle Bin path metadata is incomplete.') }
                             $avail = [Math]::Min(520, $bytes.Length - 24)
                             if ($avail -gt 0) {
                                 $raw = [System.Text.Encoding]::Unicode.GetString($bytes, 24, $avail)
@@ -3467,11 +3477,25 @@ function Get-RecycleBinInfo {
                             sid          = $sid
                             drive        = $drv.Name
                         }
-                    } catch { $partial = $true; $unreadableRecords++ }
+                    }
+                    # Purged between listing and read: nothing to report.
+                    catch [System.IO.FileNotFoundException] { }
+                    catch [System.IO.DirectoryNotFoundException] { }
+                    # Corrupt metadata or a file Windows is still writing is noise, not a failed scan.
+                    catch [System.FormatException] { $unreadableRecords++ }
+                    catch [System.IO.IOException] { $unreadableRecords++ }
+                    catch { $partial = $true; $unreadableRecords++ }
                 }
             }
         }
 
+        $coverageNotes = @()
+        if ($otherAccountLocations -gt 0) { $coverageNotes += "Recycle Bin records for $otherAccountLocations other-account $(if ($otherAccountLocations -eq 1) { 'location' } else { 'locations' }) need administrator access and were not checked." }
+        if ($unreadableRecords -gt 0 -and -not $partial) { $coverageNotes += "$unreadableRecords Recycle Bin $(if ($unreadableRecords -eq 1) { 'record has' } else { 'records have' }) unreadable metadata and $(if ($unreadableRecords -eq 1) { 'was' } else { 'were' }) skipped." }
+        if ($skippedLocations -gt 0) { $coverageNotes += "$skippedLocations Recycle Bin $(if ($skippedLocations -eq 1) { 'location' } else { 'locations' }) could not be followed and $(if ($skippedLocations -eq 1) { 'was' } else { 'were' }) skipped." }
+        $failureParts = @()
+        if ($unreadableRecords -gt 0) { $failureParts += "$unreadableRecords $(if ($unreadableRecords -eq 1) { 'record' } else { 'records' })" }
+        if ($inaccessibleLocations -gt 0) { $failureParts += "$inaccessibleLocations $(if ($inaccessibleLocations -eq 1) { 'location' } else { 'locations' })" }
         @{
             items       = $items
             total       = $items.Count
@@ -3479,11 +3503,12 @@ function Get-RecycleBinInfo {
             unreadableRecords = $unreadableRecords
             inaccessibleLocations = $inaccessibleLocations
             otherAccountLocations = $otherAccountLocations
-            coverage    = if ($otherAccountLocations -gt 0) { 'limited' } else { $null }
-            coverageNote = if ($otherAccountLocations -gt 0) { "Recycle Bin records for $otherAccountLocations other-account $(if ($otherAccountLocations -eq 1) { 'location' } else { 'locations' }) need administrator access and were not checked." } else { $null }
+            skippedLocations = $skippedLocations
+            coverage    = if ($coverageNotes.Count) { 'limited' } else { $null }
+            coverageNote = if ($coverageNotes.Count) { $coverageNotes -join ' ' } else { $null }
             partial     = $partial
             status      = if ($partial) { 'partial' } else { 'complete' }
-            message     = if ($partial) { "Read $($items.Count) records; $unreadableRecords records and $inaccessibleLocations locations could not be read." } else { $null }
+            message     = if ($partial) { "Read $($items.Count) records; $($failureParts -join ' and ') could not be read." } else { $null }
         }
     }
     catch { @{ error = $true; message = $_.Exception.Message } }
