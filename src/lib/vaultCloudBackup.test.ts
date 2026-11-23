@@ -47,10 +47,13 @@ describe("Vault cloud backup setup", () => {
     expect(cloudBackupError("cloud_backup_some_future_code")).toContain("(cloud_backup_some_future_code)");
     expect(cloudBackupError("vault_service_busy x")).toContain("(vault_service_busy)");
     expect(cloudBackupError("no code at all token=secret")).toBe("The backup result could not be confirmed. Refresh to check its state before trying again.");
-    expect(cloudBackupError("cloud_backup_engine_write_failed:create:5")).toContain("Failed while creating the file in the Vault: Windows error 5 (access denied).");
-    expect(cloudBackupError("cloud_backup_engine_write_failed:rename:32")).toContain("moving the file into place: Windows error 32 (another program is using the file)");
-    expect(cloudBackupError("cloud_backup_engine_write_failed:write:9999")).toContain("Windows error 9999.");
-    expect(cloudBackupError("cloud_backup_engine_write_failed:create:5 C:\private")).not.toContain("private");
+    expect(cloudBackupError("cloud_backup_engine_save_create_access_denied")).toContain("Failed while creating the file in the Vault: access denied.");
+    expect(cloudBackupError("cloud_backup_engine_save_rename_sharing_violation")).toContain("moving the file into place: another program is using the file");
+    expect(cloudBackupError("cloud_backup_engine_save_notice_disk_full")).toContain("saving its licence notice: the Vault is full.");
+    expect(cloudBackupError("cloud_backup_engine_save_write_something_new")).toContain("writing the file into the Vault: unknown cause.");
+    expect(cloudBackupError("cloud_backup_engine_save_flush_io_error token=secret")).not.toContain("secret");
+    expect(cloudBackupError("cloud_backup_engine_not_installed")).toContain("not installed in this Vault yet");
+    expect(cloudBackupError("cloud_backup_engine_setup_failed")).toContain("setup did not finish");
     const base: VaultCloudBackupResult = { connection_check: "unknown", remote_check: "unknown", checked_at: null, remote_path: null, mount_receipt: null, engine_ready: true, connected: true, configured: true,
       automatic: true, watching: true, running: false, can_configure: true, configuration, last_run: null,
       last_backup: null, last_verification: null, last_restore: null, reason_code: null };

@@ -69,6 +69,8 @@ const MESSAGES: Record<string, string> = {
   cloud_backup_start_exited: "The backup tool stopped before it could start. Try again.",
   cloud_backup_engine_download_failed: "The backup tool could not be downloaded. Check the connection and retry setup.",
   cloud_backup_engine_write_failed: "The backup tool downloaded but could not be saved into the Vault. Check that the Vault is writable and has free space, that security software is not blocking it, then retry setup.",
+  cloud_backup_engine_not_installed: "The backup tool is not installed in this Vault yet. Use Set up backup tool, then connect Proton Drive.",
+  cloud_backup_engine_setup_failed: "The backup tool setup did not finish. Use Set up backup tool to try again.",
   cloud_backup_state_unavailable: "The backup folder inside the Vault could not be read or written. Check that the Vault is mounted, writable and not full, then refresh.",
   cloud_backup_not_configured: "Cloud backup is not set up for this Vault yet. Use Set up backup tool, then connect Proton Drive.",
   cloud_backup_engine_unavailable: "The backup tool is not installed in this Vault yet. Use Set up backup tool.",
@@ -91,37 +93,32 @@ const MESSAGES: Record<string, string> = {
   cloud_backup_engine_version_mismatch: "The installed backup tool has an unsupported version. Retry setup.",
   cloud_backup_cli_output_unrecognized: "The backup tool returned an unrecognized result. Completion has not been confirmed.",
 };
-const SAVE_STEPS: Record<string, string> = {
+const SAVE_STAGES: Record<string, string> = {
   create: "creating the file in the Vault",
   write: "writing the file into the Vault",
   flush: "finishing the write",
   rename: "moving the file into place",
   notice: "saving its licence notice",
 };
-const WINDOWS_ERRORS: Record<number, string> = {
-  5: "access denied",
-  19: "the drive is write-protected",
-  32: "another program is using the file",
-  33: "another program has locked the file",
-  39: "the drive is full",
-  80: "the file already exists",
-  87: "invalid parameter",
-  112: "not enough free space",
-  1117: "I/O device error",
+const SAVE_CAUSES: Record<string, string> = {
+  access_denied: "access denied",
+  write_protected: "the drive is write-protected",
+  sharing_violation: "another program is using the file",
+  lock_violation: "another program has locked the file",
+  disk_full: "the Vault is full",
+  already_exists: "the file already exists",
+  invalid_parameter: "invalid parameter",
+  io_error: "the drive reported an I/O error",
 };
-/** Adds the failed step and Windows error number to the generic save failure. */
-function saveFailureDetail(detail: string): string {
-  const match = detail.match(/cloud_backup_engine_write_failed:([a-z]+):([0-9]+)/);
-  if (!match) return "";
-  const step = SAVE_STEPS[match[1]] ?? match[1];
-  const number = Number(match[2]);
-  const name = WINDOWS_ERRORS[number];
-  return ` Failed while ${step}: Windows error ${number}${name ? ` (${name})` : ""}.`;
-}
 export function cloudBackupError(cause: unknown): string {
   const detail = cause instanceof Error ? cause.message : String(cause);
+  // Fixed identifier from the helper: stage and cause are lowercase words, never user data.
+  const save = detail.match(/cloud_backup_engine_save_(create|write|flush|rename|notice)_([a-z_]+)/);
+  if (save) {
+    return `The backup tool downloaded but could not be saved into the Vault. Failed while ${SAVE_STAGES[save[1]]}: ${SAVE_CAUSES[save[2]] ?? "unknown cause"}.`;
+  }
   const code = detail.match(/cloud_backup_[a-z_]+/)?.[0];
-  if (code && MESSAGES[code]) return MESSAGES[code] + (code === "cloud_backup_engine_write_failed" ? saveFailureDetail(detail) : "");
+  if (code && MESSAGES[code]) return MESSAGES[code];
   // A fixed error identifier carries no user data; show it so the cause can be traced.
   const other = code ?? detail.match(/vault_[a-z_]+/)?.[0];
   return other
