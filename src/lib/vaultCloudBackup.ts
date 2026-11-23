@@ -73,10 +73,37 @@ const MESSAGES: Record<string, string> = {
   cloud_backup_engine_version_mismatch: "The installed backup tool has an unsupported version. Retry setup.",
   cloud_backup_cli_output_unrecognized: "The backup tool returned an unrecognized result. Completion has not been confirmed.",
 };
+const SAVE_STEPS: Record<string, string> = {
+  create: "creating the file in the Vault",
+  write: "writing the file into the Vault",
+  flush: "finishing the write",
+  rename: "moving the file into place",
+  notice: "saving its licence notice",
+};
+const WINDOWS_ERRORS: Record<number, string> = {
+  5: "access denied",
+  19: "the drive is write-protected",
+  32: "another program is using the file",
+  33: "another program has locked the file",
+  39: "the drive is full",
+  80: "the file already exists",
+  87: "invalid parameter",
+  112: "not enough free space",
+  1117: "I/O device error",
+};
+/** Adds the failed step and Windows error number to the generic save failure. */
+function saveFailureDetail(detail: string): string {
+  const match = detail.match(/cloud_backup_engine_write_failed:([a-z]+):([0-9]+)/);
+  if (!match) return "";
+  const step = SAVE_STEPS[match[1]] ?? match[1];
+  const number = Number(match[2]);
+  const name = WINDOWS_ERRORS[number];
+  return ` Failed while ${step}: Windows error ${number}${name ? ` (${name})` : ""}.`;
+}
 export function cloudBackupError(cause: unknown): string {
   const detail = cause instanceof Error ? cause.message : String(cause);
   const code = detail.match(/cloud_backup_[a-z_]+/)?.[0];
-  return code && MESSAGES[code] ? MESSAGES[code]
+  return code && MESSAGES[code] ? MESSAGES[code] + (code === "cloud_backup_engine_write_failed" ? saveFailureDetail(detail) : "")
     : "The backup result could not be confirmed. Refresh to check its state before trying again.";
 }
 export function cloudBackupStateLabel(result: VaultCloudBackupResult): string {
