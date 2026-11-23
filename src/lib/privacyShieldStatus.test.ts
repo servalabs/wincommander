@@ -116,4 +116,19 @@ describe("Privacy Shield verified status", () => {
     expect(shouldProbeShieldCamera(100_000, 200_000, false, true)).toBe(false);
     expect(shouldProbeShieldCamera(100_000, 200_000, true, true)).toBe(true);
   });
+
+  test("busy reports an in-flight or queued read so a manual recheck can wait for its forced probe", () => {
+    const gate = new ShieldStatusGate();
+    expect(gate.busy).toBe(false);
+    const first = gate.beginRead()!;
+    expect(gate.busy).toBe(true);
+    gate.queueRead();
+    expect(gate.beginRead()).toBeNull();
+    expect(gate.finishRead(first)).toBe(true);
+    expect(gate.busy).toBe(false);
+    const rerun = gate.beginRead()!;
+    expect(gate.busy).toBe(true);
+    expect(gate.finishRead(rerun)).toBe(false);
+    expect(gate.busy).toBe(false);
+  });
 });

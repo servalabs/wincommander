@@ -379,6 +379,37 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
     };
     const checkStatus = useCallback((forceCamera = false) => checkStatusRef.current(forceCamera), []);
 
+    // Manual camera recheck. The status read can be deferred behind one that is
+    // already running, and an unchanged result changes nothing on screen, so we
+    // track the recheck ourselves: spin until the forced probe has really run,
+    // keep the spinner up long enough to be seen, then say when it finished.
+    const [cameraRechecking, setCameraRechecking] = useState(false);
+    const [cameraCheckedAt, setCameraCheckedAt] = useState<number | null>(null);
+    const recheckInFlight = useRef(false);
+    const recheckMounted = useRef(true);
+    useEffect(() => { recheckMounted.current = true; return () => { recheckMounted.current = false; }; }, []);
+    const handleCameraRecheck = useCallback(async () => {
+        if (recheckInFlight.current) return;
+        recheckInFlight.current = true;
+        setCameraRechecking(true);
+        const startedAt = Date.now();
+        const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+        try {
+            await checkStatusRef.current(true);
+            // A read that was already running defers the forced probe to the next
+            // read; wait for it (bounded) so we never report "checked" early.
+            for (let i = 0; i < 80 && (forceCameraProbe.current || statusGate.current.busy); i++) await sleep(250);
+            const shown = Date.now() - startedAt;
+            if (shown < 700) await sleep(700 - shown);
+        } finally {
+            recheckInFlight.current = false;
+            if (recheckMounted.current) {
+                setCameraRechecking(false);
+                setCameraCheckedAt(Date.now());
+            }
+        }
+    }, []);
+
     useEffect(() => {
         const unsubscribeCamera = cameraPresenceStore.subscribe(value => {
             cameraAbsent.current = hasNoDetectedCamera(value);
@@ -707,11 +738,13 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
             {privacyShieldRunning !== true && (
                 <Tooltip content="Recheck camera">
                     <Button
-                        icon="refresh"
+                        icon={<Icon icon="refresh" size={16} className={cameraRechecking ? "animate-spin" : undefined} />}
                         minimal
-                        aria-label="Recheck camera"
-                        title="Recheck camera"
-                        onClick={() => void checkStatus(true)}
+                        aria-label={cameraRechecking ? "Rechecking camera" : "Recheck camera"}
+                        title={cameraRechecking ? "Rechecking camera..." : "Recheck camera"}
+                        aria-busy={cameraRechecking}
+                        disabled={cameraRechecking}
+                        onClick={() => void handleCameraRecheck()}
                         className="physical-shield-recheck-btn"
                     />
                 </Tooltip>
@@ -856,9 +889,13 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                                         : "monitoring is off by Fleet policy."}
                             </p>
                         )}
-                        {(cameraMessage || cameraAvailable !== null) && privacyShieldRunning !== true && (
-                            <p className={`text-[10px] mt-1 max-w-[320px] ${cameraAvailable === true ? "text-[var(--color-success)]" : "text-[var(--color-warning)]"}`}>
-                                {cameraMessage || (cameraAvailable ? "Camera available." : "No camera detected.")}
+                        {cameraRechecking && privacyShieldRunning !== true && (
+                            <p role="status" className="text-[10px] mt-1 max-w-[320px] text-[var(--color-text-muted)]">Rechecking camera...</p>
+                        )}
+                        {!cameraRechecking && (cameraMessage || cameraAvailable !== null || cameraCheckedAt !== null) && privacyShieldRunning !== true && (
+                            <p aria-live="polite" className={`text-[10px] mt-1 max-w-[320px] ${cameraAvailable === true ? "text-[var(--color-success)]" : "text-[var(--color-warning)]"}`}>
+                                {cameraMessage || (cameraAvailable === true ? "Camera available." : cameraAvailable === false ? "No camera detected." : "Camera status could not be confirmed.")}
+                                {cameraCheckedAt !== null && ` Checked ${new Date(cameraCheckedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}.`}
                             </p>
                         )}
                     </div>

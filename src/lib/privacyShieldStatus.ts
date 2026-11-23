@@ -41,6 +41,8 @@ export class ShieldStatusGate {
 
   get actionPending(): boolean { return this.acting; }
   get isActive(): boolean { return this.active; }
+  /** True while a status read is in flight or another read is queued behind it. */
+  get busy(): boolean { return this.reading !== null || this.queued; }
 
   queueRead(): void { this.queued = true; }
 
