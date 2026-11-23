@@ -5,6 +5,7 @@ $source = Join-Path $PSScriptRoot '..\..\src-tauri\commander-free\scripts\module
 $tokens = $null
 $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $source).Path, [ref]$tokens, [ref]$errors)
+foreach ($helperName in @('Test-CleanupSystemOwnedPath', 'Get-CleanupScanFailureKind', 'Add-CleanupPrivateCoverage')) { . ([scriptblock]::Create($ast.Find({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $helperName }, $true).Extent.Text)) }
 if ($errors.Count) { throw 'Could not parse cleanup.ps1' }
 foreach ($name in @('Get-CleanupBoundedFileInventory', 'Get-SQLiteWALList', 'Get-RecallDatabaseInfo', 'Convert-CleanupClipboardHistoryResult', 'Get-ClipboardHistoryStatus', 'Convert-CleanupSummaryHistory', 'Test-CleanupSummaryDetailSize', 'New-CleanupSummaryCategoryRecord')) {
     $function = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
@@ -120,7 +121,7 @@ try {
     $clipboard = Get-ClipboardHistoryStatus
     Assert-Count $script:clipboardReads ($readsBefore + 1) 'Disabled history still attempts an inventory'
     Assert-Count $clipboard.historyReadStatus 'disabled' 'Disabled clipboard history coverage'
-    Assert-Count $clipboard.partial $true 'Unreadable disabled history is partial'
+    Assert-Count $clipboard.partial $false 'Turned-off history is a normal state, not an incomplete scan'
     Assert-Count $clipboard.coverage 'disabled' 'Disabled clipboard history is distinct from scan failure'
     if ($clipboard.message -notmatch 'turned off' -or $clipboard.coverageNote -notmatch 'previously stored') { throw 'Disabled clipboard coverage did not explain the unavailable inventory.' }
     $script:clipboardResult = Convert-CleanupClipboardHistoryResult -Result ([pscustomobject]@{ Status = 'Success'; Items = @() })

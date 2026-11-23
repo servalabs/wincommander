@@ -2,6 +2,7 @@ $ErrorActionPreference = 'Stop'
 $path = Join-Path $PSScriptRoot '..\..\src-tauri\commander-free\scripts\modules\privacy\cleanup.ps1'
 $tokens = $null; $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path), [ref]$tokens, [ref]$errors)
+foreach ($helperName in @('Test-CleanupSystemOwnedPath', 'Get-CleanupScanFailureKind', 'Add-CleanupPrivateCoverage')) { . ([scriptblock]::Create($ast.Find({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $helperName }, $true).Extent.Text)) }
 if ($errors.Count) { throw 'Cleanup source did not parse.' }
 $definition = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-CleanupSummaryAllUsers' }, $true)
 . ([scriptblock]::Create($definition.Extent.Text))

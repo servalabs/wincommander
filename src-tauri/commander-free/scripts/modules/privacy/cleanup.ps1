@@ -282,7 +282,7 @@ function Get-ClipboardHistoryStatus {
             cloudClipboardDisabled   = $cloudDisabled
             historyItems             = @($history.items)
             historyReadStatus        = $history.status
-            partial                  = ($history.status -ne 'complete')
+            partial                  = ($history.status -notin @('complete', 'disabled'))
             coverage                 = if ($history.status -eq 'disabled') { 'disabled' } elseif ($history.status -ne 'complete') { 'partial' } else { 'complete' }
             coverageNote             = if ($history.status -eq 'disabled') { 'Windows does not expose previously stored clipboard items while history is turned off.' } else { '' }
             message                  = if ($history.status -eq 'disabled') { 'Clipboard history is turned off. Previously stored items could not be checked.' } elseif ($history.status -ne 'complete') { 'Clipboard history could not be read.' } else { '' }
@@ -3687,6 +3687,48 @@ function Get-CrashDumpList {
     @{ dumps = @($dumps.ToArray()); total = $dumps.Count; totalSizeMB = [math]::Round(($dumps | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2); partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some crash dump locations could not be checked.' } else { $null } }
 }
 
+function Test-CleanupSystemOwnedPath {
+    # Locations Windows keeps private to SYSTEM and service accounts. A standard
+    # account being denied here is the documented state, not a failed scan.
+    param([string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+    try { $full = [IO.Path]::GetFullPath($Path) } catch { return $false }
+    $roots = [Collections.Generic.List[string]]::new()
+    if ($env:SystemRoot) { $roots.Add($env:SystemRoot) }
+    foreach ($programData in @($env:ProgramData, $(if ($env:SystemDrive) { "$env:SystemDrive\ProgramData" }))) {
+        if ($programData) { $roots.Add((Join-Path $programData 'Microsoft')) }
+    }
+    foreach ($root in $roots) {
+        $prefix = $root.TrimEnd('\') + '\'
+        if ($full.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) { return $true }
+    }
+    return $false
+}
+
+function Get-CleanupScanFailureKind {
+    # skip    - the item vanished or is locked mid-scan; nothing is left to read.
+    # private - access denied on a system-owned location; a scope limit.
+    # failed  - anything else, including a denied location of the user's own.
+    param($ErrorRecord, [string]$Path = '')
+    $exception = if ($ErrorRecord -is [System.Management.Automation.ErrorRecord]) { $ErrorRecord.Exception } else { $ErrorRecord }
+    for ($current = $exception; $current; $current = $current.InnerException) {
+        if ($current -is [System.Management.Automation.ItemNotFoundException] -or $current -is [System.IO.DirectoryNotFoundException] -or $current -is [System.IO.FileNotFoundException]) { return 'skip' }
+        if ($current -is [UnauthorizedAccessException] -or $current -is [System.Security.SecurityException]) {
+            if (Test-CleanupSystemOwnedPath -Path $Path) { return 'private' }
+            return 'failed'
+        }
+        if ($current -is [System.IO.IOException] -and $current -isnot [System.IO.PathTooLongException]) { return 'skip' }
+    }
+    return 'failed'
+}
+
+function Add-CleanupPrivateCoverage {
+    param([hashtable]$Result, [bool]$Private)
+    if (-not $Private) { return }
+    $note = 'Windows keeps this location private to the system; it was not checked.'
+    $Result.coverage = 'limited'
+    $Result.coverageNote = if ($Result.coverageNote) { "$($Result.coverageNote) $note" } else { $note }
+}
 function Get-CleanupBoundedFileInventory {
     param([string[]]$Roots, [string[]]$Patterns, [int]$Depth = 5, [int]$MaxMilliseconds = 30000)
     $files = [Collections.Generic.List[object]]::new()
@@ -3723,7 +3765,7 @@ function Get-CleanupBoundedFileInventory {
             # A cache directory can disappear between listing its parent and reading it.
         } catch [System.IO.DirectoryNotFoundException] {
             # The directory no longer exists, so there is nothing left to scan.
-        } catch { $errors.Add($_.Exception.Message) }
+        } catch { if ((Get-CleanupScanFailureKind $_) -ne 'skip') { $errors.Add($_.Exception.Message) } }
     }
     @{ files = @($files.ToArray()); errors = @($errors.ToArray()); partial = $errors.Count -gt 0; skippedLinks = $skippedLinks }
 }
@@ -4405,10 +4447,10 @@ function Get-CleanupPackageCacheInventory {
                         $files.Add(@{ name = "${Label}: $name"; path = $_.FullName; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
                         $totalBytes += $_.Length
                     }
-                } catch { $partial = $true }
+                } catch { if ((Get-CleanupScanFailureKind $_ $cacheRoot) -eq 'failed') { $partial = $true } }
             }
         }
-    } catch { $partial = $true }
+    } catch { if ((Get-CleanupScanFailureKind $_ $packagesRoot) -eq 'failed') { $partial = $true } }
     @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some package cache locations could not be checked.' } else { $null } }
 }
 
@@ -4419,7 +4461,7 @@ function Get-SpotlightCacheInfo {
 function Get-FontCacheInfo {
     $files = [Collections.Generic.List[object]]::new()
     $totalBytes = [int64]0
-    $partial = $false
+    $partial = $false; $private = $false
     try {
         $root = Join-Path $env:WINDIR 'ServiceProfiles\LocalService\AppData\Local\FontCache'
         try { $null = Get-Item -LiteralPath $root -Force -ErrorAction Stop }
@@ -4428,8 +4470,10 @@ function Get-FontCacheInfo {
             $files.Add(@{ name = "Font cache: $($_.FullName.Substring($root.Length).TrimStart('\\'))"; path = $_.FullName; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
             $totalBytes += $_.Length
         }
-    } catch { $partial = $true }
-    @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some font cache locations could not be checked.' } else { $null } }
+    } catch { $kind = Get-CleanupScanFailureKind $_ $root; if ($kind -eq 'private') { $private = $true } elseif ($kind -eq 'failed') { $partial = $true } }
+    $scanResult = @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some font cache locations could not be checked.' } else { $null } }
+    Add-CleanupPrivateCoverage -Result $scanResult -Private $private
+    $scanResult
 }
 
 function Get-LegacyIconCacheInfo {
@@ -4467,7 +4511,7 @@ function Get-GameCapturesInfo {
                 Where-Object { $_.Name -like 'Microsoft.XboxGamingOverlay_*' -or $_.Name -like 'Microsoft.GamingApp_*' } |
                 ForEach-Object { $roots += Join-Path $_.FullName 'LocalState' }
         }
-    } catch { $partial = $true }
+    } catch { if ((Get-CleanupScanFailureKind $_ $packagesRoot) -eq 'failed') { $partial = $true } }
     foreach ($root in $roots) {
         try {
             try { $rootItem = Get-Item -LiteralPath $root -Force -ErrorAction Stop }
@@ -4477,7 +4521,7 @@ function Get-GameCapturesInfo {
                 $files.Add(@{ name = "Game capture: $($_.FullName.Substring($root.Length).TrimStart('\'))"; path = $_.FullName; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
                 $totalBytes += $_.Length
             }
-        } catch { $partial = $true }
+        } catch { if ((Get-CleanupScanFailureKind $_ $root) -eq 'failed') { $partial = $true } }
     }
     @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some game capture locations could not be checked.' } else { $null } }
 }
@@ -4510,13 +4554,15 @@ function Get-CleanupArtifactFiles {
 function Get-CleanupArtifactInventory {
     param([Parameter(Mandatory)] [array]$Sources, [Parameter(Mandatory)] [string]$CoverageNote)
     $files = [Collections.Generic.List[object]]::new()
-    $partial = $false
+    $partial = $false; $private = $false
     foreach ($source in $Sources) {
         try { Get-CleanupArtifactFiles -Sources @($source) -Collector $files }
-        catch { $partial = $true }
+        catch { $kind = Get-CleanupScanFailureKind $_ $source.path; if ($kind -eq 'private') { $private = $true } elseif ($kind -eq 'failed') { $partial = $true } }
     }
     $totalBytes = [int64](($files | ForEach-Object { [int64]($_.sizeKB * 1KB) } | Measure-Object -Sum).Sum)
-    @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); coverage = 'limited'; coverageNote = $CoverageNote; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some selected locations could not be checked.' } else { $null } }
+    $scanResult = @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); coverage = 'limited'; coverageNote = $CoverageNote; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some selected locations could not be checked.' } else { $null } }
+    Add-CleanupPrivateCoverage -Result $scanResult -Private $private
+    $scanResult
 }
 
 function Get-CommunicationCachesInfo {
@@ -4564,7 +4610,7 @@ function Get-GitActivityInfo {
     try {
         $files = @()
         $credentialVerified = $true
-        $configVerified = $true
+        $configVerified = $true; $gitMissing = $false
         try {
             if (-not $script:ScheduledCredentialFunctions) { throw 'Windows credential enumeration is unavailable.' }
             . ([scriptblock]::Create($script:ScheduledCredentialFunctions))
@@ -4575,7 +4621,7 @@ function Get-GitActivityInfo {
                 }
             }
         } catch { $credentialVerified = $false }
-        try {
+        if (-not (Get-Command -Name 'git.exe' -ErrorAction SilentlyContinue)) { $gitMissing = $true } else { try {
             # Git may read the XDG global configuration even when .gitconfig
             # is absent. Ask Git directly rather than inferring its sources
             # from one particular file path.
@@ -4588,11 +4634,11 @@ function Get-GitActivityInfo {
                     $files += @{ name = 'Global Git safe.directory'; value = [string]$directory; sizeKB = 0; modified = '' }
                 }
             }
-        } catch { $configVerified = $false }
+        } catch { $configVerified = $false } }
         # Credential enumeration does not include other applications' Vaults.
         $message = if (-not $credentialVerified -and -not $configVerified) { 'Git credential identities and configuration could not be checked.' } elseif (-not $credentialVerified) { 'Git credential identities could not be checked.' } elseif (-not $configVerified) { 'Git configuration could not be checked.' } else { $null }
         $partial = -not ($credentialVerified -and $configVerified)
-        @{ files = @($files); total = @($files).Count; totalSizeMB = 0; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; coverage = 'limited'; coverageNote = 'Checks Git-prefixed Windows credential identities and global safe.directory entries only; other credential stores and repository activity are not inspected.'; message = $message }
+        @{ files = @($files); total = @($files).Count; totalSizeMB = 0; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; coverage = 'limited'; coverageNote = 'Checks Git-prefixed Windows credential identities and global safe.directory entries only; other credential stores and repository activity are not inspected.' + $(if ($gitMissing) { ' Git is not installed, so its configuration was not checked.' }); message = $message }
     }
     catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
 }
@@ -4619,11 +4665,16 @@ function Get-SSHStateInfo {
                 # configuration, rather than a failed inventory. Other SSH
                 # agents are outside the scope of this check.
                 $service = if (-not $env:SSH_AUTH_SOCK) { Get-Service -Name 'ssh-agent' -ErrorAction SilentlyContinue } else { $null }
-                if ($service -and $service.Status -eq 'Stopped') {
+                if ($env:SSH_AUTH_SOCK) { $agentCoverage = 'A different SSH agent is configured through SSH_AUTH_SOCK; it was not checked.' }
+                elseif (-not $service) { $agentCoverage = 'The Windows SSH agent is not installed. Other SSH agents are not checked.' }
+                elseif ($service.Status -eq 'Stopped') {
                     $agentCoverage = 'The Windows SSH agent is stopped. Other SSH agents are not checked.'
                 } else { $agentVerified = $false }
             }
-        } catch { $agentVerified = $false }
+        } catch {
+            if ($_.Exception.Message -match 'agent tooling is unavailable') { $agentCoverage = 'Windows OpenSSH agent tooling is not installed. Other SSH agents are not checked.' }
+            else { $agentVerified = $false }
+        }
         $totalBytes = [int64](($files | ForEach-Object { [int64]($_.sizeKB * 1KB) } | Measure-Object -Sum).Sum)
         $complete = $agentVerified -and $hostsVerified
         @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); partial = (-not $complete); status = if ($complete) { 'complete' } else { 'partial' }; coverage = if ($agentCoverage) { 'limited' } else { $null }; coverageNote = $agentCoverage; message = if (-not $agentVerified -and -not $hostsVerified) { 'SSH agent state and known-hosts metadata could not be checked.' } elseif (-not $agentVerified) { 'SSH agent state could not be checked.' } elseif (-not $hostsVerified) { 'SSH known-hosts metadata could not be checked.' } else { $null } }
@@ -4665,7 +4716,7 @@ function Get-PasswordManagerCachesInfo {
         $files = [Collections.Generic.List[object]]::new(); $partial = $false
         foreach ($source in $sources) {
             try { Get-CleanupArtifactFiles -Sources @($source) -Collector $files }
-            catch { $partial = $true }
+            catch { if ((Get-CleanupScanFailureKind $_ $source.path) -eq 'failed') { $partial = $true } }
         }
         $totalBytes = [int64](($files | ForEach-Object { [int64]($_.sizeKB * 1KB) } | Measure-Object -Sum).Sum)
         @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); coverage = 'limited'; coverageNote = 'Checks selected 1Password, Bitwarden and LastPass cache locations only; other password managers and custom locations are not included.'; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some selected password-manager cache locations could not be checked.' } else { $null } }
@@ -4861,7 +4912,7 @@ function Get-NetBIOSCacheInfo {
 function Get-GeolocationCacheInfo {
     $files = [Collections.Generic.List[object]]::new()
     $totalBytes = [int64]0
-    $partial = $false
+    $partial = $false; $private = $false
     $lfSvc = 'C:\ProgramData\Microsoft\Windows\LfSvc'
     try {
         try { $root = Get-Item -LiteralPath $lfSvc -Force -ErrorAction Stop }
@@ -4873,7 +4924,7 @@ function Get-GeolocationCacheInfo {
                 $totalBytes += $_.Length
             }
         }
-    } catch { $partial = $true }
+    } catch { $kind = Get-CleanupScanFailureKind $_ $lfSvc; if ($kind -eq 'private') { $private = $true } elseif ($kind -eq 'failed') { $partial = $true } }
     $locationConsent = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location'
     try {
         try { $root = Get-Item -LiteralPath $locationConsent -ErrorAction Stop }
@@ -4897,7 +4948,9 @@ function Get-GeolocationCacheInfo {
             } catch { $partial = $true }
         }
     } catch { $partial = $true }
-    @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some geolocation sources could not be checked.' } else { $null } }
+    $scanResult = @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some geolocation sources could not be checked.' } else { $null } }
+    Add-CleanupPrivateCoverage -Result $scanResult -Private $private
+    $scanResult
 }
 
 function Get-VPNPhonebooksInfo {
@@ -4946,13 +4999,16 @@ function Get-CloudPlaceholdersInfo {
 
 function Get-BITSQueueInfo {
     $files = [Collections.Generic.List[object]]::new()
-    $partial = $false
+    $partial = $false; $bitsUnavailable = $false
     try {
         Get-BitsTransfer -AllUsers -ErrorAction Stop | ForEach-Object {
             $transfer = $_
             $files.Add(@{ name = "BITS job: $($transfer.DisplayName) ($($transfer.JobState))"; jobId = [string]$transfer.JobId; state = [string]$transfer.JobState; owner = [string]$transfer.OwnerAccount; bytesTransferred = $transfer.BytesTransferred; bytesTotal = $transfer.BytesTotal; sizeKB = 0; modified = '' })
         }
-    } catch { $partial = $true }
+    } catch {
+        # A PC without the BITS module or service has no queue to scan.
+        if ($_.Exception -is [System.Management.Automation.CommandNotFoundException] -or -not (Get-Command -Name 'Get-BitsTransfer' -ErrorAction SilentlyContinue) -or -not (Get-Service -Name 'BITS' -ErrorAction SilentlyContinue)) { $bitsUnavailable = $true } else { $partial = $true }
+    }
     $downloader = Join-Path $env:ProgramData 'Microsoft\\Network\\Downloader'
     try {
         try { $root = Get-Item -LiteralPath $downloader -Force -ErrorAction Stop }
@@ -4965,7 +5021,8 @@ function Get-BITSQueueInfo {
         }
     } catch { $partial = $true }
     $totalBytes = [int64](($files | ForEach-Object { [int64]($_.sizeKB * 1KB) } | Measure-Object -Sum).Sum)
-    @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; message = if ($partial) { 'Some BITS queue sources could not be checked.' } else { $null } }
+    $notApplicable = $bitsUnavailable -and -not $partial -and $files.Count -eq 0
+    @{ files = @($files.ToArray()); total = $files.Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); partial = $partial; status = if ($partial) { 'partial' } elseif ($notApplicable) { 'not_applicable' } else { 'complete' }; coverage = if ($bitsUnavailable -and -not $partial -and -not $notApplicable) { 'limited' } else { $null }; coverageNote = if ($bitsUnavailable -and -not $partial -and -not $notApplicable) { 'The Background Intelligent Transfer Service is not available, so its job list was not checked.' } else { $null }; message = if ($partial) { 'Some BITS queue sources could not be checked.' } elseif ($notApplicable) { 'The Background Intelligent Transfer Service is not available on this PC.' } else { $null } }
 }
 
 function Get-CellularHistoryInfo {
@@ -5030,7 +5087,7 @@ function Get-CellularHistoryInfo {
 function Get-CleanupCacheFileInventory {
     param([string]$Root, [string[]]$Patterns, [string]$ExtraDirectory = '')
     $files = [Collections.Generic.List[object]]::new()
-    $partial = $false
+    $partial = $false; $private = $false
     try {
         try { $rootItem = Get-Item -LiteralPath $Root -Force -ErrorAction Stop }
         catch [System.Management.Automation.ItemNotFoundException] { $rootItem = $null }
@@ -5041,7 +5098,7 @@ function Get-CleanupCacheFileInventory {
                     Get-ChildItem -LiteralPath $Root -File -Filter $pattern -Force -ErrorAction Stop | ForEach-Object {
                         $files.Add(@{ name=$_.Name; path=$_.FullName; sizeKB=[math]::Round($_.Length / 1KB, 1); modified=$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
                     }
-                } catch { $partial = $true }
+                } catch { $kind = Get-CleanupScanFailureKind $_ $Root; if ($kind -eq 'private') { $private = $true } elseif ($kind -eq 'failed') { $partial = $true } }
             }
             if ($ExtraDirectory) {
                 try {
@@ -5054,12 +5111,14 @@ function Get-CleanupCacheFileInventory {
                             $files.Add(@{ source=$ExtraDirectory; name=$_.Name; path=$_.FullName; sizeKB=[math]::Round($_.Length / 1KB, 1); modified=$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
                         }
                     }
-                } catch { $partial = $true }
+                } catch { $kind = Get-CleanupScanFailureKind $_ $extra; if ($kind -eq 'private') { $private = $true } elseif ($kind -eq 'failed') { $partial = $true } }
             }
         }
-    } catch { $partial = $true }
+    } catch { $kind = Get-CleanupScanFailureKind $_ $Root; if ($kind -eq 'private') { $private = $true } elseif ($kind -eq 'failed') { $partial = $true } }
     $size = ($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum
-    @{ files=@($files.ToArray()); total=$files.Count; totalSizeMB=[math]::Round($size / 1KB, 2); partial=$partial; status=if ($partial) { 'partial' } else { 'complete' }; message=if ($partial) { 'Some cache locations could not be checked.' } else { $null } }
+    $scanResult = @{ files=@($files.ToArray()); total=$files.Count; totalSizeMB=[math]::Round($size / 1KB, 2); partial=$partial; status=if ($partial) { 'partial' } else { 'complete' }; message=if ($partial) { 'Some cache locations could not be checked.' } else { $null } }
+    Add-CleanupPrivateCoverage -Result $scanResult -Private $private
+    $scanResult
 }
 
 function Get-WebCacheInfo {
@@ -5082,7 +5141,7 @@ function Get-BranchCacheInfo {
         @{ label = 'PeerDistPub'; path = "$env:SystemRoot\ServiceProfiles\NetworkService\AppData\Local\PeerDistPub" }
     )
     $files = [Collections.Generic.List[object]]::new()
-    $partial = $false
+    $partial = $false; $private = $false
     foreach ($src in $sources) {
         try {
             try { $root = Get-Item -LiteralPath $src.path -Force -ErrorAction Stop }
@@ -5091,10 +5150,12 @@ function Get-BranchCacheInfo {
             Get-ChildItem -LiteralPath $src.path -Recurse -File -Force -ErrorAction Stop | ForEach-Object {
                 $files.Add(@{ source=$src.label; name=$_.Name; path=$_.FullName; sizeKB=[math]::Round($_.Length / 1KB, 1); modified=$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
             }
-        } catch { $partial = $true }
+        } catch { $kind = Get-CleanupScanFailureKind $_ $src.path; if ($kind -eq 'private') { $private = $true } elseif ($kind -eq 'failed') { $partial = $true } }
     }
     $size = ($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum
-    @{ files=@($files.ToArray()); total=$files.Count; totalSizeMB=[math]::Round($size / 1KB, 2); partial=$partial; status=if ($partial) { 'partial' } else { 'complete' }; message=if ($partial) { 'Some BranchCache locations could not be checked.' } else { $null } }
+    $scanResult = @{ files=@($files.ToArray()); total=$files.Count; totalSizeMB=[math]::Round($size / 1KB, 2); partial=$partial; status=if ($partial) { 'partial' } else { 'complete' }; message=if ($partial) { 'Some BranchCache locations could not be checked.' } else { $null } }
+    Add-CleanupPrivateCoverage -Result $scanResult -Private $private
+    $scanResult
 }
 
 # --- Phase E: system diagnostic / servicing / defender-history viewers (read-only) ---
@@ -5103,7 +5164,7 @@ function Get-EventTranscriptInfo {
     # Returns the Diagnostic Data Viewer's EventTranscript.db + its rotating
     # ESE transaction logs (*.jrs / *.rbs). System-wide (ProgramData), not per-user.
     $files = [Collections.Generic.List[object]]::new()
-    $partial = $false
+    $partial = $false; $private = $false
     foreach ($src in @(
         @{ label = 'EventTranscript'; root = (Join-Path $env:ProgramData 'Microsoft\Diagnosis\EventTranscript'); patterns = @('EventTranscript.db', '*.jrs', '*.rbs'); recursive = $false },
         @{ label = 'ETLLogs'; root = (Join-Path $env:ProgramData 'Microsoft\Diagnosis\ETLLogs'); patterns = @('*.etl'); recursive = $true }
@@ -5117,12 +5178,14 @@ function Get-EventTranscriptInfo {
                     Get-ChildItem -LiteralPath $src.root -Filter $pattern -Recurse:$src.recursive -File -Force -ErrorAction Stop | ForEach-Object {
                         $files.Add(@{ source=$src.label; name=$_.Name; path=$_.FullName; sizeKB=[math]::Round($_.Length / 1KB, 1); modified=$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
                     }
-                } catch { $partial = $true }
+                } catch { $kind = Get-CleanupScanFailureKind $_ $src.root; if ($kind -eq 'private') { $private = $true } elseif ($kind -eq 'failed') { $partial = $true } }
             }
-        } catch { $partial = $true }
+        } catch { $kind = Get-CleanupScanFailureKind $_ $src.root; if ($kind -eq 'private') { $private = $true } elseif ($kind -eq 'failed') { $partial = $true } }
     }
     $size = ($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum
-    @{ files=@($files.ToArray()); total=$files.Count; totalSizeMB=[math]::Round($size / 1KB, 2); partial=$partial; status=if ($partial) { 'partial' } else { 'complete' }; message=if ($partial) { 'Some diagnostics locations could not be checked.' } else { $null } }
+    $scanResult = @{ files=@($files.ToArray()); total=$files.Count; totalSizeMB=[math]::Round($size / 1KB, 2); partial=$partial; status=if ($partial) { 'partial' } else { 'complete' }; message=if ($partial) { 'Some diagnostics locations could not be checked.' } else { $null } }
+    Add-CleanupPrivateCoverage -Result $scanResult -Private $private
+    $scanResult
 }
 
 function Get-ActivitiesTimelineInfo {
@@ -5141,7 +5204,7 @@ function Get-ActivitiesTimelineInfo {
                 $files.Add(@{ source='ConnectedDevicesPlatform'; name=$_.Name; path=$_.FullName; sizeKB=[math]::Round($_.Length / 1KB, 1); modified=$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
             }
         }
-    } catch { $partial = $true }
+    } catch { if ((Get-CleanupScanFailureKind $_ $cdpDir) -eq 'failed') { $partial = $true } }
     $size = ($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum
     @{ files=@($files.ToArray()); total=$files.Count; totalSizeMB=[math]::Round($size / 1KB, 2); partial=$partial; status=if ($partial) { 'partial' } else { 'complete' }; message=if ($partial) { 'Some activity locations could not be checked.' } else { $null } }
 }
@@ -5157,14 +5220,16 @@ function Get-RdpBitmapCacheInfo {
 function Get-CleanupMultiSourceFileInventory {
     param([object[]]$Sources)
     $files = [Collections.Generic.List[object]]::new()
-    $partial = $false
+    $partial = $false; $private = $false
     foreach ($source in $Sources) {
         $result = Get-CleanupCacheFileInventory -Root $source.path -Patterns $source.patterns
-        if ($result.partial) { $partial = $true }
+        if ($result.partial) { $partial = $true }; if ($result.coverage -eq 'limited') { $private = $true }
         foreach ($file in $result.files) { $file.source = $source.label; $files.Add($file) }
     }
     $size = ($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum
-    @{ files=@($files.ToArray()); total=$files.Count; totalSizeMB=[math]::Round($size / 1KB, 2); partial=$partial; status=if ($partial) { 'partial' } else { 'complete' }; message=if ($partial) { 'Some log locations could not be checked.' } else { $null } }
+    $scanResult = @{ files=@($files.ToArray()); total=$files.Count; totalSizeMB=[math]::Round($size / 1KB, 2); partial=$partial; status=if ($partial) { 'partial' } else { 'complete' }; message=if ($partial) { 'Some log locations could not be checked.' } else { $null } }
+    Add-CleanupPrivateCoverage -Result $scanResult -Private $private
+    $scanResult
 }
 
 function Get-ServicingLogsInfo {
@@ -5194,7 +5259,7 @@ function Get-DefenderHistoryInfo {
     $history = Get-CleanupRecursiveFileInventory -Root (Join-Path $env:ProgramData 'Microsoft\Windows Defender\Scans\History\Service') -Source 'ScanHistory'
     $files = [Collections.Generic.List[object]]::new()
     foreach ($file in $history.files) { $files.Add($file) }
-    $partial = [bool]$history.partial
+    $partial = [bool]$history.partial; $private = ($history.coverage -eq 'limited')
     $mpLog = Join-Path $env:ProgramData 'Microsoft\Windows Defender\Support\MpCmdRun.log'
     try {
         try { $f = Get-Item -LiteralPath $mpLog -Force -ErrorAction Stop }
@@ -5203,9 +5268,11 @@ function Get-DefenderHistoryInfo {
             if ($f.PSIsContainer) { throw 'The Defender support log is not a file.' }
             $files.Add(@{ source='Support'; name=$f.Name; path=$f.FullName; sizeKB=[math]::Round($f.Length / 1KB, 1); modified=$f.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
         }
-    } catch { $partial = $true }
+    } catch { $kind = Get-CleanupScanFailureKind $_ $mpLog; if ($kind -eq 'private') { $private = $true } elseif ($kind -eq 'failed') { $partial = $true } }
     $size = ($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum
-    @{ files=@($files.ToArray()); total=$files.Count; totalSizeMB=[math]::Round($size / 1KB, 2); partial=$partial; status=if ($partial) { 'partial' } else { 'complete' }; message=if ($partial) { 'Some protection history locations could not be checked.' } else { $null } }
+    $scanResult = @{ files=@($files.ToArray()); total=$files.Count; totalSizeMB=[math]::Round($size / 1KB, 2); partial=$partial; status=if ($partial) { 'partial' } else { 'complete' }; message=if ($partial) { 'Some protection history locations could not be checked.' } else { $null } }
+    Add-CleanupPrivateCoverage -Result $scanResult -Private $private
+    $scanResult
 }
 
 # --- Additional system/app usage viewers (read-only, no admin required) ---
@@ -5314,7 +5381,7 @@ function Get-EmbeddedWebCacheInfo {
                 try { $children = @(Get-ChildItem -LiteralPath $current.path -Force -ErrorAction Stop) }
                 catch [System.Management.Automation.ItemNotFoundException] { continue }
                 catch [System.IO.DirectoryNotFoundException] { continue }
-                catch { $partial = $true; continue }
+                catch { if ((Get-CleanupScanFailureKind $_ $current.path) -eq 'failed') { $partial = $true }; continue }
                 foreach ($directory in $children) {
                     if ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint) { $skippedLinks++; continue }
                     if (-not $directory.PSIsContainer) { continue }
@@ -5331,7 +5398,7 @@ function Get-EmbeddedWebCacheInfo {
                         try { $cacheChildren = @(Get-ChildItem -LiteralPath $cacheDir.path -Force -ErrorAction Stop) }
                         catch [System.Management.Automation.ItemNotFoundException] { continue }
                         catch [System.IO.DirectoryNotFoundException] { continue }
-                        catch { $partial = $true; $sizeIncomplete = $true; continue }
+                        catch { if ((Get-CleanupScanFailureKind $_ $cacheDir.path) -eq 'failed') { $partial = $true; $sizeIncomplete = $true }; continue }
                         foreach ($child in $cacheChildren) {
                             if ($child.Attributes -band [IO.FileAttributes]::ReparsePoint) { $skippedLinks++; continue }
                             if ($child.PSIsContainer) {
@@ -5352,7 +5419,7 @@ function Get-EmbeddedWebCacheInfo {
 function Get-CleanupRecursiveFileInventory {
     param([string]$Root, [string]$Source)
     $files = [Collections.Generic.List[object]]::new()
-    $partial = $false
+    $partial = $false; $private = $false
     try {
         try { $rootItem = Get-Item -LiteralPath $Root -Force -ErrorAction Stop }
         catch [System.Management.Automation.ItemNotFoundException] { $rootItem = $null }
@@ -5362,9 +5429,11 @@ function Get-CleanupRecursiveFileInventory {
                 $files.Add(@{ source=$Source; name=$_.Name; path=$_.FullName; sizeKB=[math]::Round($_.Length / 1KB, 1); modified=$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
             }
         }
-    } catch { $partial = $true }
+    } catch { $kind = Get-CleanupScanFailureKind $_ $Root; if ($kind -eq 'private') { $private = $true } elseif ($kind -eq 'failed') { $partial = $true } }
     $size = ($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum
-    @{ files=@($files.ToArray()); total=$files.Count; totalSizeMB=[math]::Round($size / 1KB, 2); partial=$partial; status=if ($partial) { 'partial' } else { 'complete' }; message=if ($partial) { 'Some locations could not be checked.' } else { $null } }
+    $scanResult = @{ files=@($files.ToArray()); total=$files.Count; totalSizeMB=[math]::Round($size / 1KB, 2); partial=$partial; status=if ($partial) { 'partial' } else { 'complete' }; message=if ($partial) { 'Some locations could not be checked.' } else { $null } }
+    Add-CleanupPrivateCoverage -Result $scanResult -Private $private
+    $scanResult
 }
 
 function Get-P2PUpdateCacheInfo {
@@ -7049,7 +7118,7 @@ function Get-CleanupSummaryAllUsers {
         $previewMax = if ($FullDetail) { [int]::MaxValue } else { 500 }
         $categories = @()
         foreach ($cat in $requestedCats) {
-            $count = 0; $items = @(); $records = @(); $r = $null; $scanError = $null; $categoryPartial = $false; $extraScanFacts = @{}; $cacheUnavailable = $false; $dockerUnavailable = $false; $credentialUnavailable = $false
+            $count = 0; $items = @(); $records = @(); $r = $null; $scanError = $null; $categoryPartial = $false; $otherAccountScope = $false; $limitedScope = $false; $vmUnavailable = $false; $extraScanFacts = @{}; $cacheUnavailable = $false; $dockerUnavailable = $false; $credentialUnavailable = $false
             try {
                 if (-not $hiveAvailable -and $cat -in @('rdpHistory','shellBags','execCache','ntUserTraces','netDrives','officeMru','explorerSearchHistory','wslData')) { throw $hiveError }
 
@@ -7238,7 +7307,7 @@ function Get-CleanupSummaryAllUsers {
                         # Inspect only file metadata in fixed profile locations.
                         # File counts are not credential counts; contents and
                         # another user's credential provider are never opened.
-                        $categoryPartial = $true
+                        $otherAccountScope = $true
                         $parent = Get-Item -LiteralPath (Split-Path -Parent $prof.FullName) -Force -ErrorAction Stop
                         $root = Get-Item -LiteralPath $prof.FullName -Force -ErrorAction Stop
                         foreach ($ancestor in @($parent, $root)) {
@@ -7280,14 +7349,14 @@ function Get-CleanupSummaryAllUsers {
                         }
                     }
                     'virtualMachineArtifacts' {
-                        $categoryPartial = $true
+                        $otherAccountScope = $true
                         $inventory = Get-CleanupOtherUserVmInventory -ProfilePath $prof.FullName -HiveRoot $hiveRoot -HiveAvailable $hiveAvailable -PreviewLimit $previewMax
                         $count = $inventory.total; $records = @($inventory.records); $items = @($inventory.items); $vmUnavailable = [bool]$inventory.unavailable
                     }
                     'dockerDesktopData' {
                         # This is read-only metadata for selected profile defaults.
                         # System-wide and custom disks and engine state are excluded.
-                        $categoryPartial = $true
+                        $otherAccountScope = $true
                         $parent = Get-Item -LiteralPath (Split-Path -Parent $prof.FullName) -Force -ErrorAction Stop
                         $root = Get-Item -LiteralPath $prof.FullName -Force -ErrorAction Stop
                         foreach ($ancestor in @($parent, $root)) {
@@ -7355,7 +7424,7 @@ function Get-CleanupSummaryAllUsers {
                     'passwordManagerCaches' {
                         # Read only fixed cache locations. Other vendors and
                         # custom paths remain outside this partial inventory.
-                        $categoryPartial = $true
+                        $otherAccountScope = $true
                         $parent = Get-Item -LiteralPath (Split-Path -Parent $prof.FullName) -Force -ErrorAction Stop
                         $root = Get-Item -LiteralPath $prof.FullName -Force -ErrorAction Stop
                         foreach ($ancestor in @($parent, $root)) {
@@ -7407,7 +7476,7 @@ function Get-CleanupSummaryAllUsers {
                     'sshState' {
                         # The other account's agent is unavailable in this
                         # session. Inspect known_hosts metadata only.
-                        $categoryPartial = $true
+                        $otherAccountScope = $true
                         $parent = Get-Item -LiteralPath (Split-Path -Parent $prof.FullName) -Force -ErrorAction Stop
                         if (-not $parent.PSIsContainer -or ($parent.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'The Windows users folder cannot be checked safely.' }
                         $root = Get-Item -LiteralPath $prof.FullName -Force -ErrorAction Stop
@@ -7888,6 +7957,12 @@ function Get-CleanupSummaryAllUsers {
                 catch { $scanError = $_.Exception.Message; $count = -1; $items = @(); $records = @() }
             }
             $categoryRecord = New-CleanupSummaryCategoryRecord -Category $cat -Count $count -Items $items -Records $records -ScanError $scanError -previewMax $previewMax
+            # Other-account scans only inspect fixed selected locations. Reading all of them is a
+            # scope limit; only a location that could not be read makes the category incomplete.
+            if ($otherAccountScope -and -not $scanError -and -not $categoryPartial) {
+                $scopeUnreadable = switch ($cat) { 'credentialManager' { $credentialUnavailable } 'virtualMachineArtifacts' { $vmUnavailable } 'dockerDesktopData' { $dockerUnavailable } 'passwordManagerCaches' { $cacheUnavailable } default { $false } }
+                if ($scopeUnreadable) { $categoryPartial = $true } else { $limitedScope = $true }
+            }
             if ($categoryPartial -and -not $scanError) {
                 $categoryRecord.partial = $true; $categoryRecord.status = 'partial'
                 $categoryRecord.message = 'Some sources could not be checked.'
@@ -7897,6 +7972,16 @@ function Get-CleanupSummaryAllUsers {
                 if ($cat -eq 'dockerDesktopData' -and -not $isCurrentUser) { $categoryRecord.message = if ($dockerUnavailable) { 'Some default Docker locations could not be checked; custom locations and other engines were not inspected.' } else { 'Only selected profile Docker defaults were checked; custom locations and other engines were not inspected.' }; $categoryRecord.coverage = 'Selected profile defaults only' }
                 if ($cat -eq 'credentialManager' -and -not $isCurrentUser) { $categoryRecord.message = if ($credentialUnavailable) { 'Some credential storage locations could not be checked. Credential entries and names were not inspected.' } else { 'Only selected credential storage file metadata was checked. Credential entries and names were not inspected.' }; $categoryRecord.coverage = 'Credential storage file metadata only' }
                 if ($cat -eq 'passwordManagerCaches' -and -not $isCurrentUser) { $categoryRecord.message = if ($cacheUnavailable) { 'Some selected cache locations could not be checked; other locations are not included.' } else { 'Only selected password-manager cache locations were checked; other locations may not be included.' }; $categoryRecord.coverage = 'Selected locations only' }
+            }
+            if ($limitedScope -and -not $scanError) {
+                $categoryRecord.coverage = 'limited'
+                $categoryRecord.coverageNote = switch ($cat) {
+                    'sshState' { 'SSH agent state cannot be checked for another account.' }
+                    'virtualMachineArtifacts' { 'Only selected profile VM defaults and available recent registrations were checked; relocated machines, host logs and provider-managed data were not inspected.' }
+                    'dockerDesktopData' { 'Only selected profile Docker defaults were checked; custom locations and other engines were not inspected.' }
+                    'credentialManager' { 'Only selected credential storage file metadata was checked. Credential entries and names were not inspected.' }
+                    'passwordManagerCaches' { 'Only selected password-manager cache locations were checked; other locations may not be included.' }
+                }
             }
             if ($delegated -and $r -and -not $scanError) {
                 if ($r.coverage -is [string] -and $r.coverage.Trim()) { $categoryRecord.coverage = $r.coverage }

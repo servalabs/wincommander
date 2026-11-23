@@ -2,6 +2,7 @@ $ErrorActionPreference = 'Stop'
 $source = Join-Path $PSScriptRoot '..\..\src-tauri\commander-free\scripts\modules\privacy\cleanup.ps1'
 $tokens = $null; $errors = $null
 $ast = [Management.Automation.Language.Parser]::ParseFile((Resolve-Path $source).Path, [ref]$tokens, [ref]$errors)
+foreach ($helperName in @('Test-CleanupSystemOwnedPath', 'Get-CleanupScanFailureKind', 'Add-CleanupPrivateCoverage')) { . ([scriptblock]::Create($ast.Find({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $helperName }, $true).Extent.Text)) }
 if ($errors.Count) { throw 'Cleanup module parse failed.' }
 $definition = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-EventTranscriptInfo' }, $true)
 . ([scriptblock]::Create($definition.Extent.Text))
@@ -21,9 +22,9 @@ function Get-ChildItem {
 $script:scenario = 'empty'; $result = Get-EventTranscriptInfo
 if ($result.partial -or $result.total -ne 0) { throw 'Missing directories were not handled.' }
 $script:scenario = 'denied'; $result = Get-EventTranscriptInfo
-if (-not $result.partial -or $result.total -ne 0) { throw 'Denied directories were reported as complete.' }
+if ($result.partial -or $result.coverage -ne 'limited' -or $result.total -ne 0) { throw 'Denied directories were reported as complete.' }
 $script:scenario = 'partial'; $result = Get-EventTranscriptInfo
-if (-not $result.partial -or $result.total -ne 2 -or -not $result.files[0].path -or -not $result.files[1].path) { throw 'Partial observations were lost.' }
+if ($result.partial -or $result.coverage -ne 'limited' -or $result.total -ne 2 -or -not $result.files[0].path -or -not $result.files[1].path) { throw 'Partial observations were lost.' }
 $script:scenario = 'complete'; $result = Get-EventTranscriptInfo
 if ($result.partial -or $result.total -ne 2) { throw 'Complete inventory was not returned.' }
 Write-Output 'Passed: diagnostic scan retains paths and partial observations.'

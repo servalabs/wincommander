@@ -44,11 +44,11 @@ if ($category.error -or -not $category.partial -or $category.count -ne 1 -or @($
 if ($script:enumerated -contains "$fixtureStore\redirect") { throw 'Redirected storage was traversed.' }
 $script:fixtureMode = 'large'
 $category = (Get-CleanupSummaryAllUsers -CategoryIds 'credentialManager' -TargetUsers $fixtureSid).users[0].categories[0]
-if ($category.error -or -not $category.partial -or $category.count -ne 501 -or @($category.records).Count -ne 500 -or -not $category.truncated) { throw 'Bounded storage metadata preview was inaccurate.' }
+if ($category.error -or $category.partial -or $category.coverage -ne 'limited' -or $category.count -ne 501 -or @($category.records).Count -ne 500 -or -not $category.truncated) { throw 'Bounded storage metadata preview was inaccurate.' }
 foreach ($mode in @('missing','denied','link')) {
     $script:fixtureMode = $mode; $script:enumerated = @()
     $category = (Get-CleanupSummaryAllUsers -CategoryIds 'credentialManager' -TargetUsers $fixtureSid).users[0].categories[0]
-    if ($category.error -or -not $category.partial -or $category.count -ne 0 -or $script:enumerated.Count -ne 0) { throw "Unsafe or inaccurate $mode result." }
+    if ($category.error -or [bool]$category.partial -ne ($mode -ne 'missing') -or ($mode -eq 'missing' -and $category.coverage -ne 'limited') -or $category.count -ne 0 -or $script:enumerated.Count -ne 0) { throw "Unsafe or inaccurate $mode result." }
     if ($mode -ne 'missing' -and $category.message -notmatch 'could not be checked') { throw "Unavailable $mode source was not reported." }
 }
 Write-Output 'Passed: selected-account credential storage metadata is partial; credential providers and redirected paths are not accessed.'

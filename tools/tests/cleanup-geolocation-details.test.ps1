@@ -2,6 +2,7 @@ $ErrorActionPreference = 'Stop'
 $source = Join-Path $PSScriptRoot '..\..\src-tauri\commander-free\scripts\modules\privacy\cleanup.ps1'
 $tokens = $null; $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $source).Path, [ref]$tokens, [ref]$errors)
+foreach ($helperName in @('Test-CleanupSystemOwnedPath', 'Get-CleanupScanFailureKind', 'Add-CleanupPrivateCoverage')) { . ([scriptblock]::Create($ast.Find({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $helperName }, $true).Extent.Text)) }
 if ($errors.Count) { throw 'Could not parse cleanup module.' }
 $definition = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-GeolocationCacheInfo' }, $true)
 . ([scriptblock]::Create($definition.Extent.Text))
@@ -30,7 +31,7 @@ if ($result.partial -or $result.total -ne 3 -or @($result.files | Where-Object {
 $usage = @($result.files | Where-Object { $_['values'] })
 if ($usage.Count -ne 1 -or $usage[0]['values']['Value'].value -ne 'Allow' -or $usage[0]['values']['LastUsedTimeStop'].value -ne 42) { throw 'Location usage values were not preserved.' }
 $script:mode = 'denied'; $result = Get-GeolocationCacheInfo
-if (-not $result.partial -or $result.total -ne 3) { throw 'An inaccessible cache must retain consent details and report incomplete.' }
+if ($result.partial -or $result.coverage -ne 'limited' -or $result.total -ne 3) { throw 'An inaccessible cache must retain consent details and report incomplete.' }
 $script:mode = 'missing'; $result = Get-GeolocationCacheInfo
 if ($result.partial -or $result.total -ne 0) { throw 'Missing locations should report an empty scan.' }
 Write-Output 'Passed: geolocation details and partial source handling.'

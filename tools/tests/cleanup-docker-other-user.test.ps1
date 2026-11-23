@@ -48,11 +48,11 @@ if (@($category.records | Where-Object { $_.path -eq "$fixtureRoot\AppData\Local
 if ($script:enumerated -contains "$dockerRoot\redirect") { throw 'Redirected Docker child was traversed.' }
 $script:mode = 'large'
 $category = (Get-CleanupSummaryAllUsers -CategoryIds 'dockerDesktopData' -TargetUsers $fixtureSid).users[0].categories[0]
-if ($category.error -or -not $category.partial -or $category.count -ne 501 -or @($category.records).Count -ne 500 -or -not $category.truncated) { throw 'A bounded Docker preview did not retain its inventory count and truncation marker.' }
+if ($category.error -or $category.partial -or $category.coverage -ne 'limited' -or $category.count -ne 501 -or @($category.records).Count -ne 500 -or -not $category.truncated) { throw 'A bounded Docker preview did not retain its inventory count and truncation marker.' }
 foreach ($mode in @('missing','denied','link')) {
     $script:mode = $mode; $script:enumerated = @()
     $category = (Get-CleanupSummaryAllUsers -CategoryIds 'dockerDesktopData' -TargetUsers $fixtureSid).users[0].categories[0]
-    if ($category.error -or -not $category.partial -or $category.count -ne 0 -or $script:enumerated.Count -ne 0) { throw "Unsafe or inaccurate $mode Docker result." }
+    if ($category.error -or [bool]$category.partial -ne ($mode -ne 'missing') -or ($mode -eq 'missing' -and $category.coverage -ne 'limited') -or $category.count -ne 0 -or $script:enumerated.Count -ne 0) { throw "Unsafe or inaccurate $mode Docker result." }
     if ($mode -ne 'missing' -and $category.message -notmatch 'could not be checked') { throw "Unavailable $mode source was not reported." }
 }
 Write-Output 'Passed: selected-account Docker metadata remains partial and redirected or inaccessible folders are not traversed.'

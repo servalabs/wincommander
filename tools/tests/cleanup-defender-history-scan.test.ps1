@@ -2,6 +2,7 @@ $ErrorActionPreference = 'Stop'
 $source = Join-Path $PSScriptRoot '..\..\src-tauri\commander-free\scripts\modules\privacy\cleanup.ps1'
 $tokens = $null; $errors = $null
 $ast = [Management.Automation.Language.Parser]::ParseFile((Resolve-Path $source).Path, [ref]$tokens, [ref]$errors)
+foreach ($helperName in @('Test-CleanupSystemOwnedPath', 'Get-CleanupScanFailureKind', 'Add-CleanupPrivateCoverage')) { . ([scriptblock]::Create($ast.Find({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $helperName }, $true).Extent.Text)) }
 if ($errors.Count) { throw 'Cleanup module parse failed.' }
 foreach ($name in @('Get-CleanupRecursiveFileInventory', 'Get-DefenderHistoryInfo')) {
     $definition = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
@@ -27,7 +28,7 @@ if ($result.partial -or $result.total -ne 0) { throw 'Missing sources should be 
 $script:scenario='complete'; $result=Get-DefenderHistoryInfo
 if ($result.partial -or $result.total -ne 2 -or @($result.files | Where-Object { -not $_.path }).Count) { throw 'Complete records must retain both paths.' }
 $script:scenario='partial'; $result=Get-DefenderHistoryInfo
-if (-not $result.partial -or $result.total -ne 2) { throw 'Partial enumeration must retain records.' }
+if ($result.partial -or $result.coverage -ne 'limited' -or $result.total -ne 2) { throw 'Partial enumeration must retain records.' }
 $script:scenario='deniedLog'; $result=Get-DefenderHistoryInfo
-if (-not $result.partial -or $result.total -ne 1) { throw 'Denied log must retain scan history.' }
+if ($result.partial -or $result.coverage -ne 'limited' -or $result.total -ne 1) { throw 'Denied log must retain scan history.' }
 Write-Output 'Passed: protection history retains records and reports incomplete sources.'

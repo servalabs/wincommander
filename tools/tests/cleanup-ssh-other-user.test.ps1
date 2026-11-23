@@ -28,10 +28,10 @@ function Get-Item {
 }
 $result = Get-CleanupSummaryAllUsers -CategoryIds 'sshState' -TargetUsers $fixtureSid
 $category = @($result.users)[0].categories[0]
-if ($category.error -or -not $category.partial -or $category.count -ne 1 -or @($category.records).Count -ne 1 -or $category.records[0].path -ne "$fixtureRoot\.ssh\known_hosts" -or $category.message -notmatch 'agent') { throw 'SSH observations or partial agent coverage were lost.' }
+if ($category.error -or $category.partial -or $category.coverage -ne 'limited' -or $category.count -ne 1 -or @($category.records).Count -ne 1 -or $category.records[0].path -ne "$fixtureRoot\.ssh\known_hosts" -or $category.coverageNote -notmatch 'agent') { throw 'SSH observations or partial agent coverage were lost.' }
 $script:fixtureMode = 'absent'
 $category = (Get-CleanupSummaryAllUsers -CategoryIds 'sshState' -TargetUsers $fixtureSid).users[0].categories[0]
-if ($category.error -or -not $category.partial -or $category.count -ne 0) { throw 'Absent known_hosts must remain a partial scan.' }
+if ($category.error -or $category.partial -or $category.coverage -ne 'limited' -or $category.count -ne 0) { throw 'Absent known_hosts is a normal state and must report limited scope, not a partial scan.' }
 $script:fixtureMode = 'link'
 $category = (Get-CleanupSummaryAllUsers -CategoryIds 'sshState' -TargetUsers $fixtureSid).users[0].categories[0]
 if (-not $category.error -or $category.count -ne -1) { throw 'A redirected SSH folder must fail closed.' }
