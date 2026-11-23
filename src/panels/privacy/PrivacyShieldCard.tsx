@@ -703,14 +703,28 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
             className="shield-primary-btn physical-shield-header-btn"
         />
     ) : (
-        <Button
-            text={shieldWaiting ? "Waiting for Shield" : privacyShieldRunning ? (isAdvanced ? "Stop Shield" : "Turn Off") : (isAdvanced ? "Activate Shield" : "Turn On")}
-            intent={privacyShieldRunning ? "danger" : "primary"}
-            onClick={handleToggle}
-            disabled={fleetShieldSessionLocked || localFleetControl.startLocked || operationPending || shieldWaiting || (!privacyShieldRunning && cameraAvailable === false)}
-            loading={localLoading}
-            className="shield-primary-btn physical-shield-header-btn"
-        />
+        <div className="flex items-center gap-2">
+            {privacyShieldRunning !== true && (
+                <Tooltip content="Recheck camera">
+                    <Button
+                        icon="refresh"
+                        minimal
+                        aria-label="Recheck camera"
+                        title="Recheck camera"
+                        onClick={() => void checkStatus(true)}
+                        className="physical-shield-recheck-btn"
+                    />
+                </Tooltip>
+            )}
+            <Button
+                text={shieldWaiting ? "Waiting for Shield" : privacyShieldRunning ? (isAdvanced ? "Stop Shield" : "Turn Off") : (isAdvanced ? "Activate Shield" : "Turn On")}
+                intent={privacyShieldRunning ? "danger" : "primary"}
+                onClick={handleToggle}
+                disabled={fleetShieldSessionLocked || localFleetControl.startLocked || operationPending || shieldWaiting || (!privacyShieldRunning && cameraAvailable === false)}
+                loading={localLoading}
+                className="shield-primary-btn physical-shield-header-btn"
+            />
+        </div>
     );
 
     return (
@@ -846,9 +860,6 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                             <p className={`text-[10px] mt-1 max-w-[320px] ${cameraAvailable === true ? "text-[var(--color-success)]" : "text-[var(--color-warning)]"}`}>
                                 {cameraMessage || (cameraAvailable ? "Camera available." : "No camera detected.")}
                             </p>
-                        )}
-                        {privacyShieldRunning !== true && (
-                            <button type="button" className="text-xs underline mt-1" onClick={() => void checkStatus(true)}>Recheck camera</button>
                         )}
                     </div>
                 </div>
