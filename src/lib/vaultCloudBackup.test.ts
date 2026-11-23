@@ -43,6 +43,10 @@ describe("Vault cloud backup setup", () => {
     expect(cloudBackupError("cloud_backup_engine_write_failed")).toContain("could not be saved into the Vault");
     expect(cloudBackupError("cloud_backup_engine_write_failed")).not.toContain("downloaded. Check the connection");
     expect(cloudBackupError("cloud_backup_engine_download_failed")).toContain("could not be downloaded");
+    expect(cloudBackupError("cloud_backup_state_unavailable")).toContain("backup folder inside the Vault");
+    expect(cloudBackupError("cloud_backup_some_future_code")).toContain("(cloud_backup_some_future_code)");
+    expect(cloudBackupError("vault_service_busy x")).toContain("(vault_service_busy)");
+    expect(cloudBackupError("no code at all token=secret")).toBe("The backup result could not be confirmed. Refresh to check its state before trying again.");
     expect(cloudBackupError("cloud_backup_engine_write_failed:create:5")).toContain("Failed while creating the file in the Vault: Windows error 5 (access denied).");
     expect(cloudBackupError("cloud_backup_engine_write_failed:rename:32")).toContain("moving the file into place: Windows error 32 (another program is using the file)");
     expect(cloudBackupError("cloud_backup_engine_write_failed:write:9999")).toContain("Windows error 9999.");

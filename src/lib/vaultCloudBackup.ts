@@ -69,6 +69,24 @@ const MESSAGES: Record<string, string> = {
   cloud_backup_start_exited: "The backup tool stopped before it could start. Try again.",
   cloud_backup_engine_download_failed: "The backup tool could not be downloaded. Check the connection and retry setup.",
   cloud_backup_engine_write_failed: "The backup tool downloaded but could not be saved into the Vault. Check that the Vault is writable and has free space, that security software is not blocking it, then retry setup.",
+  cloud_backup_state_unavailable: "The backup folder inside the Vault could not be read or written. Check that the Vault is mounted, writable and not full, then refresh.",
+  cloud_backup_not_configured: "Cloud backup is not set up for this Vault yet. Use Set up backup tool, then connect Proton Drive.",
+  cloud_backup_engine_unavailable: "The backup tool is not installed in this Vault yet. Use Set up backup tool.",
+  cloud_backup_unsupported_platform: "Cloud backup needs 64-bit Windows.",
+  cloud_backup_connection_failed: "WinCommander could not reach Proton Drive. Check the connection and try again.",
+  cloud_backup_disconnect_failed: "Proton Drive could not be disconnected. Try again.",
+  cloud_backup_sign_in_failed: "Proton Drive sign-in did not complete. Try again.",
+  cloud_backup_sign_in_pending: "Proton Drive sign-in is still waiting in your browser. Finish it there, then refresh.",
+  cloud_backup_sign_in_browser_failed: "The Proton Drive sign-in page could not be opened in your browser. Try again.",
+  cloud_backup_sign_in_url_rejected: "The Proton Drive sign-in address was not accepted. Try again.",
+  cloud_backup_source_changed: "A file changed while it was being backed up. Run the backup again.",
+  cloud_backup_start_failed: "The backup could not start. Try again.",
+  cloud_backup_stop_failed: "The backup could not be stopped cleanly. Refresh to check its state.",
+  cloud_backup_timed_out: "The backup tool did not answer in time. Try again.",
+  cloud_backup_transfer_failed: "Some files could not be transferred. Run the backup again.",
+  cloud_backup_restore_destination_not_empty: "The restore folder must be empty. Choose an empty folder.",
+  cloud_backup_watcher_overflow: "Too many files changed at once to track. Run a full backup.",
+  cloud_backup_watcher_unavailable: "Changes in this Vault cannot be watched right now. Run the backup manually.",
   cloud_backup_engine_integrity_failed: "The backup tool failed its integrity check. No upload was started.",
   cloud_backup_engine_version_mismatch: "The installed backup tool has an unsupported version. Retry setup.",
   cloud_backup_cli_output_unrecognized: "The backup tool returned an unrecognized result. Completion has not been confirmed.",
@@ -103,7 +121,11 @@ function saveFailureDetail(detail: string): string {
 export function cloudBackupError(cause: unknown): string {
   const detail = cause instanceof Error ? cause.message : String(cause);
   const code = detail.match(/cloud_backup_[a-z_]+/)?.[0];
-  return code && MESSAGES[code] ? MESSAGES[code] + (code === "cloud_backup_engine_write_failed" ? saveFailureDetail(detail) : "")
+  if (code && MESSAGES[code]) return MESSAGES[code] + (code === "cloud_backup_engine_write_failed" ? saveFailureDetail(detail) : "");
+  // A fixed error identifier carries no user data; show it so the cause can be traced.
+  const other = code ?? detail.match(/vault_[a-z_]+/)?.[0];
+  return other
+    ? `The backup result could not be confirmed (${other}). Refresh to check its state before trying again.`
     : "The backup result could not be confirmed. Refresh to check its state before trying again.";
 }
 export function cloudBackupStateLabel(result: VaultCloudBackupResult): string {
