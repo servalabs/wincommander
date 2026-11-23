@@ -69,6 +69,8 @@ const MESSAGES: Record<string, string> = {
   cloud_backup_start_exited: "The backup tool stopped before it could start. Try again.",
   cloud_backup_engine_download_failed: "The backup tool could not be downloaded. Check the connection and retry setup.",
   cloud_backup_engine_write_failed: "The backup tool downloaded but could not be saved into the Vault. Check that the Vault is writable and has free space, that security software is not blocking it, then retry setup.",
+  cloud_backup_engine_vault_too_small: "This Vault is too small for the backup tool. The tool alone is about 100 MB and needs about 120 MB of free space inside the Vault, plus room for your files. Use a larger Vault (256 MB or more) for cloud backup. Nothing was downloaded.",
+  cloud_backup_helper_mismatch: "The Pro component sent a reply this version of WinCommander does not accept. Update WinCommander and Pro together, then refresh.",
   cloud_backup_engine_not_installed: "The backup tool is not installed in this Vault yet. Use Set up backup tool, then connect Proton Drive.",
   cloud_backup_engine_setup_failed: "The backup tool setup did not finish. Use Set up backup tool to try again.",
   cloud_backup_state_unavailable: "The backup folder inside the Vault could not be read or written. Check that the Vault is mounted, writable and not full, then refresh.",

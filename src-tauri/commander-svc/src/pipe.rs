@@ -3688,6 +3688,9 @@ fn cloud_backup_reason_code(reason: wincmd_shared::vault_access::VaultMountReaso
         VaultMountReason::MountStateUnknown => "cloud_backup_mount_changed",
         VaultMountReason::PresentationRejected => "cloud_backup_presentation_unavailable",
         VaultMountReason::EntitlementDenied => "cloud_backup_entitlement_denied",
+        // The Pro helper answered, but not in a form this service accepts: say so
+        // instead of a vague "unavailable" that hides a version mismatch.
+        VaultMountReason::BrokerRejected | VaultMountReason::BrokerReplyRejected => "cloud_backup_helper_mismatch",
         _ => "cloud_backup_unavailable",
     }
 }
@@ -5236,6 +5239,8 @@ mod tests {
     fn cloud_backup_reports_unavailable_presentation_separately_from_denial() {
         use wincmd_shared::vault_access::VaultMountReason;
         assert_eq!(super::cloud_backup_reason_code(VaultMountReason::PresentationRejected), "cloud_backup_presentation_unavailable");
+        assert_eq!(super::cloud_backup_reason_code(VaultMountReason::BrokerReplyRejected), "cloud_backup_helper_mismatch");
+        assert_eq!(super::cloud_backup_reason_code(VaultMountReason::BrokerRejected), "cloud_backup_helper_mismatch");
         assert_eq!(super::cloud_backup_reason_code(VaultMountReason::CallerAccessDenied), "cloud_backup_not_permitted");
         assert_eq!(super::cloud_backup_reason_code(VaultMountReason::NotAuthorized), "cloud_backup_not_permitted");
         assert_eq!(super::cloud_backup_reason_code(VaultMountReason::MountStateUnknown), "cloud_backup_mount_changed");

@@ -44,6 +44,9 @@ describe("Vault cloud backup setup", () => {
     expect(cloudBackupError("cloud_backup_engine_write_failed")).not.toContain("downloaded. Check the connection");
     expect(cloudBackupError("cloud_backup_engine_download_failed")).toContain("could not be downloaded");
     expect(cloudBackupError("cloud_backup_state_unavailable")).toContain("backup folder inside the Vault");
+    expect(cloudBackupError("cloud_backup_engine_vault_too_small")).toContain("too small for the backup tool");
+    expect(cloudBackupError("cloud_backup_engine_vault_too_small")).toContain("256 MB or more");
+    expect(cloudBackupError("cloud_backup_helper_mismatch")).toContain("Update WinCommander and Pro together");
     expect(cloudBackupError("cloud_backup_some_future_code")).toContain("(cloud_backup_some_future_code)");
     expect(cloudBackupError("vault_service_busy x")).toContain("(vault_service_busy)");
     expect(cloudBackupError("no code at all token=secret")).toBe("The backup result could not be confirmed. Refresh to check its state before trying again.");
