@@ -302,6 +302,10 @@ fn main() {
         // The Cargo lib test harness does not receive Tauri's app manifest, but
         // Tauri's dialog stack imports TaskDialogIndirect from Common Controls v6.
         println!("cargo:rustc-link-arg=/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'");
+        // The vendored OpenSSL static libraries reference a PDB that is not
+        // shipped, so every debug link prints hundreds of LNK4099 notices.
+        // They only mean "no debug info for OpenSSL"; silence that one code.
+        println!("cargo:rustc-link-arg=/IGNORE:4099");
     }
 
     // --- Release encryption key generation ---
