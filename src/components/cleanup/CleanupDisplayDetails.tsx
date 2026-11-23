@@ -6,7 +6,7 @@ import type { CleanupDisplayMode } from "../../panels/cleanup/cleanupDisplay";
 import { isManualOnlyCleanupSchedule } from "../../panels/cleanup/cleanupManualPolicy";
 import { getCleanupScanFacts } from "../../panels/cleanup/cleanupScanFacts";
 import CleanupRecordPreview, { getSafeCleanupPreview } from "./CleanupRecordPreview";
-import { cleanupClearExplanation, cleanupCountUnit, cleanupDisplayDescription, cleanupDisplayName, cleanupVerificationText, hasLimitedCleanupCoverage, summarizeCleanupGroups, summarizeCleanupResult, type CleanupVerification } from "../../panels/cleanup/cleanupDisplayModel";
+import { cleanupClearExplanation, cleanupCountUnit, cleanupDisplayDescription, cleanupDisplayName, cleanupVerificationText, hasLimitedCleanupCoverage, processReviewLimitedNote, summarizeCleanupGroups, summarizeCleanupResult, type CleanupVerification } from "../../panels/cleanup/cleanupDisplayModel";
 
 type DetailCategory = Pick<CleanupCategory, "id" | "label" | "description" | "icon" | "severity" | "systemWide" | "scopeAware" | "clearDataKey" | "confirmMessage" | "regeneratesNote" | "schedulable">;
 
@@ -48,9 +48,10 @@ export default function CleanupDisplayDetails({ category, mode, count, items, ra
     ? rawData : { records: items }, [category.id, rawData, items]);
   const name = cleanupDisplayName(category, mode);
   const raw = rawData && typeof rawData === "object" && !Array.isArray(rawData) ? rawData as Record<string, unknown> : undefined;
+  const processLimitedNote = processReviewLimitedNote(category.id, rawData);
   const partialDetail = error?.trim() || (typeof raw?.message === "string" ? raw.message.trim() : "");
   const scanFacts = getCleanupScanFacts(rawData, summary.state === "error").filter(fact =>
-    !(fact.label === "Message" && summary.state === "partial") &&
+    !(fact.label === "Message" && (summary.state === "partial" || processLimitedNote !== null)) &&
     !(fact.label === "Coverage Note" && ["walFiles", "searchIndex", "remoteAccessLogs", "gameLauncherLogs", "cellularHistory", "passwordManagerCaches", "credentialManager", "gitActivity", "wslData", "sshState", "amcache"].includes(category.id))
   );
   const groupedLimited = groupedItems?.some(group => hasLimitedCleanupCoverage(category.id, group.rawData));
@@ -106,6 +107,7 @@ export default function CleanupDisplayDetails({ category, mode, count, items, ra
           {summary.state === "partial" ? partialDetail.length > 240
             ? <details><summary>Why the scan is incomplete</summary><p>{partialDetail}</p></details>
             : <p>{partialDetail || "Some sources were not checked. The result is incomplete."}</p> : null}
+          {processLimitedNote !== null ? <p className="cleanup-readable-detail__warning" role="status" data-cleanup-process-warning><Icon icon="warning-sign" size={12} /> {processLimitedNote}</p> : null}
           {["error", "unavailable"].includes(summary.state) && error?.trim() ? <p>{error}</p> : null}
           {limitedScope ? <p><strong>Scan scope:</strong> {limitedScope}</p> : null}
           {groupedItems?.length ? <p>Only profiles detected in the supported Windows user folders are shown. Other profiles may not appear.</p> : null}

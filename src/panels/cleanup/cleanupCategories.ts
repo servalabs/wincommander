@@ -1580,6 +1580,7 @@ const legacyViewOnlyCategories: LegacyCleanupCategory[] = [
     group: 'standard',
     getDataKey: 'getProcessIntelligence',
     clearDataKey: '',
+    countUnits: { singular: 'process', plural: 'processes' },
     extractPreview: (data) => {
       const procs = Array.isArray(data?.processes) ? data.processes : [];
       return {

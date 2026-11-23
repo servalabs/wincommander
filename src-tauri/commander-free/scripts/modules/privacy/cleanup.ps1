@@ -1786,7 +1786,11 @@ function Get-ProcessIntelligence {
             } catch { $partial = $true; $skippedProcesses++ }
         }
         $truncated = $listedProcesses -gt $procs.Count
-        $note = if ($partial) { "$unavailableDetails of $($entries.Count) listed processes have unavailable details; $skippedProcesses could not be listed. Windows protects some system processes; processes can also exit during the scan." } else { $null }
+        # Protected system processes and processes that exit mid-scan are
+        # normal. Rows that were read are returned as a usable partial result;
+        # only a scan that read no process at all is a failure.
+        if ($entries.Count -eq 0) { throw 'No process could be read.' }
+        $note = if ($partial) { "$unavailableDetails of $($entries.Count) processes have limited details (Windows protects some system processes; others may exit during the scan).$(if ($skippedProcesses -gt 0) { " $skippedProcesses could not be listed." })" } else { $null }
         if ($signaturesSkipped -gt 0) { $note = "$note $signaturesSkipped signature checks were skipped to stay within the collection time budget.".Trim() }
         @{ processes = @($entries.ToArray()); observedProcesses = $entries.Count; totalProcesses = $listedProcesses; truncated = $truncated; signatureChecksSkipped = $signaturesSkipped; unavailableDetails = $unavailableDetails; skippedProcesses = $skippedProcesses; partial = $partial; status = if ($partial) { 'partial' } else { 'complete' }; coverage = if ($partial) { 'limited' } else { 'complete' }; coverageNote = $note; message = $note }
     }

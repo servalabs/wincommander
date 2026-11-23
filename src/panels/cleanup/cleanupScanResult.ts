@@ -1,5 +1,6 @@
 import type { CleanupCategory } from "./cleanupCategories";
 import type { CardData } from "./useCleanupScan";
+import { processReviewLimitedNote } from "./cleanupDisplayModel";
 
 type ScanResponse = { success?: boolean; data?: unknown; error?: string };
 
@@ -71,7 +72,10 @@ export function readCleanupScanResult(
   if (data.error === true || (typeof data.error === "string" && data.error.length > 0) || ["error", "failed", "unknown", "unavailable"].includes(String(data.status))) {
     return failed(typeof data.message === "string" ? data.message : "Scan failed.", data);
   }
-  if (data.partial === true || data.status === "partial" || data.coverage === "partial" || data.complete === false || data.accessDenied === true) {
+  // Process review: unavailable details for protected or exited processes are
+  // expected, so a scan that returned rows is a result, not a failure.
+  const usableProcessScan = processReviewLimitedNote(category.id, data) !== null;
+  if (!usableProcessScan && (data.partial === true || data.status === "partial" || data.coverage === "partial" || data.complete === false || data.accessDenied === true)) {
     return failed(typeof data.message === "string" ? data.message : "Scan was incomplete.", data);
   }
   if (category.requiredScanArrays?.length && !category.requiredScanArrays.some(key => Array.isArray(data[key]))) {

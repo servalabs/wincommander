@@ -8,7 +8,7 @@ import {
 } from "@/components/ui/tooltip";
 import { getCleanupScheduleUnavailableReason, type CleanupCategory } from "../../panels/cleanup/cleanupCategories";
 import { isDefaultExcludedCleanup } from "../../panels/cleanup/cleanupManualPolicy";
-import { hasLimitedCleanupCoverage, isClipboardHistoryOff, observedPartialRows, observedProcessRows, summarizeCleanupResult, type CleanupVerification } from "../../panels/cleanup/cleanupDisplayModel";
+import { hasLimitedCleanupCoverage, isClipboardHistoryOff, observedPartialRows, observedProcessRows, processReviewLimitedNote, summarizeCleanupResult, type CleanupVerification } from "../../panels/cleanup/cleanupDisplayModel";
 import CleanupScheduleControl from "./CleanupScheduleControl";
 import { getSafeCleanupPreview } from "./CleanupRecordPreview";
 import { cleanupCardPreview } from "./cleanupPreviewPresentation";
@@ -163,7 +163,8 @@ export default function CleanupTraceCard({
     ((!!onSetSchedule || !!onRequestScheduleAccess) && !!category.schedulable) ||
     ((!!scheduleMinutes || !!scheduleExists) && !!onClearSchedule) || !!scheduleDisabled;
   const scanFlags = rawData && typeof rawData === "object" && !Array.isArray(rawData) ? rawData as Record<string, unknown> : undefined;
-  const incomplete = scanFlags?.partial === true || scanFlags?.complete === false || scanFlags?.status === "partial" || scanFlags?.coverage === "partial" || scanFlags?.accessDenied === true;
+  const processLimitedNote = processReviewLimitedNote(category.id, rawData);
+  const incomplete = processLimitedNote === null && (scanFlags?.partial === true || scanFlags?.complete === false || scanFlags?.status === "partial" || scanFlags?.coverage === "partial" || scanFlags?.accessDenied === true);
   const observedProcesses = observedProcessRows(category.id, rawData);
   const observedRecords = observedPartialRows(category.id, rawData);
   const clipboardOff = isClipboardHistoryOff(category.id, rawData);
@@ -578,6 +579,11 @@ export default function CleanupTraceCard({
             </div>
           )}
           {!loading && limited && count === 0 && <span>No items found in the checked locations.</span>}
+          {!loading && processLimitedNote !== null && (
+            <div className="font-mono line-clamp-2" title={processLimitedNote} data-cleanup-process-note style={{ fontSize: 8.5, color: "var(--color-text-muted)" }}>
+              {processLimitedNote}
+            </div>
+          )}
           {(error || (incomplete && (observedProcesses !== null || observedRecords !== null))) && !loading && (
             <div
               className="font-mono line-clamp-2"

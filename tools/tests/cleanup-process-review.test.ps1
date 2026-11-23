@@ -88,4 +88,22 @@ function Get-Process { [CmdletBinding()] param() throw [UnauthorizedAccessExcept
 $script:denied = $true
 $failure = Get-ProcessIntelligence
 if (-not $failure.error -or $failure.message -notmatch 'denied') { throw 'Denied process enumeration appeared as a clean result.' }
+# Protected or exited processes are normal: the scanned rows come back as a partial (not failed) result with a warning-level note.
+$script:denied = $false
+$script:case = 'valid'
+function Get-Process {
+    [CmdletBinding()] param()
+    [pscustomobject]@{ Id = 11; ProcessName = 'readable'; MainModule = [pscustomobject]@{ FileName = 'C:\synthetic\readable.exe' } }
+    [pscustomobject]@{ Id = 12; ProcessName = 'protected'; MainModule = $null }
+    [pscustomobject]@{ Id = 0; ProcessName = 'Idle'; MainModule = $null }
+}
+function Get-CleanupProcessElevation { param([int]$ProcessId) if ($ProcessId -eq 12) { return 'Unknown' }; 'No' }
+$mixed = Get-ProcessIntelligence
+if ($mixed.error -or $mixed.status -ne 'partial' -or -not $mixed.partial -or @($mixed.processes).Count -ne 2) { throw 'Protected processes must leave the scanned rows in a partial, non-error result.' }
+if ($mixed.unavailableDetails -ne 1 -or $mixed.skippedProcesses -ne 1) { throw 'Unavailable and unlisted process counts were not reported.' }
+if ($mixed.coverageNote -notmatch '^1 of 2 processes have limited details \(Windows protects some system processes; others may exit during the scan\)\. 1 could not be listed\.$') { throw "Unexpected limited-details note: $($mixed.coverageNote)" }
+# A scan that read no process at all remains a genuine failure.
+function Get-Process { [CmdletBinding()] param() [pscustomobject]@{ Id = 0; ProcessName = 'Idle'; MainModule = $null } }
+$none = Get-ProcessIntelligence
+if (-not $none.error -or @($none.processes).Count -ne 0) { throw 'A scan that read no process must be reported as a failure.' }
 'PASS: Process Review finds one synthetic process and rejects denied enumeration; no live process inventory ran.'

@@ -112,6 +112,25 @@ export function observedProcessRows(id: string, raw: unknown): number | null {
   return seen.size;
 }
 
+/**
+ * Process review reads whatever Windows allows. Protected system processes and
+ * processes that exit mid-scan are normal, so a scan that returned rows is a
+ * usable result with a warning-level note, never a failure. Returns the note,
+ * or null when this is not a usable partial process scan.
+ */
+export function processReviewLimitedNote(id: string, raw: unknown): string | null {
+  const observed = observedProcessRows(id, raw);
+  if (!observed || !object(raw)) return null;
+  const whole = (value: unknown) => typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : 0;
+  const limited = Math.min(whole(raw.unavailableDetails), observed);
+  const skipped = whole(raw.skippedProcesses);
+  const head = limited > 0
+    ? `${limited} of ${observed} ${observed === 1 ? "process has" : "processes have"} limited details`
+    : "Some processes have limited details";
+  const tail = skipped > 0 ? ` ${skipped} ${skipped === 1 ? "process" : "processes"} could not be listed.` : "";
+  return `${head} (Windows protects some system processes; others may exit during the scan).${tail}`;
+}
+
 /** Count returned metadata rows without presenting them as a complete inventory. */
 export function observedPartialRows(id: string, raw: unknown): number | null {
   if (!['wslData', 'credentialManager', 'gitActivity'].includes(id) || !object(raw) || raw.error || raw.status !== 'partial' || raw.partial !== true) return null;
@@ -214,6 +233,8 @@ export function summarizeCleanupResult(input: { id: string; count: number; items
   if (raw?.error === true || (typeof raw?.error === "string" && raw.error.length > 0) || raw?.status === "failed" || raw?.status === "error") return { ...base, state: "error", count: null, message: "Scan failed", nextStep: "Try scanning again or check access." };
   if (raw?.status === "unavailable") return { ...base, state: "unavailable", count: null, message: "Scan unavailable", nextStep: "Try again when the source is available." };
   if (isClipboardHistoryOff(input.id, raw)) return { ...base, state: "disabled", count: null, message: "Clipboard history is off", nextStep: "Previously stored items cannot be checked while history is off." };
+  const processNote = processReviewLimitedNote(input.id, raw);
+  if (processNote !== null) return { ...base, state: "found", count: observedProcessRows(input.id, raw), message: `${observedProcessRows(input.id, raw)} processes observed`, nextStep: processNote };
   if (raw?.partial === true || raw?.complete === false || raw?.status === "partial" || raw?.coverage === "partial" || raw?.accessDenied === true) {
     const observed = observedProcessRows(input.id, raw);
     const records = observedPartialRows(input.id, raw);

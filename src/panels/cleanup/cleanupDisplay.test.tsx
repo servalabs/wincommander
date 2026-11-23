@@ -38,7 +38,8 @@ describe("System Cleanup display projection", () => {
 
   test("shows the number of listed processes with unavailable details", () => {
     const result = summarizeCleanupResult({ id: "processIntel", count: 2, raw: { partial: true, status: "partial", processes: [{ pid: 1, name: "one" }, { pid: 2, name: "two" }], unavailableDetails: 1 } });
-    expect(result.nextStep).toContain("1 listed process has unavailable details");
+    expect(result.state).toBe("found");
+    expect(result.nextStep).toContain("1 of 2 processes have limited details");
   });
 
   test("keeps unknown, failed, partial and empty states distinct", () => {
