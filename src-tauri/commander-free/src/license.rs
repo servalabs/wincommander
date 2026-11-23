@@ -2033,28 +2033,160 @@ async fn release_hybrid_from_service() -> Result<(), String> {
     parse_hybrid_release_reply(reply)
 }
 
+/// Why a seat release did not complete. The exit code and `reason` token are
+/// the machine-readable contract read by the NSIS uninstall hook.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReleaseFailureKind {
+    /// Transport failure; the server never gave an answer.
+    Offline,
+    /// HTTP 408/425/429/5xx: the server could not process the release.
+    ServerUnavailable,
+    /// Any other HTTP answer (signature, device or app mismatch, cutover required).
+    ServerRejected,
+    CacheUnreadable,
+    NotAdministrator,
+    Other,
+}
+
+impl ReleaseFailureKind {
+    pub const fn exit_code(self) -> i32 {
+        match self {
+            Self::Offline => 2,
+            Self::ServerUnavailable | Self::ServerRejected => 3,
+            Self::CacheUnreadable => 4,
+            Self::NotAdministrator => 5,
+            Self::Other => 6,
+        }
+    }
+
+    pub const fn reason(self) -> &'static str {
+        match self {
+            Self::Offline => "offline",
+            Self::ServerUnavailable => "server_unavailable",
+            Self::ServerRejected => "server_rejected",
+            Self::CacheUnreadable => "cache_unreadable",
+            Self::NotAdministrator => "not_administrator",
+            Self::Other => "other",
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ReleaseFailure {
+    pub kind: ReleaseFailureKind,
+    pub http: Option<u16>,
+    pub message: String,
+}
+
+impl ReleaseFailure {
+    fn new(kind: ReleaseFailureKind, message: impl Into<String>) -> Self {
+        Self { kind, http: None, message: message.into() }
+    }
+
+    pub fn other(message: String) -> Self {
+        Self::new(ReleaseFailureKind::Other, message)
+    }
+
+    fn from_http(status: u16, message: String) -> Self {
+        Self { kind: classify_release_http_status(status), http: Some(status), message }
+    }
+
+    /// A body that could not be parsed. Only a non-success status says anything
+    /// about the server; a malformed 2xx body is an unexpected condition.
+    fn from_unreadable_body(status: u16, message: String) -> Self {
+        if (200..300).contains(&status) {
+            Self { kind: ReleaseFailureKind::Other, http: Some(status), message }
+        } else {
+            Self::from_http(status, message)
+        }
+    }
+}
+
+/// Transient server-side statuses leave the seat state uncertain; every other
+/// answer is a definitive rejection that must not be bypassed by the installer.
+pub fn classify_release_http_status(status: u16) -> ReleaseFailureKind {
+    match status {
+        408 | 425 | 429 | 500..=599 => ReleaseFailureKind::ServerUnavailable,
+        _ => ReleaseFailureKind::ServerRejected,
+    }
+}
+
+const RELEASE_RESULT_FILE: &str = "licence-release-result.txt";
+const RELEASE_MESSAGE_LIMIT: usize = 200;
+
+/// One-line result for the uninstaller: `code=<n>; reason=<token>; http=<n|none>; message=<text>`.
+/// Messages are control-character free and bounded; they never carry token material.
+pub fn release_report(outcome: &Result<bool, ReleaseFailure>) -> (i32, String) {
+    match outcome {
+        Ok(released) => (
+            0,
+            format!(
+                "code=0; reason={}; http=none; message=",
+                if *released { "released" } else { "nothing_to_release" }
+            ),
+        ),
+        Err(failure) => {
+            let message: String = failure
+                .message
+                .chars()
+                .map(|c| if c.is_control() { ' ' } else { c })
+                .collect::<String>()
+                .trim()
+                .chars()
+                .take(RELEASE_MESSAGE_LIMIT)
+                .collect();
+            let http = failure.http.map_or_else(|| "none".to_string(), |s| s.to_string());
+            (
+                failure.kind.exit_code(),
+                format!(
+                    "code={}; reason={}; http={}; message={}",
+                    failure.kind.exit_code(),
+                    failure.kind.reason(),
+                    http,
+                    message
+                ),
+            )
+        }
+    }
+}
+
+/// Best effort: the GUI-subsystem executable may have no usable stdout/stderr
+/// pipe under the installer, so the result also lands next to the executable
+/// (the Program Files install directory is administrator-writable only).
+pub fn write_release_result_file(line: &str) {
+    if let Some(dir) = std::env::current_exe().ok().as_deref().and_then(std::path::Path::parent) {
+        let _ = fs::write(dir.join(RELEASE_RESULT_FILE), line);
+    }
+}
+
 /// Contacts the server to release the seat, then removes the local cache.
 /// If release cannot be confirmed, retain the protected recovery state.
 pub async fn deactivate_license_internal() -> Result<(), String> {
-    require_license_removal_administrator()?;
+    release_seat_classified().await.map_err(|failure| failure.message)
+}
+
+async fn release_seat_classified() -> Result<(), ReleaseFailure> {
+    require_license_removal_administrator()
+        .map_err(|m| ReleaseFailure::new(ReleaseFailureKind::NotAdministrator, m))?;
     #[cfg(all(windows, feature = "experimental-pq-licence"))]
     {
         // Only the service can establish protected release history. A stale
         // local trial token must not hide an outstanding paid activation.
-        release_hybrid_from_service().await
+        release_hybrid_from_service().await.map_err(ReleaseFailure::other)
     }
     #[cfg(not(all(windows, feature = "experimental-pq-licence")))]
     {
-    let (api_base, public_key_b64) = get_config()?;
-    let cached =
-        load_cached_license()?.ok_or_else(|| "No license token to deactivate.".to_string())?;
+    let (api_base, public_key_b64) = get_config().map_err(ReleaseFailure::other)?;
+    let cached = load_cached_license()
+        .map_err(ReleaseFailure::other)?
+        .ok_or_else(|| ReleaseFailure::other("No license token to deactivate.".to_string()))?;
     let device_hash = verify_token_for_removal(&cached.token, &public_key_b64)
     .ok()
     .filter(|claims| device_hash_matches(&claims.device_hash))
     .map(|claims| claims.device_hash.clone())
     .unwrap_or_else(current_device_hash);
 
-    let client = crate::net::licence_http_client()?;
+    let client = crate::net::licence_http_client().map_err(ReleaseFailure::other)?;
 
     let response = client
         .post(format!("{}/license/deactivate", api_base))
@@ -2069,47 +2201,61 @@ pub async fn deactivate_license_internal() -> Result<(), String> {
         .send()
         .await
         .map_err(|e| {
-            format!(
-                "Deactivation request failed; the licence was kept so you can retry: {}. {}",
-                e, LICENSE_NETWORK_HINT
+            ReleaseFailure::new(
+                ReleaseFailureKind::Offline,
+                format!(
+                    "Deactivation request failed; the licence was kept so you can retry: {}. {}",
+                    e, LICENSE_NETWORK_HINT
+                ),
             )
         })?;
+    let status = response.status().as_u16();
 
     let payload: WorkerTokenResponse = read_license_response(response).await.map_err(|e| {
-        format!(
-            "Invalid deactivation response; the licence was kept so you can retry: {}",
-            e
+        ReleaseFailure::from_unreadable_body(
+            status,
+            format!(
+                "Invalid deactivation response; the licence was kept so you can retry: {}",
+                e
+            ),
         )
     })?;
 
     if !payload.ok {
-        return Err(payload.error.unwrap_or_else(|| {
-            "Deactivation rejected by server; the licence was kept so you can retry.".to_string()
-        }));
+        return Err(ReleaseFailure::from_http(
+            status,
+            payload.error.unwrap_or_else(|| {
+                "Deactivation rejected by server; the licence was kept so you can retry.".to_string()
+            }),
+        ));
     }
 
-    clear_cached_license_inner()?;
+    clear_cached_license_inner().map_err(ReleaseFailure::other)?;
     Ok(())
     }
 }
 
 /// Used by the explicit uninstaller path. A device without a cached licence
-/// must receive a confirmed server-side release before the uninstaller continues.
-pub async fn release_license_seat_if_present() -> Result<bool, String> {
+/// has nothing to release; any other outcome is reported with its class.
+pub async fn release_license_seat_if_present() -> Result<bool, ReleaseFailure> {
     #[cfg(all(windows, feature = "experimental-pq-licence"))]
     {
         // Releasing the seat alone is insufficient: another process could
         // reactivate after the service replies but before uninstall finishes.
         // Keep uninstall closed until the service and server both own a
         // durable retirement fence that survives that entire handoff.
-        Err("Uninstall is temporarily unavailable while licence security is being upgraded.".into())
+        Err(ReleaseFailure::other(
+            "Uninstall is temporarily unavailable while licence security is being upgraded.".into(),
+        ))
     }
     #[cfg(not(all(windows, feature = "experimental-pq-licence")))]
     {
-    if load_cached_license()?.is_none() {
-        return Ok(false);
+    match load_cached_license() {
+        Err(message) => return Err(ReleaseFailure::new(ReleaseFailureKind::CacheUnreadable, message)),
+        Ok(None) => return Ok(false),
+        Ok(Some(_)) => {}
     }
-    deactivate_license_internal().await?;
+    release_seat_classified().await?;
     Ok(true)
     }
 }
@@ -2132,6 +2278,55 @@ mod tests {
             serde_json::json!({"released": true, "extra": 1})] {
             assert!(parse_hybrid_release_reply(reply).is_err());
         }
+    }
+
+    #[test]
+    fn release_http_status_classification_separates_uncertain_from_rejected() {
+        for status in [408u16, 425, 429, 500, 502, 503, 504, 599] {
+            assert_eq!(classify_release_http_status(status), ReleaseFailureKind::ServerUnavailable, "{status}");
+        }
+        for status in [200u16, 301, 400, 401, 403, 404, 409, 426] {
+            assert_eq!(classify_release_http_status(status), ReleaseFailureKind::ServerRejected, "{status}");
+        }
+    }
+
+    #[test]
+    fn release_failure_kinds_map_to_the_documented_exit_codes_and_reasons() {
+        let table = [
+            (ReleaseFailureKind::Offline, 2, "offline"),
+            (ReleaseFailureKind::ServerUnavailable, 3, "server_unavailable"),
+            (ReleaseFailureKind::ServerRejected, 3, "server_rejected"),
+            (ReleaseFailureKind::CacheUnreadable, 4, "cache_unreadable"),
+            (ReleaseFailureKind::NotAdministrator, 5, "not_administrator"),
+            (ReleaseFailureKind::Other, 6, "other"),
+        ];
+        for (kind, code, reason) in table {
+            assert_eq!((kind.exit_code(), kind.reason()), (code, reason));
+        }
+    }
+
+    #[test]
+    fn unreadable_release_body_is_uncertain_only_for_a_failing_status() {
+        assert_eq!(ReleaseFailure::from_unreadable_body(502, "x".into()).kind, ReleaseFailureKind::ServerUnavailable);
+        assert_eq!(ReleaseFailure::from_unreadable_body(401, "x".into()).kind, ReleaseFailureKind::ServerRejected);
+        assert_eq!(ReleaseFailure::from_unreadable_body(200, "x".into()).kind, ReleaseFailureKind::Other);
+    }
+
+    #[test]
+    fn release_report_is_a_single_bounded_line_with_the_server_503_text() {
+        let failure = ReleaseFailure::from_http(503, "License service is temporarily unavailable.".into());
+        assert_eq!(
+            release_report(&Err(failure)),
+            (3, "code=3; reason=server_unavailable; http=503; message=License service is temporarily unavailable.".to_string())
+        );
+        let noisy = ReleaseFailure::new(ReleaseFailureKind::Offline, format!("a\r\nb\t{}", "x".repeat(500)));
+        let (code, line) = release_report(&Err(noisy));
+        assert_eq!(code, 2);
+        assert!(line.starts_with("code=2; reason=offline; http=none; message=a  b "));
+        assert!(!line.contains(['\r', '\n', '\t']));
+        assert_eq!(line.len(), "code=2; reason=offline; http=none; message=".len() + RELEASE_MESSAGE_LIMIT);
+        assert_eq!(release_report(&Ok(false)), (0, "code=0; reason=nothing_to_release; http=none; message=".to_string()));
+        assert_eq!(release_report(&Ok(true)).0, 0);
     }
 
     #[tokio::test]

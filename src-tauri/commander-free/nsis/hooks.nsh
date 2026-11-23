@@ -32,6 +32,7 @@ ${Using:StrFunc} UnStrStr
 !define WC_CALCULATOR_PAYLOAD "$INSTDIR\resources\Calculator.exe"
 !define WC_CALCULATOR_EXE "$INSTDIR\Calculator.exe"
 !define WC_LIFECYCLE_DIAGNOSTIC_LOG "$INSTDIR\installer-lifecycle.log"
+!define WC_LICENCE_RELEASE_RESULT "$INSTDIR\licence-release-result.txt"
 !define WC_LEGACY_LAUNCH_MIGRATION "${__FILEDIR__}\migrate-legacy-user-launches.ps1"
 !define WC_SCRUB_MENU_MIGRATION "${__FILEDIR__}\migrate-scrub-context-menus.ps1"
 !define WC_CLOSE_INSTALLED_APP "${__FILEDIR__}\close-installed-app.ps1"
@@ -491,19 +492,74 @@ FunctionEnd
 
 ; A true product uninstall must release the server-side device seat before it
 ; removes the local signed token. `/UPDATE` deliberately skips this macro so an
-; in-place upgrade never consumes/requires another activation. If the network
-; release cannot be confirmed, abort while the application and retryable token
-; are still present rather than silently stranding a licence seat.
+; in-place upgrade never consumes/requires another activation. It runs FIRST in
+; PREUNINSTALL, before the desktop app is closed and before the machine service
+; is stopped or deleted, so a refusal leaves a fully working installation. The
+; release needs only the installed exe and the ProgramData licence cache; the
+; classical path does not relay through the service.
+; The executable reports `code=<n>; reason=<token>; http=<status|none>;
+; message=<text>` in a file (a GUI-subsystem exe may have no stdout pipe here).
+; Exit codes: 2 offline, 3 server (reason server_unavailable = 429/408/5xx,
+; server_rejected = other HTTP), 4 cache unreadable, 5 not administrator, 6 other.
+;   2, 3+server_unavailable : result uncertain; an interactive user may continue
+;   4                       : no usable local licence to release; continue
+;   3+server_rejected, 5, 6, launch failure : abort (security-relevant or unknown)
+; A silent uninstall never continues past an unconfirmed release.
 !macro WC_RELEASE_LICENSE_SEAT_OR_ABORT
   IfFileExists "$INSTDIR\wincommander-free.exe" 0 wc_license_release_missing
     DetailPrint "Releasing this device's licence seat..."
+    Delete "${WC_LICENCE_RELEASE_RESULT}"
     nsExec::ExecToStack '"$INSTDIR\wincommander-free.exe" --release-license-seat'
     Pop $0
     Pop $1
-    !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "uninstall-license-release" "$0" "attempted"
-    ${If} $0 != 0
-      Abort "WinCommander could not confirm release of this device's licence seat. Connect to the internet and retry the uninstall, or use Deactivate device from WinCommander first."
+    StrCpy $R6 ""
+    ClearErrors
+    FileOpen $R7 "${WC_LICENCE_RELEASE_RESULT}" r
+    ${IfNot} ${Errors}
+      FileRead $R7 $R6
+      FileClose $R7
     ${EndIf}
+    Delete "${WC_LICENCE_RELEASE_RESULT}"
+    ${If} $R6 == ""
+      StrCpy $R6 "$1"
+    ${EndIf}
+    StrCpy $R6 $R6 200
+    !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "uninstall-license-release" "$0" "$R6"
+    ${If} $0 == 0
+      Goto wc_license_release_done
+    ${EndIf}
+    ; $R7 = human-readable reason: the text after "message=", else the raw output.
+    ${UnStrStr} $R7 $R6 "message="
+    ${If} $R7 == ""
+      StrCpy $R7 "$R6"
+    ${Else}
+      StrCpy $R7 $R7 "" 8
+    ${EndIf}
+    ${If} $R7 == ""
+      StrCpy $R7 "exit code $0"
+    ${EndIf}
+    ${If} $0 == 4
+      DetailPrint "No usable local licence record was found to release; continuing."
+      Goto wc_license_release_done
+    ${EndIf}
+    ${If} $0 == 2
+      Goto wc_license_release_uncertain
+    ${EndIf}
+    ${If} $0 == 3
+      ${UnStrStr} $R8 $R6 "reason=server_unavailable"
+      ${If} $R8 != ""
+        Goto wc_license_release_uncertain
+      ${EndIf}
+    ${EndIf}
+    Goto wc_license_release_abort
+  wc_license_release_uncertain:
+    IfSilent wc_license_release_abort
+    MessageBox MB_YESNO|MB_ICONEXCLAMATION|MB_DEFBUTTON2 "Could not confirm release of this device's licence seat ($R7).$\r$\n$\r$\nYou can continue uninstalling and release the device later from your WinCommander account, or cancel and retry.$\r$\n$\r$\nContinue uninstalling?" IDNO wc_license_release_abort
+    !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "uninstall-license-release-continue" "$0" "user continued without confirmed release"
+    Goto wc_license_release_done
+  wc_license_release_abort:
+    Abort "WinCommander could not confirm release of this device's licence seat, so nothing was removed. Reason: $R7. Connect to the internet and retry the uninstall, or use Deactivate device from WinCommander first."
+  wc_license_release_done:
   wc_license_release_missing:
 !macroend
 
@@ -715,6 +771,14 @@ FunctionEnd
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
+  ; Confirm the licence-seat release before anything is closed, stopped or
+  ; deleted: an aborted uninstall must leave the app and service working.
+  ; Updates (`/UPDATE`) never release the seat.
+  ClearErrors
+  ${GetOptions} $CMDLINE "/UPDATE" $R7
+  ${If} ${Errors}
+    !insertmacro WC_RELEASE_LICENSE_SEAT_OR_ABORT
+  ${EndIf}
   ; Stop and remove only the user-mode WinCommander service. Do not issue an
   ; SCM stop/delete for WinCommanderEncVol or VeraCrypt: a loaded kernel driver
   ; is released by Windows at reboot and must never block app removal.
@@ -760,8 +824,6 @@ FunctionEnd
   ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "WinCommander Hide Recovery"
   StrCmp $0 '$"$INSTDIR\wincommander-free.exe$" --hide-recovery-listener' 0 +2
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "WinCommander Hide Recovery"
-
-  !insertmacro WC_RELEASE_LICENSE_SEAT_OR_ABORT
 
   ; An explicit product uninstall removes machine-owned WinCommander components,
   ; including the separately delivered Pro runtime and device policy/state.

@@ -40,6 +40,24 @@ test.skipIf(process.platform !== "win32" || !existsSync(nsis))("installer diagno
 });
 
 
+test.skipIf(process.platform !== "win32" || !existsSync(nsis))("licence seat release macro compiles inside an uninstaller section", () => {
+  const hooks = readFileSync("src-tauri/commander-free/nsis/hooks.nsh", "utf8");
+  const macros = ["WC_WRITE_LIFECYCLE_DIAGNOSTIC stage exit detail", "WC_RELEASE_LICENSE_SEAT_OR_ABORT"]
+    .map((name) => hooks.match(new RegExp(`!macro ${name}\\r?\\n[\\s\\S]*?!macroend`))![0])
+    .join("\n");
+  const fixture = mkdtempSync(join(tmpdir(), "wc-installer-release-"));
+  try {
+    const source = join(fixture, "fixture.nsi");
+    // Compile only: the produced setup is never executed.
+    writeFileSync(source, `Unicode true\nName "Release fixture"\nOutFile "${join(fixture, "fixture.exe")}"\nRequestExecutionLevel user\nInstallDir "$TEMP\\wc-fixture"\n!include "LogicLib.nsh"\n!include "TextFunc.nsh"\n!include "StrFunc.nsh"\n\${Using:StrFunc} UnStrStr\n!define WC_LIFECYCLE_DIAGNOSTIC_LOG "$INSTDIR\\installer-lifecycle.log"\n!define WC_LICENCE_RELEASE_RESULT "$INSTDIR\\licence-release-result.txt"\n${macros}\nSection\nWriteUninstaller "$INSTDIR\\u.exe"\nSectionEnd\nSection Uninstall\n!insertmacro WC_RELEASE_LICENSE_SEAT_OR_ABORT\nSectionEnd\n`);
+    const compiled = spawnSync(nsis, ["/V2", source], { encoding: "utf8", windowsHide: true });
+    expect(compiled.stdout + compiled.stderr).not.toMatch(/warning|error/i);
+    expect(compiled.status).toBe(0);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
 test.skipIf(process.platform !== "win32" || process.arch !== "x64")("installer preserves cross-view explicit preferences and clears both views on uninstall", () => {
   for (const host of ["System32", "SysWOW64"]) {
     const powershell = join(process.env.WINDIR!, host, "WindowsPowerShell/v1.0/powershell.exe");
