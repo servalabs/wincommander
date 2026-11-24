@@ -10,6 +10,11 @@ lists only a selection of those changes.
 
 ## Unreleased
 
+- Add an explicit classical release profile (`WINCMD_RELEASE_PROFILE=classical`).
+  It builds without `experimental-*` features and skips the post-quantum trust
+  gate, matching 3.6.x and the production licence worker; the default profile
+  and its gate are unchanged. `release.yml` publishes only under classical, and
+  `start-free-release.ps1` now starts that run by default.
 - Show a Fleet command's effect in WinCommander within about two seconds. The
   app now re-reads settings and the open panel when settings change or the
   Pro agent reports a finished command, and the Fleet apply loop adopts that

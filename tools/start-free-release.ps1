@@ -20,7 +20,11 @@ param(
     [switch]$Beta,
 
     # Only use when a previous attempt created this tag but no GitHub Release.
-    [switch]$ReplaceUnpublishedTag
+    [switch]$ReplaceUnpublishedTag,
+
+    # 'classical' builds without experimental-* features; 'hybrid' stops at the unconfigured PQ gate.
+    [ValidateSet('classical', 'hybrid')]
+    [string]$ReleaseProfile = 'classical'
 )
 
 Set-StrictMode -Version Latest
@@ -35,6 +39,11 @@ function Invoke-Git([string[]]$Arguments) {
     if ($LASTEXITCODE -ne 0) {
         Stop-Release "git $($Arguments -join ' ') failed."
     }
+}
+
+if ($Beta -and $ReleaseProfile -eq 'classical') {
+    # Beta candidates keep the hybrid path.
+    $ReleaseProfile = 'hybrid'
 }
 
 $root = [IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent))
@@ -230,7 +239,28 @@ if (![packageVersion, tauriVersion, cargoVersion, lockVersion].every((value) => 
     }
     Invoke-Git @('-C', $worktree, 'tag', '-a', $tag, '-m', "release: $tag")
     Invoke-Git @('-C', $worktree, 'push', 'origin', "refs/tags/$tag")
-    Write-Output "Started Free release $tag. The tag push triggered the release workflow."
+    Write-Output "Pushed $tag."
+    if ($ReleaseProfile -eq 'classical') {
+        # The tag push runs the hybrid profile, which fails at the PQ gate; run classical explicitly.
+        Start-Sleep -Seconds 5
+        & gh workflow run release.yml --repo $repository --ref $branch -f "release_tag=$tag" -f 'release_profile=classical'
+        if ($LASTEXITCODE -ne 0) {
+            Stop-Release "Could not start the classical workflow run. Start it manually: GitHub > Actions > release.yml > Run workflow with release_tag=$tag and release_profile=classical."
+        }
+        try {
+            $pushRuns = (& gh run list --repo $repository --workflow release.yml --event push --limit 10 --json databaseId,headBranch,status | ConvertFrom-Json)
+            foreach ($run in $pushRuns) {
+                if ($run.headBranch -eq $tag -and $run.status -in @('queued', 'in_progress', 'waiting')) {
+                    & gh run cancel $run.databaseId --repo $repository 2>$null | Out-Null
+                }
+            }
+        }
+        catch { Write-Warning 'Could not cancel the tag-push (hybrid) run; it is expected to fail at the trust gate and can be ignored.' }
+        Write-Output "Started Free release $tag with the classical profile. Approve the 'release' environment in GitHub Actions when prompted."
+    }
+    else {
+        Write-Output "Started Free release $tag. The tag push triggered the release workflow (hybrid profile; it stops at the post-quantum trust gate)."
+    }
 }
 finally {
     if ((Get-Location).Path -eq $worktree) { Pop-Location }

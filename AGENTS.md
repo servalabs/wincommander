@@ -98,6 +98,11 @@ Run commands from the repository root in PowerShell on Windows.
 - Tier invariants: `bun run lint:tiers`
 - Documentation links and anchors: `bun run lint:docs`
 - Changed-file quality guards: `bun run lint:quality`
+- Release Free: `.\tools\start-free-release.ps1 -Version X.Y.Z` bumps versions, tags, and
+  starts `release.yml` with `release_profile=classical` (the default; `-ReleaseProfile hybrid`
+  stops at the unconfigured post-quantum gate). Classical builds carry no `experimental-*`
+  features; select it by `WINCMD_RELEASE_PROFILE=classical` or `--release-profile=classical`
+  in the build tools.
 - Generated type drift: `bun run gen:types:check`
 - Free-binary string boundary: `bun run lint:strings-free`
 - Rust checks: from `src-tauri`, run `cargo check --all-targets` and
