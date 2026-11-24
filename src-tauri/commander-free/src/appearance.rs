@@ -45,8 +45,13 @@ fn apply_label(app: &AppHandle, label: &str) {
 /// Engage or release decoy mode. Persists the preference, applies the label
 /// (or restores "WinCommander") immediately, and emits `decoy://changed` so
 /// the frontend updates its in-app branding. Paid.
+// Async so the settings write leaves the main thread, whose stack it overflows in dev builds.
 #[tauri::command]
-pub fn decoy_mode_set(app: AppHandle, enable: bool, display_name: String) -> Result<(), String> {
+pub async fn decoy_mode_set(
+    app: AppHandle,
+    enable: bool,
+    display_name: String,
+) -> Result<(), String> {
     crate::license::require_paid("decoy mode")?;
 
     let name = {
@@ -128,5 +133,54 @@ pub fn apply_on_startup(app: &AppHandle) {
             };
             apply_label(app, &name);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Stealth mode overflowed the 1 MB main stack: dev invoke handler ~0.5 MB + settings write ~0.4 MB.
+    const SETTINGS_WRITERS: [&str; 4] = [
+        "patch_settings(",
+        "write_settings(",
+        "set_calculator_lock_enabled(",
+        "mutate_settings_with(",
+    ];
+
+    fn sync_commands_writing_settings(dir: &std::path::Path, found: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                sync_commands_writing_settings(&path, found);
+                continue;
+            }
+            if path.extension().is_none_or(|extension| extension != "rs") {
+                continue;
+            }
+            let source = std::fs::read_to_string(&path)
+                .unwrap()
+                .replace("\r\n", "\n");
+            for command in source.split(concat!("#[tauri::", "command")).skip(1) {
+                let Some(open) = command.find('{') else {
+                    continue;
+                };
+                let body = command[open..].split("\n}\n").next().unwrap_or_default();
+                if !command[..open].contains("async fn")
+                    && SETTINGS_WRITERS.iter().any(|writer| body.contains(writer))
+                {
+                    found.push(format!("{}: {}", path.display(), command[..open].trim()));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn sync_tauri_commands_never_persist_settings_on_the_main_thread() {
+        let mut found = Vec::new();
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        sync_commands_writing_settings(&src, &mut found);
+        assert!(
+            found.is_empty(),
+            "sync commands writing settings: {found:#?}"
+        );
     }
 }

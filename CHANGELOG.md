@@ -10,6 +10,9 @@ lists only a selection of those changes.
 
 ## Unreleased
 
+- Fix a crash ("thread 'main' has overflowed its stack") in development
+  builds the moment Stealth mode, or the cover identity switch on its own, is
+  turned on. Saving the cover name now runs off the window thread.
 - Add a Stealth mode switch to Secret Settings that turns on the calculator
   lock, cover identity, hide WinCommander and hide backend apps together. Each
   of the four keeps its own switch, so any one can be used alone. Turning on
