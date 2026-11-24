@@ -618,6 +618,10 @@ function LockDisguiseSection() {
         if (on) {
             const setupError = stealthSetupError({ hasRealPin, pin: stealthPin });
             if (setupError) { showError(setupError); return; }
+            // Checked up front: the lock step runs after Hide, and a taken peek hotkey would leave the app hidden with no way back.
+            if (pending.includes("lock") && (wcHidden || pending.includes("hide"))) {
+                try { await invoke("require_calculator_peek_hotkey"); } catch (error) { showError(String(error)); return; }
+            }
         }
         setStealthBusy(true);
         try {
