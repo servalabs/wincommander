@@ -66,8 +66,16 @@ if ($Beta -and -not $StageOnly) {
 if ($Beta -and $Version -notmatch '^\d+\.\d+\.\d+$') {
     throw '[FAIL] Free beta candidates require a numeric X.Y.Z version.'
 }
-if (-not $StageOnly) {
-    throw '[FAIL] Free publication is disabled until verified hybrid metadata publication is integrated. Use -StageOnly for local verification.'
+# Release profile: only an explicit WINCMD_RELEASE_PROFILE=classical in the
+# calling environment (never inferred, never read from .env for this decision)
+# enables publication. Unset or empty means hybrid, whose publication stays
+# disabled. Any other value fails closed.
+$script:ReleaseProfile = if ([string]::IsNullOrEmpty($env:WINCMD_RELEASE_PROFILE)) { 'hybrid' } else { $env:WINCMD_RELEASE_PROFILE }
+if ($script:ReleaseProfile -cnotin @('hybrid', 'classical')) {
+    throw "[FAIL] Unknown release profile '$($script:ReleaseProfile)'; expected 'classical' or 'hybrid'."
+}
+if (-not $StageOnly -and $script:ReleaseProfile -ne 'classical') {
+    throw '[FAIL] Free publication is disabled until verified hybrid metadata publication is integrated. Use -StageOnly for local verification, or set WINCMD_RELEASE_PROFILE=classical for an explicit classical release.'
 }
 
 function Stop-Release {
@@ -328,6 +336,16 @@ function Publish-GitHubArchive {
 Push-Location $script:Root
 try {
     Import-ReleaseEnvironment
+    # The private environment file must not switch the profile that was chosen
+    # (and, for publication, authorised) before it was read.
+    if ($script:ReleaseProfile -eq 'classical') {
+        $env:WINCMD_RELEASE_PROFILE = 'classical'
+        $hybridTrust = @(Get-ChildItem Env: | Where-Object { $_.Name -like 'WINCMD_PQ_*' -and -not [string]::IsNullOrEmpty($_.Value) } | ForEach-Object { $_.Name })
+        if ($hybridTrust.Count -gt 0) { Stop-Release "Classical release profile refuses hybrid trust configuration: $($hybridTrust -join ', ')" }
+    } elseif ($env:WINCMD_RELEASE_PROFILE -and $env:WINCMD_RELEASE_PROFILE -ne 'hybrid') {
+        Stop-Release 'The private release environment may not change the release profile.'
+    }
+    Write-Host "[release] release_profile: $($script:ReleaseProfile)"
     if (-not $StageOnly -and ($env:WINCMD_FLEET_RECOVERY_LAB -eq '1' -or $env:VITE_FLEET_RECOVERY_LAB -eq '1')) {
         Stop-Release 'Recovery lab builds are local-only and cannot be published.'
     }

@@ -72,6 +72,7 @@ describe("paired post-quantum release configuration", () => {
   test("a release without configured trust fails before the build starts", () => {
     const env = { ...process.env };
     for (const key of Object.keys(env)) if (key.startsWith("WINCMD_PQ_")) delete env[key];
+    delete env.WINCMD_RELEASE_PROFILE;
     const result = Bun.spawnSync([process.execPath, "run", "tools/build-tauri-release.ts"], {
       cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe",
     });
@@ -81,6 +82,7 @@ describe("paired post-quantum release configuration", () => {
   test("Pro release build refuses missing approval before invoking Cargo", () => {
     const env = { ...process.env };
     for (const key of Object.keys(env)) if (key.startsWith("WINCMD_PQ_")) delete env[key];
+    delete env.WINCMD_RELEASE_PROFILE;
     const fakePro = mkdtempSync(join(tmpdir(), "wincmd-pq-test-"));
     try {
       writeFileSync(join(fakePro, "Cargo.toml"), "");

@@ -2,13 +2,27 @@ import { copyFileSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { assertSharedAssets } from "./check-shared-assets";
 import { pairedServiceHash, pairedSearchTemplate } from "./paired-search-release-contract";
-import { desktopBuildCommand, normalizedPqReleaseEnvironment, serviceBuildCommand } from "./pq-release-profile";
+import {
+  appendFeatures, assertClassicalEnvironment, assertNoExperimentalFeatures, desktopBuildCommand,
+  releaseBuildEnvironment, releaseProfile, serviceBuildCommand,
+} from "./pq-release-profile";
 import { validateReleaseTrust, verifyReleaseTrustProofs } from "./pq-release-preflight";
 
 import { recoveryLabEnabled } from "./recovery-lab-build";
 
 const root = resolve(import.meta.dirname, "..");
-validateReleaseTrust(root, process.env);
+// Hybrid is the default and keeps the full trust gate. Classical is selected only
+// by WINCMD_RELEASE_PROFILE=classical or --release-profile=classical; it builds
+// with no experimental-* Cargo feature and refuses any WINCMD_PQ_* trust value.
+const profile = releaseProfile(process.env, process.argv.slice(2));
+if (profile === "classical") {
+  assertClassicalEnvironment(process.env);
+  // The paired labs add experimental-* Cargo features, which a classical release never carries.
+  if (process.argv.includes("--experimental-paired-search-lab")) {
+    throw new Error("Classical release profile refuses the experimental paired search lab build.");
+  }
+} else validateReleaseTrust(root, process.env);
+console.log(`[release] release_profile: ${profile}`);
 const recoveryLab = recoveryLabEnabled(process.env);
 assertSharedAssets(root);
 const configPath = resolve(root, "src-tauri", "commander-free", "tauri.conf.json");
@@ -64,7 +78,7 @@ const rustflags = [process.env.RUSTFLAGS, staticCrtFlags].filter(Boolean).join("
 // C runtime, but use normal release linking for the installer so it is
 // reproducible on both local machines and CI.
 const releaseBuildEnv = {
-  ...normalizedPqReleaseEnvironment(process.env),
+  ...releaseBuildEnvironment(process.env, profile),
   RUSTFLAGS: rustflags,
   CARGO_PROFILE_RELEASE_LTO: "false",
   ...(pairedSearch ? { WINCMD_PAIRED_LAB_BUILD: "1" } : {}),
@@ -81,15 +95,16 @@ function run(command: string[], label: string, env = releaseBuildEnv) {
   if (result.exitCode !== 0) throw new Error(`${label} failed with exit code ${result.exitCode}`);
 }
 
-verifyReleaseTrustProofs(root, releaseBuildEnv);
+if (profile === "hybrid") verifyReleaseTrustProofs(root, releaseBuildEnv);
 
 run(
   ["cargo", "build", "--manifest-path", "src-tauri/Cargo.toml", "-p", "commander-context-shred", "--release"],
   "WinCommander context-delete helper release build",
 );
 if (!pairedSearch) {
-  const serviceCommand = serviceBuildCommand();
-  if (recoveryLab) serviceCommand[serviceCommand.indexOf("--features") + 1] += ",fleet-recovery-lab";
+  let serviceCommand = serviceBuildCommand(profile);
+  if (recoveryLab) serviceCommand = appendFeatures(serviceCommand, "fleet-recovery-lab");
+  if (profile === "classical") assertNoExperimentalFeatures(serviceCommand, "the service build");
   run(serviceCommand, "WinCommander machine-service release build");
 }
 run(
@@ -133,14 +148,15 @@ if (pairedSearch) pairedServiceHash(readFileSync(stagedServicePath), process.env
 copyFileSync(calculatorBuildPath, stagedCalculatorPath);
 writeFileSync(generatedConfigPath, `${JSON.stringify(config, null, 2)}\n`);
 try {
-  const desktopCommand = desktopBuildCommand(generatedConfigPath);
+  // appendFeatures never assumes `--features` exists: a classical command has none.
+  let desktopCommand = desktopBuildCommand(generatedConfigPath, profile);
   if (pairedSearch) {
-    const featuresIndex = desktopCommand.indexOf("--features") + 1;
-    desktopCommand[featuresIndex] += pairedSettings
-      ? ",experimental-encrypted-search,experimental-settings-generation"
-      : ",experimental-encrypted-search";
+    desktopCommand = appendFeatures(desktopCommand, pairedSettings
+      ? ["experimental-encrypted-search", "experimental-settings-generation"]
+      : ["experimental-encrypted-search"]);
   }
-  if (recoveryLab) desktopCommand[desktopCommand.indexOf("--features") + 1] += ",fleet-recovery-lab";
+  if (recoveryLab) desktopCommand = appendFeatures(desktopCommand, "fleet-recovery-lab");
+  if (profile === "classical") assertNoExperimentalFeatures(desktopCommand, "the desktop build");
   run(desktopCommand, "Tauri release bundle");
   if (pairedSearch) pairedServiceHash(readFileSync(stagedServicePath), process.env.WINCMD_FENCED_SERVICE_SHA256 ?? "");
 } finally {

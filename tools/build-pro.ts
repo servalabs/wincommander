@@ -2,36 +2,42 @@ import { spawnSync } from "node:child_process";
 import { copyFileSync, mkdirSync, renameSync } from "node:fs";
 import { resolve } from "node:path";
 import { getProManifestPath } from "./pro-workspace";
-import { normalizedPqReleaseEnvironment } from "./pq-release-profile";
+import { assertClassicalEnvironment, proBuildArgs, releaseBuildEnvironment, releaseProfile, withoutReleaseProfileFlag } from "./pq-release-profile";
 import { validateReleaseTrust, verifyReleaseTrustProofs } from "./pq-release-preflight";
 import { recoveryLabEnabled, validateRecoveryLabCargoArgs } from "./recovery-lab-build";
 
 const ROOT = resolve(import.meta.dir, "..");
 const PRO_MANIFEST = getProManifestPath(ROOT);
 const TARGET_DIR = resolve(ROOT, "src-tauri", "target");
-const extraArgs = process.argv.slice(2);
+// The profile flag selects release trust; it is never a Cargo argument.
+const profile = releaseProfile(process.env, process.argv.slice(2));
+const extraArgs = withoutReleaseProfileFlag(process.argv.slice(2));
 // A custom Cargo profile could otherwise bypass the release check. The release
 // path uses the standard profile so that its embedded trust is predictable.
 if (extraArgs.some(arg => arg === "--profile" || arg.startsWith("--profile="))) {
   throw new Error("Custom Pro build profiles are not supported; use --release for a release build");
 }
 const release = extraArgs.includes("--release");
-if (release) {
+if (release && profile === "hybrid") {
   validateReleaseTrust(ROOT, process.env);
   verifyReleaseTrustProofs(ROOT, process.env);
+} else if (release) {
+  // Classical release: no PQ trust is validated, and none may be configured.
+  assertClassicalEnvironment(process.env);
+  console.log("[build:pro] release_profile: classical");
 }
 const recoveryLab = recoveryLabEnabled(process.env);
 validateRecoveryLabCargoArgs(extraArgs, recoveryLab);
 const staticCrtFlags = "-C target-feature=+crt-static";
 const rustflags = [process.env.RUSTFLAGS, staticCrtFlags].filter(Boolean).join(" ");
-const environment: NodeJS.ProcessEnv = { ...normalizedPqReleaseEnvironment(process.env), RUSTFLAGS: rustflags };
+const environment: NodeJS.ProcessEnv = { ...releaseBuildEnvironment(process.env, release ? profile : "hybrid"), RUSTFLAGS: rustflags };
 if (!release && process.platform === "win32" && process.arch === "x64") {
   environment.AWS_LC_SYS_PREBUILT_NASM ??= "1";
 }
 
 const result = spawnSync(
   "cargo",
-  ["build", "-p", "commander-pro", ...extraArgs, ...(release ? ["--features", "experimental-pq-licence"] : []), ...(recoveryLab ? ["--features", "fleet-recovery-lab"] : []), "--manifest-path", PRO_MANIFEST, "--target-dir", TARGET_DIR],
+  proBuildArgs(extraArgs, { release, recoveryLab, manifestPath: PRO_MANIFEST, targetDir: TARGET_DIR, profile }),
   {
     cwd: ROOT,
     // Cargo reads config from its working directory, which is this public

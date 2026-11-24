@@ -4,7 +4,16 @@ import { readFileSync } from "node:fs";
 const publisher = readFileSync("tools/release-free.ps1", "utf8");
 
 describe("manual Free release publisher", () => {
-
+  test("publication is enabled only by an explicit classical profile taken before .env is read", () => {
+    const gate = publisher.indexOf("if (-not $StageOnly -and $script:ReleaseProfile -ne 'classical')");
+    expect(gate).toBeGreaterThan(0);
+    expect(publisher).toContain("Free publication is disabled until verified hybrid metadata publication is integrated.");
+    expect(publisher).toContain("$script:ReleaseProfile -cnotin @('hybrid', 'classical')");
+    expect(gate).toBeLessThan(publisher.indexOf("function Stop-Release"));
+    expect(gate).toBeLessThan(publisher.lastIndexOf("    Import-ReleaseEnvironment"));
+    expect(publisher).toContain("The private release environment may not change the release profile.");
+    expect(publisher).toContain("Classical release profile refuses hybrid trust configuration");
+  });
 
   test("uses pinned SBOM tooling and promotes the updater pointer only after verification", () => {
     expect(publisher).toContain('"syft_${pinnedVersion}_windows_amd64.zip"');

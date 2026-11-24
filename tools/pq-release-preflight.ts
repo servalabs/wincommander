@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { normalizedPqReleaseEnvironment, validatePqReleaseTrust } from "./pq-release-profile";
+import { assertClassicalEnvironment, normalizedPqReleaseEnvironment, releaseProfile, validatePqReleaseTrust, withoutReleaseProfileFlag } from "./pq-release-profile";
 
 const disposableTrustFiles = [
   "src-tauri/commander-free/tests/fixtures/hybrid-pro-disposable.json",
@@ -37,6 +37,15 @@ export function verifyReleaseTrustProofs(root: string, env: NodeJS.ProcessEnv): 
 
 if (import.meta.main) {
   const root = resolve(import.meta.dirname, "..");
-  validateReleaseTrust(root, process.env);
-  verifyReleaseTrustProofs(root, process.env);
+  const args = process.argv.slice(2);
+  const profile = releaseProfile(process.env, args);
+  if (withoutReleaseProfileFlag(args).length) throw new Error("Unexpected arguments.");
+  if (profile === "classical") {
+    // Explicit classical release: there is no PQ trust to verify, and none may be present.
+    assertClassicalEnvironment(process.env);
+    console.log("[release] classical profile: hybrid trust validation skipped.");
+  } else {
+    validateReleaseTrust(root, process.env);
+    verifyReleaseTrustProofs(root, process.env);
+  }
 }

@@ -5,6 +5,18 @@ name: release
 # requires reviewed beta branch rules and protected beta-v* tag rules.
 # An authorized maintainer may start the workflow, but publication always waits
 # for a different required reviewer to approve the protected environment.
+#
+# Release profile. Free publication is enabled ONLY for an explicitly
+# classical release: start this workflow with workflow_dispatch and set
+# release_profile=classical (against the existing vX.Y.Z tag). The profile is
+# never inferred. A tag push, a workflow_call without the input, or any other
+# run uses `hybrid`, which keeps the verified-hybrid trust gate and the
+# "Block incomplete hybrid Free publication" step, so those runs cannot
+# publish. A classical run sets WINCMD_RELEASE_PROFILE=classical for the build
+# (no experimental-* Cargo feature, no WINCMD_PQ_* trust, no PQ trust
+# validation) and the build tools refuse a half-configured classical release.
+# The updater manifest (latest.json) format is identical in both profiles; the
+# profile is recorded in the job summary and the GitHub Release notes only.
 on:
   push:
     tags:
@@ -16,15 +28,29 @@ on:
         description: Existing vX.Y.Z tag to build and publish
         required: true
         type: string
+      release_profile:
+        description: "Release profile. Only classical publishes Free; hybrid stays blocked."
+        required: false
+        default: hybrid
+        type: choice
+        options:
+          - hybrid
+          - classical
   workflow_call:
     inputs:
       release_tag:
         description: Existing vX.Y.Z tag to build and publish
         required: true
         type: string
+      release_profile:
+        description: "Release profile (hybrid or classical). Only classical publishes Free."
+        required: false
+        default: hybrid
+        type: string
 
 env:
   RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+  RELEASE_PROFILE: ${{ inputs.release_profile || 'hybrid' }}
 
 concurrency:
   group: public-release
@@ -39,6 +65,14 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Require a known release profile
+        run: |
+          set -euo pipefail
+          case "${RELEASE_PROFILE}" in
+            hybrid|classical) echo "Release profile: ${RELEASE_PROFILE}" ;;
+            *) echo "::error::Unknown release profile '${RELEASE_PROFILE}'; expected hybrid or classical." >&2; exit 1 ;;
+          esac
+
       - name: Require protected source and independently reviewed environment
         env:
           GH_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
@@ -346,10 +380,22 @@ jobs:
       # builds the signed machine-wide Free setup and its asInvoker Explorer
       # helper. It installs WinCommanderSvc, but never installs or removes a
       # kernel driver.
-      - name: Build signed Free NSIS setup
+      - name: Build signed Free NSIS setup (classical profile)
+        if: env.RELEASE_PROFILE == 'classical'
         env:
           RUST_MIN_STACK: "16777216"
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Deliberately no WINCMD_PQ_* variables: the build tools refuse a
+          # classical release that carries any hybrid trust configuration.
+          WINCMD_RELEASE_PROFILE: classical
+        run: bun run build:free:release-installer
+
+      - name: Build signed Free NSIS setup
+        if: env.RELEASE_PROFILE == 'hybrid'
+        env:
+          RUST_MIN_STACK: "16777216"
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          WINCMD_RELEASE_PROFILE: hybrid
           WINCMD_PQ_LIC_ED_KEY: ${{ vars.WINCMD_PQ_LIC_ED_KEY }}
           WINCMD_PQ_LIC_MLDSA_KEY: ${{ vars.WINCMD_PQ_LIC_MLDSA_KEY }}
           WINCMD_PQ_LIC_ED_ID: ${{ vars.WINCMD_PQ_LIC_ED_ID }}
@@ -638,16 +684,27 @@ jobs:
             wincommander-free.sbom.cdx.json
           if-no-files-found: error
 
-      # The app requires versioned hybrid metadata, which this workflow does
-      # not yet publish. Do not expose a pointer to an unusable update.
+      # A hybrid app requires versioned hybrid metadata, which this workflow
+      # does not yet publish. Do not expose a pointer to an unusable update.
+      # Only an explicit classical profile (see the header comment) publishes;
+      # every other run, including every default run, stops here.
       - name: Block incomplete hybrid Free publication
+        if: env.RELEASE_PROFILE != 'classical'
         shell: pwsh
         run: throw 'Free publication is disabled until verified hybrid metadata publication is integrated.'
+
+      - name: Record release profile
+        if: env.RELEASE_PROFILE == 'classical'
+        shell: pwsh
+        run: |
+          "release_profile: classical" | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+          "Tag: $env:RELEASE_TAG (updater manifest format unchanged)" | Add-Content -Path $env:GITHUB_STEP_SUMMARY
 
       # Upload immutable artifacts before the mutable latest.json pointer. A
       # client that sees a new manifest can therefore always fetch its setup and
       # minisign sidecar from the same R2 release.
       - name: Install pinned rclone (no credentials)
+        if: env.RELEASE_PROFILE == 'classical'
         shell: pwsh
         env:
           RCLONE_VERSION: v1.70.3
@@ -667,6 +724,7 @@ jobs:
           "RCLONE_EXE=$($rclone.FullName)" | Add-Content $env:GITHUB_ENV
 
       - name: Publish signed Free release to R2
+        if: env.RELEASE_PROFILE == 'classical'
         shell: pwsh
         env:
           RCLONE_CONFIG_R2_TYPE: s3
@@ -726,6 +784,7 @@ jobs:
       # GitHub Releases remain the public release archive. The installed app
       # does not read this release or download its updater from GitHub.
       - name: Publish GitHub Release archive
+        if: env.RELEASE_PROFILE == 'classical'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -738,7 +797,7 @@ jobs:
             $env:CHECKSUM_PATH,
             "wincommander-free.sbom.cdx.json"
           )
-          $notes = "Automated Free NSIS setup release. Verify provenance with: gh attestation verify `"<installer>-setup.exe`" -R ${{ github.repository }}"
+          $notes = "Automated Free NSIS setup release (release_profile: classical). Verify provenance with: gh attestation verify `"<installer>-setup.exe`" -R ${{ github.repository }}"
 
           gh release view $env:RELEASE_TAG 2>$null
           if ($LASTEXITCODE -eq 0) {

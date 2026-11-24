@@ -9,16 +9,117 @@ export const DESKTOP_PQ_FEATURES = [
 ] as const;
 export const SERVICE_PQ_FEATURES = ["experimental-pq-licence"] as const;
 
-export function serviceBuildCommand(): string[] {
-  return ["cargo", "build", "--manifest-path", "src-tauri/Cargo.toml", "-p", "commander-svc", "--release", "--features", SERVICE_PQ_FEATURES.join(",")];
-}
-
-export function desktopBuildCommand(configPath: string): string[] {
-  return ["bun", "x", "--package", "@tauri-apps/cli@2.12.4", "tauri", "build", "--config", configPath,
-    "--features", DESKTOP_PQ_FEATURES.join(",")];
-}
-
 type Environment = Readonly<Record<string, string | undefined>>;
+
+/**
+ * Which licence/update trust a release ships. "hybrid" (the default) is the
+ * Ed25519 + ML-DSA profile and keeps its full trust gate. "classical" matches
+ * the already-deployed classical licence worker and is chosen ONLY by an
+ * explicit WINCMD_RELEASE_PROFILE=classical (or --release-profile=classical);
+ * it never follows from missing or empty configuration.
+ */
+export type ReleaseProfile = "classical" | "hybrid";
+export const RELEASE_PROFILE_ENV = "WINCMD_RELEASE_PROFILE";
+const RELEASE_PROFILE_FLAG = "--release-profile";
+
+function parseProfile(source: string, value: string | undefined, explicitlyPresent = false): ReleaseProfile | undefined {
+  if (value === undefined || (value === "" && !explicitlyPresent)) return undefined;
+  if (value === "classical" || value === "hybrid") return value;
+  throw new Error(`Unknown release profile ${JSON.stringify(value)} in ${source}; expected "classical" or "hybrid".`);
+}
+
+/** Fails closed on any unknown, duplicated, malformed or conflicting selection. */
+export function releaseProfile(env: Environment, argv: readonly string[] = []): ReleaseProfile {
+  const fromEnv = parseProfile(RELEASE_PROFILE_ENV, env[RELEASE_PROFILE_ENV]);
+  const flags = argv.filter((arg) => arg === RELEASE_PROFILE_FLAG || arg.startsWith(`${RELEASE_PROFILE_FLAG}=`));
+  if (flags.length > 1) throw new Error("Release profile may be selected only once on the command line.");
+  if (flags[0] === RELEASE_PROFILE_FLAG) throw new Error(`Use ${RELEASE_PROFILE_FLAG}=classical or ${RELEASE_PROFILE_FLAG}=hybrid.`);
+  const fromFlag = flags.length ? parseProfile(RELEASE_PROFILE_FLAG, flags[0].slice(RELEASE_PROFILE_FLAG.length + 1), true) : undefined;
+  if (fromFlag && fromEnv && fromFlag !== fromEnv) {
+    throw new Error(`${RELEASE_PROFILE_FLAG}=${fromFlag} conflicts with ${RELEASE_PROFILE_ENV}=${fromEnv}.`);
+  }
+  return fromFlag ?? fromEnv ?? "hybrid";
+}
+
+/** Removes the profile flag so it is never forwarded to Cargo or Tauri. */
+export function withoutReleaseProfileFlag(argv: readonly string[]): string[] {
+  return argv.filter((arg) => arg !== RELEASE_PROFILE_FLAG && !arg.startsWith(`${RELEASE_PROFILE_FLAG}=`));
+}
+
+/** A release that is half classical and half hybrid must be impossible. */
+export function assertClassicalEnvironment(env: Environment): void {
+  // An unset GitHub variable arrives as an empty string; only real values count.
+  const present = Object.keys(env).filter((name) => name.startsWith("WINCMD_PQ_") && !!env[name]);
+  if (present.length) throw new Error(`Classical release profile refuses hybrid trust configuration: ${present.sort().join(", ")}`);
+}
+
+function featureLists(args: readonly string[]): string[] {
+  const lists: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--features" || arg === "-F") lists.push(args[i + 1] ?? "");
+    else if (arg.startsWith("--features=")) lists.push(arg.slice("--features=".length));
+    else if (arg.startsWith("-F") && arg.length > 2) lists.push(arg.slice(2).replace(/^=/, ""));
+  }
+  return lists;
+}
+
+/** Classical builds carry no experimental-* Cargo feature, however it is spelled. */
+export function assertNoExperimentalFeatures(args: readonly string[], label: string): void {
+  if (args.includes("--all-features")) throw new Error(`Classical release profile refuses --all-features in ${label}.`);
+  for (const list of featureLists(args)) {
+    for (const feature of list.split(/[\s,]+/).filter(Boolean)) {
+      if (feature.split("/").pop()!.startsWith("experimental-")) {
+        throw new Error(`Classical release profile refuses the ${feature} Cargo feature in ${label}.`);
+      }
+    }
+  }
+}
+
+/** Adds features without assuming `--features` already exists (or where it is). */
+export function appendFeatures(command: readonly string[], features: string | readonly string[]): string[] {
+  const extra = (typeof features === "string" ? [features] : [...features]).filter(Boolean).join(",");
+  const next = [...command];
+  if (!extra) return next;
+  const index = next.indexOf("--features");
+  if (index < 0) next.push("--features", extra);
+  else if (index + 1 < next.length && !next[index + 1].startsWith("-")) next[index + 1] += `,${extra}`;
+  else throw new Error("Malformed --features argument: it has no feature list.");
+  return next;
+}
+
+export function serviceBuildCommand(profile: ReleaseProfile = "hybrid"): string[] {
+  const base = ["cargo", "build", "--manifest-path", "src-tauri/Cargo.toml", "-p", "commander-svc", "--release"];
+  return profile === "classical" ? base : appendFeatures(base, SERVICE_PQ_FEATURES);
+}
+
+export function desktopBuildCommand(configPath: string, profile: ReleaseProfile = "hybrid"): string[] {
+  const base = ["bun", "x", "--package", "@tauri-apps/cli@2.12.4", "tauri", "build", "--config", configPath];
+  return profile === "classical" ? base : appendFeatures(base, DESKTOP_PQ_FEATURES);
+}
+
+/** Pro sidecar build; mirrors the historical argument order for the hybrid profile. */
+export function proBuildArgs(extraArgs: readonly string[], options: {
+  release: boolean; recoveryLab: boolean; manifestPath: string; targetDir: string; profile?: ReleaseProfile;
+}): string[] {
+  const classical = options.profile === "classical";
+  if (classical && options.release) assertNoExperimentalFeatures(extraArgs, "the Pro release build");
+  return ["build", "-p", "commander-pro", ...extraArgs,
+    ...(options.release && !classical ? ["--features", "experimental-pq-licence"] : []),
+    ...(options.recoveryLab ? ["--features", "fleet-recovery-lab"] : []),
+    "--manifest-path", options.manifestPath, "--target-dir", options.targetDir];
+}
+
+/** Child-process environment for a release build under the selected profile. */
+export function releaseBuildEnvironment(env: Environment, profile: ReleaseProfile): Record<string, string | undefined> {
+  if (profile === "hybrid") return normalizedPqReleaseEnvironment(env);
+  assertClassicalEnvironment(env);
+  const copy = { ...env };
+  // Present-but-empty trust variables would still be visible to Rust build scripts.
+  for (const name of Object.keys(copy)) if (name.startsWith("WINCMD_PQ_")) delete copy[name];
+  copy[RELEASE_PROFILE_ENV] = "classical";
+  return copy;
+}
 type Purpose = "LIC" | "FREE" | "PRO";
 const purposes: readonly Purpose[] = ["LIC", "FREE", "PRO"];
 type ApprovedKeys = { ed_sha256: string; mldsa_sha256: string; ed_id: string; mldsa_id: string; epoch: number };
