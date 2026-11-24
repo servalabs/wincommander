@@ -8,6 +8,7 @@ import { armBackend } from "../../hooks/armBackend";
 import useBackend from "../../hooks/useBackend";
 import { syncCalculatorShortcuts } from "./calculatorShortcuts";
 import { shortcutWarningsAfterReconciliation, syncSharedShortcutClaim } from "../../hooks/sharedShortcutClaims";
+import { validatePinInput } from "./pinRules";
 
 const MODES = [
   { mode: "real",    label: "Real PIN",    desc: "Opens full configuration" },
@@ -16,20 +17,6 @@ const MODES = [
 ] as const;
 
 type Mode = "real" | "decoy" | "destroy";
-
-function validatePinInput(pin: string): string | null {
-  if (pin.length < 4) return "PIN must be at least 4 digits";
-  if (!/^[0-9]+$/.test(pin)) return "PIN must contain only digits — the calculator can't display letters";
-  if (pin.startsWith("0")) return "PIN can't start with 0 — the calculator drops leading zeros";
-  if (/^(\d)\1+$/.test(pin)) return "PIN can't use the same digit repeated";
-
-  const digits = [...pin].map((d) => Number(d));
-  const ascending = digits.every((d, i) => i === 0 || d === digits[i - 1] + 1);
-  const descending = digits.every((d, i) => i === 0 || d === digits[i - 1] - 1);
-  if (ascending || descending) return "PIN can't be a simple ascending or descending sequence";
-
-  return null;
-}
 
 export default function StartupPinConfig() {
   const { appSettings, refreshSettings } = useAppState();
@@ -117,7 +104,7 @@ export default function StartupPinConfig() {
         {gateArmed
           ? "Calculator lock is ARMED — the app opens as a calculator until a PIN is entered."
           : configured.real
-            ? "Calculator lock is OFF — your saved PINs are kept. Turn the lock on above to require the Real PIN at startup."
+            ? "Calculator lock is OFF — your saved PINs are kept. Turn on Stealth mode above to require the Real PIN at startup."
             : "Calculator lock is OFF — set a Real PIN to enable it. A Decoy or Destroy PIN alone does nothing until a Real PIN exists."}
       </div>
       {MODES.map(({ mode, label, desc }) => (

@@ -10,6 +10,12 @@ lists only a selection of those changes.
 
 ## Unreleased
 
+- Add a Stealth mode switch to Secret Settings that turns on the calculator
+  lock, cover identity, hide WinCommander and hide backend apps together. Each
+  of the four keeps its own switch, so any one can be used alone. Turning on
+  the lock needs a calculator PIN (set in the same card; it opens WinCommander
+  from the calculator) and cover identity needs a name. Stealth mode stops at
+  the first step that fails and offers "Turn on the rest".
 - Fix large Vaults (a 50 GB hidden-volume Vault, a 10-15 GB hidden decoy)
   failing with the generic "could not create this Vault" message. WinCommander
   waited only 120 seconds for the service, but a hidden-volume Vault fills the

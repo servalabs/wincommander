@@ -9,7 +9,7 @@ import { isImeComposing } from "@/lib/keyboard";
 // logic stays in callbacks here; the VisibilityTable for the panel-visibility
 // grid lives in VisibilityTable.tsx.
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import PanelHeader from "../../components/shared/PanelHeader";
 import SectionCard from "../../components/shared/SectionCard";
@@ -37,6 +37,7 @@ import { armBackend, reportArmFailure } from "../../hooks/armBackend";
 import { syncCalculatorShortcuts } from "../privacy/calculatorShortcuts";
 import { shortcutWarningsAfterReconciliation, syncSharedShortcutClaim } from "../../hooks/sharedShortcutClaims";
 import VisibilityTable from "./VisibilityTable";
+import { runStealthSteps, STEALTH_LABELS, stealthPending, stealthSetupError, stealthSummary, type StealthPartId, type StealthState } from "./stealthMode";
 import AppLicensingSection from "./AppLicensingSection";
 import BrandingLicensingSection from "./BrandingLicensingSection";
 import ManagedPolicyBanner from "../../components/shared/ManagedPolicyBanner";
@@ -272,6 +273,7 @@ function LockDisguiseSection() {
     const { appSettings, patchAppSettings, refreshSettings, refreshHardening, systemInfo } = useAppState();
     const needsElevation = isPrivilegedWriteBlocked(true, systemInfo?.isAdmin);
     const { setWinCommanderVisibility, setWinCommanderCalculatorShortcuts, restartExplorer } = useBackend();
+    const { hasPaid } = useEntitlements();
 
     // Reconcile the Hide toggles with the ACTUAL machine state once on mount.
     // After startup the settings flags can lag reality — the app + backend
@@ -304,23 +306,19 @@ function LockDisguiseSection() {
     const hasRealPin = !!startupPin?.realHash;
     const lockArmed = hasRealPin && startupPin?.enabled !== false;
     const lockOnCloseChecked = lockArmed && (appSettings?.app?.lockPanelOnClose ?? true);
-    const isHideModeActive = !!appSettings?.ideal?.identity?.hideWinCommander;
     const [lockBusy, setLockBusy] = useState(false);
-    const handleToggleLock = useCallback(async (next: boolean) => {
-        if (next && !hasRealPin) {
-            showError("Type a Real PIN below and press Set to turn the calculator lock on.");
-            return;
-        }
+    // hideActive is passed in: a Stealth run changes Hide mode after this render read the settings.
+    const applyLock = useCallback(async (next: boolean, hideActive: boolean): Promise<boolean> => {
         setLockBusy(true);
         try {
-            if (next && isHideModeActive) await invoke("require_calculator_peek_hotkey");
+            if (next && hideActive) await invoke("require_calculator_peek_hotkey");
             await invoke("set_startup_pin_enabled", { enabled: next });
             await refreshSettings();
             const shared = await syncSharedShortcutClaim("calculator", next);
             const warning = await syncCalculatorShortcuts(setWinCommanderCalculatorShortcuts, next, shared.managed);
             const warnings = shortcutWarningsAfterReconciliation(warning ? [warning] : [], shared.warning);
             if (warnings.length || shared.warning) showWarning(`Calculator Lock changed, but shortcuts need attention: ${[...warnings, shared.warning].filter(Boolean).join(" ")}`);
-            void armBackend("update_autostart_task_identity", { covered: next || isHideModeActive }, "Autostart task identity was not updated");
+            void armBackend("update_autostart_task_identity", { covered: next || hideActive }, "Autostart task identity was not updated");
             if (next) {
                 try {
                     await invoke("enter_calculator_mode");
@@ -334,18 +332,20 @@ function LockDisguiseSection() {
                         reportArmFailure("set_startup_pin_enabled", "Calculator lock is saved as on but not active (rollback failed)", rollbackError);
                     }
                     await refreshSettings();
-                    return;
+                    return false;
                 }
             }
             if (!warnings.length && !shared.warning) showSuccess(next
                 ? "Calculator lock on — calculator mode is active."
                 : "Calculator lock off — saved PINs were kept.");
+            return true;
         } catch (e) {
             showError(`Failed to update calculator lock: ${e}`);
+            return false;
         } finally {
             setLockBusy(false);
         }
-    }, [hasRealPin, refreshSettings, isHideModeActive, setWinCommanderCalculatorShortcuts]);
+    }, [refreshSettings, setWinCommanderCalculatorShortcuts]);
 
     // ── Triggers: lock/unlock keywords + peek hotkey ──
     const [lockKw, setLockKw] = useState("");
@@ -416,17 +416,11 @@ function LockDisguiseSection() {
     }, [lockKw, unlockKw, patchAppSettings]);
 
     // ── Cover identity ──
-    // `coverEnabled` is DERIVED from settings (single source of truth). Turning
-    // the switch on ARMS the editor (shows + focuses the name field) but does
-    // NOT commit the default silently — the user types a name and presses
-    // Apply/Enter to actually engage cover. `coverArming` holds that pending UI.
+    // coverEnabled is derived from settings (single source of truth).
     const coverEnabled = appSettings?.app?.decoyMode?.enabled === true;
-    const [coverArming, setCoverArming] = useState(false);
     const [coverName, setCoverName] = useState(DEFAULT_COVER_NAME);
     const [coverBusy, setCoverBusy] = useState(false);
     const coverSeeded = useRef(false);
-    const coverNameRef = useRef<HTMLInputElement>(null);
-    const coverOn = coverEnabled || coverArming;
 
     useEffect(() => {
         if (!appSettings?.app?.decoyMode || coverSeeded.current) return;
@@ -434,61 +428,41 @@ function LockDisguiseSection() {
         setCoverName(appSettings.app.decoyMode.displayName?.trim() || DEFAULT_COVER_NAME);
     }, [appSettings?.app?.decoyMode]);
 
-    useEffect(() => {
-        if (coverArming) {
-            const id = requestAnimationFrame(() => coverNameRef.current?.select());
-            return () => cancelAnimationFrame(id);
-        }
-    }, [coverArming]);
-
-    const applyCover = useCallback(async (enabled: boolean, name: string) => {
+    const applyCover = useCallback(async (enabled: boolean, name: string): Promise<boolean> => {
         setCoverBusy(true);
         try {
             const clean = name.trim() || DEFAULT_COVER_NAME;
             await invoke("decoy_mode_set", { enable: enabled, displayName: clean });
             await refreshSettings();
             showSuccess(enabled ? `Cover identity on — app appears as "${clean}".` : "Cover identity off.");
+            return true;
         } catch (e) {
             showError(`Cover identity failed: ${e}`);
+            return false;
         } finally {
             setCoverBusy(false);
         }
     }, [refreshSettings]);
 
-    const handleCoverToggle = useCallback((next: boolean) => {
-        if (next) {
-            // Don't commit a default name silently — reveal the field and wait.
-            setCoverArming(true);
-        } else {
-            setCoverArming(false);
-            if (coverEnabled) applyCover(false, coverName);
-        }
-    }, [coverEnabled, coverName, applyCover]);
-
-    const commitCover = useCallback(async () => {
-        await applyCover(true, coverName);
-        setCoverArming(false);
-    }, [applyCover, coverName]);
-
     // ── Hide the app ──
     const [wcBusy, setWcBusy] = useState(false);
     const [backendBusy, setBackendBusy] = useState(false);
 
-    const handleToggleWc = useCallback(async (hidden: boolean) => {
-        if (needsElevation) { showError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
+    const applyWcHidden = useCallback(async (hidden: boolean): Promise<boolean> => {
+        if (needsElevation) { showError(MACHINE_SCOPE_ELEVATION_MESSAGE); return false; }
         setWcBusy(true);
         let calculatorNeedsReapply = false;
         try {
             if (hidden && lockArmed) {
                 try { await invoke("require_calculator_peek_hotkey"); }
-                catch (error) { showError(String(error)); return; }
+                catch (error) { showError(String(error)); return false; }
             }
             if (hidden && lockArmed) {
                 // Transfer the original shortcut snapshots to Hide mode before
                 // it hides them. Each feature can then be disabled independently.
                 calculatorNeedsReapply = true;
                 const warning = await syncCalculatorShortcuts(setWinCommanderCalculatorShortcuts, false);
-                if (warning) { showWarning(`Could not prepare Calculator Lock shortcuts: ${warning}`); return; }
+                if (warning) { showWarning(`Could not prepare Calculator Lock shortcuts: ${warning}`); return false; }
             }
             const result = await setWinCommanderVisibility(hidden);
             if (result.success && result.data) {
@@ -514,9 +488,10 @@ function LockDisguiseSection() {
                 } else {
                     showSuccess(hidden ? "WinCommander hidden — window and tray removed." : "WinCommander visible — window and tray restored.");
                 }
-            } else if (!result.success) {
-                showError(result.error || "Failed to update WinCommander visibility.");
+                return true;
             }
+            if (!result.success) showError(result.error || "Failed to update WinCommander visibility.");
+            return false;
         } finally {
             if (calculatorNeedsReapply) {
                 const shared = await syncSharedShortcutClaim("calculator", true);
@@ -531,11 +506,11 @@ function LockDisguiseSection() {
     const savedHideList: string[] = appSettings?.ideal?.identity?.hideBackendAppsList ?? [];
     const allBackendHidden = BACKEND_ALL_APP_IDS.every(id => savedHideList.includes(id));
 
-    const handleToggleBackend = useCallback(async () => {
-        if (needsElevation) { showError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
+    const applyBackendHidden = useCallback(async (hide: boolean): Promise<boolean> => {
+        if (needsElevation) { showError(MACHINE_SCOPE_ELEVATION_MESSAGE); return false; }
         setBackendBusy(true);
         try {
-            if (!allBackendHidden) {
+            if (hide) {
                 const r = await invoke<{ keys: string[]; reports: unknown[] }>("hide_runtime_list", { keys: BACKEND_EXE_NAMES });
                 showSuccess(`Backend apps hidden. ${r.keys.length} app(s) processed.`);
             } else {
@@ -543,17 +518,100 @@ function LockDisguiseSection() {
                 showSuccess("Backend apps restored.");
             }
             await patchAppSettings({
-                ideal: { identity: { hideBackendAppsList: allBackendHidden ? [] : BACKEND_ALL_APP_IDS } },
+                ideal: { identity: { hideBackendAppsList: hide ? BACKEND_ALL_APP_IDS : [] } },
             });
             await refreshHardening();
+            return true;
         } catch (e) {
             showError(`Backend visibility failed: ${e}`);
+            return false;
         } finally {
             setBackendBusy(false);
         }
-    }, [allBackendHidden, patchAppSettings, refreshHardening, needsElevation]);
+    }, [patchAppSettings, refreshHardening, needsElevation]);
 
     const wcHidden = appSettings?.ideal?.identity?.hideWinCommander === true;
+
+    // ── Stealth mode: one switch for the four features above ──
+    const [stealthBusy, setStealthBusy] = useState(false);
+    const [stealthPin, setStealthPin] = useState("");
+    const stealthState = useMemo<StealthState>(
+        () => ({ lock: lockArmed, cover: coverEnabled, hide: wcHidden, backend: allBackendHidden }),
+        [lockArmed, coverEnabled, wcHidden, allBackendHidden],
+    );
+    const stealth = stealthSummary(stealthState, hasPaid);
+    const anyStepBusy = stealthBusy || lockBusy || coverBusy || wcBusy || backendBusy;
+
+    const registerRealPin = useCallback(async (): Promise<boolean> => {
+        const pinError = stealthSetupError({ hasRealPin: false, pin: stealthPin, coverPending: false, coverName: "" });
+        if (pinError) { showError(pinError); return false; }
+        try {
+            if (wcHidden) await invoke("require_calculator_peek_hotkey");
+            await invoke("register_startup_pin", { mode: "real", plaintext: stealthPin.trim() });
+            setStealthPin("");
+            await refreshSettings();
+            return true;
+        } catch (e) {
+            showError(String(e));
+            return false;
+        }
+    }, [stealthPin, wcHidden, refreshSettings]);
+
+    const toggleLock = useCallback(async (next: boolean) => {
+        setStealthBusy(true);
+        try {
+            if (next && !hasRealPin && !(await registerRealPin())) return;
+            await applyLock(next, wcHidden);
+        } finally {
+            setStealthBusy(false);
+        }
+    }, [hasRealPin, registerRealPin, applyLock, wcHidden]);
+
+    const toggleCover = useCallback(async (next: boolean) => {
+        if (next && !coverName.trim()) { showError("Type a cover name — it is what onlookers see instead of WinCommander."); return; }
+        await applyCover(next, coverName);
+    }, [coverName, applyCover]);
+
+    const runStealth = useCallback(async (direction: "on" | "off") => {
+        const on = direction === "on";
+        const pending = stealthPending(stealthState, hasPaid, direction);
+        if (pending.some((id) => id === "hide" || id === "backend") && needsElevation) {
+            showError(MACHINE_SCOPE_ELEVATION_MESSAGE);
+            return;
+        }
+        if (on) {
+            const setupError = stealthSetupError({ hasRealPin, pin: stealthPin, coverPending: pending.includes("cover"), coverName });
+            if (setupError) { showError(setupError); return; }
+        }
+        setStealthBusy(true);
+        try {
+            if (on && !hasRealPin && !(await registerRealPin())) return;
+            let hideNow = wcHidden;
+            const run = async (id: StealthPartId): Promise<boolean> => {
+                if (id === "cover") return applyCover(on, coverName);
+                if (id === "backend") return applyBackendHidden(on);
+                if (id === "hide") {
+                    const ok = await applyWcHidden(on);
+                    if (ok) hideNow = on;
+                    return ok;
+                }
+                return applyLock(on, hideNow);
+            };
+            const result = await runStealthSteps(pending, run);
+            if (result.failed) {
+                showError(`Stealth mode stopped at "${STEALTH_LABELS[result.failed]}" (${result.done.length} of ${pending.length} steps done). Fix that, then press "Turn on the rest", or switch the others on one by one.`);
+            } else if (pending.length > 0) {
+                showSuccess(on ? "Stealth mode on." : "Stealth mode off — saved PINs were kept.");
+            }
+        } finally {
+            setStealthBusy(false);
+        }
+    }, [stealthState, hasPaid, needsElevation, hasRealPin, stealthPin, coverName, wcHidden, registerRealPin, applyCover, applyBackendHidden, applyWcHidden, applyLock]);
+
+    const stealthLabel = stealthBusy ? "Working…"
+        : stealth.mode === "on" ? "On"
+        : stealth.mode === "partial" ? `Partly on (${stealth.active} of ${stealth.total})`
+        : "Off";
 
     return (
         <div className="dgz secret-grid__wide">
@@ -577,14 +635,116 @@ function LockDisguiseSection() {
             </div>
             {needsElevation && <p role="alert" className="text-xs text-[var(--warn)]">{MACHINE_SCOPE_ELEVATION_MESSAGE}</p>}
 
-            {/* Calculator lock + triggers, side by side */}
+            {/* Stealth mode: four protections, each switchable alone or all at once */}
+            <div className="dgz-block dgz-block--col">
+                <div className="dgz-block-head">
+                    <span className="dgz-block-title">Stealth mode</span>
+                    <div className="sec-header-switch">
+                        <span>{stealthLabel}</span>
+                        <Switch
+                            checked={stealth.mode !== "off"}
+                            disabled={anyStepBusy}
+                            onCheckedChange={(next) => { void runStealth(next ? "on" : "off"); }}
+                            aria-label="Turn all stealth protections on or off"
+                        />
+                    </div>
+                </div>
+                <p className="dgz-hint">
+                    Turn everything on at once, or switch each protection on its own below.
+                    With the calculator lock on, WinCommander opens only from the calculator, with your PIN.
+                </p>
+                <div className="dgz-tiles">
+                    <DgzTile
+                        icon="lock"
+                        title="Calculator lock"
+                        desc="Opens WinCommander as a working calculator. Type your PIN and press = to open the app."
+                        checked={lockArmed}
+                        loading={anyStepBusy}
+                        onChange={(next) => { void toggleLock(next); }}
+                    >
+                        {!hasRealPin && (
+                            <>
+                                <p className="dgz-hint">Set the PIN that opens WinCommander from the calculator: at least 4 digits, not starting with 0.</p>
+                                <div className="dgz-tile-extra">
+                                    <input
+                                        className="sec-input"
+                                        type="password"
+                                        inputMode="numeric"
+                                        maxLength={12}
+                                        placeholder="Calculator PIN…"
+                                        aria-label="Calculator PIN"
+                                        value={stealthPin}
+                                        disabled={anyStepBusy}
+                                        onChange={e => setStealthPin(e.target.value.replace(/\D/g, "").slice(0, 12))}
+                                    />
+                                </div>
+                            </>
+                        )}
+                    </DgzTile>
+                    <TierGate tier="paid" featureLabel="Cover Identity">
+                        <DgzTile
+                            icon="people"
+                            title="Cover identity"
+                            desc="Disguise the app name in the taskbar, Task Manager and tray."
+                            checked={coverEnabled}
+                            warn
+                            loading={anyStepBusy}
+                            onChange={(next) => { void toggleCover(next); }}
+                        >
+                            <div className="dgz-tile-extra">
+                                <input
+                                    className="sec-input"
+                                    placeholder="Choose a cover name…"
+                                    aria-label="Cover name"
+                                    value={coverName}
+                                    disabled={anyStepBusy}
+                                    onChange={e => setCoverName(e.target.value)}
+                                    onKeyDown={e => { if (e.key === "Enter" && coverEnabled && !isImeComposing(e.nativeEvent)) void applyCover(true, coverName); }}
+                                />
+                                {coverEnabled && (
+                                    <button className="sec-btn" disabled={anyStepBusy} onClick={() => void applyCover(true, coverName)}>
+                                        Save name
+                                    </button>
+                                )}
+                            </div>
+                        </DgzTile>
+                    </TierGate>
+                    <DgzTile
+                        icon="eye-off"
+                        title="Hide WinCommander"
+                        desc="Remove from taskbar, tray, Start & installed apps. Peek via the hotkey below."
+                        checked={wcHidden}
+                        warn
+                        loading={anyStepBusy}
+                        onChange={(next) => { void applyWcHidden(next); }}
+                        disabled={needsElevation}
+                    />
+                    <DgzTile
+                        icon="application"
+                        title="Hide backend apps"
+                        desc="Encryption/ RAMDISK Engine, Mesh VPN & other bundled tools."
+                        checked={allBackendHidden}
+                        loading={anyStepBusy}
+                        onChange={(next) => { void applyBackendHidden(next); }}
+                        disabled={needsElevation}
+                    />
+                </div>
+                {stealth.mode === "partial" && (
+                    <div className="dgz-tile-extra">
+                        <button className="sec-btn" disabled={anyStepBusy} onClick={() => void runStealth("on")}>
+                            Turn on the rest
+                        </button>
+                    </div>
+                )}
+            </div>
+
+            {/* Calculator PINs + triggers, side by side */}
             <div className="dgz-split">
                 <div className="dgz-block dgz-block--col">
                     <div className="dgz-block-head">
                         <span className="dgz-block-title">Calculator lock</span>
                         <div className="sec-header-switch">
                             <span>{lockBusy ? "Updating…" : lockArmed ? "On" : "Off"}</span>
-                            <Switch checked={lockArmed} onCheckedChange={handleToggleLock} disabled={lockBusy} aria-label="Calculator lock" />
                         </div>
                     </div>
                     <p className="dgz-hint">
@@ -639,58 +799,6 @@ function LockDisguiseSection() {
                             checked={lockOnCloseChecked}
                             loading={!lockArmed}
                             onChange={(v) => patchAppSettings({ app: { lockPanelOnClose: v } }).catch(reportSettingsWriteFailure)}
-                        />
-                        <TierGate tier="paid" featureLabel="Cover Identity">
-                            <DgzTile
-                                icon="people"
-                                title="Cover identity"
-                                desc={
-                                    coverEnabled ? `Appears as "${coverName}"`
-                                    : coverArming ? "Enter a name, then press Apply"
-                                    : "Disguise the app name in taskbar, Task Manager & tray"
-                                }
-                                checked={coverOn}
-                                warn
-                                loading={coverBusy}
-                                onChange={handleCoverToggle}
-                            >
-                                {coverOn && (
-                                    <div className="dgz-tile-extra">
-                                        <input
-                                            ref={coverNameRef}
-                                            className="sec-input"
-                                            placeholder="Choose a cover name…"
-                                            value={coverName}
-                                            disabled={coverBusy}
-                                            onChange={e => setCoverName(e.target.value)}
-                                            onKeyDown={e => { if (e.key === "Enter" && !isImeComposing(e.nativeEvent)) commitCover(); }}
-                                        />
-                                        <button className="sec-btn" disabled={coverBusy} onClick={commitCover}>
-                                            Apply
-                                        </button>
-                                    </div>
-                                )}
-                            </DgzTile>
-                        </TierGate>
-
-                        <DgzTile
-                            icon="eye-off"
-                            title="Hide WinCommander"
-                            desc="Remove from taskbar, tray, Start & installed apps. Peek via the hotkey below."
-                            checked={wcHidden}
-                            warn
-                            loading={wcBusy}
-                            onChange={handleToggleWc}
-                            disabled={wcBusy || needsElevation}
-                        />
-                        <DgzTile
-                            icon="application"
-                            title="Hide backend apps"
-                            desc="Encryption/ RAMDISK Engine, Mesh VPN & other bundled tools."
-                            checked={allBackendHidden}
-                            loading={backendBusy}
-                            onChange={handleToggleBackend}
-                            disabled={backendBusy || needsElevation}
                         />
                         <AutoStartTile />
                     </div>
