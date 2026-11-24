@@ -25,6 +25,7 @@ import {
 import { newDiagnosticOperationId, recordDiagnostic } from "../../lib/diagnostics";
 import { confirmPrivacyShieldStop, privacyShieldStopError } from "../../lib/privacyShieldStop";
 import { ShieldStatusGate, hasVerifiedRunningDetector, shouldProbeShieldCamera } from "../../lib/privacyShieldStatus";
+import { CAMERA_UNCONFIRMED_MESSAGE, NO_USABLE_CAMERA_MESSAGE, cameraViewFromPresence, shieldCameraView } from "../../lib/privacyShieldCamera";
 import { defaultPrivacyShieldConfig, hydratePrivacyShieldConfig, privacyShieldConfigPatch } from "../../lib/privacyShieldConfig";
 
 // Module-level cache — survives panel unmount/remount
@@ -158,9 +159,8 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
     const [privacyShieldRunning, _setShieldRunning] = useState<boolean | null>(_shieldRunningCache);
     const setPrivacyShieldRunning = (val: boolean | null) => { _shieldRunningCache = val; _setShieldRunning(val); };
     const [activeShieldMode, setActiveShieldMode] = useState<PrivacyShieldMode | null>(null);
-    const [cameraAvailable, setCameraAvailable] = useState<boolean | null>(() => cameraPresenceStore.get() === "absent" ? false : null);
-    const [cameraMessage, setCameraMessage] = useState<string | null>(() =>
-        cameraPresenceStore.get() === "host_absent" ? "No camera detected on this computer. Windows could not verify other video sources." : null);
+    const [cameraAvailable, setCameraAvailable] = useState<boolean | null>(() => cameraViewFromPresence(cameraPresenceStore.get())?.available ?? null);
+    const [cameraMessage, setCameraMessage] = useState<string | null>(() => cameraViewFromPresence(cameraPresenceStore.get())?.message ?? null);
     // Live look-away state surfaced by the backend shield reader. Only
     // meaningful while the shield is running.
     const [lookingAway, setLookingAway] = useState(false);
@@ -333,13 +333,11 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                     else if (shield.data.cameraStatus === "hardware_unavailable") cameraPresenceStore.publish("absent", cameraGeneration);
                     else if (shield.data.cameraStatus === "available") cameraPresenceStore.publish("present", cameraGeneration);
                 }
-                if (includeCamera && cameraGeneration === cameraPresenceStore.epoch() && (shield.data.cameraStatus === "unknown" || typeof shield.data.cameraAvailable !== "boolean")) {
-                    setCameraAvailable(null);
-                    setCameraMessage(shield.data.cameraMessage ?? "Camera status could not be confirmed.");
-                } else if (includeCamera && cameraGeneration === cameraPresenceStore.epoch() && typeof shield.data.cameraAvailable === "boolean") {
-                    setCameraAvailable(shield.data.cameraAvailable);
-                    setCameraMessage(shield.data.cameraMessage ?? null);
-                    if (!shield.data.cameraAvailable) {
+                if (includeCamera && cameraGeneration === cameraPresenceStore.epoch()) {
+                    const view = shieldCameraView(shield.data);
+                    setCameraAvailable(view.available);
+                    setCameraMessage(view.message);
+                    if (view.available === false) {
                         recordDiagnostic({ feature: "privacy_shield", action: "camera_check", stage: "capability",
                             lifecycle: "verified", outcome: "degraded", errorCode: "PSH.CAMERA.UNAVAILABLE",
                             severity: "warn", retryability: "manual", suggestedNextAction: "connect_camera",
@@ -413,12 +411,11 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
     useEffect(() => {
         const unsubscribeCamera = cameraPresenceStore.subscribe(value => {
             cameraAbsent.current = hasNoDetectedCamera(value);
-            if (cameraAbsent.current) {
+            const missing = cameraViewFromPresence(value);
+            if (missing) {
                 hardwareMissingApplied.current = true;
-                setCameraAvailable(value === "absent" ? false : null);
-                setCameraMessage(value === "absent"
-                    ? "No camera detected. Recheck after connecting one."
-                    : "No camera detected on this computer. Windows could not verify other video sources.");
+                setCameraAvailable(missing.available);
+                setCameraMessage(missing.message);
             } else if (hardwareMissingApplied.current) {
                 hardwareMissingApplied.current = false;
                 setCameraAvailable(null);
@@ -770,9 +767,6 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
         >
             <div className="flex flex-col gap-5">
                 {stopError && <div role="alert" className="text-sm text-[var(--color-warning)]">{stopError}</div>}
-                {cameraAvailable === null && privacyShieldRunning === false && (
-                    <p className="text-sm text-[var(--color-warning)]">Camera availability could not be confirmed. You can try starting Shield to check the camera.</p>
-                )}
                 <div className="physical-shield-head">
                     <div className="physical-shield-copy flex flex-col gap-2 min-w-0">
                         {/* Title row — name + info icon only. "How it works" and
@@ -894,13 +888,14 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                         )}
                         {!cameraRechecking && (cameraMessage || cameraAvailable !== null || cameraCheckedAt !== null) && privacyShieldRunning !== true && (
                             <p aria-live="polite" className={`text-[10px] mt-1 max-w-[320px] ${cameraAvailable === true ? "text-[var(--color-success)]" : "text-[var(--color-warning)]"}`}>
-                                {cameraMessage || (cameraAvailable === true ? "Camera available." : cameraAvailable === false ? "No camera detected." : "Camera status could not be confirmed.")}
+                                {cameraMessage || (cameraAvailable === true ? "Camera available." : cameraAvailable === false ? NO_USABLE_CAMERA_MESSAGE : CAMERA_UNCONFIRMED_MESSAGE)}
                                 {cameraCheckedAt !== null && ` Checked ${new Date(cameraCheckedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}.`}
                             </p>
                         )}
                     </div>
                 </div>
 
+                {cameraAvailable !== false && (<>
                     <div className="rounded-md border border-[var(--shield-inner-border)] bg-[var(--shield-inner-bg)] px-3 py-2">
                         <button
                             type="button"
@@ -928,7 +923,6 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                             </div>
                         )}
                     </div>
-                {cameraAvailable !== false && (
                 <div className={`rounded-md border border-[var(--shield-inner-border)] bg-[var(--shield-inner-bg)] p-4 ${localFleetControl.settingsLocked ? "pointer-events-none opacity-70" : ""}`}>
                     {/* Blur conditions are intentionally kept together: these
                         are the three inputs that directly decide whether the
@@ -1066,7 +1060,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                         )}
                     </div>
                 </div>
-                )}
+                </>)}
             </div>
             <PrivacyShieldIntro isOpen={showShieldIntro} onClose={() => setShowShieldIntro(false)} />
             {extraSlot && (

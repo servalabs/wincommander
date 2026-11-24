@@ -10,7 +10,17 @@ lists only a selection of those changes.
 
 ## Unreleased
 
-- Add an explicit classical release profile (`WINCMD_RELEASE_PROFILE=classical`).
+- Fix Privacy Shield reporting "Camera availability could not be confirmed" on
+  a machine with no camera. The camera probe never answered "no camera" inside
+  a Remote Desktop session or while Windows camera consent read Denied, which
+  is the default on Windows Server; it now treats an empty device inventory
+  plus an empty video-source list as a definite no, retries a failed query
+  once, and the card then shows "No usable camera detected." only. A genuine
+  query failure shows one plain sentence with the refresh icon. Starting Shield
+  on a device that is not Fleet-managed no longer requires a single Windows
+  session, and a Fleet-managed refusal is worded for people. Backend errors no
+  longer show literal quotes. The AI runtime row is hidden while no camera is
+  available.- Add an explicit classical release profile (`WINCMD_RELEASE_PROFILE=classical`).
   It builds without `experimental-*` features and skips the post-quantum trust
   gate, matching 3.6.x and the production licence worker; the default profile
   and its gate are unchanged. `release.yml` publishes only under classical, and

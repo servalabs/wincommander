@@ -9,17 +9,21 @@ function Get-CimInstance {
     }
     if ($ClassName -eq 'Win32_Process') { return }
     if ($script:cameraFixture -eq 'wmi_failed') { throw 'fixture WMI failure' }
+    if ($script:cameraFixture -eq 'wmi_flaky' -and $script:wmiCalls++ -eq 0) { throw 'fixture transient WMI failure' }
     if ($Filter -eq "PNPClass='Camera'" -and $script:cameraFixture -in @('present', 'blocked', 'remote_host_camera', 'remote_virtual')) {
         return [pscustomobject]@{ Name='Synthetic camera'; Status='OK'; Present=$true }
     }
 }
-function Get-PrivacyShieldVideoSourceSummary {
+$script:wmiCalls = 0
+$script:videoCalls = 0
+function Get-PrivacyShieldVideoSourceSummaryOnce {
+    if ($script:cameraFixture -eq 'video_flaky' -and $script:videoCalls++ -eq 0) { return @{ known=$false; count=0; access='Unknown' } }
     if ($script:cameraFixture -in @('virtual', 'remote_virtual')) { return @{ known=$true; count=1; access='Allowed' } }
     if ($script:cameraFixture -in @('restricted', 'server_restricted')) { return @{ known=$true; count=0; access='DeniedByUser' } }
     if ($script:cameraFixture -eq 'server_api_unavailable') { return @{ known=$false; count=0; access='Unknown' } }
     return @{ known=$true; count=0; access='Allowed' }
 }
-function Get-PrivacyShieldRemoteSession { return ($script:cameraFixture -like 'remote_*' -or $script:cameraFixture -like 'server_*') }
+function Get-PrivacyShieldRemoteSession { return ($script:cameraFixture -like 'remote_*' -or $script:cameraFixture -like 'server_*' -or $script:cameraFixture -eq 'rdp_no_camera') }
 function Get-PrivacyShieldPidFromMarker { return $null }
 function Get-PnpDevice {
     [CmdletBinding()] param([switch]$PresentOnly)
@@ -46,15 +50,25 @@ Assert-Status 'remote_host_camera' 'unknown' $null 'unknown'
 Assert-Status 'remote_virtual' 'available' $true 'present'
 Assert-Status 'absent' 'hardware_unavailable' $false 'absent'
 Assert-Status 'wmi_failed' 'unknown' $null 'unknown'
-Assert-Status 'restricted' 'unknown' $null 'host_absent'
-Assert-Status 'server_restricted' 'unknown' $null 'host_absent'
+# Consent state and the RDP session never decide presence: an empty inventory
+# plus an empty video-source list is a definite "no camera".
+Assert-Status 'restricted' 'hardware_unavailable' $false 'absent'
+Assert-Status 'server_restricted' 'hardware_unavailable' $false 'absent'
+Assert-Status 'rdp_no_camera' 'hardware_unavailable' $false 'absent'
+$script:wmiCalls = 0; Assert-Status 'wmi_flaky' 'hardware_unavailable' $false 'absent'
+$script:videoCalls = 0; Assert-Status 'video_flaky' 'hardware_unavailable' $false 'absent'
 Assert-Status 'server_api_unavailable' 'unknown' $null 'host_absent'
 Assert-Status 'ambiguous' 'hardware_unavailable' $false 'absent'
 Assert-Status 'blocked' 'windows_camera_policy_denied' $false 'present'
 $script:cameraFixture = 'server_restricted'
 $serverStatus = Get-PrivacyShieldStatus
-if (-not $serverStatus.isWindowsServer -or $serverStatus.cameraAvailable -ne $false -or $serverStatus.cameraStatus -ne 'unknown' -or $serverStatus.cameraPresence -ne 'host_absent' -or $serverStatus.cameraMessage -notmatch 'redirected') {
-    throw 'Server must report host absence without claiming the redirected camera was checked or relaxing the Fleet guard'
+if (-not $serverStatus.isWindowsServer -or $serverStatus.cameraAvailable -ne $false -or $serverStatus.cameraStatus -ne 'hardware_unavailable' -or $serverStatus.cameraPresence -ne 'absent' -or $serverStatus.cameraMessage -ne 'No usable camera detected.') {
+    throw 'A camera-less RDP server must report a definite no-camera state with the plain message'
+}
+$script:cameraFixture = 'server_api_unavailable'
+$unverified = Get-PrivacyShieldStatus
+if ($unverified.cameraStatus -ne 'unknown' -or $unverified.cameraPresence -ne 'host_absent' -or $unverified.cameraMessage -notmatch 'refresh icon') {
+    throw 'A persistent video-source failure must stay unknown with a calm recheck message'
 }
 $script:cameraFixture = 'wmi_failed'
 $status = Get-PrivacyShieldStatus

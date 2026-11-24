@@ -3544,6 +3544,27 @@ pub(crate) fn require_single_interactive_shield_session() -> Result<(), String> 
     }
 }
 
+/// Only a Fleet-bound start reports to the single machine agent; an unmanaged
+/// device can start Shield in any session. The refusal is worded for the card.
+pub(crate) fn require_single_shield_session_for_start(
+    profile: LocalShieldStartProfile,
+) -> Result<(), String> {
+    shield_start_session_check(profile, require_single_interactive_shield_session)
+}
+
+fn shield_start_session_check(
+    profile: LocalShieldStartProfile,
+    guard: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    if profile == LocalShieldStartProfile::Unbound {
+        return Ok(());
+    }
+    guard().map_err(|error| match error.as_str() {
+        SHIELD_SESSION_UNCONFIRMED => "Fleet manages Privacy Shield on this device, so it can start only while one Windows user is signed in. Sign out the other session and try again.".to_string(),
+        _ => error,
+    })
+}
+
 async fn report_shield_policy_progress(
     transaction: &crate::settings::ShieldPolicyTransaction,
     stage: ShieldPolicyProgressStage,
@@ -7863,6 +7884,19 @@ mod fleet_connect_v2_tests {
         assert_eq!(classify_shield_failure(SHIELD_HANDOFF_MISMATCH), ShieldFailure::HandoffMismatch);
         assert_eq!(classify_shield_failure(SHIELD_SESSION_UNCONFIRMED), ShieldFailure::SessionUnconfirmed);
         assert_eq!(classify_shield_failure("service connect failed"), ShieldFailure::Other);
+    }
+
+    #[test]
+    fn only_a_fleet_bound_start_needs_one_session_and_the_refusal_is_plain() {
+        let two_sessions = || Err::<(), String>(SHIELD_SESSION_UNCONFIRMED.to_string());
+        assert_eq!(shield_start_session_check(LocalShieldStartProfile::Unbound, two_sessions), Ok(()));
+        let message = shield_start_session_check(LocalShieldStartProfile::FleetBound(None), two_sessions).unwrap_err();
+        assert!(message.starts_with("Fleet manages Privacy Shield") && !message.contains("confirmed Windows user session"));
+        assert_eq!(
+            shield_start_session_check(LocalShieldStartProfile::FleetBound(None), || Err("Shield Windows session enumeration is unavailable".into())),
+            Err("Shield Windows session enumeration is unavailable".to_string())
+        );
+        assert_eq!(shield_start_session_check(LocalShieldStartProfile::FleetBound(None), || Ok(())), Ok(()));
     }
 
     #[test]

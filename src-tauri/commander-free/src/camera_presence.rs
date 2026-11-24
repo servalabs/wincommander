@@ -23,22 +23,23 @@ $pnpCameras = @($devices | Where-Object {
 })
 if ($pnpCameras.Count -gt 0 -and -not $wcRemote) { 'pnp_present'; exit 0 }
 $videoCount = $null
-$cameraAccess = 'Unknown'
-try {
-    Add-Type -AssemblyName System.Runtime.WindowsRuntime -ErrorAction Stop
-    $null = [Windows.Devices.Enumeration.DeviceInformation,Windows.Devices.Enumeration,ContentType=WindowsRuntime]
-    $type = [Windows.Devices.Enumeration.DeviceInformationCollection,Windows.Devices.Enumeration,ContentType=WindowsRuntime]
-    $method = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
-        $_.Name -eq 'AsTask' -and $_.IsGenericMethodDefinition -and $_.GetParameters().Count -eq 1 -and
-        $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1'
-    } | Select-Object -First 1
-    $operation = [Windows.Devices.Enumeration.DeviceInformation]::FindAllAsync([Windows.Devices.Enumeration.DeviceClass]::VideoCapture)
-    $task = $method.MakeGenericMethod($type).Invoke($null, @($operation))
-    if (-not $task.Wait(4000)) { throw 'Video source enumeration timed out' }
-    $videoCount = @($task.Result).Count
-    $null = [Windows.Devices.Enumeration.DeviceAccessInformation,Windows.Devices.Enumeration,ContentType=WindowsRuntime]
-    $cameraAccess = [string]([Windows.Devices.Enumeration.DeviceAccessInformation]::CreateFromDeviceClass([Windows.Devices.Enumeration.DeviceClass]::VideoCapture).CurrentStatus)
-} catch { }
+# The first WinRT call can time out, so one failure is retried before it counts as unknown.
+foreach ($attempt in 1..2) {
+    if ($null -ne $videoCount) { break }
+    try {
+        Add-Type -AssemblyName System.Runtime.WindowsRuntime -ErrorAction Stop
+        $null = [Windows.Devices.Enumeration.DeviceInformation,Windows.Devices.Enumeration,ContentType=WindowsRuntime]
+        $type = [Windows.Devices.Enumeration.DeviceInformationCollection,Windows.Devices.Enumeration,ContentType=WindowsRuntime]
+        $method = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+            $_.Name -eq 'AsTask' -and $_.IsGenericMethodDefinition -and $_.GetParameters().Count -eq 1 -and
+            $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1'
+        } | Select-Object -First 1
+        $operation = [Windows.Devices.Enumeration.DeviceInformation]::FindAllAsync([Windows.Devices.Enumeration.DeviceClass]::VideoCapture)
+        $task = $method.MakeGenericMethod($type).Invoke($null, @($operation))
+        if (-not $task.Wait(4000)) { throw 'Video source enumeration timed out' }
+        $videoCount = @($task.Result).Count
+    } catch { }
+}
 "#;
 
 #[cfg(windows)]
@@ -51,7 +52,7 @@ $cameras = @($devices | Where-Object {
 if ($videoCount -gt 0) { 'present' }
 elseif (@($cameras | Where-Object { $_.Present -eq $true }).Count -gt 0) { 'pnp_present' }
 elseif (-not $pnpOk -or @($devices | Where-Object { $_.Class -eq 'Image' -and $_.Present -ne $false }).Count -gt 0 -or @($cameras | Where-Object { $null -eq $_.Present }).Count -gt 0) { 'unknown' }
-elseif ($wcRemote -or $null -eq $videoCount -or $cameraAccess -ne 'Allowed') { 'host_absent' }
+elseif ($null -eq $videoCount) { 'host_absent' }
 else { 'absent' }
 "#;
 
@@ -59,9 +60,10 @@ fn interpret_probe(output: &str, remote_session: bool) -> CameraPresence {
     match output.trim() {
         "present" => CameraPresence::Present,
         "pnp_present" if !remote_session => CameraPresence::Present,
-        // Plug and Play describes the host. A redirected remote-session
-        // camera need not be represented by a host camera device.
-        "absent" if !remote_session => CameraPresence::Absent,
+        // Plug and Play describes the host, but a camera redirected into a
+        // remote session also appears in the session's video-source list,
+        // which an "absent" answer has already checked.
+        "absent" => CameraPresence::Absent,
         "host_absent" => CameraPresence::HostAbsent,
         _ => CameraPresence::Unknown,
     }
@@ -111,13 +113,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_a_successful_local_empty_inventory_means_absent() {
+    fn only_a_successful_empty_inventory_means_absent() {
         assert_eq!(interpret_probe("present\r\n", false), CameraPresence::Present);
         assert_eq!(interpret_probe("present", true), CameraPresence::Present);
         assert_eq!(interpret_probe("pnp_present", false), CameraPresence::Present);
         assert_eq!(interpret_probe("pnp_present", true), CameraPresence::Unknown);
         assert_eq!(interpret_probe("absent", false), CameraPresence::Absent);
-        assert_eq!(interpret_probe("absent", true), CameraPresence::Unknown);
+        assert_eq!(interpret_probe("absent", true), CameraPresence::Absent);
         assert_eq!(interpret_probe("host_absent", true), CameraPresence::HostAbsent);
         for output in ["", "unknown", "error", "present\nabsent"] {
             assert_eq!(interpret_probe(output, false), CameraPresence::Unknown);
@@ -131,20 +133,19 @@ mod tests {
         let powershell = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap())
             .join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
         let samples = [
-            ("[pscustomobject]@{Class='Camera'; FriendlyName='Integrated Camera'; Present=$true; Status='OK'}", "$true", "0", "Allowed", "pnp_present"),
-            ("[pscustomobject]@{Class='Image'; FriendlyName='localized'; CompatibleID='USB\\Class_0E'; Present=$true}", "$true", "0", "Allowed", "pnp_present"),
-            ("[pscustomobject]@{Class='SoftwareDevice'; FriendlyName='localized'; Present=$true}", "$true", "1", "Allowed", "present"),
-            ("[pscustomobject]@{Class='Camera'; FriendlyName='Camera'; Present=$true; Status='Error'}", "$true", "0", "DeniedByUser", "pnp_present"),
-            ("[pscustomobject]@{Class='Camera'; FriendlyName='Camera'; Present=$false; Status='Unknown'}", "$true", "0", "Allowed", "absent"),
-            ("[pscustomobject]@{Class='Image'; FriendlyName='Scanner'; Present=$true; Status='OK'}", "$true", "0", "Allowed", "unknown"),
-            ("[pscustomobject]@{Class='Media'; FriendlyName='Speakers'; Present=$true}", "$true", "0", "Allowed", "absent"),
-            ("[pscustomobject]@{Class='DiskDrive'; FriendlyName='Disk'; Present=$true; Status='OK'}", "$true", "0", "Allowed", "absent"),
-            ("[pscustomobject]@{Class='DiskDrive'; FriendlyName='Disk'; Present=$true}", "$true", "0", "DeniedByUser", "host_absent"),
-            ("[pscustomobject]@{Class='DiskDrive'; FriendlyName='Disk'; Present=$true}", "$true", "$null", "Unknown", "host_absent"),
-            ("", "$false", "$null", "Unknown", "unknown"),
+            ("[pscustomobject]@{Class='Camera'; FriendlyName='Integrated Camera'; Present=$true; Status='OK'}", "$true", "0", "pnp_present"),
+            ("[pscustomobject]@{Class='Image'; FriendlyName='localized'; CompatibleID='USB\\Class_0E'; Present=$true}", "$true", "0", "pnp_present"),
+            ("[pscustomobject]@{Class='SoftwareDevice'; FriendlyName='localized'; Present=$true}", "$true", "1", "present"),
+            ("[pscustomobject]@{Class='Camera'; FriendlyName='Camera'; Present=$true; Status='Error'}", "$true", "0", "pnp_present"),
+            ("[pscustomobject]@{Class='Camera'; FriendlyName='Camera'; Present=$false; Status='Unknown'}", "$true", "0", "absent"),
+            ("[pscustomobject]@{Class='Image'; FriendlyName='Scanner'; Present=$true; Status='OK'}", "$true", "0", "unknown"),
+            ("[pscustomobject]@{Class='Media'; FriendlyName='Speakers'; Present=$true}", "$true", "0", "absent"),
+            ("[pscustomobject]@{Class='DiskDrive'; FriendlyName='Disk'; Present=$true; Status='OK'}", "$true", "0", "absent"),
+            ("[pscustomobject]@{Class='DiskDrive'; FriendlyName='Disk'; Present=$true}", "$true", "$null", "host_absent"),
+            ("", "$false", "$null", "unknown"),
         ];
-        for (devices, pnp_ok, video_count, access, expected) in samples {
-            let script = format!("$devices=@({devices}); $pnpOk={pnp_ok}; $videoCount={video_count}; $cameraAccess='{access}'\n{CLASSIFY}");
+        for (devices, pnp_ok, video_count, expected) in samples {
+            let script = format!("$devices=@({devices}); $pnpOk={pnp_ok}; $videoCount={video_count}\n{CLASSIFY}");
             let output = std::process::Command::new(&powershell)
                 .args(["-NoProfile", "-NonInteractive", "-Command", &script])
                 .creation_flags(0x08000000)

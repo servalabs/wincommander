@@ -1385,10 +1385,12 @@ export interface BcuRegistryLeftoversResult {
   totalCount: number;
 }
 
-const getUnknownError = (err: unknown) => {
+export const getUnknownError = (err: unknown) => {
   if (err instanceof Error) {
     return err.message;
   }
+  // Tauri rejects with the bare Err(String); JSON.stringify would wrap it in literal quotes.
+  if (typeof err === "string") return err;
   try {
     const serialized = JSON.stringify(err);
     return serialized && serialized !== "{}" ? serialized : String(err);

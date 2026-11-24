@@ -59,6 +59,15 @@ function Install-AIDependencies {
 }
 
 function Get-PrivacyShieldVideoSourceSummary {
+    # The first WinRT call after logon can time out, so one failure is retried before it counts as unknown.
+    for ($attempt = 1; $attempt -le 2; $attempt++) {
+        $summary = Get-PrivacyShieldVideoSourceSummaryOnce
+        if ($summary.known) { return $summary }
+    }
+    return $summary
+}
+
+function Get-PrivacyShieldVideoSourceSummaryOnce {
     # Enumerates source metadata only: it does not open a camera or request permission.
     try {
         Add-Type -AssemblyName System.Runtime.WindowsRuntime -ErrorAction Stop
@@ -105,24 +114,28 @@ function Get-PrivacyShieldCameraAvailability {
         } catch {}
 
         foreach ($className in @('Camera', 'Image', 'Media', 'SoftwareDevice')) {
-            try {
-                $found = @(Get-CimInstance -ClassName Win32_PnPEntity `
-                    -Filter "PNPClass='$className'" `
-                    -ErrorAction Stop)
-                foreach ($item in $found) {
-                    if ($item.Present -eq $false) { continue }
-                    $cameraLike = $className -eq 'Camera' -or $item.Name -match '(?i)camera|webcam' -or $item.CompatibleID -match '(?i)USB\\Class_0E|VideoCapture'
-                    if (-not $cameraLike) {
-                        if ($className -eq 'Image') { $inventoryIncomplete = $true }
-                        continue
-                    }
-                    if ($item.Present -ne $true) { $inventoryIncomplete = $true; continue }
-                    $hostCameraPresent = $true
-                    if ($item.Status -ne 'OK' -or $isRemote -ne $false) { continue }
-                    # Do not send device names or IDs to the status consumer.
-                    $devices += 'Camera source'
+            $found = $null
+            for ($attempt = 1; $attempt -le 2 -and $null -eq $found; $attempt++) {
+                try {
+                    $found = @(Get-CimInstance -ClassName Win32_PnPEntity `
+                        -Filter "PNPClass='$className'" `
+                        -ErrorAction Stop)
+                } catch {}
+            }
+            if ($null -eq $found) { $inventoryIncomplete = $true; continue }
+            foreach ($item in $found) {
+                if ($item.Present -eq $false) { continue }
+                $cameraLike = $className -eq 'Camera' -or $item.Name -match '(?i)camera|webcam' -or $item.CompatibleID -match '(?i)USB\\Class_0E|VideoCapture'
+                if (-not $cameraLike) {
+                    if ($className -eq 'Image') { $inventoryIncomplete = $true }
+                    continue
                 }
-            } catch { $inventoryIncomplete = $true }
+                if ($item.Present -ne $true) { $inventoryIncomplete = $true; continue }
+                $hostCameraPresent = $true
+                if ($item.Status -ne 'OK' -or $isRemote -ne $false) { continue }
+                # Do not send device names or IDs to the status consumer.
+                $devices += 'Camera source'
+            }
         }
 
         $names = @($devices | Sort-Object -Unique)
@@ -131,8 +144,9 @@ function Get-PrivacyShieldCameraAvailability {
         $cameraPresence = if ($names.Count -gt 0 -or ($hostCameraPresent -and $isRemote -eq $false)) {
             'present'
         } elseif (-not $hostCameraPresent -and -not $inventoryIncomplete) {
-            if ($isRemote -eq $false -and $video.known -and $video.access -eq 'Allowed') { 'absent' }
-            else { 'host_absent' }
+            # A camera redirected into an RDP session is enumerated like a local one,
+            # and the consent state says nothing about presence, so neither blocks 'absent'.
+            if ($video.known) { 'absent' } else { 'host_absent' }
         } else {
             'unknown'
         }
@@ -176,16 +190,18 @@ function Get-PrivacyShieldCameraAvailability {
         } else {
             $null
         }
-        $cameraMessage = if ($cameraPresence -eq 'host_absent' -and $isRemote -eq $true) {
-            'No camera detected on this computer. Windows could not confirm a camera redirected into this remote session.'
-        } elseif ($cameraPresence -eq 'host_absent') {
-            'No camera device detected. Windows could not verify other video sources.'
+        $cameraMessage = if ($cameraPresence -eq 'host_absent') {
+            'No camera device found, but Windows did not list its video sources. Use the refresh icon to check again.'
         } elseif ($cameraStatus -eq 'hardware_unavailable') {
-            'No camera detected.'
+            'No usable camera detected.'
         } elseif ($cameraStatus -eq 'available') {
             'Camera available.'
+        } elseif ($hostCameraPresent -and $isRemote -eq $true) {
+            'This computer has a camera, but Windows did not offer it to this remote session.'
+        } elseif ($hostCameraPresent) {
+            'A camera was found, but Windows reports it is not ready. Check the camera, then use the refresh icon.'
         } elseif (-not $blockedByPolicy) {
-            'Windows could not confirm an available camera. Check camera access, then recheck.'
+            'Windows did not answer the camera device query. Use the refresh icon to check again.'
         }
         if ($blockedByPolicy) {
             $cameraMessage = ((@($cameraMessage) + ('Camera is blocked by Windows policy: ' + ($policyBlockers -join ' '))) -join ' ').Trim()
@@ -205,7 +221,7 @@ function Get-PrivacyShieldCameraAvailability {
     catch {
         # Registry/WMI probe failures are not evidence that the hardware is
         # absent.  Keep the diagnosis honest and do not echo exception text.
-        @{ available = $null; devices = @(); message = 'Camera status could not be read.'; cameraStatus = 'unknown'; cameraPresence = 'unknown'; cameraPolicyScope = $null; isWindowsServer = $false }
+        @{ available = $null; devices = @(); message = 'Windows did not answer the camera device query. Use the refresh icon to check again.'; cameraStatus = 'unknown'; cameraPresence = 'unknown'; cameraPolicyScope = $null; isWindowsServer = $false }
     }
 }
 

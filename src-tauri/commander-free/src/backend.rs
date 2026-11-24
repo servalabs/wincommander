@@ -5126,8 +5126,9 @@ pub async fn run_backend_script(
             let _guard = crate::paths::acquire_shield_action_lock()?;
             let settings = crate::settings::read_settings()?;
             let start_profile = if command == "Start-PrivacyShield" {
-                crate::fleet_agent::require_single_interactive_shield_session()?;
-                Some(runtime.block_on(crate::fleet_agent::verify_local_shield_start_profile(&settings))?)
+                let profile = runtime.block_on(crate::fleet_agent::verify_local_shield_start_profile(&settings))?;
+                crate::fleet_agent::require_single_shield_session_for_start(profile)?;
+                Some(profile)
             } else { None };
             if let Some(profile) = start_profile {
                 let active = match profile {
