@@ -10,6 +10,15 @@ lists only a selection of those changes.
 
 ## Unreleased
 
+- Fix an in-place update (`/UPDATE`, including the in-app updater) leaving
+  the machine-wide Start Menu and Desktop shortcuts missing. Setup never
+  created a shortcut in update mode, so an install whose shortcut was gone
+  stayed without one. An update now restores a missing shortcut that no
+  earlier setup offered; one the user removed afterwards stays removed, and
+  a shortcut parked by hide or Calculator mode is not restored. The first
+  update of an install made before this change restores a Desktop shortcut
+  that was deliberately removed earlier, once. The release gate now checks
+  both shortcuts after setup and after `/UPDATE`.
 - Fix Privacy Shield reporting "Camera availability could not be confirmed" on
   a machine with no camera. The camera probe never answered "no camera" inside
   a Remote Desktop session or while Windows camera consent read Denied, which

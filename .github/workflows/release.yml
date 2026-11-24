@@ -519,6 +519,48 @@ jobs:
             Remove-Item -LiteralPath $settingsResult -Force -ErrorAction SilentlyContinue
           }
 
+          # The machine-wide Start Menu and Desktop shortcuts must exist and launch
+          # the installed app after a fresh setup and after an in-place /UPDATE.
+          $shortcutShell = New-Object -ComObject WScript.Shell
+          $startShortcut = Join-Path $env:ProgramData "Microsoft\Windows\Start Menu\Programs\ServaLabs\WinCommander\WinCommander.lnk"
+          $desktopShortcut = Join-Path ([Environment]::GetFolderPath("CommonDesktopDirectory")) "WinCommander.lnk"
+          function Assert-Shortcut([string]$Path, [string]$Label, [string]$Stage) {
+            if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "$Stage left no $Label shortcut at $Path." }
+            $target = $shortcutShell.CreateShortcut($Path).TargetPath
+            if ($target -ine $mainBinary) { throw "$Stage left a $Label shortcut targeting '$target', not '$mainBinary'." }
+          }
+          function Invoke-Setup([string]$Arguments) {
+            $run = Start-Process -FilePath $setup -ArgumentList $Arguments -Verb RunAs -Wait -PassThru
+            if ($run.ExitCode -ne 0) {
+              if (Test-Path -LiteralPath $diagnosticLog -PathType Leaf) { Get-Content -LiteralPath $diagnosticLog -Raw | Write-Host }
+              throw "The NSIS setup '$Arguments' failed with exit code $($run.ExitCode)."
+            }
+          }
+          $setupKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\WinCommander"
+          Assert-Shortcut $startShortcut "Start Menu" "A fresh setup"
+          Assert-Shortcut $desktopShortcut "Desktop" "A fresh setup"
+
+          # An update over an install that kept its shortcuts must leave them working.
+          Invoke-Setup "/S /UPDATE"
+          Assert-Shortcut $startShortcut "Start Menu" "An /UPDATE"
+          Assert-Shortcut $desktopShortcut "Desktop" "An /UPDATE"
+
+          # Builds before the offered markers lost their shortcuts to an uninstall;
+          # an /UPDATE over such an install must bring both back.
+          Remove-Item -LiteralPath $startShortcut, $desktopShortcut -Force
+          Remove-ItemProperty -LiteralPath $setupKey -Name "StartMenuShortcutOffered", "DesktopShortcutOffered" -ErrorAction Stop
+          Invoke-Setup "/S /UPDATE"
+          Assert-Shortcut $startShortcut "Start Menu" "An /UPDATE over an install without markers"
+          Assert-Shortcut $desktopShortcut "Desktop" "An /UPDATE over an install without markers"
+
+          # A shortcut the user removed after setup offered it stays removed.
+          Remove-Item -LiteralPath $desktopShortcut -Force
+          Invoke-Setup "/S /UPDATE"
+          Assert-Shortcut $startShortcut "Start Menu" "An /UPDATE after a Desktop shortcut was removed"
+          if (Test-Path -LiteralPath $desktopShortcut) { throw "An /UPDATE re-created a Desktop shortcut the user removed." }
+          Invoke-Setup "/S"
+          Assert-Shortcut $desktopShortcut "Desktop" "A silent setup after the Desktop shortcut was removed"
+
           $uninstaller = Join-Path $env:ProgramFiles "WinCommander\uninstall.exe"
           if (-not (Test-Path -LiteralPath $uninstaller -PathType Leaf)) {
             throw "The NSIS setup did not create its uninstaller at $uninstaller."

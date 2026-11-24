@@ -2,6 +2,8 @@
 ; 8909f221d1515955fc843808032bdc5d62209c96, crates/tauri-bundler/src/bundle/windows/nsis/installer.nsi.
 ; Upstream SHA-256: 20F4ECC730DEFB71F1342EAEAEC4021DF13BE3D843ABBA0EFFE88EA5835FA079.
 ; WinCommander change: keep existing NSIS installations in place on setup/reinstall.
+; WinCommander change: /UPDATE restores a missing shortcut that this installation never
+; offered before (see ShouldRestoreShortcut), instead of never creating one.
 ; Tauri 2.12 utilities require Restart Manager and an absolute installed image path.
 Unicode true
 ManifestDPIAware true
@@ -751,6 +753,11 @@ Section Install
     Call CreateOrUpdateDesktopShortcut
   ${EndIf}
 
+  ; Written after the shortcut calls above, which read it. A later /UPDATE
+  ; then treats a missing shortcut as the user's choice.
+  WriteRegDWORD SHCTX "${UNINSTKEY}" "StartMenuShortcutOffered" 1
+  WriteRegDWORD SHCTX "${UNINSTKEY}" "DesktopShortcutOffered" 1
+
   !ifmacrodef NSIS_HOOK_POSTINSTALL
     !insertmacro NSIS_HOOK_POSTINSTALL
   !endif
@@ -935,6 +942,23 @@ Function un.SkipIfPassive
   ${IfThen} $PassiveMode = 1  ${|} Abort ${|}
 FunctionEnd
 
+; /UPDATE restores a missing shortcut only if no earlier setup offered it (an
+; install from before this marker, or one whose shortcut an uninstall removed)
+; and hide/Calculator mode has not parked it. The parked names match
+; shared_shortcuts_store.rs. In: $R1 = marker value, $R2 = parked file.
+; Out: $R3 = 1 to create the shortcut.
+Function ShouldRestoreShortcut
+  StrCpy $R3 0
+  ReadRegStr $R4 SHCTX "${UNINSTKEY}" "$R1"
+  ${If} $R4 == 1
+    Return
+  ${EndIf}
+  !insertmacro WC_LOAD_PROGRAMDATA_OR_ABORT "shortcut-restore"
+  ${IfNot} ${FileExists} "$R5\WinCommanderSharedShortcuts\$R2"
+    StrCpy $R3 1
+  ${EndIf}
+FunctionEnd
+
 Function CreateOrUpdateStartMenuShortcut
   ; We used to use product name as MAINBINARYNAME
   ; migrate old shortcuts to target the new MAINBINARYNAME
@@ -958,12 +982,19 @@ Function CreateOrUpdateStartMenuShortcut
     Return
   ${EndIf}
 
-  ; Skip creating shortcut if in update mode or no shortcut mode
-  ; but always create if migrating from wix
+  ; Skip creating shortcut in no shortcut mode, or in update mode unless this
+  ; shortcut was never offered; always create if migrating from wix
   ${If} $WixMode = 0
-    ${If} $UpdateMode = 1
-    ${OrIf} $NoShortcutMode = 1
+    ${If} $NoShortcutMode = 1
       Return
+    ${EndIf}
+    ${If} $UpdateMode = 1
+      StrCpy $R1 "StartMenuShortcutOffered"
+      StrCpy $R2 "start.lnk"
+      Call ShouldRestoreShortcut
+      ${If} $R3 <> 1
+        Return
+      ${EndIf}
     ${EndIf}
   ${EndIf}
 
@@ -987,12 +1018,19 @@ Function CreateOrUpdateDesktopShortcut
     Return
   ${EndIf}
 
-  ; Skip creating shortcut if in update mode or no shortcut mode
-  ; but always create if migrating from wix
+  ; Skip creating shortcut in no shortcut mode, or in update mode unless this
+  ; shortcut was never offered; always create if migrating from wix
   ${If} $WixMode = 0
-    ${If} $UpdateMode = 1
-    ${OrIf} $NoShortcutMode = 1
+    ${If} $NoShortcutMode = 1
       Return
+    ${EndIf}
+    ${If} $UpdateMode = 1
+      StrCpy $R1 "DesktopShortcutOffered"
+      StrCpy $R2 "desktop.lnk"
+      Call ShouldRestoreShortcut
+      ${If} $R3 <> 1
+        Return
+      ${EndIf}
     ${EndIf}
   ${EndIf}
 
