@@ -15,7 +15,10 @@ lists only a selection of those changes.
   of the four keeps its own switch, so any one can be used alone. Turning on
   the lock needs a calculator PIN (set in the same card; it opens WinCommander
   from the calculator) and cover identity needs a name. Stealth mode stops at
-  the first step that fails and offers "Turn on the rest".
+  the first step that fails and offers "Turn on the rest". The card shows a
+  status pill, a one-line description under every protection, the PIN and
+  cover-name fields only where they are needed, and a "Needs administrator"
+  note on the two hide options when elevation is missing.
 - Ask for administrator rights on every normal launch that is not already
   elevated: split-token administrators get the UAC consent prompt, standard
   accounts get the administrator-credential prompt. Cancelling or a failed

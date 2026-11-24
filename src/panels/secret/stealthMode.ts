@@ -33,6 +33,15 @@ export function stealthSummary(state: StealthState, hasPaid: boolean): { mode: S
   return { mode, active, total: parts.length };
 }
 
+export type StealthTone = StealthMode | "busy";
+
+export function stealthStatus(summary: { mode: StealthMode; active: number; total: number }, busy: boolean): { label: string; tone: StealthTone } {
+  if (busy) return { label: "Working…", tone: "busy" };
+  if (summary.mode === "on") return { label: "On", tone: "on" };
+  if (summary.mode === "partial") return { label: `Partly on (${summary.active} of ${summary.total})`, tone: "partial" };
+  return { label: "Off", tone: "off" };
+}
+
 // Turning off also undoes a lapsed-plan cover; turning on runs only what applies and is not done yet.
 export function stealthPending(state: StealthState, hasPaid: boolean, direction: "on" | "off"): StealthPartId[] {
   if (direction === "off") return OFF_ORDER.filter((id) => state[id]);

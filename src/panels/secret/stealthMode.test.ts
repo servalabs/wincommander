@@ -4,6 +4,7 @@ import {
   stealthParts,
   stealthPending,
   stealthSetupError,
+  stealthStatus,
   stealthSummary,
   type StealthState,
 } from "./stealthMode";
@@ -41,6 +42,22 @@ describe("stealth summary", () => {
 
   test("three protections are enough without a paid plan", () => {
     expect(stealthSummary({ lock: true, cover: false, hide: true, backend: true }, false).mode).toBe("on");
+  });
+});
+
+describe("stealth status pill", () => {
+  test("names the state and how many protections are on", () => {
+    expect(stealthStatus(stealthSummary(none, true), false)).toEqual({ label: "Off", tone: "off" });
+    expect(stealthStatus(stealthSummary({ ...none, lock: true, hide: true }, true), false)).toEqual({ label: "Partly on (2 of 4)", tone: "partial" });
+    expect(stealthStatus(stealthSummary(all, true), false)).toEqual({ label: "On", tone: "on" });
+  });
+
+  test("an unpaid install counts three protections", () => {
+    expect(stealthStatus(stealthSummary({ ...none, hide: true }, false), false).label).toBe("Partly on (1 of 3)");
+  });
+
+  test("shows Working while a step runs, whatever the state", () => {
+    expect(stealthStatus(stealthSummary(all, true), true)).toEqual({ label: "Working…", tone: "busy" });
   });
 });
 

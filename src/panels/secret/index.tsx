@@ -9,7 +9,7 @@ import { isImeComposing } from "@/lib/keyboard";
 // logic stays in callbacks here; the VisibilityTable for the panel-visibility
 // grid lives in VisibilityTable.tsx.
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import PanelHeader from "../../components/shared/PanelHeader";
 import SectionCard from "../../components/shared/SectionCard";
@@ -37,7 +37,7 @@ import { armBackend, reportArmFailure } from "../../hooks/armBackend";
 import { syncCalculatorShortcuts } from "../privacy/calculatorShortcuts";
 import { shortcutWarningsAfterReconciliation, syncSharedShortcutClaim } from "../../hooks/sharedShortcutClaims";
 import VisibilityTable from "./VisibilityTable";
-import { runStealthSteps, STEALTH_LABELS, stealthPending, stealthSetupError, stealthSummary, type StealthPartId, type StealthState } from "./stealthMode";
+import { runStealthSteps, STEALTH_LABELS, stealthPending, stealthSetupError, stealthStatus, stealthSummary, type StealthPartId, type StealthState } from "./stealthMode";
 import AppLicensingSection from "./AppLicensingSection";
 import BrandingLicensingSection from "./BrandingLicensingSection";
 import ManagedPolicyBanner from "../../components/shared/ManagedPolicyBanner";
@@ -105,6 +105,40 @@ function DgzTile({ icon, title, desc, checked, warn, loading, disabled, onChange
                         title={title}
                     />
                 )}
+            </div>
+            {children}
+        </div>
+    );
+}
+
+/** One Stealth mode protection: icon, name, plain description, switch, optional setup field. */
+function StealthRow({ icon, title, desc, checked, disabled, note, onChange, children }: {
+    icon: IconName;
+    title: string;
+    desc: string;
+    checked: boolean;
+    disabled?: boolean;
+    note?: string;
+    onChange: (v: boolean) => void;
+    children?: ReactNode;
+}) {
+    const descId = useId();
+    return (
+        <div className={`dgz-stealth-row ${checked ? "on" : ""}`}>
+            <div className="dgz-stealth-row-main">
+                <span className="dgz-stealth-row-ico" aria-hidden="true"><Icon icon={icon} size={16} /></span>
+                <div className="dgz-stealth-row-body">
+                    <div className="dgz-stealth-row-title">{title}</div>
+                    <div className="dgz-stealth-row-desc" id={descId}>{desc}</div>
+                    {note && <div className="dgz-stealth-note">{note}</div>}
+                </div>
+                <Switch
+                    checked={checked}
+                    disabled={disabled}
+                    onCheckedChange={onChange}
+                    aria-label={title}
+                    aria-describedby={descId}
+                />
             </div>
             {children}
         </div>
@@ -608,10 +642,8 @@ function LockDisguiseSection() {
         }
     }, [stealthState, hasPaid, needsElevation, hasRealPin, stealthPin, coverName, wcHidden, registerRealPin, applyCover, applyBackendHidden, applyWcHidden, applyLock]);
 
-    const stealthLabel = stealthBusy ? "Working…"
-        : stealth.mode === "on" ? "On"
-        : stealth.mode === "partial" ? `Partly on (${stealth.active} of ${stealth.total})`
-        : "Off";
+    const stealthPill = stealthStatus(stealth, stealthBusy);
+    const adminNote = needsElevation ? "Needs administrator" : undefined;
 
     return (
         <div className="dgz secret-grid__wide">
@@ -636,11 +668,22 @@ function LockDisguiseSection() {
             {needsElevation && <p role="alert" className="text-xs text-[var(--warn)]">{MACHINE_SCOPE_ELEVATION_MESSAGE}</p>}
 
             {/* Stealth mode: four protections, each switchable alone or all at once */}
-            <div className="dgz-block dgz-block--col">
-                <div className="dgz-block-head">
-                    <span className="dgz-block-title">Stealth mode</span>
-                    <div className="sec-header-switch">
-                        <span>{stealthLabel}</span>
+            <section className={`dgz-block dgz-stealth ${stealth.mode}`} aria-labelledby="stealth-title">
+                <div className="dgz-stealth-hero">
+                    <span className="dgz-stealth-hero-ico" aria-hidden="true"><Icon icon="shield" size={20} /></span>
+                    <div className="dgz-stealth-hero-text">
+                        <h3 className="dgz-stealth-title" id="stealth-title">Stealth mode</h3>
+                        <p className="dgz-stealth-lead">Hide WinCommander behind a calculator and a cover name: all at once, or one protection at a time.</p>
+                    </div>
+                    <div className="dgz-stealth-hero-actions">
+                        <span className={`dgz-stealth-pill ${stealthPill.tone}`} role="status" aria-live="polite">
+                            <span className="dgz-dot" />{stealthPill.label}
+                        </span>
+                        {stealth.mode === "partial" && (
+                            <button className="sec-btn" type="button" disabled={anyStepBusy} onClick={() => void runStealth("on")}>
+                                Turn on the rest
+                            </button>
+                        )}
                         <Switch
                             checked={stealth.mode !== "off"}
                             disabled={anyStepBusy}
@@ -649,94 +692,92 @@ function LockDisguiseSection() {
                         />
                     </div>
                 </div>
-                <p className="dgz-hint">
-                    Turn everything on at once, or switch each protection on its own below.
-                    With the calculator lock on, WinCommander opens only from the calculator, with your PIN.
-                </p>
-                <div className="dgz-tiles">
-                    <DgzTile
+                <div className="dgz-stealth-list">
+                    <StealthRow
                         icon="lock"
                         title="Calculator lock"
-                        desc="Opens WinCommander as a working calculator. Type your PIN and press = to open the app."
+                        desc="Opens as a working calculator. Type your PIN and press = to open WinCommander."
                         checked={lockArmed}
-                        loading={anyStepBusy}
+                        disabled={anyStepBusy}
                         onChange={(next) => { void toggleLock(next); }}
                     >
                         {!hasRealPin && (
-                            <>
-                                <p className="dgz-hint">Set the PIN that opens WinCommander from the calculator: at least 4 digits, not starting with 0.</p>
-                                <div className="dgz-tile-extra">
+                            <div className="dgz-stealth-setup">
+                                <label className="dgz-stealth-setup-label" htmlFor="stealth-pin">
+                                    Calculator PIN<span className="dgz-stealth-req">* required</span>
+                                </label>
+                                <p className="dgz-stealth-setup-hint" id="stealth-pin-hint">At least 4 digits, not starting with 0. Saved when you switch the lock on.</p>
+                                <div className="dgz-stealth-setup-fields">
                                     <input
+                                        id="stealth-pin"
                                         className="sec-input"
                                         type="password"
                                         inputMode="numeric"
                                         maxLength={12}
-                                        placeholder="Calculator PIN…"
-                                        aria-label="Calculator PIN"
+                                        required
+                                        aria-required="true"
+                                        aria-describedby="stealth-pin-hint"
+                                        placeholder="e.g. 4829"
                                         value={stealthPin}
                                         disabled={anyStepBusy}
                                         onChange={e => setStealthPin(e.target.value.replace(/\D/g, "").slice(0, 12))}
                                     />
                                 </div>
-                            </>
+                            </div>
                         )}
-                    </DgzTile>
+                    </StealthRow>
                     <TierGate tier="paid" featureLabel="Cover Identity">
-                        <DgzTile
+                        <StealthRow
                             icon="people"
                             title="Cover identity"
-                            desc="Disguise the app name in the taskbar, Task Manager and tray."
+                            desc="Shows a different name in the taskbar, Task Manager and tray."
                             checked={coverEnabled}
-                            warn
-                            loading={anyStepBusy}
+                            disabled={anyStepBusy}
                             onChange={(next) => { void toggleCover(next); }}
                         >
-                            <div className="dgz-tile-extra">
-                                <input
-                                    className="sec-input"
-                                    placeholder="Choose a cover name…"
-                                    aria-label="Cover name"
-                                    value={coverName}
-                                    disabled={anyStepBusy}
-                                    onChange={e => setCoverName(e.target.value)}
-                                    onKeyDown={e => { if (e.key === "Enter" && coverEnabled && !isImeComposing(e.nativeEvent)) void applyCover(true, coverName); }}
-                                />
-                                {coverEnabled && (
-                                    <button className="sec-btn" disabled={anyStepBusy} onClick={() => void applyCover(true, coverName)}>
-                                        Save name
-                                    </button>
-                                )}
+                            <div className="dgz-stealth-setup">
+                                <label className="dgz-stealth-setup-label" htmlFor="stealth-cover-name">Cover name</label>
+                                <p className="dgz-stealth-setup-hint" id="stealth-cover-hint">What onlookers see instead of WinCommander.</p>
+                                <div className="dgz-stealth-setup-fields">
+                                    <input
+                                        id="stealth-cover-name"
+                                        className="sec-input"
+                                        aria-describedby="stealth-cover-hint"
+                                        placeholder="Choose a cover name…"
+                                        value={coverName}
+                                        disabled={anyStepBusy}
+                                        onChange={e => setCoverName(e.target.value)}
+                                        onKeyDown={e => { if (e.key === "Enter" && coverEnabled && !isImeComposing(e.nativeEvent)) void applyCover(true, coverName); }}
+                                    />
+                                    {coverEnabled && (
+                                        <button className="sec-btn" type="button" disabled={anyStepBusy} onClick={() => void applyCover(true, coverName)}>
+                                            Save name
+                                        </button>
+                                    )}
+                                </div>
                             </div>
-                        </DgzTile>
+                        </StealthRow>
                     </TierGate>
-                    <DgzTile
+                    <StealthRow
                         icon="eye-off"
                         title="Hide WinCommander"
-                        desc="Remove from taskbar, tray, Start & installed apps. Peek via the hotkey below."
+                        desc="Gone from the taskbar, tray, Start and installed apps. Reopen with the peek hotkey below."
                         checked={wcHidden}
-                        warn
-                        loading={anyStepBusy}
+                        disabled={anyStepBusy || needsElevation}
+                        note={adminNote}
                         onChange={(next) => { void applyWcHidden(next); }}
-                        disabled={needsElevation}
                     />
-                    <DgzTile
+                    <StealthRow
                         icon="application"
                         title="Hide backend apps"
-                        desc="Encryption/ RAMDISK Engine, Mesh VPN & other bundled tools."
+                        desc="Hides the Encryption / RAMDISK Engine, Mesh VPN and other bundled tools."
                         checked={allBackendHidden}
-                        loading={anyStepBusy}
+                        disabled={anyStepBusy || needsElevation}
+                        note={adminNote}
                         onChange={(next) => { void applyBackendHidden(next); }}
-                        disabled={needsElevation}
                     />
                 </div>
-                {stealth.mode === "partial" && (
-                    <div className="dgz-tile-extra">
-                        <button className="sec-btn" disabled={anyStepBusy} onClick={() => void runStealth("on")}>
-                            Turn on the rest
-                        </button>
-                    </div>
-                )}
-            </div>
+            </section>
 
             {/* Calculator PINs + triggers, side by side */}
             <div className="dgz-split">
