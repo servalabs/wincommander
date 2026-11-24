@@ -22,13 +22,13 @@ lists only a selection of those changes.
   builds the moment Stealth mode, or the cover identity switch on its own, is
   turned on. Saving the cover name now runs off the window thread.
 - Add a Stealth mode switch to Secret Settings that turns on the calculator
-  lock, cover identity, hide WinCommander and hide backend apps together. Each
-  of the four keeps its own switch, so any one can be used alone. Turning on
-  the lock needs a calculator PIN (set in the same card; it opens WinCommander
-  from the calculator). Stealth mode stops at
-  the first step that fails and offers "Turn on the rest". The card shows a
-  status pill and the four protections as a 2x2 grid of cards (one column on
-  narrow windows), each with an On/Off badge, its own switch and a short
+  lock, cover identity and hide backend apps together. Hide WinCommander is
+  its own switch and is not turned on or off by Stealth mode; each of the four
+  works alone. Turning on the lock needs a calculator PIN (set in the same
+  card; it opens WinCommander from the calculator). Stealth mode stops at the
+  first step that fails and offers "Turn on the rest". The card shows a status
+  pill and the four protections as one compact row (two columns on a medium
+  window, one on a narrow one), each with its own switch and a short
   description; the PIN and cover-name fields sit in the cards that need them,
   and the two hide cards are dimmed with a "Needs administrator" note when
   elevation is missing. A blank cover name uses "Calculator".

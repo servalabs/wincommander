@@ -1,11 +1,11 @@
 // src/panels/secret/stealthMode.ts
 //
-// One Stealth mode switch drives four existing concealment features. Order,
+// One Stealth mode switch drives three existing concealment features; Hide WinCommander stays its own switch. Order,
 // status and input checks are pure and live here; the panel runs the real steps.
 
 import { validatePinInput } from "../privacy/pinRules";
 
-export type StealthPartId = "cover" | "backend" | "hide" | "lock";
+export type StealthPartId = "cover" | "backend" | "lock";
 export type StealthState = Record<StealthPartId, boolean>;
 export type StealthMode = "off" | "partial" | "on";
 
@@ -19,15 +19,14 @@ export function resolveCoverName(name: string): string {
 export const STEALTH_LABELS: Record<StealthPartId, string> = {
   lock: "Calculator lock",
   cover: "Cover identity",
-  hide: "Hide WinCommander",
   backend: "Hide backend apps",
 };
 
 // The lock goes last on the way in: it switches the app to the calculator, so no step can follow it.
-const ON_ORDER: readonly StealthPartId[] = ["cover", "backend", "hide", "lock"];
-const OFF_ORDER: readonly StealthPartId[] = ["hide", "backend", "cover", "lock"];
+const ON_ORDER: readonly StealthPartId[] = ["cover", "backend", "lock"];
+const OFF_ORDER: readonly StealthPartId[] = ["backend", "cover", "lock"];
 
-// Cover identity is a paid feature; unpaid installs run the other three.
+// Cover identity is a paid feature; unpaid installs run the other two.
 export function stealthParts(hasPaid: boolean): StealthPartId[] {
   return ON_ORDER.filter((id) => hasPaid || id !== "cover");
 }

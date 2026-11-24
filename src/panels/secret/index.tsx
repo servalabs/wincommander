@@ -106,7 +106,7 @@ function DgzTile({ icon, title, desc, checked, warn, loading, disabled, onChange
     );
 }
 
-/** One Stealth mode protection card: icon tile, state badge and switch, name, description, optional setup field. */
+/** One Stealth mode protection card: icon tile, name and switch on one line, then description and optional setup field. */
 function StealthCard({ icon, title, desc, checked, disabled, unavailable, note, onChange, children }: {
     icon: IconName;
     title: string;
@@ -124,24 +124,17 @@ function StealthCard({ icon, title, desc, checked, disabled, unavailable, note, 
         <div className={`dgz-stealth-card ${checked ? "on" : ""} ${unavailable ? "dim" : ""}`}>
             <div className="dgz-stealth-card-head">
                 <span className="dgz-stealth-card-ico" aria-hidden="true"><Icon icon={icon} size={16} /></span>
-                <div className="dgz-stealth-card-ctl">
-                    <span className={`dgz-stealth-pill ${checked ? "on" : "off"}`} aria-hidden="true">
-                        <span className="dgz-dot" />{checked ? "On" : "Off"}
-                    </span>
-                    <Switch
-                        size="sm"
-                        checked={checked}
-                        disabled={disabled}
-                        onCheckedChange={onChange}
-                        aria-label={title}
-                        aria-describedby={descId}
-                    />
-                </div>
-            </div>
-            <div className="dgz-stealth-card-body">
                 <div className="dgz-stealth-card-title">{title}</div>
-                <div className="dgz-stealth-card-desc" id={descId}>{desc}</div>
+                <Switch
+                    size="sm"
+                    checked={checked}
+                    disabled={disabled}
+                    onCheckedChange={onChange}
+                    aria-label={title}
+                    aria-describedby={descId}
+                />
             </div>
+            <div className="dgz-stealth-card-desc" id={descId}>{desc}</div>
             {note && <div className="dgz-stealth-note">{note}</div>}
             {children}
         </div>
@@ -569,12 +562,12 @@ function LockDisguiseSection() {
 
     const wcHidden = appSettings?.ideal?.identity?.hideWinCommander === true;
 
-    // ── Stealth mode: one switch for the four features above ──
+    // ── Stealth mode: one switch for lock, cover and backend apps; Hide WinCommander stays separate ──
     const [stealthBusy, setStealthBusy] = useState(false);
     const [stealthPin, setStealthPin] = useState("");
     const stealthState = useMemo<StealthState>(
-        () => ({ lock: lockArmed, cover: coverEnabled, hide: wcHidden, backend: allBackendHidden }),
-        [lockArmed, coverEnabled, wcHidden, allBackendHidden],
+        () => ({ lock: lockArmed, cover: coverEnabled, backend: allBackendHidden }),
+        [lockArmed, coverEnabled, allBackendHidden],
     );
     const stealth = stealthSummary(stealthState, hasPaid);
     const anyStepBusy = stealthBusy || lockBusy || coverBusy || wcBusy || backendBusy;
@@ -611,31 +604,25 @@ function LockDisguiseSection() {
     const runStealth = useCallback(async (direction: "on" | "off") => {
         const on = direction === "on";
         const pending = stealthPending(stealthState, hasPaid, direction);
-        if (pending.some((id) => id === "hide" || id === "backend") && needsElevation) {
+        if (pending.includes("backend") && needsElevation) {
             showError(MACHINE_SCOPE_ELEVATION_MESSAGE);
             return;
         }
         if (on) {
             const setupError = stealthSetupError({ hasRealPin, pin: stealthPin });
             if (setupError) { showError(setupError); return; }
-            // Checked up front: the lock step runs after Hide, and a taken peek hotkey would leave the app hidden with no way back.
-            if (pending.includes("lock") && (wcHidden || pending.includes("hide"))) {
+            // Checked up front: a taken peek hotkey would leave an already hidden app with no way back.
+            if (pending.includes("lock") && wcHidden) {
                 try { await invoke("require_calculator_peek_hotkey"); } catch (error) { showError(String(error)); return; }
             }
         }
         setStealthBusy(true);
         try {
             if (on && !hasRealPin && !(await registerRealPin())) return;
-            let hideNow = wcHidden;
             const run = async (id: StealthPartId): Promise<boolean> => {
                 if (id === "cover") return applyCover(on, coverName);
                 if (id === "backend") return applyBackendHidden(on);
-                if (id === "hide") {
-                    const ok = await applyWcHidden(on);
-                    if (ok) hideNow = on;
-                    return ok;
-                }
-                return applyLock(on, hideNow);
+                return applyLock(on, wcHidden);
             };
             const result = await runStealthSteps(pending, run);
             if (result.failed) {
@@ -646,7 +633,7 @@ function LockDisguiseSection() {
         } finally {
             setStealthBusy(false);
         }
-    }, [stealthState, hasPaid, needsElevation, hasRealPin, stealthPin, coverName, wcHidden, registerRealPin, applyCover, applyBackendHidden, applyWcHidden, applyLock]);
+    }, [stealthState, hasPaid, needsElevation, hasRealPin, stealthPin, coverName, wcHidden, registerRealPin, applyCover, applyBackendHidden, applyLock]);
 
     const stealthPill = stealthStatus(stealth, stealthBusy);
     const adminNote = needsElevation ? "Needs administrator" : undefined;
@@ -673,13 +660,13 @@ function LockDisguiseSection() {
             </div>
             {needsElevation && <p role="alert" className="text-xs text-[var(--warn)]">{MACHINE_SCOPE_ELEVATION_MESSAGE}</p>}
 
-            {/* Stealth mode: four protections, each switchable alone or all at once */}
+            {/* Stealth mode: one row of four cards; the switch covers the first three, Hide WinCommander is its own */}
             <section className={`dgz-block dgz-stealth ${stealth.mode}`} aria-labelledby="stealth-title">
                 <div className="dgz-stealth-hero">
                     <span className="dgz-stealth-hero-ico" aria-hidden="true"><Icon icon="shield" size={18} /></span>
                     <div className="dgz-stealth-hero-text">
                         <h3 className="dgz-stealth-title" id="stealth-title">Stealth mode</h3>
-                        <p className="dgz-stealth-lead">Hide WinCommander behind a calculator and a cover name: all at once, or one protection at a time.</p>
+                        <p className="dgz-stealth-lead">Calculator lock, cover name and hidden backend apps in one switch, or each on its own. Hide WinCommander is separate.</p>
                     </div>
                     <div className="dgz-stealth-hero-actions">
                         <span className={`dgz-stealth-pill ${stealthPill.tone}`} role="status" aria-live="polite">
@@ -702,7 +689,7 @@ function LockDisguiseSection() {
                     <StealthCard
                         icon="lock"
                         title="Calculator lock"
-                        desc="Opens as a working calculator. Type your PIN and press = to open WinCommander."
+                        desc="Opens as a calculator. Type your PIN and press = to open WinCommander."
                         checked={lockArmed}
                         disabled={anyStepBusy}
                         onChange={(next) => { void toggleLock(next); }}
@@ -726,7 +713,7 @@ function LockDisguiseSection() {
                                     disabled={anyStepBusy}
                                     onChange={e => setStealthPin(e.target.value.replace(/\D/g, "").slice(0, 12))}
                                 />
-                                <p className="dgz-stealth-setup-hint" id="stealth-pin-hint">At least 4 digits, not starting with 0. Saved when you switch the lock on.</p>
+                                <p className="dgz-stealth-setup-hint" id="stealth-pin-hint">4+ digits, not starting with 0.</p>
                             </div>
                         )}
                     </StealthCard>
@@ -783,14 +770,14 @@ function LockDisguiseSection() {
                                         </button>
                                     )}
                                 </div>
-                                <p className="dgz-stealth-setup-hint" id="stealth-cover-hint">Left empty, WinCommander shows as {DEFAULT_COVER_NAME}.</p>
+                                <p className="dgz-stealth-setup-hint" id="stealth-cover-hint">Empty = {DEFAULT_COVER_NAME}.</p>
                             </div>
                         </StealthCard>
                     </TierGate>
                     <StealthCard
                         icon="eye-off"
                         title="Hide WinCommander"
-                        desc="Gone from the taskbar, tray, Start and installed apps. Reopen with the peek hotkey below."
+                        desc="Gone from the taskbar, tray, Start and installed apps. Reopen with the peek hotkey below. Not part of the Stealth switch."
                         checked={wcHidden}
                         disabled={anyStepBusy || needsElevation}
                         unavailable={needsElevation}
