@@ -56,7 +56,9 @@ try {
         if (-not ($hideResult.warnings -contains 'Shared WinCommander shortcuts need service reconciliation.')) { throw 'Direct hide omitted the shared-link reconciliation warning' }
         $null = Set-WinCommanderVisibility $true
         $null = Set-WinCommanderCalculatorShortcuts $true
+        if (-not (Test-Path -LiteralPath (Join-Path $script:programs 'calculator..lnk'))) { throw "Hide first, then lock left no Calculator shortcut for $order" }
         $null = Set-WinCommanderCalculatorShortcuts $false
+        if (Test-Path -LiteralPath $original) { throw "Lock off exposed the original while Hide was on for $order" }
         $result = Set-WinCommanderVisibility $false
         if ($result.error -or -not (Test-Path -LiteralPath $original)) { throw "Restore failed for $order" }
         if ([Convert]::ToBase64String([IO.File]::ReadAllBytes($original)) -cne $originalBytes) { throw "Shortcut bytes changed for $order" }

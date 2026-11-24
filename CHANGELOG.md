@@ -10,6 +10,14 @@ lists only a selection of those changes.
 
 ## Unreleased
 
+- Fix Stealth mode leaving no Calculator shortcut: with Hide WinCommander
+  already on, turning the Calculator lock on restored the WinCommander
+  shortcuts to the Hide snapshot instead of replacing them, so the Start menu
+  and Desktop showed neither WinCommander nor Calculator. The lock now keeps
+  its "calculator." shortcuts while Hide keeps the WinCommander ones hidden,
+  and each comes off on its own: turning the lock off leaves WinCommander
+  hidden, turning Hide off keeps the Calculator shortcuts, and turning both
+  off brings the original shortcuts back byte for byte.
 - Fix a crash ("thread 'main' has overflowed its stack") in development
   builds the moment Stealth mode, or the cover identity switch on its own, is
   turned on. Saving the cover name now runs off the window thread.

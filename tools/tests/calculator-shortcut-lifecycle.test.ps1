@@ -142,10 +142,10 @@ try {
     New-Item -ItemType Directory -Path (Split-Path $bothFlag -Parent) -Force | Out-Null
     [IO.File]::WriteAllText($bothFlag, '')
     $null = Set-WinCommanderCalculatorShortcuts $true
-    foreach ($root in @($script:programs,$script:desktop,$script:quickLaunch)) { Assert-True (-not (Test-Path -LiteralPath (Get-TestReplacement $root))) 'Both modes left a calculator alias visible' }
+    foreach ($root in @($script:programs,$script:desktop,$script:quickLaunch)) { Assert-True (Test-Path -LiteralPath (Get-TestReplacement $root)) 'Both modes left no calculator alias visible' }
     Remove-Item -LiteralPath $bothFlag
     $null = Set-WinCommanderCalculatorShortcuts $true
-    foreach ($root in @($script:programs,$script:desktop,$script:quickLaunch)) { Assert-True (Test-Path -LiteralPath (Get-TestReplacement $root)) 'Turning Hide off did not restore the calculator alias' }
+    foreach ($root in @($script:programs,$script:desktop,$script:quickLaunch)) { Assert-True (Test-Path -LiteralPath (Get-TestReplacement $root)) 'Turning Hide off did not keep the calculator alias' }
     $null = Set-WinCommanderCalculatorShortcuts $false
     foreach ($path in $originals) { Assert-True ((Read-Bytes $path) -ceq $snapshots[$path]) 'Both-mode transition lost an original shortcut' }
     $windowsCalculatorLink = Join-Path $script:programs 'Calculator.lnk'
@@ -178,10 +178,15 @@ try {
     # Hide WinCommander can remove every original shortcut first. Calculator
     # Lock still needs account Start and Desktop entries without restoring them.
     foreach ($path in $originals) { Remove-Item -LiteralPath $path }
+    # Stealth mode hides first, so the Hide flag is already set when the lock turns on.
+    $stealthFlag = Get-WinCommanderHideFlagPath
+    New-Item -ItemType Directory -Path (Split-Path $stealthFlag -Parent) -Force | Out-Null
+    [IO.File]::WriteAllText($stealthFlag, '')
     $null = Set-WinCommanderCalculatorShortcuts $true
     Assert-True (Test-Path -LiteralPath (Join-Path $script:programs 'calculator..lnk')) 'Calculator Start shortcut was not created without originals'
     Assert-True (Test-Path -LiteralPath (Join-Path $script:desktop 'calculator..lnk')) 'Calculator Desktop shortcut was not created without an original'
     $null = Set-WinCommanderCalculatorShortcuts $false
+    Remove-Item -LiteralPath $stealthFlag
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $script:programs 'calculator..lnk'))) 'Calculator Start shortcut remained after disabling'
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $script:desktop 'calculator..lnk'))) 'Calculator Desktop shortcut remained after disabling'
     foreach ($path in $originals) {

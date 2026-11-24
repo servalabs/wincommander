@@ -2756,11 +2756,6 @@ function Set-WinCommanderCalculatorShortcuts {
     #>
     param([bool]$Hidden = $true, [bool]$SharedDesktop = $false, [bool]$SharedStart = $false)
 
-    $hideFlag = Get-WinCommanderHideFlagPath
-    if ($Hidden -and $hideFlag -and (Test-Path -LiteralPath $hideFlag)) {
-        return Set-WinCommanderCalculatorShortcuts -Hidden $false
-    }
-
     $stateDir     = Join-Path $env:APPDATA 'WinCommander'
     $statePath    = "$stateDir\calc_shortcut_state.json"
     $oldStateDir = Get-WinCommanderMachineStateDir

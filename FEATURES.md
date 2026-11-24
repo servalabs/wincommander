@@ -119,8 +119,9 @@ the backend and private component before execution.
   or **Standard (not elevated)**. An unreadable privilege status is shown as
   unavailable, with a retry control.
 - Calculator Lock uses the visible name **calculator.** for its shortcuts.
-  Windows controls Search ranking and may also show Windows Calculator. Hide
-  mode suppresses calculator shortcuts while both modes are active. With an
+  Windows controls Search ranking and may also show Windows Calculator. With
+  Hide mode also on, the calculator shortcuts stay as the cover while the
+  WinCommander shortcuts stay hidden. With an
   elevated app and available local service, the two shared WinCommander links
   follow account claims for all users and are restored after all claims end.
   Failures are reported; pinned shortcuts remain unchanged.
