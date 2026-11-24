@@ -103,7 +103,7 @@ fn overflow_is_rejected_as_invalid_not_as_a_space_shortfall() {
     for same_volume in [true, false] {
         assert!(matches!(
             check_capacity(u64::MAX, u64::MAX, u64::MAX, same_volume),
-            Err(PrepareFailure::Other(VaultError::Validation))
+            Err(PrepareFailure::Other)
         ));
     }
 }
@@ -112,7 +112,7 @@ fn overflow_is_rejected_as_invalid_not_as_a_space_shortfall() {
 fn preparation_failures_carry_distinct_diagnostic_codes() {
     assert_eq!(PrepareFailure::InsufficientSpace.diagnostic_code(), "VLT.CREATE.INSUFFICIENT_SPACE");
     assert_eq!(
-        PrepareFailure::Other(VaultError::Persistence).diagnostic_code(),
+        PrepareFailure::Other.diagnostic_code(),
         "VLT.CREATE.PREPARATION_FAILED"
     );
 }

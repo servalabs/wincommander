@@ -19,12 +19,12 @@ const MAX_KEYFILES: usize = 64;
 #[derive(Debug)]
 pub(super) enum PrepareFailure {
     InsufficientSpace,
-    Other(VaultError),
+    Other,
 }
 
 impl From<VaultError> for PrepareFailure {
-    fn from(error: VaultError) -> Self {
-        Self::Other(error)
+    fn from(_: VaultError) -> Self {
+        Self::Other
     }
 }
 
@@ -32,7 +32,7 @@ impl PrepareFailure {
     pub(super) fn diagnostic_code(&self) -> &'static str {
         match self {
             Self::InsufficientSpace => "VLT.CREATE.INSUFFICIENT_SPACE",
-            Self::Other(_) => "VLT.CREATE.PREPARATION_FAILED",
+            Self::Other => "VLT.CREATE.PREPARATION_FAILED",
         }
     }
 }
