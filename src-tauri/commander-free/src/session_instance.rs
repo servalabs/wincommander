@@ -200,14 +200,8 @@ pub(crate) fn reveal_elevated_primary(executable: &std::path::Path) -> bool {
 
 // ── Public API ───────────────────────────────────────────────────────────────
 
-/// Background duplicates must not ask Scheduler for a fresh elevated GUI.
-pub fn is_background_duplicate(args: &[String]) -> bool {
-    if !args
-        .iter()
-        .any(|arg| arg == "--autostart" || arg == "--minimized")
-    {
-        return false;
-    }
+/// Another instance (any account) already owns this session's lock.
+pub(crate) fn primary_running() -> bool {
     let name = encode_wide(&instance_object_name(current_session_id(), "lock"));
     let handle = unsafe { OpenMutexW(0x00100000, 0, name.as_ptr()) }; // SYNCHRONIZE
     if handle.is_null() {
@@ -215,6 +209,13 @@ pub fn is_background_duplicate(args: &[String]) -> bool {
     }
     unsafe { CloseHandle(handle) };
     true
+}
+
+/// Background duplicates must not ask Scheduler for a fresh elevated GUI.
+pub fn is_background_duplicate(args: &[String]) -> bool {
+    args.iter()
+        .any(|arg| arg == "--autostart" || arg == "--minimized")
+        && primary_running()
 }
 
 fn duplicate_forward_arguments(args: &[String]) -> Option<Vec<String>> {
@@ -506,7 +507,9 @@ fn focus_preserved_primary(sid: u32, pid: Option<u32>) -> bool {
 }
 
 fn read_calculator_lock() -> Option<bool> {
-    crate::settings::read_startup_calculator_lock(std::time::Duration::from_secs(2))
+    // A cold elevated child can need far more than 2 s for the settings read;
+    // a timeout here silently keeps the non-elevated primary.
+    crate::settings::read_startup_calculator_lock(std::time::Duration::from_secs(15))
 }
 
 fn calculator_allows_elevation_handoff(calculator_lock: Option<bool>) -> bool {

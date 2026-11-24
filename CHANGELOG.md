@@ -16,6 +16,11 @@ lists only a selection of those changes.
   the lock needs a calculator PIN (set in the same card; it opens WinCommander
   from the calculator) and cover identity needs a name. Stealth mode stops at
   the first step that fails and offers "Turn on the rest".
+- Ask for administrator rights on every normal launch that is not already
+  elevated: split-token administrators get the UAC consent prompt, standard
+  accounts get the administrator-credential prompt. Cancelling or a failed
+  prompt keeps the normal window; sign-in, PIN-cover and disabled-UAC launches
+  never prompt. A slow settings read no longer keeps the old non-elevated copy.
 - Fix large Vaults (a 50 GB hidden-volume Vault, a 10-15 GB hidden decoy)
   failing with the generic "could not create this Vault" message. WinCommander
   waited only 120 seconds for the service, but a hidden-volume Vault fills the

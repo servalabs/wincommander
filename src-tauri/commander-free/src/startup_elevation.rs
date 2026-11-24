@@ -1,10 +1,11 @@
-//! Request Windows administrator consent for a foreground split-token launch.
+//! Request Windows elevation for a foreground launch of a non-elevated process.
 //!
 //! The executable manifest deliberately remains `asInvoker`: a standard user
-//! must always be able to open WinCommander. For a foreground launch made by
-//! a split-token administrator, Windows may start a second elevated copy.
-//! Standard accounts always continue normally; accepting UAC consent starts
-//! the administrator copy, while cancelling it leaves the original untouched.
+//! must always be able to open WinCommander. For a foreground launch Windows
+//! may start a second elevated copy: a split-token administrator gets the UAC
+//! consent prompt, a standard account gets the administrator-credential prompt
+//! (the copy then runs as that administrator). Accepting starts the elevated
+//! copy; cancelling or failing leaves the original running untouched.
 //!
 //! This is intentionally not a generic privilege broker.  It only chooses the
 //! integrity level for the normal desktop process.  Individual machine-wide
@@ -65,13 +66,22 @@ pub fn is_current_process_elevated() -> bool {
     crate::process_privileges::current_process_elevation() == Ok(true)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TokenKind {
+    Elevated,
+    /// UAC-filtered administrator: Windows offers the consent prompt.
+    SplitAdmin,
+    /// Standard account, or an administrator token with no elevated pair.
+    Other,
+}
+
 /// A UAC-filtered Administrator token is not elevated, so IsUserAnAdmin()
 /// returns false. TokenElevationTypeLimited is the Windows-supported way to
-/// distinguish that account from a standard account without parsing localized
-/// group names or invoking a shell command. This only decides whether to ask
-/// Windows for consent; it grants no authority.
+/// tell that account from the rest without parsing localized group names or
+/// invoking a shell command. `None` means the token could not be read, which
+/// never prompts. This only decides whether to ask Windows; it grants nothing.
 #[cfg(windows)]
-fn current_user_has_split_admin_token() -> bool {
+fn current_token_kind() -> Option<TokenKind> {
     use windows_sys::Win32::{
         Foundation::CloseHandle,
         Security::{
@@ -84,7 +94,7 @@ fn current_user_has_split_admin_token() -> bool {
     unsafe {
         let mut token = std::ptr::null_mut();
         if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
-            return false;
+            return None;
         }
         let mut elevation_type: TOKEN_ELEVATION_TYPE = 0;
         let mut bytes_returned = 0;
@@ -94,12 +104,45 @@ fn current_user_has_split_admin_token() -> bool {
             &mut elevation_type as *mut TOKEN_ELEVATION_TYPE as *mut _,
             std::mem::size_of::<TOKEN_ELEVATION_TYPE>() as u32,
             &mut bytes_returned,
-        ) != 0;
+        ) != 0
+            && bytes_returned == std::mem::size_of::<TOKEN_ELEVATION_TYPE>() as u32;
+        let elevated = crate::process_privileges::query_elevation(token);
         CloseHandle(token);
-        read_ok
-            && bytes_returned == std::mem::size_of::<TOKEN_ELEVATION_TYPE>() as u32
-            && elevation_type == TokenElevationTypeLimited
+        match (elevated, read_ok) {
+            (Ok(true), _) => Some(TokenKind::Elevated),
+            (Ok(false), true) if elevation_type == TokenElevationTypeLimited => {
+                Some(TokenKind::SplitAdmin)
+            }
+            (Ok(false), true) => Some(TokenKind::Other),
+            _ => None,
+        }
     }
+}
+
+/// The machine's UAC switches that decide whether asking can ever work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct UacPolicy {
+    enabled: bool,
+    standard_requests_denied: bool,
+}
+
+/// Missing values mean Windows' defaults: UAC on, standard users prompted.
+/// ConsentPromptBehaviorUser 0 is "automatically deny elevation requests".
+fn uac_policy_from_values(enable_lua: Option<u32>, consent_prompt_user: Option<u32>) -> UacPolicy {
+    UacPolicy {
+        enabled: enable_lua != Some(0),
+        standard_requests_denied: consent_prompt_user == Some(0),
+    }
+}
+
+#[cfg(windows)]
+fn read_uac_policy() -> UacPolicy {
+    use winreg::{enums::HKEY_LOCAL_MACHINE, RegKey};
+    let key = RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey(r"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System")
+        .ok();
+    let read = |name: &str| key.as_ref().and_then(|key| key.get_value::<u32, _>(name).ok());
+    uac_policy_from_values(read("EnableLUA"), read("ConsentPromptBehaviorUser"))
 }
 
 #[cfg(not(windows))]
@@ -169,15 +212,38 @@ fn quote_windows_argument(argument: &str) -> String {
     quoted
 }
 
-fn should_request_admin_handoff(is_elevated: bool, has_split_admin_token: bool) -> bool {
-    !is_elevated && has_split_admin_token
+/// A credential prompt runs the copy as another account, which cannot share
+/// this account's per-user instance mutex: ask standard accounts only when no
+/// instance is running, otherwise the launch just focuses it.
+fn should_request_elevation(token: TokenKind, policy: UacPolicy, primary_running: bool) -> bool {
+    match token {
+        TokenKind::Elevated => false,
+        _ if !policy.enabled => false,
+        TokenKind::SplitAdmin => true,
+        TokenKind::Other => !policy.standard_requests_denied && !primary_running,
+    }
 }
+
+/// A token that cannot be read (another account's process) is judged by
+/// whether the child is still alive after its own startup guard has had time
+/// to reject a non-elevated copy.
+fn startup_outcome(verified: Option<bool>, child_still_running: bool) -> StartupElevationResult {
+    if verified.unwrap_or(child_still_running) {
+        StartupElevationResult::UseElevatedDesktop
+    } else {
+        StartupElevationResult::ContinueNormally
+    }
+}
+
+#[cfg(windows)]
+const UNVERIFIED_CHILD_GRACE_MS: u32 = 5_000;
 
 #[cfg(windows)]
 pub fn offer_startup_elevation(args: &[String]) -> StartupElevationResult {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::{
-        Foundation::{CloseHandle, GetLastError, ERROR_CANCELLED},
+        Foundation::{CloseHandle, GetLastError, ERROR_CANCELLED, WAIT_TIMEOUT},
+        System::Threading::WaitForSingleObject,
         UI::{
             Shell::{
                 ShellExecuteExW, SEE_MASK_FLAG_NO_UI, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS,
@@ -188,10 +254,13 @@ pub fn offer_startup_elevation(args: &[String]) -> StartupElevationResult {
     };
 
     if !should_offer_startup_elevation(false, args, false)
-        || !should_request_admin_handoff(
-            is_current_process_elevated(),
-            current_user_has_split_admin_token(),
-        )
+        || !current_token_kind().is_some_and(|token| {
+            should_request_elevation(
+                token,
+                read_uac_policy(),
+                crate::session_instance::primary_running(),
+            )
+        })
     {
         return StartupElevationResult::ContinueNormally;
     }
@@ -248,19 +317,25 @@ pub fn offer_startup_elevation(args: &[String]) -> StartupElevationResult {
     }
 
     let child = request.hProcess;
+    let mut verified = None;
+    let mut child_still_running = false;
     if !child.is_null() {
-        let elevated = crate::process_privileges::process_elevation(child);
-        unsafe { CloseHandle(child) };
-        if elevated == Ok(true) {
-            return StartupElevationResult::UseElevatedDesktop;
+        verified = crate::process_privileges::process_elevation(child).ok();
+        if verified.is_none() {
+            child_still_running =
+                unsafe { WaitForSingleObject(child, UNVERIFIED_CHILD_GRACE_MS) } == WAIT_TIMEOUT;
         }
+        unsafe { CloseHandle(child) };
     }
-    crate::log_message_src(
-        "warn",
-        "core",
-        "[StartupElevation] Windows could not verify the new desktop's elevated token",
-    );
-    StartupElevationResult::ContinueNormally
+    let outcome = startup_outcome(verified, child_still_running);
+    if outcome == StartupElevationResult::ContinueNormally {
+        crate::log_message_src(
+            "warn",
+            "core",
+            "[StartupElevation] Windows could not verify the new desktop's elevated token",
+        );
+    }
+    outcome
 }
 
 #[cfg(not(windows))]
@@ -370,11 +445,58 @@ mod tests {
         ));
     }
 
+    const UAC_ON: UacPolicy = UacPolicy {
+        enabled: true,
+        standard_requests_denied: false,
+    };
+
     #[test]
-    fn only_a_split_token_administrator_needs_a_consent_request() {
-        assert!(should_request_admin_handoff(false, true));
-        assert!(!should_request_admin_handoff(false, false));
-        assert!(!should_request_admin_handoff(true, true));
+    fn split_token_administrator_is_asked_for_consent_even_beside_a_running_copy() {
+        assert!(should_request_elevation(TokenKind::SplitAdmin, UAC_ON, false));
+        assert!(should_request_elevation(TokenKind::SplitAdmin, UAC_ON, true));
+    }
+
+    #[test]
+    fn standard_account_is_asked_for_credentials_only_when_no_copy_is_running() {
+        assert!(should_request_elevation(TokenKind::Other, UAC_ON, false));
+        assert!(!should_request_elevation(TokenKind::Other, UAC_ON, true));
+    }
+
+    #[test]
+    fn an_already_elevated_process_is_never_asked_again() {
+        for running in [false, true] {
+            assert!(!should_request_elevation(TokenKind::Elevated, UAC_ON, running));
+        }
+    }
+
+    #[test]
+    fn disabled_uac_never_prompts_any_account() {
+        let off = uac_policy_from_values(Some(0), None);
+        for token in [TokenKind::SplitAdmin, TokenKind::Other, TokenKind::Elevated] {
+            assert!(!should_request_elevation(token, off, false));
+        }
+    }
+
+    #[test]
+    fn policy_that_auto_denies_standard_requests_skips_only_standard_accounts() {
+        let deny = uac_policy_from_values(Some(1), Some(0));
+        assert!(!should_request_elevation(TokenKind::Other, deny, false));
+        assert!(should_request_elevation(TokenKind::SplitAdmin, deny, false));
+    }
+
+    #[test]
+    fn missing_uac_registry_values_mean_windows_defaults() {
+        assert_eq!(uac_policy_from_values(None, None), UAC_ON);
+        assert_eq!(uac_policy_from_values(Some(1), Some(3)), UAC_ON);
+        assert!(!uac_policy_from_values(Some(0), Some(3)).enabled);
+    }
+
+    #[test]
+    fn unreadable_child_token_trusts_a_child_that_survived_its_startup_guard() {
+        assert_eq!(startup_outcome(Some(true), false), StartupElevationResult::UseElevatedDesktop);
+        assert_eq!(startup_outcome(Some(false), true), StartupElevationResult::ContinueNormally);
+        assert_eq!(startup_outcome(None, true), StartupElevationResult::UseElevatedDesktop);
+        assert_eq!(startup_outcome(None, false), StartupElevationResult::ContinueNormally);
     }
 
     #[test]
