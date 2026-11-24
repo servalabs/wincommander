@@ -885,6 +885,7 @@ pub mod personal_settings;
 /// contract that both the desktop UI and `commander-svc` import. See `svc.rs`.
 pub mod svc;
 pub mod vault_access;
+pub mod vault_create_budget;
 pub mod vault_display_path;
 pub mod vault_inventory;
 

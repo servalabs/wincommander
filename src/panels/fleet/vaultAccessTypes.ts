@@ -54,6 +54,10 @@ export const VAULT_MOUNT_REASONS = [
   "acl_apply_failed",
   "acl_readback_failed",
   "dismount_failed",
+  "container_too_large",
+  "hidden_too_large",
+  "format_files_open",
+  "create_timeout",
 ] as const;
 export type VaultMountReason = typeof VAULT_MOUNT_REASONS[number];
 
@@ -87,6 +91,10 @@ const VAULT_MOUNT_REASON_LABELS: Record<VaultMountReason, string> = {
   acl_apply_failed: "Windows permissions could not be applied to this Vault. Check the filesystem inside the Vault: exFAT and FAT32 cannot enforce these permissions; NTFS supports them. Other Windows access problems can also cause this error. Back up your files before moving them to an NTFS Vault",
   acl_readback_failed: "Windows permissions could not be verified for this Vault",
   dismount_failed: "The Vault could not be safely unmounted",
+  container_too_large: "The Vault is larger than the free space on the chosen drive",
+  hidden_too_large: "The hidden volume is too large for the outer volume",
+  format_files_open: "Another program held the new Vault open while it was prepared",
+  create_timeout: "Creating the Vault took longer than the time allowed",
 };
 
 export interface VaultGrantInput {

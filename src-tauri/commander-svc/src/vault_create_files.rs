@@ -13,8 +13,8 @@ use windows_sys::Win32::{
         Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW, SECURITY_ATTRIBUTES,
     },
     Storage::FileSystem::{
-        CreateDirectoryW, FileDispositionInfo, GetDiskFreeSpaceExW, SetFileInformationByHandle,
-        DELETE, FILE_ATTRIBUTE_REPARSE_POINT, FILE_DISPOSITION_INFO, FILE_FLAG_BACKUP_SEMANTICS,
+        CreateDirectoryW, FileDispositionInfo, GetDiskFreeSpaceExW, GetVolumeNameForVolumeMountPointW,
+        GetVolumePathNameW, SetFileInformationByHandle, DELETE, FILE_ATTRIBUTE_REPARSE_POINT, FILE_DISPOSITION_INFO, FILE_FLAG_BACKUP_SEMANTICS,
         FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_READ_ATTRIBUTES,
         FILE_SHARE_READ, FILE_SHARE_WRITE,
     },
@@ -208,6 +208,25 @@ impl Drop for Stage {
             eprintln!("[wincommander-svc] protected vault staging directory retained");
         }
     }
+}
+
+/// The volume GUID path holding `path`. None when it cannot be resolved (a
+/// network share or substituted drive), which callers must treat as unknown.
+pub(super) fn volume_id(path: &Path) -> Option<String> {
+    let mut root = [0u16; 1024];
+    if unsafe { GetVolumePathNameW(wide(path).as_ptr(), root.as_mut_ptr(), root.len() as u32) } == 0
+    {
+        return None;
+    }
+    let mut guid = [0u16; 64];
+    if unsafe {
+        GetVolumeNameForVolumeMountPointW(root.as_ptr(), guid.as_mut_ptr(), guid.len() as u32)
+    } == 0
+    {
+        return None;
+    }
+    let length = guid.iter().position(|unit| *unit == 0)?;
+    Some(String::from_utf16_lossy(&guid[..length]).to_ascii_lowercase())
 }
 
 pub(super) fn available_space(path: &Path) -> Result<u64, VaultError> {

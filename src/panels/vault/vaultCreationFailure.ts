@@ -34,5 +34,20 @@ export function vaultCreationFailureDetail(cause: unknown): string {
   if (normalized.includes("vault_validation_failed")) {
     return "WinCommander rejected this request because the selected settings or partition no longer pass its safety checks. Go Back, refresh the partition selection, and try again. No Vault was created. Diagnostic code: VLT.CREATE.VALIDATION_FAILED.";
   }
+  if (normalized.includes("vault_creation_preparation_failed")) {
+    return "There is not enough free space to prepare this Vault. Free space of about twice the Vault size is needed on the Windows drive and on the destination drive if WinCommander is not running as an administrator, and about the Vault size otherwise. Free some space or choose a larger drive, then try again.";
+  }
+  if (normalized.includes("vault_container_too_large")) {
+    return "The Vault is larger than the free space on the chosen drive, so no Vault was created. Choose a drive with more free space or a smaller size, then try again.";
+  }
+  if (normalized.includes("vault_hidden_too_large")) {
+    return "The hidden volume is too large for the outer volume. Go Back and reduce the hidden volume size, or increase the total size, then try again. No Vault was created.";
+  }
+  if (normalized.includes("vault_format_files_open")) {
+    return "Another program, often antivirus or file indexing, held the new Vault open while it was being prepared. Try again; if it repeats, pause that program for a few minutes or exclude the Vault folder from it, then try again.";
+  }
+  if (normalized.includes("vault_create_timeout")) {
+    return "Creating this Vault took longer than the time WinCommander allows. Large Vaults, especially hidden-volume Vaults, can take a long time, and WinCommander now waits longer in proportion to the size. Try again and keep WinCommander open until it finishes.";
+  }
   return "WinCommander could not create this Vault. No successful Vault was confirmed; try again and send the diagnostic reference if it repeats.";
 }

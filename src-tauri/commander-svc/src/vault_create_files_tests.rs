@@ -27,6 +27,14 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn a_folder_and_its_child_share_one_volume_id() {
+    let fixture = Fixture::new();
+    let id = volume_id(&fixture.0).expect("temp volume id");
+    assert!(id.starts_with(r"\\?\volume{"), "{id}");
+    assert_eq!(volume_id(&fixture.0.join("not-created-yet.bin")), Some(id));
+}
+
+#[test]
 fn existing_target_is_never_overwritten() {
     let fixture = Fixture::new();
     let target = fixture.0.join("existing.bin");

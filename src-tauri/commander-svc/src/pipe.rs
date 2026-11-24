@@ -2593,10 +2593,18 @@ async fn handle_personal_vault_create(
         .as_ref()
         .filter(|_| !token_is_privileged(peer.token()).unwrap_or(false))
     {
-        Some(vault_create_staging::Creation::prepare(&mut args, registration.normalized_path(), peer.token()).map_err(|_| {
+        Some(vault_create_staging::Creation::prepare(&mut args, registration.normalized_path(), peer.token()).map_err(|failure| {
             zeroize_json(&mut args);
             vault_access.cancel_personal_registration(registration);
-            VerbError::new("vault_creation_preparation_failed", "The new Vault could not be prepared. Choose a new writable filename and allow free disk space for two encrypted copies; keyfiles must be readable and no larger than 64 MB.")
+            crate::diagnostics::record_vault_failure(
+                &diagnostic_operation_id,
+                "create",
+                failure.diagnostic_code(),
+                "review_free_space_and_keyfiles",
+                false,
+                started,
+            );
+            VerbError::new("vault_creation_preparation_failed", "The new Vault could not be prepared. Choose a new writable filename; free space of about twice the Vault size is needed on the Windows drive and the destination drive when they are the same drive, and about the Vault size on each otherwise. Keyfiles must be readable and no larger than 64 MB.")
         })?)
     } else {
         None
@@ -2627,11 +2635,13 @@ async fn handle_personal_vault_create(
         if let Some(registration) = &registration {
             vault_access.cancel_personal_registration(registration);
         }
+        let (code, next) = crate::diagnostics::create_failure_fields(reason)
+            .unwrap_or(("VLT.CREATE.BROKER_FAILED", "review_create_diagnostics"));
         crate::diagnostics::record_vault_failure(
             &diagnostic_operation_id,
             "create",
-            "VLT.CREATE.BROKER_FAILED",
-            "review_create_diagnostics",
+            code,
+            next,
             false,
             started,
         );

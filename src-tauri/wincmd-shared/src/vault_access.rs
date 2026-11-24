@@ -674,10 +674,14 @@ pub enum VaultMountReason {
     AclApplyFailed,
     AclReadbackFailed,
     DismountFailed,
+    ContainerTooLarge,
+    HiddenTooLarge,
+    FormatFilesOpen,
+    CreateTimeout,
 }
 
 impl VaultMountReason {
-    pub const ALL: [Self; 29] = [
+    pub const ALL: [Self; 33] = [
         Self::NotAuthorized,
         Self::AdministratorRequired,
         Self::PolicyAccessDenied,
@@ -707,9 +711,13 @@ impl VaultMountReason {
         Self::AclApplyFailed,
         Self::AclReadbackFailed,
         Self::DismountFailed,
+        Self::ContainerTooLarge,
+        Self::HiddenTooLarge,
+        Self::FormatFilesOpen,
+        Self::CreateTimeout,
     ];
 
-    pub const ALL_WIRE_VALUES: [&'static str; 29] = [
+    pub const ALL_WIRE_VALUES: [&'static str; 33] = [
         "not_authorized",
         "administrator_required",
         "policy_access_denied",
@@ -739,6 +747,10 @@ impl VaultMountReason {
         "acl_apply_failed",
         "acl_readback_failed",
         "dismount_failed",
+        "container_too_large",
+        "hidden_too_large",
+        "format_files_open",
+        "create_timeout",
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -772,6 +784,10 @@ impl VaultMountReason {
             Self::AclApplyFailed => "acl_apply_failed",
             Self::AclReadbackFailed => "acl_readback_failed",
             Self::DismountFailed => "dismount_failed",
+            Self::ContainerTooLarge => "container_too_large",
+            Self::HiddenTooLarge => "hidden_too_large",
+            Self::FormatFilesOpen => "format_files_open",
+            Self::CreateTimeout => "create_timeout",
         }
     }
 
@@ -806,6 +822,12 @@ impl VaultMountReason {
             "acl_apply_failed" => Some(Self::AclApplyFailed),
             "acl_readback_failed" => Some(Self::AclReadbackFailed),
             "dismount_failed" => Some(Self::DismountFailed),
+            // Pro names the four create failures with the final `vault_` code,
+            // so both forms must land on one reason and never be prefixed twice.
+            "container_too_large" | "vault_container_too_large" => Some(Self::ContainerTooLarge),
+            "hidden_too_large" | "vault_hidden_too_large" => Some(Self::HiddenTooLarge),
+            "format_files_open" | "vault_format_files_open" => Some(Self::FormatFilesOpen),
+            "create_timeout" | "vault_create_timeout" => Some(Self::CreateTimeout),
             _ => None,
         }
     }
@@ -1383,6 +1405,18 @@ mod tests {
             VaultMountReason::from_wire("vault_engine_mount_failed"),
             None
         );
+        for (prefixed, reason) in [
+            ("vault_container_too_large", VaultMountReason::ContainerTooLarge),
+            ("vault_hidden_too_large", VaultMountReason::HiddenTooLarge),
+            ("vault_format_files_open", VaultMountReason::FormatFilesOpen),
+            ("vault_create_timeout", VaultMountReason::CreateTimeout),
+        ] {
+            assert_eq!(VaultMountReason::from_wire(prefixed), Some(reason));
+            assert_eq!(format!("vault_{}", reason.as_str()), prefixed);
+        }
+        for unknown in ["vault_vault_create_timeout", "vault_broker_rejected", "vault_create_failed"] {
+            assert_eq!(VaultMountReason::from_wire(unknown), None);
+        }
         let declaration = renderer
             .split("export const VAULT_MOUNT_REASONS = [")
             .nth(1)

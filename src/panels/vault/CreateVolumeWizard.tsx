@@ -6,6 +6,8 @@ import useBackend from "../../hooks/useBackend";
 import type { EncryptionPartition } from "../../hooks/useBackend";
 import useVisibility from "../../hooks/useVisibility";
 import { useTheme } from "../../context/ThemeContext";
+import { freeBytesForPath } from "../../lib/stegoBackup";
+import { assessDestinationSpace, largeVaultNotice, sizeToBytes, type DestinationSpaceVerdict } from "./createVolumeCapacity";
 import { vaultCreationFailureDetail } from "./vaultCreationFailure";
 import './CreateVolumeWizard.css';
 
@@ -111,7 +113,7 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
     const visibility = useVisibility();
     const isAdvanced = visibility.isVisible({ minDensity: "expert", capability: ["safeguards"] });
 
-    const { createVolume, createDualVolume, getEncryptionPartitions } = useBackend();
+    const { createVolume, createDualVolume, getEncryptionPartitions, getWipeDriveList, isCurrentProcessElevated } = useBackend();
 
     // Step tracking
     const [stepIndex, setStepIndex] = useState(0);
@@ -158,6 +160,18 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
     const [done, setDone] = useState(false);
     const selectedPartition = partitions.find(partition => partition.devicePath === selectedDevicePath);
 
+    // Read on the Create step only; null means unknown and never blocks.
+    const [destinationFreeBytes, setDestinationFreeBytes] = useState<number | null>(null);
+    const [isElevated, setIsElevated] = useState<boolean | null>(null);
+    const outerSizeBytes = targetKind === "device" ? selectedPartition?.sizeBytes ?? 0 : sizeToBytes(sizeValue, sizeUnit);
+    const spaceVerdict: DestinationSpaceVerdict = useMemo(
+        () => targetKind === "file"
+            ? assessDestinationSpace({ sizeBytes: outerSizeBytes, freeBytes: destinationFreeBytes, isElevated, isDynamic: !isDual && dynamicFormat })
+            : { level: "ok" },
+        [destinationFreeBytes, dynamicFormat, isDual, isElevated, outerSizeBytes, targetKind],
+    );
+    const largeNotice = largeVaultNotice(outerSizeBytes, isDual);
+
     useEffect(() => {
         if (!isOpen) return;
         let cancelled = false;
@@ -182,6 +196,23 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
     }, [isAdvanced]);
 
     const currentStep = steps[stepIndex];
+
+    const isCreateStep = currentStep?.id === "summary";
+    useEffect(() => {
+        if (!isOpen || !isCreateStep || targetKind !== "file") return;
+        let cancelled = false;
+        setDestinationFreeBytes(null);
+        setIsElevated(null);
+        void Promise.all([
+            getWipeDriveList().catch(() => null),
+            isCurrentProcessElevated().catch(() => null),
+        ]).then(([drives, elevated]) => {
+            if (cancelled) return;
+            setDestinationFreeBytes(drives ? freeBytesForPath(volumePath, drives) : null);
+            setIsElevated(elevated);
+        });
+        return () => { cancelled = true; };
+    }, [getWipeDriveList, isCurrentProcessElevated, isCreateStep, isOpen, targetKind, volumePath]);
 
     const canNext = useMemo(() => {
         switch (currentStep?.id) {
@@ -254,6 +285,7 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
     }, []);
 
     const handleCreate = useCallback(async () => {
+        if (spaceVerdict.level === "blocked") return;
         setApplying(true);
         const sizeStr = `${sizeValue}${sizeUnit}`;
         const label = isDual ? "Creating outer and hidden volumes" : `Creating encrypted ${targetKind === "device" ? "partition" : "container"}`;
@@ -342,6 +374,7 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
         selectedPartition,
         sizeUnit,
         sizeValue,
+        spaceVerdict.level,
         targetKind,
         volumePath,
     ]);
@@ -381,6 +414,18 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
     }, [applying, done, hasError, onClose, onCreated]);
 
     const pwStrength = getPasswordStrength(password);
+
+    const createStepNotices = (
+        <>
+            {largeNotice && <div className="info-callout"><Icon icon="time" /><span>{largeNotice}</span></div>}
+            {spaceVerdict.level !== "ok" && (
+                <div className="info-callout">
+                    <Icon icon="warning-sign" intent={spaceVerdict.level === "blocked" ? "danger" : "warning"} />
+                    <span>{spaceVerdict.message}</span>
+                </div>
+            )}
+        </>
+    );
 
     const renderStepContent = () => {
         switch (currentStep?.id) {
@@ -696,6 +741,7 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
                 if (applyLog.length > 0 || applying || done) {
                     return (
                         <div className="wizard-step-content">
+                            {createStepNotices}
                             <div className="apply-log">
                                 {applyLog.map((item, i) => (
                                     <div key={i} className={`apply-log-item ${item.status}`}>
@@ -730,6 +776,7 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
                 return (
                     <div className="wizard-step-content">
                         <p className="step-description">Review your configuration before creating the volume.</p>
+                        {createStepNotices}
                         <div className="summary-table">
                             <div className="summary-row"><span>Type</span><span>{isDual ? "Hidden + decoy" : "Standard"}</span></div>
                             <div className="summary-row"><span>Host</span><span>{targetKind === "device" ? "Entire partition" : "File container"}</span></div>
@@ -874,7 +921,7 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
                                     text={applying ? "CREATING..." : "CREATE VOLUME"}
                                     className="modal-primary-btn"
                                     loading={applying}
-                                    disabled={applying}
+                                    disabled={applying || spaceVerdict.level === "blocked"}
                                     onClick={handleCreate}
                                 />
                             )}

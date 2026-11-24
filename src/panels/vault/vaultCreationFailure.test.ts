@@ -40,6 +40,49 @@ describe("Vault creation failure presentation", () => {
     expect(vaultCreationFailureDetail("vault_create_failed")).not.toContain("vault_create_failed");
   });
 
+  test("explains a space shortage with the 1x and 2x figures and no raw code", () => {
+    const detail = vaultCreationFailureDetail(new Error("vault_creation_preparation_failed (C:\\private\\vault.hc)"));
+    expect(detail).toContain("not enough free space");
+    expect(detail).toContain("twice the Vault size");
+    expect(detail).toContain("not running as an administrator");
+    expect(detail).not.toContain("vault_creation_preparation_failed");
+    expect(detail).not.toContain("private");
+  });
+
+  test("a Vault larger than the destination is its own message", () => {
+    const detail = vaultCreationFailureDetail("vault_container_too_large");
+    expect(detail).toContain("larger than the free space");
+    expect(detail).toContain("smaller size");
+    expect(detail).not.toContain("vault_container_too_large");
+  });
+
+  test("a hidden volume that does not fit says to reduce its size", () => {
+    const detail = vaultCreationFailureDetail("vault_hidden_too_large");
+    expect(detail).toContain("reduce the hidden volume size");
+    expect(detail).not.toContain("vault_hidden_too_large");
+  });
+
+  test("a volume held open names antivirus and indexing and asks for a retry", () => {
+    const detail = vaultCreationFailureDetail("vault_format_files_open");
+    expect(detail).toContain("antivirus");
+    expect(detail).toContain("indexing");
+    expect(detail).toContain("Try again");
+    expect(detail).not.toContain("vault_format_files_open");
+  });
+
+  test("a creation timeout tells the owner large Vaults take long and to retry", () => {
+    const detail = vaultCreationFailureDetail("vault_create_timeout");
+    expect(detail).toContain("Large Vaults");
+    expect(detail).toContain("Try again");
+    expect(detail).not.toContain("vault_create_timeout");
+  });
+
+  test("an unknown code still falls to the generic message without leaking it", () => {
+    const detail = vaultCreationFailureDetail("vault_some_future_code");
+    expect(detail).toContain("could not create this Vault");
+    expect(detail).not.toContain("vault_some_future_code");
+  });
+
   test("gives a safe, actionable explanation for rejected partition requests", () => {
     const detail = vaultCreationFailureDetail("vault_validation_failed");
 

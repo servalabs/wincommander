@@ -608,7 +608,7 @@ fn vault_event(
     operation_id: &str,
     action: &'static str,
     outcome: DiagnosticOutcome,
-    error_code: &'static str,
+    error_code: &str,
     severity: DiagnosticSeverity,
     retryable: bool,
     next: &'static str,
@@ -957,9 +957,79 @@ fn reason_fields(
             true,
             "retry_cleanup",
         ),
+        Some(VaultMountReason::ContainerTooLarge) => (
+            "VLT.CREATE.CONTAINER_TOO_LARGE",
+            DiagnosticSeverity::Error,
+            false,
+            "choose_larger_drive_or_smaller_size",
+        ),
+        Some(VaultMountReason::HiddenTooLarge) => (
+            "VLT.CREATE.HIDDEN_TOO_LARGE",
+            DiagnosticSeverity::Error,
+            false,
+            "reduce_hidden_size",
+        ),
+        Some(VaultMountReason::FormatFilesOpen) => (
+            "VLT.CREATE.FORMAT_FILES_OPEN",
+            DiagnosticSeverity::Error,
+            true,
+            "pause_scanners_and_retry",
+        ),
+        Some(VaultMountReason::CreateTimeout) => (
+            "VLT.CREATE.TIMEOUT",
+            DiagnosticSeverity::Error,
+            true,
+            "retry_large_create",
+        ),
         None => ("VLT.UNKNOWN", DiagnosticSeverity::Error, true, "retry"),
     };
     (DiagnosticOutcome::Failed, code, severity, retry, next)
+}
+
+/// Fixed code and next step for the create failures the helper reports by name;
+/// every other reason keeps the generic create-broker code.
+pub(crate) fn create_failure_fields(
+    reason: VaultMountReason,
+) -> Option<(&'static str, &'static str)> {
+    match reason {
+        VaultMountReason::ContainerTooLarge
+        | VaultMountReason::HiddenTooLarge
+        | VaultMountReason::FormatFilesOpen
+        | VaultMountReason::CreateTimeout => {
+            let (_, code, _, _, next) = reason_fields(Some(reason), "create");
+            Some((code, next))
+        }
+        _ => None,
+    }
+}
+
+/// The helper's fixed `VLT.CREATE.<UPPER_SNAKE>` token, recorded verbatim. Anything
+/// else, including native text or paths, is dropped rather than stored.
+fn create_token_is_valid(token: &str) -> bool {
+    token.strip_prefix("VLT.CREATE.").is_some_and(|tail| {
+        !tail.is_empty()
+            && tail.len() <= 40
+            && tail
+                .bytes()
+                .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
+    })
+}
+
+pub(crate) fn record_vault_create_token(operation_id: &str, token: &str) {
+    if !create_token_is_valid(token) {
+        return;
+    }
+    let _ = record_event(vault_event(
+        operation_id,
+        "create",
+        DiagnosticOutcome::Failed,
+        token,
+        DiagnosticSeverity::Error,
+        false,
+        "review_create_diagnostics",
+        Instant::now(),
+        BTreeMap::new(),
+    ));
 }
 fn presentation_name(value: VaultPresentation) -> &'static str {
     match value {
@@ -1059,6 +1129,35 @@ mod tests {
             assert_eq!(event.stage, stage);
             assert!(event.redacted_context.is_empty());
             assert!(event.duration_ms.is_some());
+        }
+    }
+    #[test]
+    fn named_create_failures_carry_their_fixed_create_token() {
+        for (reason, code) in [
+            (VaultMountReason::ContainerTooLarge, "VLT.CREATE.CONTAINER_TOO_LARGE"),
+            (VaultMountReason::HiddenTooLarge, "VLT.CREATE.HIDDEN_TOO_LARGE"),
+            (VaultMountReason::FormatFilesOpen, "VLT.CREATE.FORMAT_FILES_OPEN"),
+            (VaultMountReason::CreateTimeout, "VLT.CREATE.TIMEOUT"),
+        ] {
+            assert_eq!(create_failure_fields(reason).map(|fields| fields.0), Some(code));
+        }
+        assert!(create_failure_fields(VaultMountReason::BrokerRejected).is_none());
+    }
+    #[test]
+    fn only_fixed_create_tokens_are_recorded() {
+        for token in ["VLT.CREATE.ENGINE_EXIT_10", "VLT.CREATE.ENGINE_FAILED", "VLT.CREATE.TIMEOUT"] {
+            assert!(create_token_is_valid(token), "{token}");
+        }
+        for token in [
+            "",
+            "VLT.CREATE.",
+            "VLT.CREATE.engine_failed",
+            "VLT.CREATE.ENGINE_EXIT_10\nC:\\private",
+            "VLT.NATIVE.EXIT_14",
+            "C:\\Users\\private\\vault.hc",
+            "VLT.CREATE.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        ] {
+            assert!(!create_token_is_valid(token), "{token:?}");
         }
     }
     #[test]

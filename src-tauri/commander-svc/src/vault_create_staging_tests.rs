@@ -85,9 +85,34 @@ fn keyfile_values_preserve_multiple_selections_and_reject_nonpaths() {
 }
 
 #[test]
-fn insufficient_space_or_overflow_fails_before_formatting() {
-    assert!(check_capacity(32, 64, 64).is_ok());
-    assert!(check_capacity(32, 63, 64).is_err());
-    assert!(check_capacity(32, 64, 63).is_err());
-    assert!(check_capacity(u64::MAX, u64::MAX, u64::MAX).is_err());
+fn one_shared_volume_must_hold_both_copies() {
+    assert!(check_capacity(32, 64, 64, true).is_ok());
+    assert!(matches!(check_capacity(32, 63, 64, true), Err(PrepareFailure::InsufficientSpace)));
+    assert!(matches!(check_capacity(32, 64, 63, true), Err(PrepareFailure::InsufficientSpace)));
+}
+
+#[test]
+fn separate_volumes_each_need_one_copy() {
+    assert!(check_capacity(32, 32, 32, false).is_ok());
+    assert!(matches!(check_capacity(32, 31, 32, false), Err(PrepareFailure::InsufficientSpace)));
+    assert!(matches!(check_capacity(32, 32, 31, false), Err(PrepareFailure::InsufficientSpace)));
+}
+
+#[test]
+fn overflow_is_rejected_as_invalid_not_as_a_space_shortfall() {
+    for same_volume in [true, false] {
+        assert!(matches!(
+            check_capacity(u64::MAX, u64::MAX, u64::MAX, same_volume),
+            Err(PrepareFailure::Other(VaultError::Validation))
+        ));
+    }
+}
+
+#[test]
+fn preparation_failures_carry_distinct_diagnostic_codes() {
+    assert_eq!(PrepareFailure::InsufficientSpace.diagnostic_code(), "VLT.CREATE.INSUFFICIENT_SPACE");
+    assert_eq!(
+        PrepareFailure::Other(VaultError::Persistence).diagnostic_code(),
+        "VLT.CREATE.PREPARATION_FAILED"
+    );
 }

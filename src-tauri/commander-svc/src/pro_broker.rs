@@ -143,8 +143,13 @@ fn require_vault_runtime_version(
 #[cfg(windows)]
 const BROKER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 #[cfg(windows)]
-fn broker_timeout_for(feature_id: &str) -> std::time::Duration {
-    if feature_id == "managed.deployment.apply" {
+fn broker_timeout_for(feature_id: &str, args: &serde_json::Value) -> std::time::Duration {
+    if feature_id == "vault.broker.create_personal" {
+        // A hidden-volume create fills the whole outer volume with random data.
+        wincmd_shared::vault_create_budget::service_budget(
+            wincmd_shared::vault_create_budget::size_mib_from_args(args),
+        )
+    } else if feature_id == "managed.deployment.apply" {
         std::time::Duration::from_secs(300)
     } else if matches!(feature_id, "vault.backup.manage" | "vault.backup.resume") {
         std::time::Duration::from_secs(180)
@@ -293,7 +298,7 @@ fn require_upgrade_probe_acl(feature:&str,check:impl FnOnce()->bool)->Result<(),
 pub async fn vault_call(
     call: VaultCall<'_>,
 ) -> Result<serde_json::Value, wincmd_shared::vault_access::VaultMountReason> {
-    let deadline = tokio::time::Instant::now() + broker_timeout_for(call.feature_id);
+    let deadline = tokio::time::Instant::now() + broker_timeout_for(call.feature_id, &call.args);
     vault_call_until(call, deadline, None).await
 }
 
@@ -770,6 +775,14 @@ fn process_broker_reply(
                     VaultMountReason::BrokerRejected
                 }
             });
+            // Named create failures are recorded by the create route under the
+            // caller's reference; the helper's other engine tokens are kept here.
+            if crate::diagnostics::create_failure_fields(reason).is_none() {
+                crate::diagnostics::record_vault_create_token(
+                    &format!("VLT-{request_id}"),
+                    &error.message,
+                );
+            }
             Ok(BrokerReply::Finished(Err(reason)))
         }
         Envelope::Response(_)
@@ -1410,8 +1423,9 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn only_explicit_sync_enrollment_has_an_installation_deadline() {
+        let no_args = serde_json::Value::Null;
         assert_eq!(
-            broker_timeout_for("vault.syncthing.prepare"),
+            broker_timeout_for("vault.syncthing.prepare", &no_args),
             std::time::Duration::from_secs(180)
         );
         for feature in [
@@ -1421,7 +1435,64 @@ mod tests {
             "vault.broker.mount",
             "vault.broker.dismount",
         ] {
-            assert_eq!(broker_timeout_for(feature), BROKER_TIMEOUT);
+            assert_eq!(broker_timeout_for(feature, &no_args), BROKER_TIMEOUT);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn vault_creation_wait_scales_with_the_outer_size_and_nothing_else_does() {
+        use std::time::Duration;
+        let secs = |args: serde_json::Value| broker_timeout_for("vault.broker.create_personal", &args);
+        assert_eq!(secs(serde_json::json!({"HostSizeMB": 51200, "SecondSizeMB": 10240})), Duration::from_secs(5_240));
+        assert_eq!(secs(serde_json::json!({"SizeMB": 500})), Duration::from_secs(170));
+        assert_eq!(secs(serde_json::json!({"SizeMB": 1})), Duration::from_secs(121));
+        assert_eq!(secs(serde_json::json!({})), BROKER_TIMEOUT);
+        assert_eq!(secs(serde_json::json!({"SizeMB": u64::MAX})), Duration::from_secs(43_200));
+        // Mount, dismount and the short ACL step keep their own bounded waits.
+        let large = serde_json::json!({"SizeMB": 51200});
+        for feature in ["vault.broker.mount", "vault.broker.dismount", "vault.broker.apply_root_acl"] {
+            assert_eq!(broker_timeout_for(feature, &large), BROKER_TIMEOUT);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn helper_create_failures_map_to_one_final_code_whether_prefixed_or_not() {
+        use wincmd_shared::vault_access::VaultMountReason;
+        let token = "broker-test-token";
+        for (kind, reason, code) in [
+            ("vault_container_too_large", VaultMountReason::ContainerTooLarge, "vault_container_too_large"),
+            ("container_too_large", VaultMountReason::ContainerTooLarge, "vault_container_too_large"),
+            ("vault_hidden_too_large", VaultMountReason::HiddenTooLarge, "vault_hidden_too_large"),
+            ("hidden_too_large", VaultMountReason::HiddenTooLarge, "vault_hidden_too_large"),
+            ("vault_format_files_open", VaultMountReason::FormatFilesOpen, "vault_format_files_open"),
+            ("format_files_open", VaultMountReason::FormatFilesOpen, "vault_format_files_open"),
+            ("vault_create_timeout", VaultMountReason::CreateTimeout, "vault_create_timeout"),
+            ("create_timeout", VaultMountReason::CreateTimeout, "vault_create_timeout"),
+            ("broker_rejected", VaultMountReason::BrokerRejected, "vault_broker_rejected"),
+            ("vault_broker_rejected", VaultMountReason::BrokerRejected, "vault_broker_rejected"),
+            ("vault_some_future_kind", VaultMountReason::BrokerRejected, "vault_broker_rejected"),
+            ("vault_vault_create_timeout", VaultMountReason::BrokerRejected, "vault_broker_rejected"),
+        ] {
+            let reply = wincmd_shared::Envelope::Error(wincmd_shared::ErrorReply {
+                request_id: REQUEST_ID,
+                kind: kind.to_string(),
+                message: "bounded failure".to_string(),
+            })
+            .sign(token);
+            let mut notifications = 0;
+            let Ok(BrokerReply::Finished(Err(actual))) =
+                process_broker_reply(reply, token, REQUEST_ID, &mut notifications)
+            else {
+                panic!("{kind} was not a finished failure");
+            };
+            assert_eq!(actual, reason, "{kind}");
+            assert_eq!(
+                crate::vault_mount::VaultMountBroker::personal_mount_failure_code(actual),
+                code,
+                "{kind}"
+            );
         }
     }
 

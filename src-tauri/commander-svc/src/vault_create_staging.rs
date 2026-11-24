@@ -15,6 +15,28 @@ mod files;
 const MAX_KEYFILE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_KEYFILES: usize = 64;
 
+/// Space is checked before anything is created so a shortfall fails early.
+#[derive(Debug)]
+pub(super) enum PrepareFailure {
+    InsufficientSpace,
+    Other(VaultError),
+}
+
+impl From<VaultError> for PrepareFailure {
+    fn from(error: VaultError) -> Self {
+        Self::Other(error)
+    }
+}
+
+impl PrepareFailure {
+    pub(super) fn diagnostic_code(&self) -> &'static str {
+        match self {
+            Self::InsufficientSpace => "VLT.CREATE.INSUFFICIENT_SPACE",
+            Self::Other(_) => "VLT.CREATE.PREPARATION_FAILED",
+        }
+    }
+}
+
 pub(super) struct Creation {
     destination: files::Destination,
     stage: files::Stage,
@@ -84,19 +106,33 @@ fn keyfile_paths(value: &Value) -> Result<Vec<String>, VaultError> {
 }
 
 impl Creation {
-    pub(super) fn prepare(args: &mut Value, path: &str, token: HANDLE) -> Result<Self, VaultError> {
+    pub(super) fn prepare(
+        args: &mut Value,
+        path: &str,
+        token: HANDLE,
+    ) -> Result<Self, PrepareFailure> {
         let expected_bytes = expected_bytes(args)?;
+        let staging_root = std::path::PathBuf::from(
+            std::env::var_os("ProgramData").ok_or(VaultError::Persistence)?,
+        );
+        let (destination_free, destination_volume) = with_caller_impersonation(token, || {
+            let parent = Path::new(path).parent().ok_or(VaultError::Validation)?;
+            Ok((files::available_space(parent)?, files::volume_id(parent)))
+        })?;
+        let same_volume = match (files::volume_id(&staging_root), destination_volume) {
+            (Some(staging), Some(destination)) => staging == destination,
+            // Unknown means assume they share one, the larger requirement.
+            _ => true,
+        };
+        check_capacity(
+            expected_bytes,
+            files::available_space(&staging_root)?,
+            destination_free,
+            same_volume,
+        )?;
         let destination =
             with_caller_impersonation(token, || files::Destination::create(Path::new(path)))?;
         let stage = files::Stage::create()?;
-        // Reserve enough for both encrypted copies even when they share a volume.
-        check_capacity(
-            expected_bytes,
-            files::available_space(&stage.path)?,
-            with_caller_impersonation(token, || {
-                files::available_space(Path::new(path).parent().ok_or(VaultError::Validation)?)
-            })?,
-        )?;
         let mut creation = Self {
             destination,
             stage,
@@ -255,12 +291,25 @@ fn file_hash(file: &mut std::fs::File) -> Result<Vec<u8>, VaultError> {
     Ok(digest.finalize().to_vec())
 }
 
-fn check_capacity(bytes: u64, staging_free: u64, destination_free: u64) -> Result<(), VaultError> {
-    let required = bytes.checked_mul(2).ok_or(VaultError::Validation)?;
-    if staging_free < required || destination_free < required {
-        return Err(VaultError::Persistence);
+/// The staged container and its published copy coexist: both need `bytes`, on
+/// one volume together, or one each when the destination is elsewhere.
+fn check_capacity(
+    bytes: u64,
+    staging_free: u64,
+    destination_free: u64,
+    same_volume: bool,
+) -> Result<(), PrepareFailure> {
+    let both = bytes.checked_mul(2).ok_or(VaultError::Validation)?;
+    let enough = if same_volume {
+        staging_free.min(destination_free) >= both
+    } else {
+        staging_free >= bytes && destination_free >= bytes
+    };
+    if enough {
+        Ok(())
+    } else {
+        Err(PrepareFailure::InsufficientSpace)
     }
-    Ok(())
 }
 
 #[cfg(test)]

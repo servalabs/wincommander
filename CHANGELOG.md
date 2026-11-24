@@ -10,6 +10,21 @@ lists only a selection of those changes.
 
 ## Unreleased
 
+- Fix large Vaults (a 50 GB hidden-volume Vault, a 10-15 GB hidden decoy)
+  failing with the generic "could not create this Vault" message. WinCommander
+  waited only 120 seconds for the service, but a hidden-volume Vault fills the
+  whole outer volume with random data. Creating a Vault now waits 120 seconds
+  plus 1 second per 10 MiB of outer size (at most 12 hours), and always two
+  minutes longer than the service's own limit. A timed-out request is still
+  never replayed. The Create step says when a Vault of 2 GB or more can take
+  several minutes, and blocks a file Vault that clearly exceeds the free space
+  on its drive. Not enough free space, a hidden volume too large for its outer
+  volume, a Vault held open by antivirus or indexing, and a timeout now each
+  get their own plain message instead of the generic one. The service waits
+  the same size-scaled time for the Vault helper instead of a flat 120
+  seconds, and a standard-account creation checks free space before it
+  creates anything: one copy per drive when the Windows drive and the
+  destination differ, two on one drive, instead of two on both.
 - Fix an in-place update (`/UPDATE`, including the in-app updater) leaving
   the machine-wide Start Menu and Desktop shortcuts missing. Setup never
   created a shortcut in update mode, so an install whose shortcut was gone

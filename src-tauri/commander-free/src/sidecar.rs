@@ -138,7 +138,7 @@ fn is_vault_mount_mutation(feature_id: &str) -> bool {
     .any(|parts| crate::command_strings::matches_parts(feature_id, parts))
 }
 
-fn request_timeout_for(feature_id: &str) -> Option<Duration> {
+fn request_timeout_for(feature_id: &str, args: &serde_json::Value) -> Option<Duration> {
     if backup::matches(feature_id) { return Some(STEGO_TRANSFER_TIMEOUT); }
 
     if is_vault_mount_mutation(feature_id) {
@@ -150,6 +150,12 @@ fn request_timeout_for(feature_id: &str) -> Option<Duration> {
         | "Attach-StegoContainer"
         | "Restore-StegoContainer"
         | "Refresh-StegoContainer" => Some(STEGO_TRANSFER_TIMEOUT),
+        // Outlasts the service's own size-scaled limit so its timeout is reported first.
+        "Create-DualVolume" | "Create-EncryptionVolume" => Some(
+            wincmd_shared::vault_create_budget::desktop_timeout(
+                wincmd_shared::vault_create_budget::size_mib_from_args(args),
+            ),
+        ),
         "scrub_metadata_paths" => Some(METADATA_SCRUB_REQUEST_TIMEOUT),
         "fleet_lab_join" => Some(FLEET_LAB_JOIN_TIMEOUT),
         _ => Some(SESSION_REQUEST_TIMEOUT),
@@ -1556,7 +1562,7 @@ async fn dispatch_request_open(
     req: Request,
 ) -> Result<serde_json::Value, DispatchFailure> {
     let request_id = req.request_id;
-    let request_timeout = request_timeout_for(&req.feature_id);
+    let request_timeout = request_timeout_for(&req.feature_id, &req.args);
     let (tx, rx) = oneshot::channel();
 
     // Insert before write so a fast reader (already-buffered reply)
@@ -2479,7 +2485,10 @@ mod tests {
             "Dismount-AllEncryptedVolumes",
         ] {
             assert!(is_vault_mount_mutation(command));
-            assert_eq!(request_timeout_for(command), Some(Duration::from_secs(180)));
+            assert_eq!(
+                request_timeout_for(command, &serde_json::Value::Null),
+                Some(Duration::from_secs(180))
+            );
         }
         assert!(!is_vault_mount_mutation("Get-EncryptedVolumeStatus"));
         assert!(!is_vault_mount_mutation("Mount-EncryptionVolume-Other"));
@@ -2488,16 +2497,60 @@ mod tests {
     #[test]
     fn ordinary_pro_requests_keep_the_standard_timeout() {
         for feature_id in [
-            "Create-EncryptionVolume",
+            "Create-EncryptionVolume-Other",
             "Mount-EncryptionVolume-Other",
             "Clear-EventLogs",
         ] {
             assert_eq!(
-                request_timeout_for(feature_id),
+                request_timeout_for(feature_id, &serde_json::json!({ "SizeMB": 51200 })),
                 Some(Duration::from_secs(120)),
-                "{feature_id} must not receive the mount timeout"
+                "{feature_id} must not receive the mount or creation timeout"
             );
         }
+    }
+
+
+    #[test]
+    fn vault_creation_requests_wait_in_proportion_to_the_outer_size() {
+        let dual = serde_json::json!({ "HostSizeMB": 51200, "SecondSizeMB": 10240 });
+        assert_eq!(
+            request_timeout_for("Create-DualVolume", &dual),
+            Some(Duration::from_secs(5_360))
+        );
+        let standard = serde_json::json!({ "SizeMB": 500 });
+        assert_eq!(
+            request_timeout_for("Create-EncryptionVolume", &standard),
+            Some(Duration::from_secs(290))
+        );
+        let device = serde_json::json!({ "SizeMB": 0, "DeviceSizeBytes": 500u64 * 1024 * 1024 });
+        assert_eq!(
+            request_timeout_for("Create-EncryptionVolume", &device),
+            Some(Duration::from_secs(290))
+        );
+        // The hidden size must never drive the wait.
+        assert_eq!(
+            request_timeout_for("Create-DualVolume", &serde_json::json!({ "HostSizeMB": 500, "SecondSizeMB": 51200 })),
+            Some(Duration::from_secs(290))
+        );
+    }
+
+    #[test]
+    fn vault_creation_with_unreadable_size_still_outlasts_the_service_floor() {
+        for args in [
+            serde_json::Value::Null,
+            serde_json::json!({}),
+            serde_json::json!({ "SizeMB": "not a number" }),
+            serde_json::json!({ "SizeMB": -5 }),
+        ] {
+            assert_eq!(
+                request_timeout_for("Create-EncryptionVolume", &args),
+                Some(Duration::from_secs(240))
+            );
+        }
+        assert_eq!(
+            request_timeout_for("Create-EncryptionVolume", &serde_json::json!({ "SizeMB": "500" })),
+            Some(Duration::from_secs(290))
+        );
     }
 
     #[test]
@@ -2513,7 +2566,7 @@ mod tests {
             "backup_generation_restore",
         ] {
             assert_eq!(
-                request_timeout_for(feature_id),
+                request_timeout_for(feature_id, &serde_json::Value::Null),
                 Some(Duration::from_secs(24 * 60 * 60)),
                 "{feature_id} must not be cut off mid-copy"
             );

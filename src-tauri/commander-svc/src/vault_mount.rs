@@ -791,6 +791,10 @@ impl VaultMountBroker {
             VaultMountReason::PresentationRejected => "vault_presentation_rejected",
             VaultMountReason::EntitlementDenied => "vault_entitlement_denied",
             VaultMountReason::DismountFailed => "vault_cleanup_failed",
+            VaultMountReason::ContainerTooLarge => "vault_container_too_large",
+            VaultMountReason::HiddenTooLarge => "vault_hidden_too_large",
+            VaultMountReason::FormatFilesOpen => "vault_format_files_open",
+            VaultMountReason::CreateTimeout => "vault_create_timeout",
         }
     }
 
@@ -4820,6 +4824,10 @@ mod tests {
                 "vault_syncthing_not_enabled",
             ),
             (VaultMountReason::DismountFailed, "vault_cleanup_failed"),
+            (VaultMountReason::ContainerTooLarge, "vault_container_too_large"),
+            (VaultMountReason::HiddenTooLarge, "vault_hidden_too_large"),
+            (VaultMountReason::FormatFilesOpen, "vault_format_files_open"),
+            (VaultMountReason::CreateTimeout, "vault_create_timeout"),
         ] {
             assert_eq!(
                 VaultMountBroker::personal_mount_failure_code(reason),
