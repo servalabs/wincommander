@@ -9,6 +9,13 @@ export type StealthPartId = "cover" | "backend" | "hide" | "lock";
 export type StealthState = Record<StealthPartId, boolean>;
 export type StealthMode = "off" | "partial" | "on";
 
+// Blank names fall back to this: the backend would otherwise show the real app name, which is no cover.
+export const DEFAULT_COVER_NAME = "Calculator";
+
+export function resolveCoverName(name: string): string {
+  return name.trim() || DEFAULT_COVER_NAME;
+}
+
 export const STEALTH_LABELS: Record<StealthPartId, string> = {
   lock: "Calculator lock",
   cover: "Cover identity",
@@ -49,12 +56,11 @@ export function stealthPending(state: StealthState, hasPaid: boolean, direction:
   return ON_ORDER.filter((id) => parts.includes(id) && !state[id]);
 }
 
-export function stealthSetupError(input: { hasRealPin: boolean; pin: string; coverPending: boolean; coverName: string }): string | null {
+export function stealthSetupError(input: { hasRealPin: boolean; pin: string }): string | null {
   if (!input.hasRealPin) {
     const pinError = validatePinInput(input.pin.trim());
     if (pinError) return `Set the calculator PIN first: ${pinError}.`;
   }
-  if (input.coverPending && !input.coverName.trim()) return "Type a cover name — it is what onlookers see instead of WinCommander.";
   return null;
 }
 

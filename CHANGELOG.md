@@ -17,11 +17,13 @@ lists only a selection of those changes.
   lock, cover identity, hide WinCommander and hide backend apps together. Each
   of the four keeps its own switch, so any one can be used alone. Turning on
   the lock needs a calculator PIN (set in the same card; it opens WinCommander
-  from the calculator) and cover identity needs a name. Stealth mode stops at
+  from the calculator). Stealth mode stops at
   the first step that fails and offers "Turn on the rest". The card shows a
-  status pill, a one-line description under every protection, the PIN and
-  cover-name fields only where they are needed, and a "Needs administrator"
-  note on the two hide options when elevation is missing.
+  status pill and the four protections as a 2x2 grid of cards (one column on
+  narrow windows), each with an On/Off badge, its own switch and a short
+  description; the PIN and cover-name fields sit in the cards that need them,
+  and the two hide cards are dimmed with a "Needs administrator" note when
+  elevation is missing. A blank cover name uses "Calculator".
 - Ask for administrator rights on every normal launch that is not already
   elevated: split-token administrators get the UAC consent prompt, standard
   accounts get the administrator-credential prompt. Cancelling or a failed

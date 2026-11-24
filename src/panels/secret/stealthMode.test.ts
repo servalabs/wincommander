@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
+  DEFAULT_COVER_NAME,
+  resolveCoverName,
   runStealthSteps,
   stealthParts,
   stealthPending,
@@ -62,9 +64,9 @@ describe("stealth status pill", () => {
 });
 
 describe("stealth setup check", () => {
-  const base = { hasRealPin: false, pin: "4829", coverPending: true, coverName: "Notes" };
+  const base = { hasRealPin: false, pin: "4829" };
 
-  test("accepts a valid PIN and a cover name", () => {
+  test("accepts a valid PIN", () => {
     expect(stealthSetupError(base)).toBeNull();
   });
 
@@ -78,9 +80,17 @@ describe("stealth setup check", () => {
     expect(stealthSetupError({ ...base, hasRealPin: true, pin: "" })).toBeNull();
   });
 
-  test("requires a cover name only while cover identity still has to be set", () => {
-    expect(stealthSetupError({ ...base, coverName: "  " })).toContain("cover name");
-    expect(stealthSetupError({ ...base, coverPending: false, coverName: "" })).toBeNull();
+});
+
+describe("cover name", () => {
+  test("a blank or whitespace-only name falls back to Calculator, never to the real app name", () => {
+    expect(DEFAULT_COVER_NAME).toBe("Calculator");
+    expect(resolveCoverName("")).toBe("Calculator");
+    expect(resolveCoverName("   ")).toBe("Calculator");
+  });
+
+  test("a typed name is used trimmed", () => {
+    expect(resolveCoverName("  Notes ")).toBe("Notes");
   });
 });
 
