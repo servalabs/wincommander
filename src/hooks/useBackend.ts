@@ -7,6 +7,7 @@ import { createSearchMaintenanceClient } from "../lib/searchMaintenanceClient";
 import { createBackendRequestTracker } from "../lib/backendRequestTracker";
 import { requestDestructiveCapability } from "./destructiveAuthz";
 import { afterVaultMutation } from "../lib/vaultChangeEvents";
+import { buildPasswordChangeRequest, type VaultPasswordChangeForm, type VaultPasswordChangeResult } from "../lib/vaultPasswordChange";
 import type { VaultSyncWarning } from "../lib/vaultSyncWarning";
 import type { PersonalVaultSyncEnrollment, VaultSyncRecoveryAction } from "../lib/vaultSyncRecovery";
 import type { VaultSyncAction, VaultSyncManagementResult } from "../types/generated/ipc";
@@ -2049,6 +2050,8 @@ export function useBackend(retainCleanupScanErrors = false) {
           DeviceLabel: params.Device.label,
         } : {}),
       }),
+    changeVolumePassword: (form: VaultPasswordChangeForm) =>
+      afterVaultMutation(() => execute<VaultPasswordChangeResult>("Set-EncryptionVolumePassword", buildPasswordChangeRequest(form))),
     createDualVolume: (params: CreateDualVolumeParams) =>
       execute("Create-DualVolume", {
         TargetKind: params.TargetKind ?? "file",

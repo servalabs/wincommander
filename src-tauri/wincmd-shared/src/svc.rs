@@ -177,6 +177,7 @@ pub fn is_known_verb(feature_id: &str) -> bool {
             | "svc.vault.authorize_mount"
             | "svc.vault.mount"
             | "svc.vault.create_personal"
+            | "svc.vault.change_password_personal"
             | "svc.vault.unmount"
             | "svc.vault.dismount_personal"
             | "svc.vault.enroll_personal_syncthing"
@@ -452,6 +453,8 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         // service prepares a fixed driver and the Pro engine performs all
         // caller-controlled file I/O in the authenticated caller's token.
         "svc.vault.create_personal"
+        // Safe for a standard user: the header is rewritten under the caller's own token.
+        | "svc.vault.change_password_personal"
         | "svc.vault.setup_cloud_backup"
         | "svc.vault.manage_cloud_backup"
         | "svc.vault.attest_cloud_backup" => CapabilityClass::InteractiveSession,
@@ -555,6 +558,15 @@ mod tests {
     fn personal_vault_creation_requires_an_interactive_session_not_admin() {
         assert_eq!(
             classify_verb("svc.vault.create_personal"),
+            CapabilityClass::InteractiveSession
+        );
+    }
+
+    #[test]
+    fn personal_vault_password_change_requires_an_interactive_session_not_admin() {
+        assert!(is_known_verb("svc.vault.change_password_personal"));
+        assert_eq!(
+            classify_verb("svc.vault.change_password_personal"),
             CapabilityClass::InteractiveSession
         );
     }

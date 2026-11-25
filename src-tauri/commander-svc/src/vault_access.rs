@@ -801,6 +801,16 @@ pub enum SelectedContainerMountRoute {
     Unmanaged { record: PersonalVaultRecord },
 }
 
+/// The service-resolved container a password change may rewrite. A policy
+/// Vault names its entry so the caller's grant is checked against it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PasswordChangeTarget {
+    pub container_path: String,
+    pub container_identity: String,
+    pub entry_id: Option<String>,
+    pub caller_owns_entry: bool,
+}
+
 impl VaultAccessStore {
     #[cfg_attr(windows, allow(dead_code))]
     pub fn open(
@@ -1831,6 +1841,59 @@ impl VaultAccessStore {
                 syncthing_opt_in: Some(false),
             },
         })
+    }
+
+    /// Resolve a password-change target. A registered personal container must
+    /// belong to the caller and still be the registered file; an unregistered
+    /// one relies, like an ordinary mount, on the caller's own Windows access
+    /// and the current credentials. A policy Vault is authorized by the caller.
+    pub fn password_change_target(
+        &self,
+        container_path: &str,
+        caller_sid: &str,
+        caller_session: u32,
+    ) -> Result<PasswordChangeTarget, VaultError> {
+        match self.selected_container_mount_route(container_path, caller_sid, caller_session)? {
+            SelectedContainerMountRoute::Unmanaged { record } => {
+                if !wincmd_shared::vault_access::is_supported_vault_device_path(&record.container_path) {
+                    if let Some(personal) = self.personal_record_for_path(&record.container_path)? {
+                        if personal.container_identity != record.container_identity {
+                            return Err(VaultError::ContainerIdentity);
+                        }
+                        if personal.owner_sid != caller_sid {
+                            return Err(VaultError::Forbidden);
+                        }
+                    }
+                }
+                Ok(PasswordChangeTarget {
+                    container_path: record.container_path,
+                    container_identity: record.container_identity,
+                    entry_id: None,
+                    caller_owns_entry: false,
+                })
+            }
+            SelectedContainerMountRoute::Managed { entry_id } => {
+                let normalized = self
+                    .fs
+                    .normalize_existing_container_path(Path::new(container_path))?;
+                let container_identity = self.fs.stable_file_identity(&normalized)?;
+                let caller_owns_entry = {
+                    let state = self.state.lock().map_err(|_| VaultError::Persistence)?;
+                    state.active.as_ref().is_some_and(|active| {
+                        active.policy.entries.iter().any(|entry| {
+                            entry.id == entry_id
+                                && entry.primary_owner_sid.as_deref() == Some(caller_sid)
+                        })
+                    })
+                };
+                Ok(PasswordChangeTarget {
+                    container_path: normalized.to_string_lossy().into_owned(),
+                    container_identity,
+                    entry_id: Some(entry_id),
+                    caller_owns_entry,
+                })
+            }
+        }
     }
 
     /// Prepares an existing, unregistered container for one-time adoption.
@@ -4962,6 +5025,43 @@ pub(crate) fn hold_unmanaged_mount_files(
             files.push(file);
         }
         for path in request.keyfiles.iter().chain(&request.hidden_keyfiles) {
+            let file = hold_mount_file(Path::new(path), false, &mut files)?;
+            files.push(file);
+        }
+        Ok(UnmanagedMountFileGuard { _files: files })
+    })
+}
+
+/// Proves, in the caller's token, write access to the resolved container and
+/// read access to the keyfiles, and pins them until the broker has finished.
+#[cfg(windows)]
+pub(crate) fn hold_password_change_files(
+    target: &PasswordChangeTarget,
+    keyfiles: &[String],
+    caller_token: windows_sys::Win32::Foundation::HANDLE,
+) -> Result<UnmanagedMountFileGuard, VaultError> {
+    with_caller_impersonation(caller_token, || {
+        let mut files = Vec::new();
+        if wincmd_shared::vault_access::is_supported_vault_device_path(&target.container_path) {
+            use std::os::windows::fs::OpenOptionsExt;
+            use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
+            let device = format!(r"\\?\GLOBALROOT{}", target.container_path.trim());
+            files.push(
+                std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+                    .open(device)
+                    .map_err(|_| VaultError::AclReadback)?,
+            );
+        } else {
+            let file = hold_mount_file(Path::new(&target.container_path), true, &mut files)?;
+            if file_identity_from_handle(&file)? != target.container_identity {
+                return Err(VaultError::ContainerIdentity);
+            }
+            files.push(file);
+        }
+        for path in keyfiles {
             let file = hold_mount_file(Path::new(path), false, &mut files)?;
             files.push(file);
         }
@@ -8254,6 +8354,55 @@ mod tests {
                 entry_id: "shared".into()
             }
         );
+    }
+
+    #[test]
+    fn password_change_refuses_another_owners_or_a_replaced_registered_container() {
+        let store = store(Arc::new(Mutex::new(HashMap::new())));
+        let path = r"D:\Vault\notes.hc";
+        let unregistered = store
+            .password_change_target(path, "S-1-test-Alex", 7)
+            .unwrap();
+        assert_eq!(unregistered.entry_id, None);
+        let mut record = PersonalVaultRecord {
+            container_path: path.into(),
+            container_identity: unregistered.container_identity.clone(),
+            owner_sid: "S-1-test-Other".into(),
+            scope: VaultPresentation::PerUser,
+            created_by_session: 3,
+            syncthing_opt_in: None,
+        };
+        store.insert_personal_record_for_test(record.clone());
+        assert!(matches!(
+            store.password_change_target(path, "S-1-test-Alex", 7),
+            Err(VaultError::Forbidden)
+        ));
+        record.owner_sid = "S-1-test-Alex".into();
+        store.insert_personal_record_for_test(record.clone());
+        assert_eq!(
+            store.password_change_target(path, "S-1-test-Alex", 7).unwrap(),
+            unregistered
+        );
+        record.container_identity = "replaced-file".into();
+        store.insert_personal_record_for_test(record);
+        assert!(matches!(
+            store.password_change_target(path, "S-1-test-Alex", 7),
+            Err(VaultError::ContainerIdentity)
+        ));
+    }
+
+    #[test]
+    fn password_change_names_the_policy_entry_and_whether_the_caller_owns_it() {
+        let store = store(Arc::new(Mutex::new(HashMap::new())));
+        let path = "D:\\Vault\\sales";
+        let mut managed_policy = policy(1, 0);
+        managed_policy.entries[0].container_path = path.into();
+        store.apply(managed_policy, 7).unwrap();
+        let target = store
+            .password_change_target(path, "S-1-test-Alex", 7)
+            .unwrap();
+        assert_eq!(target.entry_id.as_deref(), Some("shared"));
+        assert!(!target.caller_owns_entry, "a policy without a primary owner grants no ownership");
     }
 
     #[test]

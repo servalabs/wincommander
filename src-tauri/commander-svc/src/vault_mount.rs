@@ -795,6 +795,11 @@ impl VaultMountBroker {
             VaultMountReason::HiddenTooLarge => "vault_hidden_too_large",
             VaultMountReason::FormatFilesOpen => "vault_format_files_open",
             VaultMountReason::CreateTimeout => "vault_create_timeout",
+            VaultMountReason::WrongPassword => "vault_wrong_password",
+            VaultMountReason::WrongHeader => "vault_wrong_header",
+            VaultMountReason::NewPasswordCollides => "vault_new_password_collides",
+            VaultMountReason::WeakNewPassword => "vault_weak_new_password",
+            VaultMountReason::EngineFailed => "vault_engine_failed",
         }
     }
 
@@ -4828,6 +4833,11 @@ mod tests {
             (VaultMountReason::HiddenTooLarge, "vault_hidden_too_large"),
             (VaultMountReason::FormatFilesOpen, "vault_format_files_open"),
             (VaultMountReason::CreateTimeout, "vault_create_timeout"),
+            (VaultMountReason::WrongPassword, "vault_wrong_password"),
+            (VaultMountReason::WrongHeader, "vault_wrong_header"),
+            (VaultMountReason::NewPasswordCollides, "vault_new_password_collides"),
+            (VaultMountReason::WeakNewPassword, "vault_weak_new_password"),
+            (VaultMountReason::EngineFailed, "vault_engine_failed"),
         ] {
             assert_eq!(
                 VaultMountBroker::personal_mount_failure_code(reason),

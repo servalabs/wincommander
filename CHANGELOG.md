@@ -10,6 +10,14 @@ lists only a selection of those changes.
 
 ## Unreleased
 
+- Add Change Password to Secure Storage > Encrypted Volumes (Pro). It changes
+  the password, and optionally the PIM or keyfile, of a dismounted vault file.
+  For a decoy vault you choose whether to change the decoy or the real
+  password; the other one is left as it was. The service checks that the
+  vault is yours (or that you own or can write a shared Vault), that it is the
+  registered file, and that nothing has it mounted. Header backups and copies
+  made earlier still open with the old password. Needs a Pro release with the
+  matching password-change engine.
 - Fix Stealth mode leaving no Calculator shortcut: with Hide WinCommander
   already on, turning the Calculator lock on restored the WinCommander
   shortcuts to the Hide snapshot instead of replacing them, so the Start menu

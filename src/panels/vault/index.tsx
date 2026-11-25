@@ -11,6 +11,7 @@ import { useAppState } from "../../context/AppContext";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useTheme } from "../../context/ThemeContext";
 import CreateVolumeWizard from "./CreateVolumeWizard";
+import ChangePasswordDialog from "./ChangePasswordDialog";
 import VolumeActionsMenu from "./VolumeActionsMenu";
 import SystemEncryptionSection from "./SystemEncryptionSection";
 import RamDisksSection from "./RamDisksSection";
@@ -130,6 +131,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
   const [mountRemovable, setMountRemovable] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [createWizardOpen, setCreateWizardOpen] = useState(false);
+  const [changePasswordOpen, setChangePasswordOpen] = useState(false);
   const { letters: availableLetters, loading: mountLettersLoading, unavailable: mountLettersUnavailable,
     refresh: refreshMountLetters } = useVaultDriveLetters();
   const [mountType, setMountType] = useState<'file' | 'partition'>('file');
@@ -496,6 +498,13 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
               onClick={() => openMountDialog()}
               className="vault-action-btn"
             />
+            <Button
+              minimal
+              icon="key"
+              text="Change Password"
+              onClick={() => setChangePasswordOpen(true)}
+              className="vault-action-btn"
+            />
           </TierGate>
         </div>
 
@@ -588,6 +597,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
         onClose={() => setCreateWizardOpen(false)}
         onCreated={() => { setCreateWizardOpen(false); refreshVault(true); }}
       />
+      <ChangePasswordDialog isOpen={changePasswordOpen} onClose={() => setChangePasswordOpen(false)} />
       <Dialog
         isOpen={mountDialogOpen}
         onClose={closeMountDialog}

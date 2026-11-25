@@ -74,6 +74,9 @@ mod vault_inventory_contract;
 #[path = "vault_create_staging.rs"]
 mod vault_create_staging;
 
+#[path = "vault_password_change.rs"]
+mod vault_password_change;
+
 use windows_sys::Win32::{
     Foundation::{LocalFree, HANDLE},
     Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW,
@@ -922,6 +925,9 @@ async fn dispatch_verb(
         }
         "svc.vault.create_personal" => {
             handle_personal_vault_create(request_id, vault_access, args, peer).await
+        }
+        "svc.vault.change_password_personal" => {
+            vault_password_change::handle(request_id, vault_access, vault_mount, args, peer).await
         }
         "svc.vault.unmount" => handle_vault_unmount(
             request_id,
@@ -6395,6 +6401,22 @@ mod tests {
             .await,
             Err("personal Vault creation requires an active Windows session".to_string()),
         );
+    }
+
+    #[tokio::test]
+    async fn vault_password_change_allows_standard_user_only_in_active_session() {
+        let gate = passing_gate();
+        for (active, expected) in [(true, true), (false, false)] {
+            let result = authorize_with_interactive_session(
+                "svc.vault.change_password_personal",
+                false,
+                active,
+                1234,
+                &gate,
+            )
+            .await;
+            assert_eq!(result.is_ok(), expected);
+        }
     }
 
     #[test]

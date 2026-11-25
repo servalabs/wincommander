@@ -6865,6 +6865,14 @@
       ]
     },
     {
+      "id": "backend:Set\u002dEncryptionVolumePassword",
+      "name": "Set\u002dEncryptionVolumePassword",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": []
+    },
+    {
       "id": "backend:Set\u002dExplorerOpensQuickAccess",
       "name": "Set\u002dExplorerOpensQuickAccess",
       "transport": "backend\u002dscript",

@@ -494,6 +494,34 @@ pub(crate) fn record_vault_create_success(operation_id: &str, started: Instant) 
     ));
 }
 
+pub(crate) fn record_vault_password_change(
+    operation_id: &str,
+    failure: Option<VaultMountReason>,
+    started: Instant,
+) {
+    let (outcome, error_code, severity, retryable, next) = match failure {
+        None => (
+            DiagnosticOutcome::Succeeded,
+            "VLT.PASSWORD.CHANGED",
+            DiagnosticSeverity::Info,
+            false,
+            "none",
+        ),
+        Some(reason) => reason_fields(Some(reason), "change_password"),
+    };
+    let _ = record_event(vault_event(
+        operation_id,
+        "change_password",
+        outcome,
+        error_code,
+        severity,
+        retryable,
+        next,
+        started,
+        BTreeMap::new(),
+    ));
+}
+
 pub(crate) fn record_vault_policy_save(
     operation_id: &str,
     stage: &'static str,
@@ -981,7 +1009,37 @@ fn reason_fields(
             true,
             "retry_large_create",
         ),
-        None => ("VLT.UNKNOWN", DiagnosticSeverity::Error, true, "retry"),
+        Some(VaultMountReason::WrongPassword) => (
+            "VLT.PASSWORD.WRONG_PASSWORD",
+            DiagnosticSeverity::Warn,
+            true,
+            "check_current_credentials",
+        ),
+        Some(VaultMountReason::WrongHeader) => (
+            "VLT.PASSWORD.WRONG_HEADER",
+            DiagnosticSeverity::Warn,
+            true,
+            "choose_other_password",
+        ),
+        Some(VaultMountReason::NewPasswordCollides) => (
+            "VLT.PASSWORD.NEW_PASSWORD_COLLIDES",
+            DiagnosticSeverity::Warn,
+            true,
+            "choose_different_password",
+        ),
+        Some(VaultMountReason::WeakNewPassword) => (
+            "VLT.PASSWORD.WEAK_NEW_PASSWORD",
+            DiagnosticSeverity::Warn,
+            true,
+            "choose_stronger_password",
+        ),
+        Some(VaultMountReason::EngineFailed) => (
+            "VLT.PASSWORD.ENGINE_FAILED",
+            DiagnosticSeverity::Error,
+            true,
+            "review_password_change_diagnostics",
+        ),
+        None =>("VLT.UNKNOWN", DiagnosticSeverity::Error, true, "retry"),
     };
     (DiagnosticOutcome::Failed, code, severity, retry, next)
 }
@@ -1164,6 +1222,18 @@ mod tests {
     fn every_vault_reason_is_stable() {
         for reason in VaultMountReason::ALL {
             assert!(reason_fields(Some(reason), "mount").1.starts_with("VLT."));
+        }
+    }
+    #[test]
+    fn password_change_failures_keep_their_own_stable_codes() {
+        for (reason, code) in [
+            (VaultMountReason::WrongPassword, "VLT.PASSWORD.WRONG_PASSWORD"),
+            (VaultMountReason::WrongHeader, "VLT.PASSWORD.WRONG_HEADER"),
+            (VaultMountReason::NewPasswordCollides, "VLT.PASSWORD.NEW_PASSWORD_COLLIDES"),
+            (VaultMountReason::WeakNewPassword, "VLT.PASSWORD.WEAK_NEW_PASSWORD"),
+            (VaultMountReason::EngineFailed, "VLT.PASSWORD.ENGINE_FAILED"),
+        ] {
+            assert_eq!(reason_fields(Some(reason), "change_password").1, code);
         }
     }
     #[test]

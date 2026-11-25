@@ -133,6 +133,7 @@ fn is_vault_mount_mutation(feature_id: &str) -> bool {
         &["Dismount-~", "Encrypted~", "Volume~"][..],
         &["Dismount-~", "AllEncryption~", "Volumes~"][..],
         &["Dismount-~", "AllEncrypted~", "Volumes~"][..],
+        &["Set-~", "EncryptionVolume~", "Password~"][..],
     ]
     .iter()
     .any(|parts| crate::command_strings::matches_parts(feature_id, parts))
@@ -2483,6 +2484,7 @@ mod tests {
             "Dismount-EncryptedVolume",
             "Dismount-AllEncryptionVolumes",
             "Dismount-AllEncryptedVolumes",
+            "Set-EncryptionVolumePassword",
         ] {
             assert!(is_vault_mount_mutation(command));
             assert_eq!(
