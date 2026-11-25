@@ -60,6 +60,8 @@ fn request_timeout_for(feature_id: &str) -> std::time::Duration {
         | "svc.vault.apply_owner_fragment"
         | "svc.vault.unmount"
         | "svc.vault.dismount_personal"
+        // A rename waits for the mount lock, which a mount in progress holds.
+        | "svc.vault.rename"
         // The repair is a bounded mutation in the caller's Explorer session.
         // It starts the same authenticated Vault broker as a mount, so its
         // deadline must cover the broker handshake and native DOS-device
@@ -85,6 +87,7 @@ fn may_still_be_completing(feature_id: &str) -> bool {
             | "svc.vault.apply_owner_fragment"
             | "svc.vault.unmount"
             | "svc.vault.dismount_personal"
+            | "svc.vault.rename"
             | "svc.vault.enroll_personal_syncthing"
             | "svc.vault.manage_personal_syncthing"
             | "svc.vault.setup_cloud_backup"

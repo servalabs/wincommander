@@ -178,6 +178,8 @@ pub fn is_known_verb(feature_id: &str) -> bool {
             | "svc.vault.mount"
             | "svc.vault.create_personal"
             | "svc.vault.change_password_personal"
+            | "svc.vault.rename"
+            | "svc.vault.display_names"
             | "svc.vault.unmount"
             | "svc.vault.dismount_personal"
             | "svc.vault.enroll_personal_syncthing"
@@ -438,6 +440,8 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         // Per-user status read: the handler keys the registration lookup on
         // the authenticated pipe token's SID and accepts no SID selector.
         | "svc.vault.personal_status"
+        // Returns only names the token's SID owns or may rename.
+        | "svc.vault.display_names"
         | "svc.vault.capabilities"
         | "svc.search.fence_capabilities" => CapabilityClass::ReadOnly,
 
@@ -455,6 +459,8 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         "svc.vault.create_personal"
         // Safe for a standard user: the header is rewritten under the caller's own token.
         | "svc.vault.change_password_personal"
+        // Changes only a service-held name; the handler checks the owner or a write grant.
+        | "svc.vault.rename"
         | "svc.vault.setup_cloud_backup"
         | "svc.vault.manage_cloud_backup"
         | "svc.vault.attest_cloud_backup" => CapabilityClass::InteractiveSession,
@@ -569,6 +575,14 @@ mod tests {
             classify_verb("svc.vault.change_password_personal"),
             CapabilityClass::InteractiveSession
         );
+    }
+
+    #[test]
+    fn vault_rename_requires_an_interactive_session_and_name_reads_stay_read_only() {
+        assert!(is_known_verb("svc.vault.rename"));
+        assert_eq!(classify_verb("svc.vault.rename"), CapabilityClass::InteractiveSession);
+        assert!(is_known_verb("svc.vault.display_names"));
+        assert_eq!(classify_verb("svc.vault.display_names"), CapabilityClass::ReadOnly);
     }
 
     #[test]

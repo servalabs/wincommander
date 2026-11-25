@@ -77,6 +77,9 @@ mod vault_create_staging;
 #[path = "vault_password_change.rs"]
 mod vault_password_change;
 
+#[path = "vault_rename.rs"]
+mod vault_rename;
+
 use windows_sys::Win32::{
     Foundation::{LocalFree, HANDLE},
     Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW,
@@ -929,6 +932,8 @@ async fn dispatch_verb(
         "svc.vault.change_password_personal" => {
             vault_password_change::handle(request_id, vault_access, vault_mount, args, peer).await
         }
+        "svc.vault.rename" => vault_rename::handle(vault_access, vault_mount, args, peer),
+        "svc.vault.display_names" => vault_rename::handle_display_names(vault_access, peer),
         "svc.vault.unmount" => handle_vault_unmount(
             request_id,
             &diagnostic_operation_id,
@@ -6415,6 +6420,17 @@ mod tests {
                 &gate,
             )
             .await;
+            assert_eq!(result.is_ok(), expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn vault_rename_allows_standard_user_only_in_active_session() {
+        let gate = passing_gate();
+        for (active, expected) in [(true, true), (false, false)] {
+            let result =
+                authorize_with_interactive_session("svc.vault.rename", false, active, 1234, &gate)
+                    .await;
             assert_eq!(result.is_ok(), expected);
         }
     }

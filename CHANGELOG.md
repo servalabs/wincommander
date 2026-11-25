@@ -10,6 +10,13 @@ lists only a selection of those changes.
 
 ## Unreleased
 
+- Add Rename to Secure Storage > Encrypted Volumes (Free). It changes only the
+  name WinCommander shows for a dismounted vault; the vault file keeps its file
+  name and location. Your own vault can be renamed only by you; a shared Vault
+  by its owner or an account with write access. A vault file WinCommander has
+  no record of cannot be named. The name appears next to the path of a
+  mounted vault. After a rename, an older WinCommander version cannot read the
+  saved list of personal vaults until it is updated again.
 - Add Change Password to Secure Storage > Encrypted Volumes (Pro). It changes
   the password, and optionally the PIM or keyfile, of a dismounted vault file.
   For a decoy vault you choose whether to change the decoy or the real

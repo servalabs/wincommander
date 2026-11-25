@@ -23,6 +23,8 @@ const UNMOUNT: &str = "svc.vault.unmount";
 const ENROLL_PERSONAL_SYNCTHING: &str = "svc.vault.enroll_personal_syncthing";
 const RELEASE_ORPHANED_DRIVE_LETTERS: &str = "svc.vault.release_orphaned_drive_letters";
 const LIST_AUTHORIZED: &str = "svc.vault.list_authorized";
+const RENAME: &str = "svc.vault.rename";
+const DISPLAY_NAMES: &str = "svc.vault.display_names";
 const DRIVE_LETTERS: &str = "svc.vault.drive_letters";
 const LIST_PRINCIPALS: &str = "svc.vault.list_principals";
 const CAPABILITIES: &str = "svc.vault.capabilities";
@@ -616,6 +618,22 @@ pub async fn vault_release_orphaned_drive_letters() -> Result<Value, String> {
     crate::svc_client::call(RELEASE_ORPHANED_DRIVE_LETTERS, json!({})).await
 }
 
+/// Free path: a name is service-held data, so no Pro engine is involved. The
+/// service decides who may rename and never touches the container file.
+#[tauri::command]
+pub async fn vault_rename(container_path: String, name: String) -> Result<Value, String> {
+    crate::svc_client::call(RENAME, rename_payload(container_path, name)).await
+}
+
+fn rename_payload(container_path: String, name: String) -> Value {
+    json!({ "container_path": container_path, "name": name })
+}
+
+#[tauri::command]
+pub async fn vault_display_names() -> Result<Value, String> {
+    crate::svc_client::call(DISPLAY_NAMES, json!({})).await
+}
+
 #[tauri::command]
 pub async fn vault_list_authorized_entries() -> Result<Value, String> {
     crate::svc_client::call(LIST_AUTHORIZED, json!({})).await
@@ -763,6 +781,12 @@ mod tests {
             "svc.vault.enroll_personal_syncthing"
         );
         assert_eq!(LIST_AUTHORIZED, "svc.vault.list_authorized");
+        assert_eq!(RENAME, "svc.vault.rename");
+        assert_eq!(DISPLAY_NAMES, "svc.vault.display_names");
+        assert_eq!(
+            rename_payload(r"D:\Vaults\notes.hc".into(), "Taxes".into()),
+            json!({ "container_path": r"D:\Vaults\notes.hc", "name": "Taxes" })
+        );
         assert_eq!(DRIVE_LETTERS, "svc.vault.drive_letters");
         assert_eq!(CAPABILITIES, "svc.vault.capabilities");
         assert_eq!(RECONCILE_ACCESS_GROUPS, "svc.vault.reconcile_access_groups");

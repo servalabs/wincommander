@@ -1205,6 +1205,13 @@ input::-webkit-credentials-auto-fill-button {
   color: var(--color-danger);
 }
 
+.vault-volume-name {
+  display: block;
+  font-family: var(--font-sans, inherit);
+  font-size: 12px;
+  color: var(--color-text-primary);
+}
+
 .vault-volume-unavailable {
   display: block;
   margin-top: 3px;

@@ -8,6 +8,8 @@ use std::sync::Mutex;
 
 #[path = "vault_access/access_directory_mutation.rs"]
 mod access_directory_mutation;
+#[path = "vault_access/display_name.rs"]
+mod display_name;
 #[cfg(windows)]
 #[path = "vault_access/local_principals.rs"]
 mod local_principals;
@@ -1451,6 +1453,7 @@ impl VaultAccessStore {
             scope: VaultPresentation::PerUser,
             created_by_session: pending.created_by_session,
             syncthing_opt_in: Some(false),
+            display_name: None,
         };
         state.personal_pending.remove(&key);
         state.personal.insert(key.clone(), record.clone());
@@ -1539,6 +1542,7 @@ impl VaultAccessStore {
             scope: VaultPresentation::PerUser,
             created_by_session: pending.created_by_session,
             syncthing_opt_in: Some(false),
+            display_name: None,
         };
         state.personal_pending.remove(&key);
         state.personal.insert(key.clone(), record.clone());
@@ -1786,6 +1790,7 @@ impl VaultAccessStore {
                     scope: VaultPresentation::Machine,
                     created_by_session: caller_session,
                     syncthing_opt_in: Some(false),
+                    display_name: None,
                 },
             });
         }
@@ -1839,6 +1844,7 @@ impl VaultAccessStore {
                 scope: VaultPresentation::Machine,
                 created_by_session: caller_session,
                 syncthing_opt_in: Some(false),
+                display_name: None,
             },
         })
     }
@@ -1948,6 +1954,7 @@ impl VaultAccessStore {
                 scope: VaultPresentation::PerUser,
                 created_by_session: caller_session,
                 syncthing_opt_in: None,
+                display_name: None,
             },
             acl,
         };
@@ -6012,6 +6019,7 @@ fn denied(reason: VaultMountDenial) -> VaultAuthorizeMountResponse {
 mod tests {
     include!("vault_access/policy_change_tests.rs");
     include!("vault_access/rollback_recovery_tests.rs");
+    include!("vault_access/display_name_tests.rs");
     #[cfg(windows)]
     #[test]
     fn windows_administrator_directory_resolves_real_user_accounts() {
@@ -7203,6 +7211,7 @@ mod tests {
             scope: VaultPresentation::PerUser,
             created_by_session: 1,
             syncthing_opt_in: None,
+            display_name: None,
         };
         store
             .state
@@ -7740,6 +7749,7 @@ mod tests {
             scope: VaultPresentation::PerUser,
             created_by_session: 3,
             syncthing_opt_in: None,
+            display_name: None,
         };
         store
             .state
@@ -7789,6 +7799,7 @@ mod tests {
             scope: VaultPresentation::PerUser,
             created_by_session: 3,
             syncthing_opt_in: None,
+            display_name: None,
         };
         let key = personal_key(&path.to_string_lossy());
         store
@@ -7826,6 +7837,7 @@ mod tests {
             scope: VaultPresentation::PerUser,
             created_by_session: 3,
             syncthing_opt_in: None,
+            display_name: None,
         };
         let key = personal_key(path);
         store
@@ -7862,6 +7874,7 @@ mod tests {
             scope: VaultPresentation::PerUser,
             created_by_session: 3,
             syncthing_opt_in: None,
+            display_name: None,
         };
         let key = personal_key(path);
         let alias = personal_key_alias(&key);
@@ -8203,6 +8216,7 @@ mod tests {
             scope: VaultPresentation::Machine,
             created_by_session: 1,
             syncthing_opt_in: None,
+            display_name: None,
         };
         let mut request: wincmd_shared::vault_access::PersonalVaultMountRequest = serde_json::from_value(serde_json::json!({
             "container_path":record.container_path, "password":"fixture", "volume_kind":"standard", "volume_role":"outer", "keyfiles":[keyfile.to_string_lossy()], "read_only":false
@@ -8329,6 +8343,7 @@ mod tests {
             scope: VaultPresentation::PerUser,
             created_by_session: 3,
             syncthing_opt_in: None,
+            display_name: None,
         };
         store
             .state
@@ -8371,6 +8386,7 @@ mod tests {
             scope: VaultPresentation::PerUser,
             created_by_session: 3,
             syncthing_opt_in: None,
+            display_name: None,
         };
         store.insert_personal_record_for_test(record.clone());
         assert!(matches!(
