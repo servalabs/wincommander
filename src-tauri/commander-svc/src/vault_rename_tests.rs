@@ -31,7 +31,6 @@ fn store_with_personal_vault() -> (VaultAccessStore, String) {
         scope: VaultPresentation::PerUser,
         created_by_session: 7,
         syncthing_opt_in: Some(false),
-        display_name: None,
     });
     (store, identity)
 }

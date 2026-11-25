@@ -4238,7 +4238,6 @@ mod tests {
             scope: VaultPresentation::PerUser,
             created_by_session: 7,
             syncthing_opt_in: Some(false),
-            display_name: None,
         }
     }
 
@@ -4600,7 +4599,6 @@ mod tests {
                 scope: VaultPresentation::PerUser,
                 created_by_session: 7,
                 syncthing_opt_in: Some(true),
-                display_name: None,
             });
             let receipt = sync_management::mount_receipt("personal", &mount);
             broker
@@ -4673,7 +4671,6 @@ mod tests {
             scope: VaultPresentation::PerUser,
             created_by_session: 7,
             syncthing_opt_in: Some(false),
-            display_name: None,
         });
         broker
             .active

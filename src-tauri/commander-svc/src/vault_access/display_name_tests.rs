@@ -21,32 +21,110 @@ fn named_personal_record(owner_sid: &str) -> PersonalVaultRecord {
         scope: VaultPresentation::PerUser,
         created_by_session: 7,
         syncthing_opt_in: Some(false),
-        display_name: None,
     }
+}
+
+const NAMES_OWNER: &str = "S-1-5-21-owner";
+
+fn registry_path() -> PathBuf {
+    PathBuf::from("/policy").join(PERSONAL_VAULTS_FILE)
+}
+
+fn names_path() -> PathBuf {
+    PathBuf::from("/policy").join("vault-personal-names-v1.json")
+}
+
+/// A store loaded from a saved registry, as after a service restart.
+fn store_with_saved_registry(
+    files: &Arc<Mutex<HashMap<PathBuf, Vec<u8>>>>,
+    fail: &Arc<AtomicBool>,
+) -> VaultAccessStore {
+    if !files.lock().unwrap().contains_key(&registry_path()) {
+        let registry = serde_json::to_vec(&PersonalVaultRegistry {
+            records: vec![named_personal_record(NAMES_OWNER)],
+            pending: vec![],
+            legacy_recoveries: vec![],
+        })
+        .unwrap();
+        files.lock().unwrap().insert(registry_path(), registry);
+    }
+    let store = rename_store(Arc::clone(files), Arc::clone(fail), RecordingAcl::default());
+    store.load_at_startup();
+    store
+}
+
+fn rename_notes(store: &VaultAccessStore, name: &str) -> Result<(), VaultError> {
+    let target = store.rename_target(r"C:\vaults\notes.hc", NAMES_OWNER, 7)?.unwrap();
+    store.rename_personal_vault(&target, NAMES_OWNER, name)
+}
+
+fn notes_name(store: &VaultAccessStore) -> Option<String> {
+    store.personal_display_name_for_test(&named_personal_record(NAMES_OWNER))
+}
+
+#[test]
+fn personal_rename_writes_only_the_names_file_and_leaves_the_registry_byte_identical() {
+    let files = Arc::new(Mutex::new(HashMap::new()));
+    let fail = Arc::new(AtomicBool::new(false));
+    let store = store_with_saved_registry(&files, &fail);
+    let registry = files.lock().unwrap().get(&registry_path()).cloned().unwrap();
+    rename_notes(&store, "Taxes").unwrap();
+    assert_eq!(files.lock().unwrap().get(&registry_path()), Some(&registry));
+    assert_eq!(notes_name(&store).as_deref(), Some("Taxes"));
+    assert_eq!(store.personal_record_for_path(r"C:\vaults\notes.hc").unwrap(), Some(named_personal_record(NAMES_OWNER)));
+
+    let restarted = store_with_saved_registry(&files, &fail);
+    assert_eq!(notes_name(&restarted).as_deref(), Some("Taxes"));
 }
 
 #[test]
 fn personal_rename_failure_to_save_keeps_the_previous_name_in_memory_and_on_disk() {
     let files = Arc::new(Mutex::new(HashMap::new()));
     let fail = Arc::new(AtomicBool::new(false));
-    let store = rename_store(Arc::clone(&files), Arc::clone(&fail), RecordingAcl::default());
-    let owner = "S-1-5-21-owner";
-    store.insert_personal_record_for_test(named_personal_record(owner));
-    let target = store.rename_target(r"C:\vaults\notes.hc", owner, 7).unwrap().unwrap();
-    store.rename_personal_vault(&target, owner, "Taxes").unwrap();
-    let registry_path = PathBuf::from("/policy").join(PERSONAL_VAULTS_FILE);
-    let saved = files.lock().unwrap().get(&registry_path).cloned().unwrap();
+    let store = store_with_saved_registry(&files, &fail);
+    rename_notes(&store, "Taxes").unwrap();
+    let saved = files.lock().unwrap().clone();
 
     fail.store(true, Ordering::SeqCst);
-    assert_eq!(
-        store.rename_personal_vault(&target, owner, "Receipts"),
-        Err(VaultError::Persistence)
-    );
-    let record = store.personal_record_for_path(r"C:\vaults\notes.hc").unwrap().unwrap();
-    let mut expected = named_personal_record(owner);
-    expected.display_name = Some("Taxes".into());
-    assert_eq!(record, expected, "identity, owner and settings must be untouched");
-    assert_eq!(files.lock().unwrap().get(&registry_path), Some(&saved));
+    assert_eq!(rename_notes(&store, "Receipts"), Err(VaultError::Persistence));
+    assert_eq!(notes_name(&store).as_deref(), Some("Taxes"));
+    assert_eq!(*files.lock().unwrap(), saved, "neither file may change");
+    assert_eq!(store.personal_record_for_path(r"C:\vaults\notes.hc").unwrap(), Some(named_personal_record(NAMES_OWNER)));
+}
+
+#[test]
+fn a_missing_names_file_loads_with_no_names_and_an_unreadable_one_is_never_overwritten() {
+    let files = Arc::new(Mutex::new(HashMap::new()));
+    let fail = Arc::new(AtomicBool::new(false));
+    let store = store_with_saved_registry(&files, &fail);
+    assert_eq!(notes_name(&store), None);
+    assert!(store.display_names_for_caller(NAMES_OWNER, |_| false).is_empty());
+
+    files.lock().unwrap().insert(names_path(), b"not json".to_vec());
+    let store = store_with_saved_registry(&files, &fail);
+    assert_eq!(notes_name(&store), None);
+    assert_eq!(rename_notes(&store, "Taxes"), Err(VaultError::Persistence));
+    assert_eq!(files.lock().unwrap().get(&names_path()).map(Vec::as_slice), Some(&b"not json"[..]));
+}
+
+#[test]
+fn a_stale_names_entry_is_ignored_and_pruned_on_the_next_rename() {
+    let files = Arc::new(Mutex::new(HashMap::new()));
+    let fail = Arc::new(AtomicBool::new(false));
+    let stale = serde_json::json!({ "names": [
+        { "owner_sid": NAMES_OWNER, "container_identity": "replaced-file", "name": "Old" },
+    ] });
+    files.lock().unwrap().insert(names_path(), serde_json::to_vec(&stale).unwrap());
+    let store = store_with_saved_registry(&files, &fail);
+    assert_eq!(notes_name(&store), None);
+    assert!(store.display_names_for_caller(NAMES_OWNER, |_| false).is_empty());
+
+    rename_notes(&store, "Taxes").unwrap();
+    let saved: serde_json::Value =
+        serde_json::from_slice(files.lock().unwrap().get(&names_path()).unwrap()).unwrap();
+    assert_eq!(saved, serde_json::json!({ "names": [
+        { "owner_sid": NAMES_OWNER, "container_identity": "v:1:i:2", "name": "Taxes" },
+    ] }));
 }
 
 #[test]
@@ -72,7 +150,7 @@ fn personal_rename_needs_a_registered_record_owned_by_the_caller() {
         store.rename_personal_vault(&target, "S-1-5-21-other", "Mine now"),
         Err(VaultError::Forbidden)
     );
-    assert_eq!(store.personal_record_for_path(path).unwrap().unwrap().display_name, None);
+    assert_eq!(store.personal_display_name_for_test(&named_personal_record("S-1-5-21-owner")), None);
 }
 
 #[test]

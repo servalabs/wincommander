@@ -599,10 +599,6 @@ pub struct PersonalVaultRecord {
     /// checked during bounded lifecycle recovery.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub syncthing_opt_in: Option<bool>,
-    /// The name WinCommander shows; omitted until set so an unnamed record
-    /// stays readable by versions that predate it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub display_name: Option<String>,
 }
 
 /// Same bound as a Fleet Vault label, so either kind of name fits both stores.
@@ -1042,21 +1038,6 @@ pub struct VaultSaveAccessDirectoryResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn personal_record_saved_before_names_loads_and_an_unnamed_record_serializes_unchanged() {
-        let old = serde_json::json!({
-            "container_path": "D:\\Vaults\\notes.hc", "container_identity": "v:1:i:2",
-            "owner_sid": "S-1-5-21-1", "scope": "per-user", "created_by_session": 3,
-        });
-        let record: PersonalVaultRecord = serde_json::from_value(old.clone()).unwrap();
-        assert_eq!(record.display_name, None);
-        assert_eq!(serde_json::to_value(&record).unwrap(), old);
-        let mut named = old;
-        named["display_name"] = serde_json::json!("Taxes");
-        let record: PersonalVaultRecord = serde_json::from_value(named).unwrap();
-        assert_eq!(record.display_name.as_deref(), Some("Taxes"));
-    }
 
     #[test]
     fn display_names_are_trimmed_bounded_and_free_of_control_characters() {
