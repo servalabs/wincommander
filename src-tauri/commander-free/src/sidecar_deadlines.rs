@@ -6,7 +6,11 @@ use std::{
     task::{Context, Poll},
     time::Duration,
 };
-use tokio::{io::AsyncWrite, sync::Mutex, time::timeout};
+use tokio::{
+    io::AsyncWrite,
+    sync::{watch, Mutex},
+    time::timeout,
+};
 use wincmd_shared::{write_envelope, Envelope};
 
 #[derive(Debug)]
@@ -50,14 +54,38 @@ pub(super) async fn while_open<T>(
     }
 }
 
+pub(super) const BUSY_MESSAGE: &str =
+    "WinCommander Pro is still finishing another task. Try again in a moment.";
+
 pub(super) async fn admit<T>(
     future: impl Future<Output = T>,
     budget: Duration,
     phase: &str,
 ) -> Result<T, String> {
-    timeout(budget, future)
-        .await
-        .map_err(|_| format!("Pro {phase} busy; request not sent"))
+    timeout(budget, future).await.map_err(|_| {
+        crate::log_message("warn", &format!("[Sidecar] Pro {phase} busy; request not sent"));
+        BUSY_MESSAGE.to_string()
+    })
+}
+
+// Each progress tick restarts the budget, so only a stalled request times out.
+pub(super) async fn while_progressing<T>(
+    reply: impl Future<Output = T>,
+    mut progress: watch::Receiver<()>,
+    idle: Duration,
+) -> Option<T> {
+    tokio::pin!(reply);
+    progress.borrow_and_update();
+    loop {
+        tokio::select! {
+            biased;
+            result = &mut reply => return Some(result),
+            changed = progress.changed() => if changed.is_err() {
+                return timeout(idle, reply).await.ok();
+            },
+            _ = tokio::time::sleep(idle) => return None,
+        }
+    }
 }
 
 struct TrackedWriter<'a, W> {
@@ -233,6 +261,55 @@ mod tests {
         assert!(admit(agent.lock(), BUDGET, "agent").await.is_err());
         drop(held);
         assert!(agent.try_lock().is_ok());
+    }
+
+    #[tokio::test]
+    async fn busy_admission_tells_the_user_to_retry_without_jargon() {
+        let pool = Semaphore::new(1);
+        let _held = pool.acquire().await.unwrap();
+        let error = admit(pool.acquire(), BUDGET, "worker").await.unwrap_err();
+        assert_eq!(error, BUSY_MESSAGE);
+        assert!(!error.contains("worker") && !error.contains("request not sent"));
+    }
+
+    #[tokio::test]
+    async fn progress_keeps_a_long_request_alive_past_its_idle_budget() {
+        let (tick, progress) = watch::channel(());
+        let reply = async move {
+            for _ in 0..8 {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                tick.send_replace(());
+            }
+            "report"
+        };
+        let idle = Duration::from_millis(200);
+        assert_eq!(while_progressing(reply, progress, idle).await, Some("report"));
+    }
+
+    #[tokio::test]
+    async fn stalled_request_times_out_one_idle_budget_after_its_last_tick() {
+        let (tick, progress) = watch::channel(());
+        let reply = async move {
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            tick.send_replace(());
+            std::future::pending::<()>().await
+        };
+        let started = tokio::time::Instant::now();
+        let idle = Duration::from_millis(100);
+        assert!(while_progressing(reply, progress, idle).await.is_none());
+        assert!(started.elapsed() >= Duration::from_millis(130));
+    }
+
+    #[tokio::test]
+    async fn lost_progress_channel_still_bounds_the_wait() {
+        let (tick, progress) = watch::channel(());
+        drop(tick);
+        let waited = timeout(
+            Duration::from_secs(1),
+            while_progressing(std::future::pending::<()>(), progress, BUDGET),
+        )
+        .await;
+        assert_eq!(waited.ok(), Some(None));
     }
 
     #[tokio::test]
