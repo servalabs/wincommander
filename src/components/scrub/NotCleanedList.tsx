@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Icon } from '@/components/ui/bp';
-import { displayFolder, groupNotCleaned, skipReasonLabel, type NotCleanedEntry, type NotCleanedGroup } from '@/lib/scrubReportModel';
+import { displayFolder, groupNotCleaned, isNeutralReason, skipReasonLabel, type NotCleanedEntry, type NotCleanedGroup } from '@/lib/scrubReportModel';
+import FileTypeIcon from '../FileTypeIcon';
 import ScrubFileIcon from './ScrubFileIcon';
 
 const WARN = 'var(--color-warning, #f59e0b)';
@@ -14,7 +15,7 @@ function NotCleanedRow({ entry, roots }: { entry: NotCleanedEntry; roots: readon
       title={entry.path}
       style={{ display: 'grid', gridTemplateColumns: 'auto minmax(0, 1.2fr) minmax(0, 1fr)', alignItems: 'center', columnGap: 8, padding: '2px 0' }}
     >
-      <ScrubFileIcon path={entry.path} size={16} showLabel={false} />
+      {entry.isFolder ? <FileTypeIcon kind="folders" size={16} /> : <ScrubFileIcon path={entry.path} size={16} showLabel={false} />}
       <span style={{ minWidth: 0, fontFamily: 'var(--font-mono)', color: 'var(--color-text-primary)', overflowWrap: 'anywhere' }}>
         {name}
         {entry.note && <span style={{ fontFamily: 'inherit', color: WARN, marginLeft: 6 }}>{entry.note}</span>}
@@ -52,12 +53,13 @@ function ReasonGroup({ group, roots }: { group: NotCleanedGroup; roots: readonly
   );
 }
 
-/** Every file the engine left un-cleaned, grouped by the reason it gave. */
+/** Every file the engine left un-cleaned, grouped by the reason it gave. Open by
+ *  default: the names are the point, and the old collapsed panel hid them. */
 export default function NotCleanedList({
   count,
   entries,
   roots,
-  defaultExpanded = false,
+  defaultExpanded = true,
 }: {
   count: number;
   entries: NotCleanedEntry[];
@@ -66,31 +68,45 @@ export default function NotCleanedList({
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const groups = groupNotCleaned(entries);
+  const neutral = entries.filter((e) => isNeutralReason(e.reason)).length;
   const total = Math.max(count, entries.length);
+  const problems = total - neutral;
   const unnamed = total - entries.length;
-  const summary =
-    groups.length === 0 ? skipReasonLabel('unreported').toLowerCase()
-      : groups.length === 1 ? groups[0].label.toLowerCase()
-        : groups.map((g) => `${g.entries.length} ${g.label.toLowerCase()}`).join(' · ');
+  const problemGroups = groups.filter((g) => !isNeutralReason(g.reason));
+  const summaryParts =
+    problemGroups.length === 0 ? (problems > 0 ? [skipReasonLabel('unreported').toLowerCase()] : [])
+      : problemGroups.length === 1 && neutral === 0 ? [problemGroups[0].label.toLowerCase()]
+        : problemGroups.map((g) => `${g.entries.length} ${g.label.toLowerCase()}`);
+  if (problems > 0 && neutral > 0) summaryParts.push(`${neutral} nothing to remove`);
+  const tone = problems > 0 ? WARN : 'var(--color-success)';
   const canExpand = entries.length > 0;
   return (
-    <div style={{ border: `1px solid color-mix(in srgb, ${WARN} 40%, transparent)`, borderRadius: 6, overflow: 'hidden', fontSize: 11 }}>
+    <div style={{ border: `1px solid color-mix(in srgb, ${tone} 40%, transparent)`, borderRadius: 6, overflow: 'hidden', fontSize: 11 }}>
       <button
         type="button"
         aria-expanded={canExpand ? expanded : undefined}
         onClick={() => canExpand && setExpanded((v) => !v)}
         style={{
           width: '100%', display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px',
-          background: `color-mix(in srgb, ${WARN} 8%, var(--color-bg-secondary))`, border: 'none',
+          background: `color-mix(in srgb, ${tone} 8%, var(--color-bg-secondary))`, border: 'none',
           cursor: canExpand ? 'pointer' : 'default', textAlign: 'left', color: 'var(--color-text-secondary)',
         }}
       >
-        <Icon icon="ban-circle" size={11} style={{ flexShrink: 0, color: WARN }} />
+        <Icon icon={problems > 0 ? 'ban-circle' : 'tick-circle'} size={11} style={{ flexShrink: 0, color: tone }} />
         <span style={{ flex: 1, minWidth: 0 }}>
-          {total} file{total === 1 ? '' : 's'} <strong>not cleaned</strong>
-          {' — '}{summary}
+          {problems > 0 ? (
+            <>{problems} file{problems === 1 ? '' : 's'} <strong>not cleaned</strong></>
+          ) : (
+            <>{neutral} file{neutral === 1 ? '' : 's'} with <strong>nothing to remove</strong></>
+          )}
+          {summaryParts.length > 0 && <>{' — '}{summaryParts.join(' · ')}</>}
         </span>
-        {canExpand && <Icon icon={expanded ? 'chevron-up' : 'chevron-down'} size={12} style={{ color: 'var(--color-text-muted)', flexShrink: 0 }} />}
+        {canExpand && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, flexShrink: 0, color: 'var(--color-accent)', fontWeight: 600 }}>
+            {expanded ? 'Hide list' : `Show ${entries.length} file${entries.length === 1 ? '' : 's'}`}
+            <Icon icon={expanded ? 'chevron-up' : 'chevron-down'} size={12} />
+          </span>
+        )}
       </button>
       {expanded && canExpand && (
         <div style={{ padding: '4px 10px 8px', display: 'flex', flexDirection: 'column', gap: 4, background: 'var(--color-bg-secondary)' }}>

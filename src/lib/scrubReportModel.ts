@@ -61,6 +61,8 @@ export interface NotCleanedEntry {
   reason: SkipReasonId;
   /** Row-specific explanation, e.g. "named .jpg but is really PNG". */
   note?: string;
+  /** A selected folder that could not be listed, so its files can't be named. */
+  isFolder?: boolean;
 }
 
 function outcomeNote(file: ScrubFileOutcome, reason: SkipReasonId): string | undefined {
@@ -84,7 +86,7 @@ export function notCleanedEntries(report: Pick<ScrubReport, 'skippedFiles' | 'fi
     return report.files.filter((f) => f && typeof f.path === 'string' && f.path && isListedOutcome(f)).map((f) => {
       const reason = skipReasonId(f.reason ?? (f.outcome === 'failed' ? 'failed' : null));
       const note = outcomeNote(f, reason);
-      return { path: f.path, reason, ...(note ? { note } : {}) };
+      return { path: f.path, reason, ...(note ? { note } : {}), ...(f.detectedType === 'folder' ? { isFolder: true } : {}) };
     });
   }
   const raw = Array.isArray(report.skippedFiles) ? report.skippedFiles : [];

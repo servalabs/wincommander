@@ -44,6 +44,36 @@ describe('NotCleanedList', () => {
     expect(html).toContain('data-scrub-kind="word"');
   });
 
+  test('the list is open by default, with a visible text toggle', () => {
+    const html = renderToStaticMarkup(<NotCleanedList count={1} entries={notCleanedEntries({ skippedFiles: [`${ROOT}\\a.xyz`] })} roots={[ROOT]} />);
+    expect(html).toContain('aria-expanded="true"');
+    expect(html).toContain('a.xyz');
+    expect(html).toContain('Hide list');
+  });
+
+  test('nothing-to-remove files are listed but not counted as not cleaned', () => {
+    const file = (name: string, outcome: ScrubFileOutcome['outcome'], reason: string | null, extra: Partial<ScrubFileOutcome> = {}): ScrubFileOutcome => ({
+      path: `${ROOT}\\${name}`, root: ROOT, extension: name.split('.').pop() ?? '', detectedType: null, typeMismatch: false,
+      cleanedAs: null, outcome, reason, message: null, outputPath: null, scrubbedIndex: null, removedCategories: [], dryRun: true, ...extra,
+    });
+    const neutralOnly = notCleanedEntries({ files: [file('a.txt', 'already_clean', 'nothing_to_remove'), file('b.csv', 'already_clean', 'empty_file')] });
+    const neutralHtml = renderToStaticMarkup(<NotCleanedList count={2} entries={neutralOnly} roots={[ROOT]} />);
+    expect(neutralHtml).toContain('2 files with <strong>nothing to remove</strong>');
+    expect(neutralHtml).not.toContain('not cleaned');
+    expect(neutralHtml).toContain('a.txt');
+
+    const mixed = notCleanedEntries({
+      files: [
+        file('a.txt', 'already_clean', 'nothing_to_remove'),
+        file('Locked', 'failed', 'access_denied', { detectedType: 'folder', extension: '', message: 'Folder could not be read (os error 5)' }),
+      ],
+    });
+    const mixedHtml = renderToStaticMarkup(<NotCleanedList count={2} entries={mixed} roots={[ROOT]} />);
+    expect(mixedHtml).toContain('1 file <strong>not cleaned</strong> — 1 no permission · 1 nothing to remove');
+    expect(mixedHtml).toContain('Folder could not be read (os error 5)');
+    expect(mixedHtml).toContain('data-kind="folders"');
+  });
+
   test('count without names is reported and not expandable', () => {
     const html = renderToStaticMarkup(<NotCleanedList count={5} entries={[]} roots={[]} defaultExpanded />);
     expect(html).toContain('5 files <strong>not cleaned</strong> — unsupported format or content mismatch');

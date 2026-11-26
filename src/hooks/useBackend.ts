@@ -8,6 +8,7 @@ import { createBackendRequestTracker } from "../lib/backendRequestTracker";
 import { requestDestructiveCapability } from "./destructiveAuthz";
 import { afterVaultMutation } from "../lib/vaultChangeEvents";
 import type { VaultSyncWarning } from "../lib/vaultSyncWarning";
+import type { ScrubFileOutcome, ScrubRootSummary } from "../lib/scrubTypes";
 import type { PersonalVaultSyncEnrollment, VaultSyncRecoveryAction } from "../lib/vaultSyncRecovery";
 import type { VaultSyncAction, VaultSyncManagementResult } from "../types/generated/ipc";
 import type { VaultCloudBackupRequest, VaultCloudBackupResult } from "../types/generated/ipc";
@@ -383,6 +384,8 @@ export interface ScrubReportSummary {
   skippedCount?: number;
   skippedFiles?: string[];
   residualCount?: number;
+  files?: ScrubFileOutcome[];
+  roots?: ScrubRootSummary[];
 }
 
 export type MacRandomizerMode = "static-random";
