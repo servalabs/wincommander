@@ -5,7 +5,7 @@
 use std::collections::HashSet;
 use std::time::Instant;
 
-use wincmd_shared::vault_access::VaultMountReason;
+use wincmd_shared::vault_access::{VaultAccess, VaultMountReason};
 
 use super::{AuthenticatedPipePeer, VerbError, PERSONAL_VAULT_UNAUTHORIZED};
 use crate::vault_access::{FileFault, PasswordChangeTarget, TargetLookupError, VaultAccessStore, VaultError};
@@ -122,20 +122,24 @@ pub(super) fn target_refusal(error: TargetLookupError) -> (&'static str, VerbErr
     }
 }
 
-/// A Vault-Permissions Vault's owner or an administrator may change it; another
-/// grantee learns only that it is managed, a caller without a grant only that it may not.
+/// A Vault-Permissions Vault's owner or a write grantee may change it; being an
+/// administrator is not enough. A read grantee learns only that it is managed,
+/// a caller without a grant only that it may not.
 pub(super) fn policy_refusal(
     target: &PasswordChangeTarget,
-    caller_privileged: bool,
-    authorized: impl FnOnce(&str) -> bool,
+    grant: impl FnOnce(&str) -> (bool, Option<VaultAccess>),
 ) -> Result<(), (&'static str, VerbError)> {
     let Some(entry_id) = &target.entry_id else {
         return Ok(());
     };
-    if target.caller_owns_entry || caller_privileged {
+    if target.caller_owns_entry {
         return Ok(());
     }
-    Err(if authorized(entry_id) {
+    let (granted, access) = grant(entry_id);
+    if granted && access == Some(VaultAccess::Write) {
+        return Ok(());
+    }
+    Err(if granted {
         (
             "VLT.PASSWORD.POLICY_MANAGED",
             VerbError::new("vault_policy_managed", "this Vault is managed in Vault Permissions"),
@@ -168,13 +172,11 @@ pub(super) fn failure_code(reason: VaultMountReason) -> &'static str {
 }
 
 /// Runs `run` on the resolved container, held and dismounted, under the mount lock.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn on_held_target<T>(
     log: &Refusals,
     vault_access: &VaultAccessStore,
     vault_mount: &VaultMountBroker,
     peer: &AuthenticatedPipePeer,
-    caller_privileged: bool,
     volume_path: &str,
     keyfiles: &[String],
     run: impl FnOnce(&PasswordChangeTarget) -> Result<T, VerbError>,
@@ -183,8 +185,9 @@ pub(super) fn on_held_target<T>(
         vault_access.password_change_target_as_caller(volume_path, peer.caller_sid(), peer.session_id(), peer.token())
     };
     let target = resolve().map_err(|error| log.refuse(target_refusal(error)))?;
-    policy_refusal(&target, caller_privileged, |entry_id| {
-        crate::vault_access::authorize_mount_for_token(vault_access, entry_id, peer.token()).allowed
+    policy_refusal(&target, |entry_id| {
+        let authorization = crate::vault_access::authorize_mount_for_token(vault_access, entry_id, peer.token());
+        (authorization.allowed, authorization.mode)
     })
     .map_err(|refusal| log.refuse(refusal))?;
     // Held under the mount lock so no mount can start while the header is read or rewritten.

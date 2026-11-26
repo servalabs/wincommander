@@ -119,7 +119,7 @@ describe("password change steps", () => {
     expect(run(typed, { type: "send" }, { type: "failed", error: "engine_failed" }).step).toBe("current");
     const stopped = run(typed, { type: "send" }, { type: "failed", error: "vault_policy_managed" });
     expect(stopped.step).toBe("policy");
-    expect(stopped.failure).toBe("Only this vault's owner or an administrator can change its password.");
+    expect(stopped.failure).toBe("Only this vault's owner, or an account it is shared with for editing, can change its password.");
     expect(stopped.failure).not.toContain("Vault Permissions");
     expect(stopped.first.oldPassword).toBe("");
     expect(passwordChangeProblem(stopped)).toBeNull();

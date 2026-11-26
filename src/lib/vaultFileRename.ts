@@ -25,7 +25,7 @@ export const RENAME_BUSY = "Checking the password and renaming the file…";
 
 export const RENAME_PASSWORD_NOTE = "Checking the password can take up to about 30 seconds.";
 
-export const POLICY_RENAME_REFUSED = "Only this vault's owner or an administrator can rename it.";
+export const POLICY_RENAME_REFUSED = "Only this vault's owner, or an account it is shared with for editing, can rename it.";
 
 const MAX_FILE_NAME_UNITS = 255;
 const RESERVED_DEVICE_NAME = /^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(\.|$)/i;

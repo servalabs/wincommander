@@ -129,7 +129,7 @@ describe("vault password change errors", () => {
 
   test("a policy refusal names who may change the password instead of pointing back to Vault Permissions", () => {
     const error = new Error("service rejected request: vault_policy_managed");
-    expect(vaultPasswordChangeErrorMessage(error, "probe")).toBe("Only this vault's owner or an administrator can change its password.");
+    expect(vaultPasswordChangeErrorMessage(error, "probe")).toBe("Only this vault's owner, or an account it is shared with for editing, can change its password.");
     expect(isPolicyManagedError(error)).toBe(true);
     expect(isPolicyManagedError("wrong_password")).toBe(false);
   });

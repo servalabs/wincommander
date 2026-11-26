@@ -146,7 +146,7 @@ fn handler_refuses_before_the_broker_without_an_interactive_caller() {
     let broker = VaultMountBroker::new();
     let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
     let error = runtime
-        .block_on(handle(1, &store, &broker, request(), None, true))
+        .block_on(handle(1, &store, &broker, request(), None))
         .unwrap_err();
     assert_eq!(error.kind, PERSONAL_VAULT_SESSION_ABSENT);
 }

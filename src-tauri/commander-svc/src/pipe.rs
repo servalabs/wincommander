@@ -936,14 +936,12 @@ async fn dispatch_verb(
             handle_personal_vault_create(request_id, vault_access, args, peer).await
         }
         "svc.vault.change_password_personal" => {
-            vault_password_change::handle(request_id, vault_access, vault_mount, args, peer, caller_privileged).await
+            vault_password_change::handle(request_id, vault_access, vault_mount, args, peer).await
         }
         "svc.vault.probe_password" => {
-            vault_password_probe::handle(request_id, vault_access, vault_mount, args, peer, caller_privileged).await
+            vault_password_probe::handle(request_id, vault_access, vault_mount, args, peer).await
         }
-        "svc.vault.rename" => {
-            vault_rename::handle(request_id, vault_access, vault_mount, args, peer, caller_privileged)
-        }
+        "svc.vault.rename" => vault_rename::handle(request_id, vault_access, vault_mount, args, peer),
         "svc.vault.display_names" => vault_rename::handle_display_names(vault_access, peer),
         "svc.vault.unmount" => handle_vault_unmount(
             request_id,

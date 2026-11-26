@@ -116,7 +116,7 @@ export const WRONG_DECOY_PASSWORD = "Wrong password. The first password change w
 /** The service noted a hidden part and the decoy password opened only the outer one. */
 export const REAL_PASSWORD_REQUIRED = "Wrong password. Enter the real password for this vault.";
 
-export const POLICY_MANAGED = "Only this vault's owner or an administrator can change its password.";
+export const POLICY_MANAGED = "Only this vault's owner, or an account it is shared with for editing, can change its password.";
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : typeof error === "string" ? error : "").toLowerCase();
 const hasCode = (detail: string, code: string) => new RegExp(`(?:^|[^a-z_])(?:vault_)?${code}(?:$|[^a-z_])`).test(detail);

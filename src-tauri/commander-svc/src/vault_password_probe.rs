@@ -58,7 +58,6 @@ pub(super) async fn handle(
     vault_mount: &VaultMountBroker,
     args: serde_json::Value,
     peer: Option<&AuthenticatedPipePeer>,
-    caller_privileged: bool,
 ) -> Result<serde_json::Value, VerbError> {
     let mut args = SecretArgs(args);
     let log = Refusals::new(operation_id, "probe_password");
@@ -74,7 +73,6 @@ pub(super) async fn handle(
         vault_access,
         vault_mount,
         peer,
-        caller_privileged,
         &request.volume_path,
         &request.keyfiles,
         |target| {

@@ -63,16 +63,15 @@ fn probe_args(args: &mut serde_json::Value) -> SecretArgs {
     }))
 }
 
-/// A Vault-Permissions Vault may be renamed by its owner, an administrator or a write grant.
+/// A Vault-Permissions Vault may be renamed by its owner or a write grant; being
+/// an administrator is not enough.
 pub(super) fn policy_rename_allowed(
     target: &PasswordChangeTarget,
-    caller_privileged: bool,
     granted: bool,
     access: Option<VaultAccess>,
 ) -> bool {
     target.entry_id.is_none()
         || target.caller_owns_entry
-        || caller_privileged
         || (granted && access == Some(VaultAccess::Write))
 }
 
@@ -119,7 +118,6 @@ pub(super) fn rename_for_caller(
     log: &Refusals,
     vault_access: &VaultAccessStore,
     vault_mount: &VaultMountBroker,
-    caller_privileged: bool,
     request: &RenameRequest,
     steps: &RenameSteps<'_>,
     probe: impl FnOnce(&PasswordChangeTarget) -> Result<&'static str, VerbError>,
@@ -127,7 +125,7 @@ pub(super) fn rename_for_caller(
     let target = (steps.resolve)().map_err(|error| log.refuse(target_refusal(error)))?;
     if let Some(entry_id) = &target.entry_id {
         let (granted, access) = (steps.grant)(entry_id);
-        if !policy_rename_allowed(&target, caller_privileged, granted, access) {
+        if !policy_rename_allowed(&target, granted, access) {
             return Err(log.refuse(if granted {
                 ("VLT.RENAME.POLICY_MANAGED", VerbError::new("vault_policy_managed", "this Vault is managed in Vault Permissions"))
             } else {
@@ -178,7 +176,6 @@ pub(super) fn handle(
     vault_mount: &VaultMountBroker,
     args: serde_json::Value,
     peer: Option<&AuthenticatedPipePeer>,
-    caller_privileged: bool,
 ) -> Result<serde_json::Value, VerbError> {
     let mut args = SecretArgs(args);
     let log = Refusals::new(operation_id, "rename");
@@ -204,7 +201,7 @@ pub(super) fn handle(
         crate::vault_access::rename_container_as_caller(from, identity, to, token)
     };
     let steps = RenameSteps { resolve: &resolve, grant: &grant, prove_access: &prove_access, exists: &exists, rename: &rename };
-    rename_for_caller(&log, vault_access, vault_mount, caller_privileged, &request, &steps, |target| {
+    rename_for_caller(&log, vault_access, vault_mount, &request, &steps, |target| {
         // Released before the rename: the pin shares no delete access.
         let _held = hold_for_broker(target, &request.keyfiles, peer).map_err(|refusal| log.refuse(refusal))?;
         probe_header(operation_id, peer, target, &mut credential.0).map_err(|reason| {

@@ -23,8 +23,10 @@ lists only a selection of those changes.
   password for this vault.". The file is renamed with your own Windows
   access, keeps its permissions, and WinCommander's records follow it; if
   they cannot be saved the file gets its old name back. Your own vault can be
-  renamed only by you; a shared Vault by its owner, an administrator or an
-  account with write access. Rename no longer stores a separate display
+  renamed only by you; a shared Vault only by its owner or an account it is
+  shared with for editing, not by an administrator outside the share. In
+  Vault Permissions both actions are disabled, with that reason, for any other
+  account. Rename no longer stores a separate display
   name; names saved by earlier builds still show.
 - Change Password and Rename appear once on each dismounted vault row: My
   vaults, the selected Quick Mount vault, and the More (⋯) menu of each saved
@@ -54,8 +56,8 @@ lists only a selection of those changes.
   renames nothing ("Wrong password. Enter the real password for this vault."),
   and a decoy change needs the real password proven again. The note is kept by
   the file's identity, follows a rename and is never shown. A Vault in Vault
-  Permissions can be changed by its owner or an administrator; anyone else is
-  told exactly that. The dialog names a
+  Permissions can be changed only by its owner or an account it is shared with
+  for editing; anyone else, an administrator included, is told exactly that. The dialog names a
   missing, locked or inaccessible vault file, and says when the engine kept the
   original header. The service checks that the vault is yours (or one
   WinCommander has no record of), that it is the registered file, and that

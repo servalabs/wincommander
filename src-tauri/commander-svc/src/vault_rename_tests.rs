@@ -20,7 +20,6 @@ fn request(path: &str, new_name: &str) -> serde_json::Value {
 struct Fake {
     store: VaultAccessStore,
     caller: &'static str,
-    privileged: bool,
     access: Option<VaultAccess>,
     mounted: bool,
     header: Result<&'static str, &'static str>,
@@ -35,7 +34,6 @@ impl Fake {
         Self {
             store,
             caller: OWNER,
-            privileged: false,
             access: None,
             mounted: false,
             header: Ok("outer"),
@@ -70,7 +68,7 @@ impl Fake {
         };
         let steps = RenameSteps { resolve: &resolve, grant: &grant, prove_access: &prove_access, exists: &exists, rename: &rename };
         let log = Refusals::new(1, "rename");
-        rename_for_caller(&log, &self.store, &broker, self.privileged, &request, &steps, |_| {
+        rename_for_caller(&log, &self.store, &broker, &request, &steps, |_| {
             self.probed.set(true);
             self.header.map_err(|code| VerbError::new(code, "probe refused"))
         })
@@ -214,7 +212,7 @@ fn a_caller_who_cannot_write_the_file_or_folder_is_refused() {
 }
 
 #[test]
-fn a_policy_vault_is_renamed_by_a_writer_or_an_administrator_and_its_entry_moves() {
+fn a_policy_vault_is_renamed_only_by_a_writer_and_its_entry_moves() {
     let mut fake = Fake::new(store_with_policy_vault());
     fake.caller = OTHER;
     assert_eq!(fake.refused(POLICY_PATH, "Read"), PERSONAL_VAULT_UNAUTHORIZED);
@@ -229,15 +227,6 @@ fn a_policy_vault_is_renamed_by_a_writer_or_an_administrator_and_its_entry_moves
     assert_eq!(policy.entries[0].container_path, r"D:\Vaults\SyncTest.hc");
     assert_eq!(policy.entries[0].label, "SyncTest", "the label is not the file name");
     assert_eq!(policy.version, 2);
-}
-
-#[test]
-fn an_administrator_renames_a_policy_vault_without_a_grant() {
-    let mut fake = Fake::new(store_with_policy_vault());
-    fake.caller = OTHER;
-    fake.privileged = true;
-    fake.run(POLICY_PATH, "Admin copy").unwrap();
-    assert_eq!(fake.store.policy().unwrap().entries[0].container_path, r"D:\Vaults\Admin copy.hc");
 }
 
 #[test]
@@ -300,7 +289,7 @@ fn a_verbatim_path_reads_as_an_ordinary_one() {
 fn handlers_refuse_without_an_authenticated_caller() {
     let store = crate::vault_access::test_policy_store();
     let broker = crate::vault_mount::test_broker_with_mount(None);
-    assert_eq!(handle(1, &store, &broker, request(PERSONAL_PATH, "Taxes"), None, false).unwrap_err().kind, PERSONAL_VAULT_SESSION_ABSENT);
+    assert_eq!(handle(1, &store, &broker, request(PERSONAL_PATH, "Taxes"), None).unwrap_err().kind, PERSONAL_VAULT_SESSION_ABSENT);
     assert_eq!(handle_display_names(&store, None).unwrap_err().kind, PERSONAL_VAULT_SESSION_ABSENT);
 }
 
@@ -352,7 +341,7 @@ mod real_files {
         let rename = |from: &str, identity: &str, to: &str| crate::vault_access::rename_container_as_caller(from, identity, to, token);
         let steps = RenameSteps { resolve: &resolve, grant: &grant, prove_access: &prove_access, exists: &exists, rename: &rename };
         let log = Refusals::new(1, "rename");
-        rename_for_caller(&log, store, &broker, false, &request, &steps, |_| Ok(header))
+        rename_for_caller(&log, store, &broker, &request, &steps, |_| Ok(header))
     }
 
     #[test]

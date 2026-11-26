@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { vaultPolicyMenuItems, type VaultPolicyMenuInput } from "./vaultPolicyMenu";
+import { VAULT_NOT_SHARED_FOR_EDIT, vaultPolicyMenuItems, type VaultPolicyMenuInput } from "./vaultPolicyMenu";
 
 const opened: string[] = [];
 const input = (overrides: Partial<VaultPolicyMenuInput> = {}): VaultPolicyMenuInput => ({
@@ -9,6 +9,7 @@ const input = (overrides: Partial<VaultPolicyMenuInput> = {}): VaultPolicyMenuIn
   mountStateUnknown: false,
   saving: false,
   canEditEntry: true,
+  canChangeFile: true,
   canRemoveEntry: true,
   canRepairSharedAccess: false,
   onRepair: () => {},
@@ -33,6 +34,12 @@ describe("saved Vault More menu", () => {
     expect(password!.disabledReason).toBe("Dismount this vault to change its password or rename it.");
     expect(rename!.disabledReason).toBe(password!.disabledReason);
     expect(remove!.disabledReason).toContain("Dismount");
+  });
+
+  test("an account that neither owns nor edits the Vault cannot change or rename it", () => {
+    const [password, rename] = vaultPolicyMenuItems(input({ canChangeFile: false, mounted: true }));
+    expect(password!.disabledReason).toBe(VAULT_NOT_SHARED_FOR_EDIT);
+    expect(rename!.disabledReason).toBe(VAULT_NOT_SHARED_FOR_EDIT);
   });
 
   test("without Pro only the policy actions remain", () => {

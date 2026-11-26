@@ -92,7 +92,7 @@ describe("vaultRenameErrorMessage", () => {
     const cases: Array<[string, string]> = [
       ["service rejected request: real_password_required", "Wrong password. Enter the real password for this vault."],
       ["wrong_password", "Wrong password."],
-      ["vault_policy_managed", "Only this vault's owner or an administrator can rename it."],
+      ["vault_policy_managed", "Only this vault's owner, or an account it is shared with for editing, can rename it."],
       ["name_invalid", "Windows does not allow that file name. Avoid \\ / : * ? \" < > |, a dot or space at the end, and names such as CON or NUL. Nothing was changed."],
       ["name_exists", "A file with that name already exists in this folder. Choose another name. Nothing was changed."],
       ["name_unchanged", "This is already the file's name. Enter a different one."],

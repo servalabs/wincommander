@@ -1252,6 +1252,7 @@ export default function VaultAccessTab({ isAdmin, directory, onVisibilityChange 
                     <VaultPolicyMoreMenu label={entry.label} items={vaultPolicyMenuItems({
                       fileActions, target: { path: entry.container_path, label: entry.label },
                       mounted: mounted || needsCleanup, mountStateUnknown, saving, canEditEntry, canRemoveEntry, canRepairSharedAccess,
+                      canChangeFile: (!!currentCallerSid && entry.primary_owner_sid === currentCallerSid) || authorized?.access === "write",
                       onRepair: repairSharedAccess, onForget: () => setForgetPolicyConfirmation(entry.id), onRemove: () => requestEntryRemoval(entry.id),
                     })} />
                   </div></td>
