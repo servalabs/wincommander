@@ -1,3 +1,5 @@
+import { cleanVaultPath, serviceDetail } from "./vaultRename";
+
 export type VaultPasswordKind = "standard" | "decoy";
 
 /** One header's credentials. A decoy vault keeps its decoy password in the outer header and its real one in the hidden header. */
@@ -103,7 +105,7 @@ function headerFields(header: HeaderCredentials, prefix: "" | "Hidden"): Record<
 export function buildPasswordChangeRequest(form: VaultPasswordChangeForm): Record<string, string> {
   const decoy = form.vaultKind === "decoy";
   return {
-    VolumePath: form.volumePath.trim(),
+    VolumePath: cleanVaultPath(form.volumePath),
     TargetKind: "file",
     // "both" makes the service check both current passwords before it writes either header.
     Target: decoy ? "both" : "outer",
@@ -139,7 +141,7 @@ export function vaultPasswordChangeErrorMessage(error: unknown): string {
   if (has("caller_access_denied")) return "Windows did not let this account change the vault file or read its keyfile. Check that the file is not read-only and that you can open the keyfile.";
   if (has("vault_policy_identity_changed")) return "The selected file is not the vault WinCommander registered at this location. Check that you picked the right file.";
   if (has("mount_state_unknown")) return "WinCommander could not confirm that this vault is dismounted. Refresh Secure Storage, dismount it if it is listed, then try again.";
-  if (has("vault_validation_failed")) return "Check the vault file and the passwords, then try again. Nothing was changed.";
+  if (has("vault_validation_failed")) return `Check the vault file and the passwords, then try again. Nothing was changed.${serviceDetail(detail)}`;
   if (has("vault_runtime_update_required") || has("pro_not_installed") || has("entitlement_denied") || detail.includes("feature_unknown")) {
     return "Changing a vault password needs an up-to-date WinCommander Pro. Update or install Pro from License settings, then try again.";
   }
