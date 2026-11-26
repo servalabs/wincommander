@@ -55,6 +55,7 @@ fn file(details: &[&str]) -> ScrubResult {
         sample_values: vec!["private-author-value".into()],
         dry_run: false,
         residual_fields: vec![],
+        cleaned_as: None,
     }
 }
 

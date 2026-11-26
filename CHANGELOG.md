@@ -39,6 +39,18 @@ lists only a selection of those changes.
   network drives and subst folders are never removed. Secure Storage also
   lists another account's Vault that is still held after that account signed
   out or the volume closed, with no path and no dismount button.
+- Share Safely now reports every file in a scrub, one entry per file, each
+  with its selected folder, extension, real type (read from the file's
+  content) and outcome. A file that was not cleaned now says why: an
+  unsupported format, a type mismatch (for example a WhatsApp ".jpg" that is
+  really PNG), in use by another app, no permission, unreadable, unwritable,
+  or a path that is too long. Plain text, CSV, JSON, Markdown, BMP and ICO
+  files and empty files count as "nothing to remove", not as failures. A file
+  or unreadable folder that the scrub engine skipped without naming it is
+  still listed. Results are also totalled per selected folder.
+- Fix the Hidden Data Remover version text ("vExifTool 13.59; qpdf version
+  12.4.2Run qpdf --copyright to see..."). The version is now the ExifTool
+  number, and the ExifTool and qpdf versions are also reported separately.
 
 - Fix Stealth mode leaving no Calculator shortcut: with Hide WinCommander
   already on, turning the Calculator lock on restored the WinCommander
