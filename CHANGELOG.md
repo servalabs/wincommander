@@ -18,6 +18,28 @@ lists only a selection of those changes.
   saved in it, with full control for SYSTEM and Administrators. Nothing is
   granted to Everyone or anonymous logons. A RAM disk an older build already
   mounted gets the same permissions the next time WinCommander reuses it.
+- Fix a drive letter (for example T:) staying "in use" after a Vault was
+  closed. When a Vault is dismounted from another session, or the volume
+  closes, Windows can keep the letter linked to a volume that no longer
+  exists in the logon that mounted it. That logon may still be signed in or
+  disconnected. Mounting to that letter then failed with "already in use",
+  even though no drive showed in File Explorer. The service now frees any
+  letter whose link points to a Vault or RAM disk device that no longer
+  exists, in any account's logon, with no sign-out needed. It does this when
+  the service starts, before choosing or mounting a letter, after a mount,
+  and after every dismount, including failed, forced and logoff/disconnect
+  dismounts. Dismount also removes the letter in the logon that mounted it.
+  "Check and free unavailable Vault letters" does the same in one click and
+  reports, for example, "Freed T: (left over from SERVAULT\King's closed
+  vault)". A letter that stays blocked now says what holds it: a mounted
+  encrypted volume, the WinCommander RAM disk, a Windows volume, a network
+  drive or a subst folder. It also says which account holds it and whether
+  that account is signed in, disconnected or signed out. Only administrators
+  see other accounts' names. Live volumes, the RAM disk, Windows volumes,
+  network drives and subst folders are never removed. Secure Storage also
+  lists another account's Vault that is still held after that account signed
+  out or the volume closed, with no path and no dismount button.
+
 - Fix Stealth mode leaving no Calculator shortcut: with Hide WinCommander
   already on, turning the Calculator lock on restored the WinCommander
   shortcuts to the Hide snapshot instead of replacing them, so the Start menu

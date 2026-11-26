@@ -28,6 +28,7 @@ mod cloud_backup;
 mod slot;
 
 use crate::vault_access::{ResolvedGrant, VaultAccessStore};
+use crate::vault_drive_letters::{LetterHolder, LetterRelease};
 use crate::vault_syncthing_recovery::{
     recovery_roots, RecoveryAction, RecoveryOptions, RecoveryRoot,
 };
@@ -724,6 +725,9 @@ struct MountedRootAclSddl(String);
 
 type EngineSnapshot = fn() -> Result<HashMap<u8, String>, String>;
 
+type LetterHolderProbe = fn(&HashSet<char>) -> Result<HashMap<char, Vec<LetterHolder>>, ()>;
+type StaleLetterRelease = fn(&HashSet<char>) -> Result<HashMap<char, LetterRelease>, ()>;
+
 pub struct VaultMountBroker {
     active: Mutex<HashMap<String, ActiveMount>>,
     // One policy generation must not interleave with an authorization/mount or
@@ -733,12 +737,15 @@ pub struct VaultMountBroker {
     broker: Box<dyn AuthenticatedVaultBroker>,
     caller_mount_attestor: CallerMountAttestor,
     drive_letter_probe: fn() -> Result<HashSet<String>, ()>,
+    letter_holder_probe: LetterHolderProbe,
+    stale_letter_release: StaleLetterRelease,
     engine_snapshot: Option<EngineSnapshot>,
     owner_logon_probe: fn(&ActiveMount) -> Result<bool, ()>,
     machine_alias_cleanup: fn(&ActiveMount) -> Result<bool, ()>,
     private_alias_absent: fn(&ActiveMount) -> Result<bool, ()>,
     private_alias_cleanup: fn(&ActiveMount) -> Result<bool, ()>,
     owned_private_alias_cleanup: fn(&ActiveMount) -> Result<bool, ()>,
+    mounted_alias_cleanup: fn(&ActiveMount) -> Result<bool, ()>,
     policy_authorizer: fn(
         &VaultAccessStore,
         &str,
@@ -859,6 +866,16 @@ impl VaultMountBroker {
                     recovery::cleanup_owned_private_alias
                 }
             },
+            mounted_alias_cleanup: {
+                #[cfg(test)]
+                {
+                    |_| Ok(true)
+                }
+                #[cfg(not(test))]
+                {
+                    recovery::cleanup_mounting_logon_alias
+                }
+            },
             machine_alias_cleanup: {
                 #[cfg(test)]
                 {
@@ -877,6 +894,26 @@ impl VaultMountBroker {
                 #[cfg(not(test))]
                 {
                     crate::vault_drive_letters::occupied_letters
+                }
+            },
+            letter_holder_probe: {
+                #[cfg(test)]
+                {
+                    |_| Ok(HashMap::new())
+                }
+                #[cfg(not(test))]
+                {
+                    crate::vault_drive_letters::letter_holders
+                }
+            },
+            stale_letter_release: {
+                #[cfg(test)]
+                {
+                    |_| Ok(HashMap::new())
+                }
+                #[cfg(not(test))]
+                {
+                    crate::vault_drive_letters::release_stale_letters
                 }
             },
             recovery: Mutex::new(RecoveryState::default()),
@@ -951,7 +988,7 @@ impl VaultMountBroker {
         effective_access: wincmd_shared::vault_access::VaultAccess,
     ) -> VaultMountResult {
         self.with_exclusive_operation(|| {
-            self.mount_authorized_locked(
+            let result = self.mount_authorized_locked(
                 operation_id,
                 store,
                 entry_id,
@@ -963,7 +1000,11 @@ impl VaultMountBroker {
                 caller_sid,
                 caller_authentication_id,
                 effective_access,
-            )
+            );
+            if result.state == VaultMountState::Mounted {
+                self.sweep_dead_letters_locked(result.drive_letter.as_deref());
+            }
+            result
         })
     }
 
@@ -1074,7 +1115,7 @@ impl VaultMountBroker {
         caller_authentication_id: (u32, i32),
         caller_is_local_admin: bool,
     ) -> Result<(String, u8, bool, Option<VaultSyncWarning>), VaultMountReason> {
-        self.mount_personal_with_entry_id_locked(
+        let result = self.mount_personal_with_entry_id_locked(
             operation_id,
             store,
             record,
@@ -1085,7 +1126,11 @@ impl VaultMountBroker {
             caller_authentication_id,
             unmanaged_mount_entry_id(record),
             caller_is_local_admin,
-        )
+        );
+        if let Ok((letter, ..)) = &result {
+            self.sweep_dead_letters_locked(Some(letter));
+        }
+        result
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1184,6 +1229,7 @@ impl VaultMountBroker {
             store,
             request.preferred_letter.as_deref(),
             &record.container_identity,
+            caller_sid,
         ) {
             Ok(letter) => Some(letter),
             Err(reason) => {
@@ -1545,8 +1591,12 @@ impl VaultMountBroker {
             }
         }
         let preferred_letter =
-            match self.select_mount_letter(store, preferred_letter.as_deref(), &container_identity)
-            {
+            match self.select_mount_letter(
+                store,
+                preferred_letter.as_deref(),
+                &container_identity,
+                &caller_sid,
+            ) {
                 Ok(letter) => Some(letter),
                 Err(reason) => {
                     zeroize_mount_secrets(password, hidden_protection_password);
@@ -1990,6 +2040,10 @@ impl VaultMountBroker {
                 VaultMountReason::DismountFailed,
             );
         }
+        if active.presentation == VaultPresentation::PerUser {
+            // The engine removes only the dismounting caller's link; the mounting logon can differ.
+            let _ = (self.mounted_alias_cleanup)(&active);
+        }
         match self.active.lock() {
             Ok(mounts) if self.persist_active(store, &mounts).is_ok() => {}
             _ => {
@@ -2124,7 +2178,12 @@ impl VaultMountBroker {
         store: &VaultAccessStore,
         request: AuthorizedDismount<'_>,
     ) -> VaultMountResult {
-        self.with_exclusive_operation(|| self.dismount_authorized_locked(store, &request))
+        self.with_exclusive_operation(|| {
+            let result = self.dismount_authorized_locked(store, &request);
+            // Failed and forced dismounts can also leave a link to a closed device.
+            self.sweep_dead_letters_locked(None);
+            result
+        })
     }
 
     fn dismount_authorized_locked(
@@ -2333,6 +2392,8 @@ impl VaultMountBroker {
                     caller_elevated,
                 },
             );
+            // Failed and forced dismounts can also leave a link to a closed device.
+            self.sweep_dead_letters_locked(None);
             // A guessed slot must not disclose the opaque private entry ID.
             VaultMountResult {
                 entry_id: synthetic_entry_id,
@@ -2650,6 +2711,7 @@ impl VaultMountBroker {
         store: &VaultAccessStore,
         preferred_letter: Option<&str>,
         container_identity: &str,
+        caller_sid: &str,
     ) -> Result<String, VaultMountReason> {
         let unavailable = VaultMountReason::EngineDriveLetterUnavailable;
         let occupied = self.occupied_letters_locked()?;
@@ -2665,25 +2727,110 @@ impl VaultMountBroker {
         {
             return Err(unavailable);
         }
+        if self.mapped_letters_locked()?.contains(&letter) {
+            let drive = letter.chars().next().ok_or(unavailable)?;
+            self.release_stale_letters_locked(&HashSet::from([drive]), Some(caller_sid));
+            if self.mapped_letters_locked()?.contains(&letter) {
+                return Err(unavailable);
+            }
+        }
         Ok(letter)
     }
 
-    pub(crate) fn occupied_letters_locked(&self) -> Result<HashSet<String>, VaultMountReason> {
-        let unavailable = VaultMountReason::EngineDriveLetterUnavailable;
-        let mut occupied = (self.drive_letter_probe)().map_err(|_| unavailable)?;
-        occupied.extend(
-            self.active
-                .lock()
-                .map_err(|_| unavailable)?
+    fn recorded_letters(&self) -> Option<HashSet<String>> {
+        self.active.lock().ok().map(|active| {
+            active
                 .values()
                 .map(|mount| {
                     mount
                         .drive_letter
                         .trim_end_matches(':')
                         .to_ascii_uppercase()
-                }),
-        );
+                })
+                .collect()
+        })
+    }
+
+    fn mapped_letters_locked(&self) -> Result<HashSet<String>, VaultMountReason> {
+        let unavailable = VaultMountReason::EngineDriveLetterUnavailable;
+        let mut occupied = (self.drive_letter_probe)().map_err(|_| unavailable)?;
+        occupied.extend(self.recorded_letters().ok_or(unavailable)?);
         Ok(occupied)
+    }
+
+    /// Letters held only by links to removed devices count as free; mounting
+    /// releases those links before the engine is called.
+    pub(crate) fn occupied_letters_locked(&self) -> Result<HashSet<String>, VaultMountReason> {
+        let unavailable = VaultMountReason::EngineDriveLetterUnavailable;
+        let mut occupied = (self.drive_letter_probe)().map_err(|_| unavailable)?;
+        let recorded = self.recorded_letters().ok_or(unavailable)?;
+        let candidates = occupied
+            .iter()
+            .filter(|letter| letter.len() == 1 && !recorded.contains(*letter))
+            .filter_map(|letter| letter.chars().next())
+            .filter(|letter| ('D'..='Z').contains(letter))
+            .collect::<HashSet<_>>();
+        if !candidates.is_empty() {
+            if let Ok(holders) = (self.letter_holder_probe)(&candidates) {
+                for (letter, holders) in holders {
+                    if !holders.is_empty() && holders.iter().all(LetterHolder::is_dead_device) {
+                        occupied.remove(&letter.to_string());
+                    }
+                }
+            }
+        }
+        occupied.extend(recorded);
+        Ok(occupied)
+    }
+
+    /// Removes only links whose target device no longer exists, in any logon.
+    fn release_stale_letters_locked(
+        &self,
+        letters: &HashSet<char>,
+        caller_sid: Option<&str>,
+    ) -> HashMap<char, LetterRelease> {
+        let letters = letters
+            .iter()
+            .copied()
+            .filter(|letter| ('D'..='Z').contains(letter))
+            .collect::<HashSet<_>>();
+        if letters.is_empty() {
+            return HashMap::new();
+        }
+        let started = std::time::Instant::now();
+        let releases = (self.stale_letter_release)(&letters).unwrap_or_default();
+        if caller_sid.is_some() || releases.values().any(|release| release.released() > 0) {
+            let context = releases
+                .iter()
+                .flat_map(|(letter, release)| {
+                    crate::vault_drive_letters::holder_diagnostics(
+                        *letter,
+                        release,
+                        caller_sid,
+                    )
+                })
+                .collect();
+            crate::diagnostics::record_vault_letter_holders(context, started);
+        }
+        releases
+    }
+
+    pub(crate) fn sweep_dead_letters(&self) {
+        self.with_exclusive_operation(|| self.sweep_dead_letters_locked(None));
+    }
+
+    /// Frees links left by a dismounted or moved Vault; live devices are kept.
+    fn sweep_dead_letters_locked(&self, keep: Option<&str>) {
+        let keep = keep.map(|letter| letter.trim_end_matches(':').to_ascii_uppercase());
+        let Ok(mapped) = (self.drive_letter_probe)() else {
+            return;
+        };
+        let letters = mapped
+            .iter()
+            .filter(|letter| letter.len() == 1 && Some(*letter) != keep.as_ref())
+            .filter_map(|letter| letter.chars().next())
+            .collect::<HashSet<_>>();
+        self.release_stale_letters_locked(&letters, None);
     }
 
     fn attest_existing_mount(
@@ -2797,6 +2944,10 @@ impl VaultMountBroker {
         }
         let mut mounts = Vec::new();
         for (entry_id, mount) in active.iter() {
+            // Another account's stale record is listed, without its path, so a
+            // held letter is explained; bulk dismount and cleanup checks drop it.
+            let foreign_stale = mount.caller_sid != caller_sid
+                && (mount.driver_slot_absent || self.owner_logon_ended(mount));
             // The ordinary-user inventory remains own-mount scoped. A direct
             // cross-owner request can explain elevation is needed, but bulk
             // dismount must not collect another user's unavailable targets.
@@ -2810,6 +2961,9 @@ impl VaultMountBroker {
                 )
                 && !self.owner_may_recover(mount, caller_sid)
             {
+                if foreign_stale {
+                    mounts.push(foreign_stale_row(mount));
+                }
                 continue;
             }
             let request = AuthorizedDismount {
@@ -2830,6 +2984,9 @@ impl VaultMountBroker {
             );
             if matches!(permission, Err(reason) if reason != VaultMountReason::AdministratorRequired)
             {
+                if foreign_stale {
+                    mounts.push(foreign_stale_row(mount));
+                }
                 continue;
             }
             if !mount.driver_slot_absent
@@ -2982,13 +3139,16 @@ impl VaultMountBroker {
             .lock()
             .map(|active| active.keys().cloned().collect::<Vec<_>>())
             .unwrap_or_default();
-        for entry_id in entries {
-            if self.dismount_entry_locked(store, &entry_id).state != VaultMountState::Unmounted {
-                return Err(VaultMountReason::DismountFailed);
+        let result = (|| {
+            for entry_id in entries {
+                if self.dismount_entry_locked(store, &entry_id).state != VaultMountState::Unmounted {
+                    return Err(VaultMountReason::DismountFailed);
+                }
             }
-        }
-        self.broker.cleanup_orphans()?;
-        Ok(())
+            self.broker.cleanup_orphans()
+        })();
+        self.sweep_dead_letters_locked(None);
+        result
     }
 
     #[cfg(test)]
@@ -3075,6 +3235,7 @@ impl VaultMountBroker {
                     Ok(false) | Err(()) => {} // Retry later; unknown ownership cannot select an alias namespace.
                 }
             }
+            self.sweep_dead_letters_locked(None);
         });
     }
 
@@ -3587,7 +3748,9 @@ fn zeroize_mount_secrets(password: &mut String, hidden_protection_password: &mut
     *hidden_protection_password = None;
 }
 
-fn authenticated_logon_id(token: windows_sys::Win32::Foundation::HANDLE) -> Option<(u32, i32)> {
+pub(crate) fn authenticated_logon_id(
+    token: windows_sys::Win32::Foundation::HANDLE,
+) -> Option<(u32, i32)> {
     #[cfg(test)]
     if token.is_null() {
         return Some((0, 0));
@@ -3617,7 +3780,9 @@ fn authenticated_logon_id(token: windows_sys::Win32::Foundation::HANDLE) -> Opti
 
 /// Windows supplies the paired filtered/elevated token for a split UAC logon.
 /// A missing or inaccessible linked token never grants additional access.
-fn linked_authentication_id(token: windows_sys::Win32::Foundation::HANDLE) -> Option<(u32, i32)> {
+pub(crate) fn linked_authentication_id(
+    token: windows_sys::Win32::Foundation::HANDLE,
+) -> Option<(u32, i32)> {
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::Security::{GetTokenInformation, TokenLinkedToken, TOKEN_LINKED_TOKEN};
     if token.is_null() {
@@ -3673,6 +3838,20 @@ fn quick_mount_receipt_for_caller(
         "qm1:{}",
         sync_management::mount_receipt(entry_id, active)
     ))
+}
+
+fn foreign_stale_row(mount: &ActiveMount) -> PersonalVaultMountedVolume {
+    PersonalVaultMountedVolume {
+        drive_letter: mount.drive_letter.clone(),
+        internal_drive: mount.internal_drive,
+        presentation: mount.presentation,
+        cleanup_required: mount.cleanup_required,
+        browse_allowed: false,
+        quick_mount_receipt: None,
+        dismount_allowed: false,
+        dismount_reason: Some(VaultMountReason::PrivateOwnerRequired),
+        canonical_container_path: None,
+    }
 }
 
 fn same_mount_owner(
@@ -3937,6 +4116,8 @@ mod tests {
     include!("vault_syncthing_dismount_tests.rs");
     include!("vault_shared_per_user_dismount_tests.rs");
     include!("vault_quick_mount_receipt_tests.rs");
+    include!("vault_letter_sweep_tests.rs");
+    include!("vault_letter_report_tests.rs");
     include!("vault_policy_mount_tests.rs");
     use crate::vault_access::{AclApplier, AclSnapshot, PrincipalResolver, VaultAclPlan, VaultFs};
     use std::path::{Path, PathBuf};
@@ -4443,6 +4624,7 @@ mod tests {
             "live",
             "missing_logon",
             "foreign_owner",
+            "foreign_signed_out",
             "foreign_personal_live",
             "foreign_personal_replaced",
             "sync_recovery",
@@ -4471,9 +4653,18 @@ mod tests {
             if case == "missing_logon" {
                 mount.authentication_id = None;
             }
-            if matches!(case, "foreign_owner" | "foreign_personal_live" | "foreign_personal_replaced") {
+            if matches!(
+                case,
+                "foreign_owner"
+                    | "foreign_signed_out"
+                    | "foreign_personal_live"
+                    | "foreign_personal_replaced"
+            ) {
                 mount.caller_sid = "other-owner".into();
                 mount.personal = case != "foreign_owner";
+            }
+            if case == "foreign_signed_out" {
+                broker.owner_logon_probe = |_| Ok(true);
             }
             if case == "sync_recovery" {
                 mount.syncthing_resume_unresolved = true;
@@ -4505,18 +4696,13 @@ mod tests {
                         cleanup_calls += 1;
                         case != "alias_unknown"
                     },
+                    |_| HashMap::new(),
+                    None,
                 )
                 .unwrap();
-            assert_eq!(
-                result["released"],
-                if case == "stale" { 1 } else { 0 },
-                "{case}"
-            );
-            assert_eq!(
-                broker.active.lock().unwrap().is_empty(),
-                case == "stale",
-                "{case}"
-            );
+            let releases = matches!(case, "stale" | "foreign_signed_out");
+            assert_eq!(result["released"], u8::from(releases), "{case}");
+            assert_eq!(broker.active.lock().unwrap().is_empty(), releases, "{case}");
             if matches!(case, "alias_unknown" | "foreign_personal_live" | "foreign_personal_replaced") {
                 let report = result["letters"]
                     .as_array()
@@ -4532,7 +4718,10 @@ mod tests {
                     assert!(report.get("other_account_personal_vault").is_none());
                 }
             }
-            if !matches!(case, "stale" | "alias_unknown" | "persistence_failed") {
+            if !matches!(
+                case,
+                "stale" | "foreign_signed_out" | "alias_unknown" | "persistence_failed"
+            ) {
                 assert_eq!(cleanup_calls, 0, "{case}");
             }
         }
@@ -5534,7 +5723,7 @@ mod tests {
             active_mount_for_owner(99, "another-sid"),
         );
         assert_eq!(
-            broker.select_mount_letter(&store, Some("v"), "another-container"),
+            broker.select_mount_letter(&store, Some("v"), "another-container", "caller"),
             Err(VaultMountReason::EngineDriveLetterUnavailable)
         );
         assert_eq!(
@@ -5543,7 +5732,7 @@ mod tests {
         );
         assert_eq!(
             broker
-                .select_mount_letter(&store, None, "another-container")
+                .select_mount_letter(&store, None, "another-container", "caller")
                 .unwrap(),
             "Z"
         );

@@ -388,6 +388,8 @@ async fn run(mut stop_rx: Option<tokio::sync::watch::Receiver<bool>>) {
         }
     };
     vault_access.load_at_startup_after_mount_cleanup(&recovered_mount_identities);
+    // A crash or a dismount from another logon can leave a letter linked to a closed volume.
+    vault_mount.sweep_dead_letters();
     vault_mount.start_cloud_backup_supervisor(Arc::clone(&vault_access));
 
     // Reconcile the legacy TEMP R: disk once per service start. On-demand

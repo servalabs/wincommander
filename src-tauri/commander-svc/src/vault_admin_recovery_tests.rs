@@ -54,8 +54,13 @@ fn administrator_cannot_recover_another_owners_private_mount_even_after_signout(
                 assert!(broker.retain_cleanup_mount(&store, "old", mount));
                 let allowed = false;
                 let rows = broker.personal_mounts_for_caller(&store, std::ptr::null_mut(), 8, "S-1-5-21-admin", elevated).unwrap();
-                assert_eq!(rows.len(), usize::from(allowed));
-                if allowed { assert!(rows[0].dismount_allowed && !rows[0].browse_allowed); }
+                // A signed-out owner's Vault is listed so its letter is explained, never offered for dismount.
+                assert_eq!(rows.len(), usize::from(ended));
+                if ended {
+                    assert!(!rows[0].dismount_allowed && !rows[0].browse_allowed);
+                    assert_eq!(rows[0].dismount_reason, Some(VaultMountReason::PrivateOwnerRequired));
+                    assert_eq!(rows[0].canonical_container_path, None);
+                }
                 let result = broker.dismount_personal_for_caller(&store, 1, 12, std::ptr::null_mut(), 8, "S-1-5-21-admin", elevated);
                 assert_eq!(result.state == VaultMountState::Unmounted, allowed);
                 let events = events.lock().unwrap();

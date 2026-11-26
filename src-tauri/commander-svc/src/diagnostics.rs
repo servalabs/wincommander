@@ -476,6 +476,31 @@ pub(crate) fn record_vault_failure(
     ));
 }
 
+/// Records what held each inspected drive letter and whether its link was removed.
+pub(crate) fn record_vault_letter_holders(context: BTreeMap<String, String>, started: Instant) {
+    if context.is_empty() {
+        return;
+    }
+    let mut event = vault_event(
+        "vault-letter-holders",
+        "letter_holders",
+        DiagnosticOutcome::Succeeded,
+        "VLT.LETTER.HOLDERS",
+        DiagnosticSeverity::Info,
+        false,
+        "none",
+        started,
+        context.into_iter().take(32).collect(),
+    );
+    event.stage = "inspect".into();
+    #[cfg(not(test))]
+    std::thread::spawn(move || {
+        let _ = record_event(event);
+    });
+    #[cfg(test)]
+    let _ = event;
+}
+
 /// A creation completes only after its caller-specific service route has
 /// either registered a file identity or the signed broker has revalidated the
 /// reviewed raw-device identity.  The persisted record is intentionally

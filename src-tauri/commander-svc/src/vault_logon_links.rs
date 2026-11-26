@@ -5,13 +5,20 @@ use super::{Api, GlobalEncryptedLinkCleanup};
 #[path = "vault_logon_liveness.rs"]
 mod liveness;
 pub(crate) use liveness::logon_ended;
+#[path = "vault_logon_drive_report.rs"]
+mod drive_report;
 #[path = "vault_logon_links_native.rs"]
 mod native;
 #[path = "vault_logon_links_scope.rs"]
 mod scope;
-#[path = "vault_logon_drive_report.rs"]
-mod drive_report;
 pub(crate) use drive_report::session_drive_mappings;
+#[path = "vault_letter_holders.rs"]
+mod holders;
+pub(crate) use holders::{holder_diagnostics, LetterHolder, LetterRelease};
+#[cfg(not(test))]
+pub(crate) use holders::{letter_holders, release_stale_letters};
+#[cfg(test)]
+pub(crate) use holders::{HolderKind, LogonState};
 #[cfg(test)]
 #[path = "vault_logon_links_tests.rs"]
 mod tests;
