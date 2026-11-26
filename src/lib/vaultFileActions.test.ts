@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { resolveVaultFilePath, vaultKindFromContainer } from "./vaultFileActions";
+import { resolveVaultFilePath } from "./vaultFileActions";
 
 describe("vault file targets", () => {
   const names = [
@@ -20,10 +20,5 @@ describe("vault file targets", () => {
     expect(resolveVaultFilePath({ path: null, label: "Twin" }, names)).toBe("");
     expect(resolveVaultFilePath({ path: null, label: "Other" }, names)).toBe("");
     expect(resolveVaultFilePath({ path: null }, names)).toBe("");
-  });
-
-  test("a dual container is a decoy vault", () => {
-    expect(vaultKindFromContainer("dual")).toBe("decoy");
-    expect(vaultKindFromContainer("standard")).toBe("standard");
   });
 });

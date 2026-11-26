@@ -26,19 +26,22 @@ lists only a selection of those changes.
 - Add Change Password (Pro) next to Rename in the same places, with "Change
   password of a vault file…" under Encrypted Volumes. It changes
   the password, and optionally the PIM or keyfile, of a dismounted vault file.
-  You enter only the current password; the new service verb
-  `svc.vault.probe_password` has the engine try the hidden and the outer
-  header every time, with the same work on every vault, and the password then
-  changes the header it opened. After the real password of a decoy vault has
-  changed, the decoy password can be changed too; only that step, which
-  carries the just-proven real password, refuses a new decoy password equal to
-  the real one. A wrong password gives the same `wrong_password` on every
-  vault. A Vault managed in Vault Permissions is refused with
-  `vault_policy_managed`. The service checks that the vault is yours (or one
+  You enter one current password and press Continue; WinCommander checks it
+  first and then asks for the new password, with no vault type to choose. The
+  engine tries the hidden and the outer header every time, with the same work
+  on every vault, and the password changes the header it opened. A wrong
+  password says only "Wrong password.". When the password you entered is the
+  real password of a decoy vault, the dialog then asks "Also change the decoy
+  password?"; each change says which password changed and that the other one
+  still works, a wrong decoy password keeps the real-password change, and only
+  that step refuses a new decoy password equal to the real one. A Vault managed
+  in Vault Permissions is refused with a pointer there. The dialog names a
+  missing, locked or inaccessible vault file, and says when the engine kept the
+  original header. The service checks that the vault is yours (or one
   WinCommander has no record of), that it is the registered file, and that
-  nothing has it mounted. If writing a header fails, the original header is
-  written back. Header backups and copies made earlier still open with the old
-  password. Needs a Pro release with the matching password-change engine.
+  nothing has it mounted. Header backups and copies made earlier still open
+  with the old password. Needs a Pro release with the matching password-change
+  engine.
 - Fix Change Password and Rename refusing a vault path pasted with Explorer's
   "Copy as path" (wrapped in quotes) with "Check the vault file ...". The
   service now reads a quoted path as the same file.

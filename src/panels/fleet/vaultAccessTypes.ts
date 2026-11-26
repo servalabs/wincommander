@@ -63,9 +63,6 @@ export const VAULT_MOUNT_REASONS = [
   "new_password_collides",
   "weak_new_password",
   "engine_failed",
-  "wrong_decoy_password",
-  "wrong_real_password",
-  "wrong_both_passwords",
 ] as const;
 export type VaultMountReason = typeof VAULT_MOUNT_REASONS[number];
 
@@ -108,9 +105,6 @@ const VAULT_MOUNT_REASON_LABELS: Record<VaultMountReason, string> = {
   new_password_collides: "The new password is the same as the other password of this decoy vault. Choose a different one",
   weak_new_password: "The new password is too weak. Use a longer password",
   engine_failed: "The encrypted-volume engine could not change this Vault's password",
-  wrong_decoy_password: "The current decoy password is wrong",
-  wrong_real_password: "The current real password is wrong, or this vault has only one password",
-  wrong_both_passwords: "Both current passwords are wrong",
 };
 
 export interface VaultGrantInput {

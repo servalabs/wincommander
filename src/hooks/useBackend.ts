@@ -7,7 +7,13 @@ import { createSearchMaintenanceClient } from "../lib/searchMaintenanceClient";
 import { createBackendRequestTracker } from "../lib/backendRequestTracker";
 import { requestDestructiveCapability } from "./destructiveAuthz";
 import { afterVaultMutation } from "../lib/vaultChangeEvents";
-import { buildPasswordChangeRequest, type VaultPasswordChangeForm, type VaultPasswordChangeResult } from "../lib/vaultPasswordChange";
+import {
+  buildPasswordChangeRequest,
+  buildPasswordProbeRequest,
+  type HeaderCredentials,
+  type VaultPasswordChangeResult,
+  type VaultPasswordHeader,
+} from "../lib/vaultPasswordChange";
 import type { VaultSyncWarning } from "../lib/vaultSyncWarning";
 import type { PersonalVaultSyncEnrollment, VaultSyncRecoveryAction } from "../lib/vaultSyncRecovery";
 import type { VaultSyncAction, VaultSyncManagementResult } from "../types/generated/ipc";
@@ -2050,8 +2056,10 @@ export function useBackend(retainCleanupScanErrors = false) {
           DeviceLabel: params.Device.label,
         } : {}),
       }),
-    changeVolumePassword: (form: VaultPasswordChangeForm) =>
-      afterVaultMutation(() => execute<VaultPasswordChangeResult>("Set-EncryptionVolumePassword", buildPasswordChangeRequest(form))),
+    probeVolumePassword: (volumePath: string, credentials: HeaderCredentials) =>
+      execute<unknown>("Test-EncryptionVolumePassword", buildPasswordProbeRequest(volumePath, credentials)),
+    changeVolumePassword: (volumePath: string, target: VaultPasswordHeader, credentials: HeaderCredentials) =>
+      afterVaultMutation(() => execute<VaultPasswordChangeResult>("Set-EncryptionVolumePassword", buildPasswordChangeRequest(volumePath, target, credentials))),
     createDualVolume: (params: CreateDualVolumeParams) =>
       execute("Create-DualVolume", {
         TargetKind: params.TargetKind ?? "file",
