@@ -1,4 +1,4 @@
-import { vaultLetterReportMessage, type VaultLetterReport } from "@/lib/vaultLetterCleanup";
+import { freedLettersSummary, vaultLetterReportMessage, type VaultLetterReport } from "@/lib/vaultLetterCleanup";
 import { Button, Icon, Dialog, FormGroup, InputGroup, Tooltip, CheckboxControl } from "@/components/ui/bp";
 import { useState, useCallback, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -201,11 +201,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
       setLetterReports(result.data.letters);
       const refreshed = await refreshMountLetters();
       if (!refreshed) { showError("Cleanup returned a result, but current drive availability could not be refreshed. Check status before mounting."); return; }
-      showSuccess(
-        result.data.released === 0
-          ? "Drive letters checked. No stale Vault mappings were released."
-          : `Cleared ${result.data.released} stale Vault drive mapping${result.data.released === 1 ? "" : "s"}.`,
-      );
+      showSuccess(freedLettersSummary(result.data.letters) ?? "Drive letters checked. No stale Vault mappings were released.");
     } finally {
       setReleasingOrphanedLetters(false);
       letterCleanupInFlight.current = false;

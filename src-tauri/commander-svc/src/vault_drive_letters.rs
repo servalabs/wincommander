@@ -5,9 +5,13 @@
 mod logon_links;
 pub(crate) use logon_links::{
     cleanup_ended_logon_encrypted_link, cleanup_owned_caller_link,
-    cleanup_owned_logon_encrypted_link, ended_logon_encrypted_link_absent, logon_ended,
-    session_drive_mappings,
+    cleanup_owned_logon_encrypted_link, ended_logon_encrypted_link_absent, holder_diagnostics,
+    logon_ended, session_drive_mappings, LetterHolder, LetterRelease,
 };
+#[cfg(not(test))]
+pub(crate) use logon_links::{letter_holders, release_stale_letters};
+#[cfg(test)]
+pub(crate) use logon_links::{HolderKind, LogonState};
 
 use std::{collections::HashSet, ffi::c_void, mem::size_of};
 use windows_sys::Win32::{

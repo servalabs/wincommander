@@ -17,7 +17,7 @@ pub(crate) enum SessionDriveMapping {
     OtherAccount,
 }
 
-fn network_target(target: &str) -> bool {
+pub(super) fn network_target(target: &str) -> bool {
     let lower = target.to_ascii_lowercase();
     [
         r"\device\mup",

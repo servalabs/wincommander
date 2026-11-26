@@ -272,6 +272,24 @@ pub(super) fn cleanup_private_alias(mount: &ActiveMount) -> Result<bool, ()> {
 }
 
 #[cfg_attr(test, allow(dead_code))]
+pub(super) fn cleanup_mounting_logon_alias(mount: &ActiveMount) -> Result<bool, ()> {
+    let logon = mount.authentication_id.ok_or(())?;
+    let letter = mount.drive_letter.strip_suffix(':').ok_or(())?;
+    if letter.len() != 1 || !letter.as_bytes()[0].is_ascii_alphabetic() {
+        return Err(());
+    }
+    use crate::vault_drive_letters::GlobalEncryptedLinkCleanup;
+    Ok(matches!(
+        crate::vault_drive_letters::cleanup_owned_caller_link(
+            logon,
+            letter.as_bytes()[0].to_ascii_uppercase() as char,
+            mount.internal_drive,
+        )?,
+        GlobalEncryptedLinkCleanup::Absent | GlobalEncryptedLinkCleanup::Removed
+    ))
+}
+
+#[cfg_attr(test, allow(dead_code))]
 pub(super) fn cleanup_owned_private_alias(mount: &ActiveMount) -> Result<bool, ()> {
     let logon = mount.authentication_id.ok_or(())?;
     let letter = mount.drive_letter.strip_suffix(':').ok_or(())?;

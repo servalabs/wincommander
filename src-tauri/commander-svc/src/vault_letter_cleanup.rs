@@ -11,6 +11,7 @@ enum Category {
     DuplicateSavedEntry,
     SystemOrPolicyReservedLetter,
     ExternalOrUnknownOwner,
+    StaleDriveMapping,
 }
 
 fn category(
@@ -87,6 +88,8 @@ impl VaultMountBroker {
                     (self.private_alias_cleanup)(mount) == Ok(true)
                 }
             },
+            |letters| self.release_stale_letters_locked(letters, Some(sid)),
+            caller_is_administrator.then_some(crate::vault_access::account_label_for_sid),
         )?;
         let Some(reports) = result["letters"].as_array_mut() else {
             return Ok(result);
@@ -131,6 +134,8 @@ impl VaultMountBroker {
         saved: &[String],
         real_volume: impl Fn(char) -> bool,
         mut cleanup_alias: impl FnMut(&ActiveMount, char) -> bool,
+        release_dead_links: impl FnOnce(&HashSet<char>) -> HashMap<char, LetterRelease>,
+        account_name: Option<fn(&str) -> Option<String>>,
     ) -> Result<serde_json::Value, &'static str> {
         const UNKNOWN: &str = "vault_drive_letter_cleanup_failed";
         if self.recovery.lock().map_or(true, |state| {
@@ -144,6 +149,18 @@ impl VaultMountBroker {
         let occupied = (self.drive_letter_probe)().map_err(|_| UNKNOWN)?;
         let policy = store.reserved_letters(None).map_err(|_| UNKNOWN)?;
         let active = self.active.lock().map_err(|_| UNKNOWN)?.clone();
+        let mapped = occupied
+            .iter()
+            .filter(|letter| letter.len() == 1)
+            .filter_map(|letter| letter.chars().next())
+            .filter(|letter| ('D'..='Z').contains(letter))
+            .collect::<HashSet<_>>();
+        let mut releases = if mapped.is_empty() {
+            HashMap::new()
+        } else {
+            release_dead_links(&mapped)
+        };
+        let remaining = (self.drive_letter_probe)().map_err(|_| UNKNOWN)?;
         let mut reports = Vec::new();
         let mut released = 0;
         // The picker and cleanup support D–Z; do not report A–C as if they
@@ -169,7 +186,8 @@ impl VaultMountBroker {
             }
             let own = mounts.first().filter(|(_, mount)| {
                 mounts.len() == 1
-                    && mount.caller_sid == sid
+                    // A signed-out owner's closed Vault no longer needs that owner to clean it up.
+                    && (mount.caller_sid == sid || self.owner_logon_ended(mount))
                     && mount.engine_mount_identity.is_some()
                     && !snapshot.contains_key(&mount.internal_drive)
                     && !requires_syncthing_pause(mount)
@@ -209,8 +227,24 @@ impl VaultMountBroker {
                     kind = Category::ExternalOrUnknownOwner;
                 }
             }
+            let mut holder = None;
+            if kind == Category::ExternalOrUnknownOwner && mounts.is_empty() {
+                if let Some(release) = releases.remove(&letter) {
+                    if release.released() > 0 && !remaining.contains(&key) {
+                        kind = Category::StaleDriveMapping;
+                        was_released = true;
+                        released += 1;
+                    }
+                    holder = release
+                        .reported()
+                        .map(|holder| holder_report(holder, sid, account_name));
+                }
+            }
             let mut report = serde_json::json!({ "letter": key, "category": kind, "released": was_released,
                 "saved_entry": saved_count > 0, "vault_policy_reservation": policy.contains(&key) });
+            if let Some(holder) = holder {
+                report["holder"] = holder;
+            }
             if kind == Category::ActiveWincommanderMount
                 && matches!(mounts.as_slice(), [(_, mount)]
                     if mount.personal
@@ -236,6 +270,34 @@ impl VaultMountBroker {
             serde_json::json!({ "released": released, "letters": reports, "unavailable_letters": unavailable }),
         )
     }
+}
+
+/// Another account's name is included only when `account_name` is given (administrators).
+fn holder_report(
+    holder: &LetterHolder,
+    caller_sid: &str,
+    account_name: Option<fn(&str) -> Option<String>>,
+) -> serde_json::Value {
+    let mut report = serde_json::json!({
+        "kind": holder.kind,
+        "scope": if holder.logon.is_some() { "session" } else { "machine" },
+        "logon_state": holder.state,
+        "device_present": holder.device_present,
+    });
+    if let Some(owner) = &holder.owner_sid {
+        let is_caller = owner == caller_sid;
+        report["owner_is_caller"] = serde_json::json!(is_caller);
+        let name = account_name
+            .filter(|_| !is_caller)
+            .and_then(|lookup| lookup(owner))
+            .filter(|name| {
+                !name.trim().is_empty() && name.len() <= 256 && !name.chars().any(char::is_control)
+            });
+        if let Some(name) = name {
+            report["owner"] = serde_json::json!(name);
+        }
+    }
+    report
 }
 
 fn external_letter(report: &serde_json::Value) -> Option<char> {

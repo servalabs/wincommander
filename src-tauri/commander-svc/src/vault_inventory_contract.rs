@@ -45,6 +45,16 @@ pub(super) fn reply(
     version: InventoryVersion,
     mounts: &[PersonalVaultMountedVolume],
 ) -> Result<Value, serde_json::Error> {
+    if version == InventoryVersion::QuickMountReceipts {
+        return serde_json::to_value(mounts);
+    }
+    // Bulk dismount and its cleanup check act only on rows this caller may close.
+    let owned = mounts
+        .iter()
+        .filter(|mount| !is_foreign_stale_row(mount))
+        .cloned()
+        .collect::<Vec<_>>();
+    let mounts = owned.as_slice();
     match version {
         InventoryVersion::QuickMountReceipts => serde_json::to_value(mounts),
         InventoryVersion::Current | InventoryVersion::VerifyCleanup => {
@@ -73,6 +83,12 @@ pub(super) fn reply(
                 .collect(),
         )),
     }
+}
+
+fn is_foreign_stale_row(mount: &PersonalVaultMountedVolume) -> bool {
+    !mount.dismount_allowed
+        && mount.dismount_reason
+            == Some(wincmd_shared::vault_access::VaultMountReason::PrivateOwnerRequired)
 }
 
 #[cfg(test)]
@@ -176,5 +192,31 @@ mod tests {
             &json!({"personal":true,"inventory_version":2,"quick_mount_receipts":false})
         )
         .is_none());
+    }
+
+    #[test]
+    fn another_accounts_stale_vault_is_shown_but_never_sent_to_bulk_dismount() {
+        let mut foreign = fixture();
+        foreign.drive_letter = "T:".into();
+        foreign.dismount_reason = Some(VaultMountReason::PrivateOwnerRequired);
+        foreign.canonical_container_path = None;
+        let rows = [fixture(), foreign];
+        assert_eq!(
+            reply(InventoryVersion::QuickMountReceipts, &rows)
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        for version in [
+            InventoryVersion::Current,
+            InventoryVersion::VerifyCleanup,
+            InventoryVersion::Legacy,
+        ] {
+            let response = reply(version, &rows).unwrap();
+            assert_eq!(response.as_array().unwrap().len(), 1, "{version:?}");
+            assert_eq!(response[0]["drive_letter"], "V:");
+        }
     }
 }
