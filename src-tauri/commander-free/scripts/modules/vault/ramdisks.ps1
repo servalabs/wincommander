@@ -486,19 +486,48 @@ function Get-SystemRamInfo {
     }
 }
 
-function _Test-RamDiskUserModifyAccess {
-    param([System.Security.AccessControl.DirectorySecurity]$Acl,
-        [System.Security.Principal.SecurityIdentifier]$User)
-    $modify = [System.Security.AccessControl.FileSystemRights]::Modify
+function _Get-RamDiskMachineAccessRules {
     $inherit = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
         [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+    $full = [System.Security.AccessControl.FileSystemRights]::FullControl
+    # Authenticated Users, never Everyone, so anonymous logons stay excluded.
+    $grants = @(
+        @{ sid = 'S-1-5-18'; rights = $full },
+        @{ sid = 'S-1-5-32-544'; rights = $full },
+        @{ sid = 'S-1-5-11'; rights = [System.Security.AccessControl.FileSystemRights]::Modify }
+    )
+    return @($grants | ForEach-Object {
+        New-Object System.Security.AccessControl.FileSystemAccessRule(
+            (New-Object System.Security.Principal.SecurityIdentifier($_.sid)), $_.rights, $inherit,
+            [System.Security.AccessControl.PropagationFlags]::None,
+            [System.Security.AccessControl.AccessControlType]::Allow)
+    })
+}
+
+function _Test-RamDiskAccessRule {
+    param([System.Security.AccessControl.DirectorySecurity]$Acl,
+        [System.Security.AccessControl.FileSystemAccessRule]$Rule)
     return @($Acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) | Where-Object {
-        $_.IdentityReference -eq $User -and
+        $_.IdentityReference -eq $Rule.IdentityReference -and
         $_.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow -and
-        ($_.FileSystemRights -band $modify) -eq $modify -and
-        ($_.InheritanceFlags -band $inherit) -eq $inherit -and
+        ($_.FileSystemRights -band $Rule.FileSystemRights) -eq $Rule.FileSystemRights -and
+        ($_.InheritanceFlags -band $Rule.InheritanceFlags) -eq $Rule.InheritanceFlags -and
         $_.PropagationFlags -eq [System.Security.AccessControl.PropagationFlags]::None
     }).Count -gt 0
+}
+
+function _Test-RamDiskMachineAccess {
+    param([System.Security.AccessControl.DirectorySecurity]$Acl)
+    return @(_Get-RamDiskMachineAccessRules | Where-Object {
+        -not (_Test-RamDiskAccessRule -Acl $Acl -Rule $_)
+    }).Count -eq 0
+}
+
+function _Add-RamDiskMachineAccess {
+    param([System.Security.AccessControl.DirectorySecurity]$Acl)
+    foreach ($rule in _Get-RamDiskMachineAccessRules) {
+        if (-not (_Test-RamDiskAccessRule -Acl $Acl -Rule $rule)) { $Acl.AddAccessRule($rule) }
+    }
 }
 
 function _Get-RamDiskFilesystem {
@@ -509,8 +538,6 @@ function _Get-RamDiskFilesystem {
 function _Ensure-RamDiskWritableAccess {
     param([string]$Letter, [int]$DeviceNumber, [bool]$ReadOnly = $false)
     if ($ReadOnly) { return }
-    $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-    if ($user.IsWellKnown([System.Security.Principal.WellKnownSidType]::LocalSystemSid)) { return }
     $root = "${Letter}:\"
     if ((_Get-RamDiskFilesystem -Letter $Letter) -ine 'NTFS') { return }
     if ((_Get-ImDiskMountOwner -Letter $Letter) -ne $DeviceNumber) {
@@ -520,22 +547,16 @@ function _Ensure-RamDiskWritableAccess {
     if ((_Get-ImDiskMountOwner -Letter $Letter) -ne $DeviceNumber) {
         throw "${Letter}: changed while checking RAM disk write access"
     }
-    if (_Test-RamDiskUserModifyAccess -Acl $acl -User $user) { return }
-    # Elevated creation otherwise leaves normal apps unable to edit admin-owned files.
-    $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-        $user, [System.Security.AccessControl.FileSystemRights]::Modify,
-        ([System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
-            [System.Security.AccessControl.InheritanceFlags]::ObjectInherit),
-        [System.Security.AccessControl.PropagationFlags]::None,
-        [System.Security.AccessControl.AccessControlType]::Allow)
-    $acl.AddAccessRule($rule)
+    if (_Test-RamDiskMachineAccess -Acl $acl) { return }
+    # The drive is global, so every account, not only the creator, must be able to save here.
+    _Add-RamDiskMachineAccess -Acl $acl
     if ((_Get-ImDiskMountOwner -Letter $Letter) -ne $DeviceNumber) {
         throw "${Letter}: changed before applying RAM disk write access"
     }
     Set-Acl -LiteralPath $root -AclObject $acl -ErrorAction Stop
     $verified = Get-Acl -LiteralPath $root -ErrorAction Stop
     if ((_Get-ImDiskMountOwner -Letter $Letter) -ne $DeviceNumber -or
-        -not (_Test-RamDiskUserModifyAccess -Acl $verified -User $user)) {
+        -not (_Test-RamDiskMachineAccess -Acl $verified)) {
         throw "${Letter}: RAM disk write access could not be verified"
     }
 }

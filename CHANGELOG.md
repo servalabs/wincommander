@@ -10,6 +10,14 @@ lists only a selection of those changes.
 
 ## Unreleased
 
+- Fix RAM disks being writable only by the Windows account that created them:
+  other users on the same PC saw the drive (for example "TEMP (R:)") but got
+  "You don't have permission to save in this location". An NTFS RAM disk made
+  from Secure Storage or by the Startup RAM disk switch now gives every
+  signed-in account (Authenticated Users) Modify on the drive and everything
+  saved in it, with full control for SYSTEM and Administrators. Nothing is
+  granted to Everyone or anonymous logons. A RAM disk an older build already
+  mounted gets the same permissions the next time WinCommander reuses it.
 - Fix Stealth mode leaving no Calculator shortcut: with Hide WinCommander
   already on, turning the Calculator lock on restored the WinCommander
   shortcuts to the Hide snapshot instead of replacing them, so the Start menu
