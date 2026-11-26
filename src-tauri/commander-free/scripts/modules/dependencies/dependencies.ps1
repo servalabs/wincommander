@@ -705,18 +705,18 @@ function Resolve-QpdfExe {
 function Test-MetadataScrubberInstalled {
     $exiftool = Resolve-ExifToolExe
     $qpdf = Resolve-QpdfExe
-    if (-not $exiftool -or -not $qpdf) { return @{ installed = $false; version = $null } }
+    if (-not $exiftool -or -not $qpdf) { return @{ installed = $false; version = $null; versions = $null } }
     $exiftoolVersion = $null
     $qpdfVersion = $null
-    try {
-        $verOut = & $exiftool -ver 2>$null
-        if ($verOut) { $exiftoolVersion = ($verOut -join '').Trim() }
-    } catch {}
-    try {
-        $verOut = & $qpdf --version 2>$null
-        if ($verOut) { $qpdfVersion = ($verOut -join '').Trim() }
-    } catch {}
-    return @{ installed = $true; version = "ExifTool $exiftoolVersion; $qpdfVersion" }
+    try { $exiftoolVersion = Get-ScrubEngineVersion (& $exiftool -ver 2>$null) '^\s*(\d+(?:\.\d+)+)' } catch {}
+    try { $qpdfVersion = Get-ScrubEngineVersion (& $qpdf --version 2>$null) 'qpdf version (\d+(?:\.\d+)+)' } catch {}
+    return @{ installed = $true; version = $exiftoolVersion; versions = @{ exiftool = $exiftoolVersion; qpdf = $qpdfVersion } }
+}
+
+function Get-ScrubEngineVersion([object[]]$Output, [string]$Pattern) {
+    # qpdf prints a copyright line after the version; keep only the number.
+    if (($Output -join "`n") -match $Pattern) { return $Matches[1] }
+    return $null
 }
 
 # Locates `ollama.exe` for the Local AI Advisor dep probe. winget drops it
@@ -1642,6 +1642,14 @@ function Get-DependencyStatus {
                 $cachedSearch.version = $searchStatus.version
                 $cachedSearch.missing = $searchStatus.missing
             }
+            # Older caches hold the garbled "ExifTool x; qpdf version y..." text.
+            $cachedScrubber = @($cached.status | Where-Object { $_.id -eq 'metadataScrubber' -and -not $_.PSObject.Properties['versions'] }) | Select-Object -First 1
+            if ($cachedScrubber) {
+                $scrubberStatus = Test-MetadataScrubberInstalled
+                $cachedScrubber.installed = [bool]$scrubberStatus.installed
+                $cachedScrubber.version = $scrubberStatus.version
+                $cachedScrubber | Add-Member -NotePropertyName versions -NotePropertyValue $scrubberStatus.versions
+            }
             $payload = @{ dependencies = $cached.status; cacheAgeSecs = $cached.cacheAgeSecs }
             $script:_depStatusCache     = $payload
             $script:_depStatusCacheTime = Get-Date
@@ -1678,6 +1686,7 @@ function Get-DependencyStatus {
             running   = if ($status.ContainsKey('running')) { $status.running } else { $null }
             connected = if ($status.ContainsKey('connected')) { $status.connected } else { $null }
             missing   = if ($status.ContainsKey('missing')) { $status.missing } else { $null }
+            versions  = if ($status.ContainsKey('versions')) { $status.versions } else { $null }
             canHide   = $dep.canHide
             canStart  = $dep.canStart
         }
