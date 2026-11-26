@@ -29,6 +29,7 @@ fn result(path: &str, categories: &[&str], residual: bool) -> ScrubResult {
         } else {
             vec![]
         },
+        cleaned_as: None,
     }
 }
 

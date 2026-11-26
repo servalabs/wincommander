@@ -123,6 +123,7 @@ fn describe(path: &Path, root: String, report: &ScrubReport, index: &Indexes) ->
             .collect();
         item.output_path = Some(r.output_path.clone()).filter(|p| !p.is_empty());
         item.dry_run = r.dry_run;
+        item.cleaned_as = r.cleaned_as.clone();
         return item;
     }
     let probe = Probe::of(path);

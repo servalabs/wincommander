@@ -14,6 +14,7 @@ fn report() -> ScrubReport {
             sample_values: vec!["secret-author-value".into()],
             dry_run: false,
             residual_fields: vec![],
+            cleaned_as: None,
         }],
         ..Default::default()
     }

@@ -65,6 +65,9 @@ pub struct ScrubResult {
     /// means the file is NOT safe to share. See commander-pro metadata_scrubber.
     #[serde(default)]
     pub residual_fields: Vec<StrippedField>,
+    /// Real type a misnamed file was cleaned as (Pro sends it only for a mismatch).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cleaned_as: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
