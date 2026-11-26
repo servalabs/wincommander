@@ -12,7 +12,7 @@ export interface VaultRenameRequest {
   containerPath: string;
   newName: string;
   password: string;
-  pim: number | null;
+  pim: string | null;
   keyfiles: string[];
 }
 
@@ -63,7 +63,8 @@ export function buildRenameRequest(volumePath: string, newName: string, credenti
     containerPath: cleanVaultPath(volumePath),
     newName,
     password: credentials.oldPassword,
-    pim: credentials.oldPim ? Number(credentials.oldPim) : null,
+    // The Tauri command takes the PIM as text, so a number would fail to deserialize.
+    pim: credentials.oldPim.trim() || null,
     keyfiles: keyfile ? [keyfile] : [],
   };
 }

@@ -57,7 +57,7 @@ describe("rename request", () => {
   test("carries the secrets only in the request, never in state after sending", () => {
     const typed = run(ready(), { type: "edit", field: "oldPim", value: "485" }, { type: "edit", field: "oldKeyfile", value: " D:\\key.bin " });
     expect(buildRenameRequest(`"${PATH}"`, typed.newName, typed.credentials)).toEqual({
-      containerPath: PATH, newName: "taxes", password: "secret", pim: 485, keyfiles: ["D:\\key.bin"],
+      containerPath: PATH, newName: "taxes", password: "secret", pim: "485", keyfiles: ["D:\\key.bin"],
     });
     const sent = run(typed, { type: "send" });
     expect(sent.busy).toBe(true);
