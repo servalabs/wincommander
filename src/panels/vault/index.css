@@ -1212,6 +1212,30 @@ input::-webkit-credentials-auto-fill-button {
   color: var(--color-text-primary);
 }
 
+/* Beats the Privacy panel's .mount-dialog.mount-dialog width once that panel has loaded. */
+.mount-dialog.mount-dialog.vault-file-dialog {
+  width: min(480px, calc(100vw - 32px)) !important;
+}
+
+.mount-dialog.vault-file-dialog--fit {
+  height: auto;
+}
+
+.vault-file-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 10px;
+}
+
+.vault-file-links button {
+  max-width: 100%;
+  height: auto;
+  min-height: 28px;
+  white-space: normal;
+  text-align: left;
+}
+
 .vault-volume-unavailable {
   display: block;
   margin-top: 3px;

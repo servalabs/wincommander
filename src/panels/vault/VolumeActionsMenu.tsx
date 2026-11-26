@@ -2,6 +2,7 @@ import { Button, Tooltip } from "@/components/ui/bp";
 import { useState } from "react";
 import useBackend from "../../hooks/useBackend";
 import VolumePropertiesDialog from "./VolumePropertiesDialog";
+import { MountedVaultFileButton } from "./VaultFileActionButtons";
 import TierGate from "../../components/shared/TierGate";
 import { showSuccess, showError } from "../../utils/toast";
 import { vaultOperationError } from "@/lib/vaultOperationFeedback";
@@ -123,6 +124,8 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = tru
           aria-label={`View properties for ${driveLabel}`}
         />
       </Tooltip>
+
+      <MountedVaultFileButton driveLabel={driveLabel} />
 
       <VaultCloudBackupButton compact driveLabel={driveLabel} internalDrive={internalDrive}
         disabled={!accessible || Boolean(statusError) || internalDrive === undefined} />

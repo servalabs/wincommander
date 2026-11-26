@@ -11,9 +11,9 @@ import { useAppState } from "../../context/AppContext";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useTheme } from "../../context/ThemeContext";
 import CreateVolumeWizard from "./CreateVolumeWizard";
-import ChangePasswordDialog from "./ChangePasswordDialog";
-import RenameVaultDialog from "./RenameVaultDialog";
+import { VaultFileLinks } from "./VaultFileActionButtons";
 import useVaultNames from "../../hooks/useVaultNames";
+import useVaultFileActions from "../../hooks/useVaultFileActions";
 import { findVaultName } from "@/lib/vaultRename";
 import VolumeActionsMenu from "./VolumeActionsMenu";
 import SystemEncryptionSection from "./SystemEncryptionSection";
@@ -138,9 +138,8 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
   const [mountRemovable, setMountRemovable] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [createWizardOpen, setCreateWizardOpen] = useState(false);
-  const [changePasswordOpen, setChangePasswordOpen] = useState(false);
-  const [renameOpen, setRenameOpen] = useState(false);
   const { names: vaultNames } = useVaultNames();
+  const { actions: vaultFileActions, dialogs: vaultFileDialogs } = useVaultFileActions();
   const { letters: availableLetters, loading: mountLettersLoading, unavailable: mountLettersUnavailable,
     refresh: refreshMountLetters } = useVaultDriveLetters();
   const [mountType, setMountType] = useState<'file' | 'partition'>('file');
@@ -507,22 +506,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
               onClick={() => openMountDialog()}
               className="vault-action-btn"
             />
-            <Button
-              minimal
-              icon="key"
-              text="Change Password"
-              onClick={() => setChangePasswordOpen(true)}
-              className="vault-action-btn"
-            />
           </TierGate>
-          {/* Free: a name is service-held data and needs no Pro engine. */}
-          <Button
-            minimal
-            icon="edit"
-            text="Rename"
-            onClick={() => setRenameOpen(true)}
-            className="vault-action-btn"
-          />
         </div>
 
         <VaultOperationNotice message={statusError ?? ""} />
@@ -608,6 +592,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
             </div>
           )}
         </div>
+        <VaultFileLinks actions={vaultFileActions} />
       </SectionCard>
 
       <CreateVolumeWizard
@@ -615,8 +600,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
         onClose={() => setCreateWizardOpen(false)}
         onCreated={() => { setCreateWizardOpen(false); refreshVault(true); }}
       />
-      <ChangePasswordDialog isOpen={changePasswordOpen} onClose={() => setChangePasswordOpen(false)} />
-      <RenameVaultDialog isOpen={renameOpen} onClose={() => setRenameOpen(false)} />
+      {vaultFileDialogs}
       <Dialog
         isOpen={mountDialogOpen}
         onClose={closeMountDialog}

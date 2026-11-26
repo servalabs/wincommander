@@ -10,7 +10,11 @@ lists only a selection of those changes.
 
 ## Unreleased
 
-- Add Rename to Secure Storage > Encrypted Volumes (Free). It changes only the
+- Add Rename (Free) to every vault row WinCommander shows: My vaults and
+  Manage saved Vaults (in Secure Storage and Fleet) and the Quick Mount vault
+  picker, plus "Rename a vault file…" under Secure Storage > Encrypted Volumes
+  for any other file. A mounted vault's row shows it disabled until the vault
+  is dismounted. It changes only the
   name WinCommander shows for a dismounted vault; the vault file keeps its file
   name and location. Your own vault can be renamed only by you; a shared Vault
   by its owner or an account with write access. A vault file WinCommander has
@@ -18,10 +22,13 @@ lists only a selection of those changes.
   mounted vault. Personal vault names are kept in their own file, so an older
   WinCommander version still opens your personal vaults (it just shows no
   names).
-- Add Change Password to Secure Storage > Encrypted Volumes (Pro). It changes
+- Add Change Password (Pro) next to Rename in the same places, with "Change
+  password of a vault file…" under Encrypted Volumes. It changes
   the password, and optionally the PIM or keyfile, of a dismounted vault file.
-  For a decoy vault you choose whether to change the decoy or the real
-  password; the other one is left as it was. The service checks that the
+  For a decoy vault you enter both current passwords and both new ones in one
+  step; both current passwords are checked before either is changed, and the
+  new decoy and real passwords must differ. You choose the vault type, because
+  the file does not show whether it has a hidden part. The service checks that the
   vault is yours (or that you own or can write a shared Vault), that it is the
   registered file, and that nothing has it mounted. Header backups and copies
   made earlier still open with the old password. Needs a Pro release with the
