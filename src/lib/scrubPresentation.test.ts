@@ -1,12 +1,15 @@
 import { describe, expect, test } from 'bun:test';
 import {
   classifyRemovedProperty,
+  FILE_DETAILS_AUTO_OPEN_MAX,
   formatEngineLine,
   groupRemovedProperties,
+  initiallyOpenFiles,
+  pairSampleValues,
   parseEngineVersions,
   scrubFileKind,
 } from './scrubPresentation';
-import type { StrippedField } from './scrubTypes';
+import type { ScrubResult, StrippedField } from './scrubTypes';
 
 describe('scrubFileKind', () => {
   for (const [path, kind, label] of [
@@ -135,5 +138,40 @@ describe('engine version line', () => {
   test('unparseable or missing text still yields the formats line, never raw text', () => {
     expect(formatEngineLine(parseEngineVersions('weird output'))).toBe('JPEG, PNG, HEIC, PDF, Office, RAW, Photoshop, MP4 and more');
     expect(formatEngineLine(parseEngineVersions(null))).not.toContain('null');
+  });
+});
+
+describe('pairSampleValues', () => {
+  const groups = groupRemovedProperties([
+    { category: 'exif', label: 'EXIF', bytes: 1, isIdentifying: true, details: ['Create Date', 'Camera or device model'] },
+  ]);
+
+  test('a sample naming a removed property is shown beside it; the rest stay loose examples', () => {
+    const { valueByDetail, unmatched } = pairSampleValues(groups, ['CreateDate: 2024:05:01', 'Lens Model: 50mm', 'no key here']);
+    expect([...valueByDetail]).toEqual([['Create Date', '2024:05:01']]);
+    expect(unmatched).toEqual([{ key: 'Lens Model', value: '50mm' }, { key: '', value: 'no key here' }]);
+  });
+
+  test('empty values are dropped and a second sample for the same property is not lost', () => {
+    const { valueByDetail, unmatched } = pairSampleValues(groups, ['Create Date:', 'Create Date: a', 'create_date: b']);
+    expect([...valueByDetail]).toEqual([['Create Date', 'a']]);
+    expect(unmatched).toEqual([{ key: 'create_date', value: 'b' }]);
+  });
+});
+
+describe('initiallyOpenFiles', () => {
+  const file = (name: string, residual = false): ScrubResult => ({
+    inputPath: `C:\\p\\${name}`, outputPath: '', fileType: 'jpg', bytesIn: 1, bytesOut: 1, fieldsStripped: [],
+    ...(residual ? { residualFields: [{ category: 'exif', label: 'Serial', bytes: 1, isIdentifying: true }] } : {}),
+  });
+
+  test(`up to ${FILE_DETAILS_AUTO_OPEN_MAX} files all start open`, () => {
+    const few = Array.from({ length: FILE_DETAILS_AUTO_OPEN_MAX }, (_, i) => file(`${i}.jpg`));
+    expect(initiallyOpenFiles(few).size).toBe(FILE_DETAILS_AUTO_OPEN_MAX);
+  });
+
+  test('a bigger batch starts collapsed except files that still carry data', () => {
+    const many = [...Array.from({ length: FILE_DETAILS_AUTO_OPEN_MAX + 1 }, (_, i) => file(`${i}.jpg`)), file('leak.jpg', true)];
+    expect([...initiallyOpenFiles(many)]).toEqual(['C:\\p\\leak.jpg']);
   });
 });

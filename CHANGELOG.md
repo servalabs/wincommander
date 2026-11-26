@@ -10,6 +10,18 @@ lists only a selection of those changes.
 
 ## Unreleased
 
+- Share Safely (Scrub Meta): each file in the results is now one full-width
+  section with a single toggle, instead of a two-column grid of cards with a
+  separate dropdown per kind of data. Collapsed, a file's header still shows
+  its name, type icon, how many items will be removed and a per-kind summary
+  ("Camera & device 2 · Dates & times 1 · Author & edits 1"). Expanded, it
+  shows every removed property under every kind at once, with the value found
+  in the original beside a property when the scan reported one. Up to three
+  files start open; larger batches start collapsed (except a file that still
+  holds data), with "Expand all" / "Collapse all" in the File details header,
+  and list 50 files at a time. In the "files not cleaned" list a file's reason
+  now sits on its own full-width line under the name, so a long reason no
+  longer wraps into a narrow column.
 - Fix RAM disks being writable only by the Windows account that created them:
   other users on the same PC saw the drive (for example "TEMP (R:)") but got
   "You don't have permission to save in this location". An NTFS RAM disk made
@@ -50,7 +62,7 @@ lists only a selection of those changes.
   6 nothing to remove"). Each file card shows a file-type icon instead of a
   grey text badge, keeps its explanations behind an (i) button, and groups
   the removed properties by kind (GPS / location, Camera & device, Dates &
-  times and so on), collapsed to names and counts. The engine line under the
+  times and so on). The engine line under the
   drop zone reads "ExifTool 13.59 · qpdf 12.4.2 · JPEG, PNG, …" instead of
   the garbled qpdf banner.
 - Share Safely now reports every file in a scrub, one entry per file, each

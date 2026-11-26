@@ -1,6 +1,6 @@
 // Pure presentation rules for the Share Safely (metadata scrubber) dialog:
-// file-type icon kind, removed-property grouping, and engine version line.
-import type { StrippedField } from './scrubTypes';
+// file-type icon kind, removed-property grouping, sample values, and engine version line.
+import type { ScrubResult, StrippedField } from './scrubTypes';
 
 export type ScrubFileKind =
   | 'images' | 'raw' | 'vector' | 'pdf' | 'word' | 'excel' | 'slides'
@@ -151,6 +151,59 @@ export function groupRemovedProperties(fields: readonly FieldWithGroup[]): Remov
     );
     return [{ id, label, isIdentifying: properties.some((p) => p.isIdentifying), properties }];
   });
+}
+
+export function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+export interface SampleValue {
+  key: string;
+  value: string;
+}
+
+export function parseSampleValue(s: string): SampleValue {
+  const idx = s.indexOf(':');
+  if (idx > 0 && idx < 50) {
+    const rawKey = s.slice(0, idx).trim();
+    const cleanKey = rawKey
+      .replace(/^GPS\s+/i, '')
+      .replace(/([a-z])([A-Z])/g, '$1 $2')
+      .replace(/([A-Z]{2,})([A-Z][a-z])/g, '$1 $2');
+    return { key: cleanKey, value: s.slice(idx + 1).trim() };
+  }
+  return { key: '', value: s };
+}
+
+const nameKey = (name: string) => name.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+/** Attaches each original-file sample to the removed property of the same name;
+ *  samples that name no removed property stay as loose examples. */
+export function pairSampleValues(
+  groups: readonly RemovedPropertyGroup[],
+  samples: readonly string[],
+): { valueByDetail: Map<string, string>; unmatched: SampleValue[] } {
+  const detailByKey = new Map(groups.flatMap((g) => g.properties.map((p) => [nameKey(p.detail), p.detail] as const)));
+  const valueByDetail = new Map<string, string>();
+  const unmatched: SampleValue[] = [];
+  for (const sample of samples.map(parseSampleValue)) {
+    if (!sample.value) continue;
+    const detail = detailByKey.get(nameKey(sample.key));
+    if (sample.key && detail && !valueByDetail.has(detail)) valueByDetail.set(detail, sample.value);
+    else unmatched.push(sample);
+  }
+  return { valueByDetail, unmatched };
+}
+
+export const FILE_DETAILS_AUTO_OPEN_MAX = 3;
+
+/** A handful of files all start open; in a big batch only files that still
+ *  carry data do, so a not-safe-to-share file is never hidden behind a click. */
+export function initiallyOpenFiles(results: readonly ScrubResult[]): Set<string> {
+  const isFew = results.length <= FILE_DETAILS_AUTO_OPEN_MAX;
+  return new Set(results.filter((r) => isFew || (r.residualFields?.length ?? 0) > 0).map((r) => r.inputPath));
 }
 
 export interface EngineVersions {
