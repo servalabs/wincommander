@@ -18,7 +18,7 @@ export interface VaultFileRequest {
   id: number;
   dialog: "password" | "rename";
   path: string;
-  /** A row's own vault stays fixed; only the "Other vault file" entry lets the person pick a file. */
+  /** A row's own vault stays fixed; only the Encrypted Volumes More menu lets the person pick a file. */
   pathLocked: boolean;
   open: boolean;
   onRenamed?: (path: string) => void;

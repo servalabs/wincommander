@@ -3,6 +3,33 @@
   min-width: 0;
 }
 
+/* A grid, not the shared wrapping flex row, so the More button never wraps away from the row's right end. */
+.vault-volumes-card .vault-card-action-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+}
+
+.vault-volumes-card .vault-card-action-row .vault-action-btn {
+  min-width: 0;
+}
+
+.vault-volumes-card .vault-card-more {
+  grid-column: -2 / -1;
+  grid-row: 1;
+  height: auto;
+}
+
+.vault-volumes-card .vault-card-action-row > .tier-gate-locked {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+
+@container vault-volumes (max-width: 360px) {
+  .vault-volumes-card .vault-card-action-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+}
+
 .vault-volumes-card .section-header-row,
 .vault-volume-header-actions {
   flex-wrap: wrap;

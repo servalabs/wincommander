@@ -32,9 +32,11 @@ lists only a selection of those changes.
   vaults, the selected Quick Mount vault, and the More (⋯) menu of each saved
   Vault in Vault Permissions, where they are disabled with a dismount hint
   while the Vault is mounted. Mounted rows under Encrypted Volumes and Cloud
-  backup no longer show a key button. One "Other vault file…" menu under
-  Encrypted Volumes replaces the two links and opens either dialog for a file
-  no list shows. In Vault Permissions, Change Password, Rename, Repair shared
+  backup no longer show a key button. Under Encrypted Volumes, a More (⋯)
+  button at the right end of the Create Volume and Mount Volume row replaces
+  the two links and opens either dialog for a vault file you choose, including
+  one no list shows; it stays on that row at narrow widths. In Vault
+  Permissions, Change Password, Rename, Repair shared
   access, Forget policy and Remove policy moved into the More menu, so each
   saved Vault keeps one line of buttons. Both dialogs size to their content,
   show progress next to their buttons instead of stacked notices, and show the

@@ -1285,10 +1285,6 @@ input::-webkit-credentials-auto-fill-button {
   line-height: 1.4;
 }
 
-.vault-file-other {
-  margin-top: 10px;
-}
-
 .vault-volume-unavailable {
   display: block;
   margin-top: 3px;

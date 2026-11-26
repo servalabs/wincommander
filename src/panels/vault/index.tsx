@@ -11,7 +11,7 @@ import { useAppState } from "../../context/AppContext";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useTheme } from "../../context/ThemeContext";
 import CreateVolumeWizard from "./CreateVolumeWizard";
-import { OtherVaultFileMenu } from "./VaultFileActionButtons";
+import { VaultFileMoreMenu } from "./VaultFileActionButtons";
 import useVaultNames from "../../hooks/useVaultNames";
 import useVaultFileActions from "../../hooks/useVaultFileActions";
 import { findVaultName } from "@/lib/vaultRename";
@@ -506,6 +506,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
               onClick={() => openMountDialog()}
               className="vault-action-btn"
             />
+            {vaultFileActions && <VaultFileMoreMenu actions={vaultFileActions} />}
           </TierGate>
         </div>
 
@@ -592,7 +593,6 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
             </div>
           )}
         </div>
-        {vaultFileActions && <OtherVaultFileMenu actions={vaultFileActions} />}
       </SectionCard>
 
       <CreateVolumeWizard
