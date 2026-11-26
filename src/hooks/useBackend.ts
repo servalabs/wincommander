@@ -2058,8 +2058,8 @@ export function useBackend(retainCleanupScanErrors = false) {
       }),
     probeVolumePassword: (volumePath: string, credentials: HeaderCredentials) =>
       execute<unknown>("Test-EncryptionVolumePassword", buildPasswordProbeRequest(volumePath, credentials)),
-    changeVolumePassword: (volumePath: string, target: VaultPasswordHeader, credentials: HeaderCredentials) =>
-      afterVaultMutation(() => execute<VaultPasswordChangeResult>("Set-EncryptionVolumePassword", buildPasswordChangeRequest(volumePath, target, credentials))),
+    changeVolumePassword: (volumePath: string, target: VaultPasswordHeader, credentials: HeaderCredentials, provenReal?: HeaderCredentials | null) =>
+      afterVaultMutation(() => execute<VaultPasswordChangeResult>("Set-EncryptionVolumePassword", buildPasswordChangeRequest(volumePath, target, credentials, provenReal))),
     createDualVolume: (params: CreateDualVolumeParams) =>
       execute("Create-DualVolume", {
         TargetKind: params.TargetKind ?? "file",

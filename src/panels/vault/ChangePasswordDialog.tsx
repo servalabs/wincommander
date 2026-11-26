@@ -69,7 +69,7 @@ export default function ChangePasswordDialog({ isOpen, onClose, initialPath = ""
     if (busy || problem || !stage) return;
     const operationId = newDiagnosticOperationId("vault");
     const action = stage === "probe" ? "probe_password" : "change_password";
-    const { volumePath, first, decoy, header } = flow;
+    const { volumePath, first, decoy, header, provenReal } = flow;
     dispatch({ type: "send" });
     setShowExtras(false);
     try {
@@ -79,7 +79,7 @@ export default function ChangePasswordDialog({ isOpen, onClose, initialPath = ""
         if (!opened) throw new Error(result.error || "");
         dispatch({ type: "probed", header: opened });
       } else {
-        const result = await changeVolumePassword(volumePath, stage === "decoy" ? "outer" : header ?? "outer", stage === "decoy" ? decoy : first);
+        const result = await changeVolumePassword(volumePath, stage === "decoy" ? "outer" : header ?? "outer", stage === "decoy" ? decoy : first, stage === "decoy" ? provenReal : null);
         if (!result.success || result.data?.status !== "password_changed") throw new Error(result.error || "");
         dispatch({ type: "changed" });
         showSuccess(stage === "decoy" ? "Decoy password changed." : "Vault password changed.", undefined, { kind: "notification", operationId });

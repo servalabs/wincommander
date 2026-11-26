@@ -65,6 +65,21 @@ describe("password change steps", () => {
     expect(done.decoy.oldPassword).toBe("");
   });
 
+  test("the decoy follow-up carries the just-set real password so a decoy equal to it is refused", () => {
+    const decoy = run(realChanged(), { type: "decoy-yes" },
+      ...type("decoy", { oldPassword: "old decoy", newPassword: "fresh", confirmPassword: "fresh" }));
+    expect(decoy.provenReal?.oldPassword).toBe("fresh");
+    expect(buildPasswordChangeRequest(decoy.volumePath, "outer", decoy.decoy, decoy.provenReal)).toMatchObject({
+      Target: "outer", HiddenPassword: "fresh", HiddenKeyfiles: "[]",
+    });
+    expect(run(decoy, { type: "send" }, { type: "changed" }).provenReal).toBeNull();
+    expect(run(realChanged(), { type: "decoy-no" }).provenReal).toBeNull();
+    expect(probedAs("outer").provenReal).toBeNull();
+    const outerSent = run(probedAs("outer"), { type: "send" });
+    expect(outerSent.provenReal).toBeNull();
+    expect("HiddenPassword" in buildPasswordChangeRequest(PATH, "outer", outerSent.first)).toBe(false);
+  });
+
   test("a wrong decoy password keeps the first change and asks again", () => {
     const decoy = run(realChanged(), { type: "decoy-yes" },
       ...type("decoy", { oldPassword: "bad", newPassword: "new decoy", confirmPassword: "new decoy" }));

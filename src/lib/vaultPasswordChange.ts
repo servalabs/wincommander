@@ -76,8 +76,9 @@ export function buildPasswordProbeRequest(volumePath: string, header: HeaderCred
   };
 }
 
-/** Field names follow the Pro "Set-EncryptionVolumePassword" handler; the engine re-checks the current password itself. */
-export function buildPasswordChangeRequest(volumePath: string, target: VaultPasswordHeader, header: HeaderCredentials): Record<string, string> {
+/** Field names follow the Pro "Set-EncryptionVolumePassword" handler; the engine re-checks the current password itself.
+ * `provenReal` (decoy follow-up only) lets the engine refuse a new decoy equal to the real password it first re-proves. */
+export function buildPasswordChangeRequest(volumePath: string, target: VaultPasswordHeader, header: HeaderCredentials, provenReal?: HeaderCredentials | null): Record<string, string> {
   return {
     VolumePath: cleanVaultPath(volumePath),
     TargetKind: "file",
@@ -88,6 +89,11 @@ export function buildPasswordChangeRequest(volumePath: string, target: VaultPass
     NewKeyfiles: keyfileList(header.newKeyfile),
     ...(header.oldPim ? { OldPim: header.oldPim } : {}),
     ...(header.newPim ? { NewPim: header.newPim } : {}),
+    ...(target === "outer" && provenReal ? {
+      HiddenPassword: provenReal.oldPassword,
+      HiddenKeyfiles: keyfileList(provenReal.oldKeyfile),
+      ...(provenReal.oldPim ? { HiddenPim: provenReal.oldPim } : {}),
+    } : {}),
   };
 }
 
