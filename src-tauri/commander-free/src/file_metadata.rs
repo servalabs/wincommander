@@ -91,6 +91,12 @@ pub struct ScrubReport {
     /// the Pro producer field; drives the report-header warning.
     #[serde(default)]
     pub residual_count: u32,
+    /// Every file in the run exactly once, with its outcome and reason.
+    #[serde(default)]
+    pub files: Vec<crate::scrub_file_outcomes::ScrubFileOutcome>,
+    /// One summary per selected path, in the order the paths were sent.
+    #[serde(default)]
+    pub roots: Vec<crate::scrub_file_outcomes::ScrubRootSummary>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -154,7 +160,15 @@ pub async fn scrub_metadata_paths(
     paths: Vec<String>,
     options: Option<ScrubOptions>,
 ) -> Result<ScrubReport, String> {
-    scrub_metadata_paths_headless(paths, options).await
+    let recursive = options.as_ref().is_none_or(|o| o.recursive);
+    let roots = paths.clone();
+    let mut report = scrub_metadata_paths_headless(paths, options).await?;
+    tauri::async_runtime::spawn_blocking(move || {
+        (report.files, report.roots) = crate::scrub_file_outcomes::build(&roots, recursive, &report);
+        report
+    })
+    .await
+    .map_err(|e| format!("scrub report outcomes: {}", e))
 }
 
 /// The same paid scrub dispatch used by the Tauri command, without an app
