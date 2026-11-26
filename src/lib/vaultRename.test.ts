@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
   MAX_VAULT_NAME_BYTES,
-  findVaultKind,
   findVaultName,
   readVaultDisplayNames,
   vaultNameProblem,
@@ -54,20 +53,6 @@ describe("vault name lookup", () => {
       try { readVaultDisplayNames(reply); } catch { failed = true; }
       expect(failed).toBe(true);
     }
-  });
-
-  test("keeps a known vault type hint and drops an unknown one", () => {
-    const rows = readVaultDisplayNames({ names: [
-      { path: "D:\\a.hc", name: "A", kind: "decoy" },
-      { path: "D:\\b.hc", name: "B", kind: "dual" },
-      { path: "D:\\c.hc", name: "C", kind: "standard" },
-      { path: "D:\\d.hc", name: "D", kind: "hidden-ish" },
-    ] });
-    expect(rows.map(row => row.kind)).toEqual(["decoy", "decoy", "standard", undefined]);
-    expect(rows[3]).toEqual({ path: "D:\\d.hc", name: "D" });
-    expect(findVaultKind(rows, "d:/A.HC")).toBe("decoy");
-    expect(findVaultKind(rows, "D:\\d.hc")).toBeNull();
-    expect(findVaultKind(rows, "D:\\other.hc")).toBeNull();
   });
 });
 

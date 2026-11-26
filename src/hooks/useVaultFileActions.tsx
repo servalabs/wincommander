@@ -14,7 +14,7 @@ export default function useVaultFileActions() {
 
   const show = useCallback((dialog: VaultFileRequest["dialog"], target: VaultFileTarget) => {
     const path = resolveVaultFilePath(target, names);
-    setRequest(current => ({ id: (current?.id ?? 0) + 1, dialog, path, kind: target.kind, open: true }));
+    setRequest(current => ({ id: (current?.id ?? 0) + 1, dialog, path, open: true }));
   }, [names]);
 
   const actions = useMemo<VaultFileActions>(() => ({

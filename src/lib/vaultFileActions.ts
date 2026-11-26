@@ -1,11 +1,9 @@
-import type { VaultPasswordKind } from "./vaultPasswordChange";
 import type { VaultDisplayName } from "./vaultRename";
 
 /** The vault a list row offers to change. A row that does not know its file passes path null. */
 export interface VaultFileTarget {
   path: string | null;
   label?: string;
-  kind?: VaultPasswordKind;
 }
 
 export interface VaultFileActions {
@@ -19,15 +17,10 @@ export interface VaultFileRequest {
   id: number;
   dialog: "password" | "rename";
   path: string;
-  kind?: VaultPasswordKind;
   open: boolean;
 }
 
 export const DISMOUNT_FIRST_HINT = "Dismount this vault to change its password or rename it.";
-
-export function vaultKindFromContainer(containerKind: string): VaultPasswordKind {
-  return containerKind === "dual" ? "decoy" : "standard";
-}
 
 /** The row's own path, else the path of the only named vault with the row's label, else empty. */
 export function resolveVaultFilePath(target: VaultFileTarget, names: readonly VaultDisplayName[]): string {

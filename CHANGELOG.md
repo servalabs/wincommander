@@ -26,11 +26,15 @@ lists only a selection of those changes.
 - Add Change Password (Pro) next to Rename in the same places, with "Change
   password of a vault file…" under Encrypted Volumes. It changes
   the password, and optionally the PIM or keyfile, of a dismounted vault file.
-  For a decoy vault you enter both current passwords and both new ones in one
-  step; both current passwords are checked before either is changed, the new
-  decoy and real passwords must differ, and the vault ends with either both old
-  or both new passwords. You choose the vault type, because the file does not
-  show whether it has a hidden part. The service checks that the
+  You enter one current password and press Continue; WinCommander checks it
+  first and then asks for the new password, with no vault type to choose. A
+  wrong password says only "Wrong password.". When the password you entered is
+  the real password of a decoy vault, the dialog then asks "Also change the
+  decoy password?"; each change says which password changed and that the other
+  one still works, and a wrong decoy password keeps the real-password change.
+  A Vault managed in Vault Permissions is refused with a pointer there. The
+  dialog names a missing, locked or inaccessible vault file, and says when the
+  engine kept the original header. The service checks that the
   vault is yours (or that you own or can write a shared Vault), that it is the
   registered file, and that nothing has it mounted. Header backups and copies
   made earlier still open with the old password. Needs a Pro release with the

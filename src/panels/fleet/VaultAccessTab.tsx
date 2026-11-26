@@ -31,7 +31,7 @@ import VaultAccessEditor from "./VaultAccessEditor";
 import { vaultEntryResultLabel, vaultPolicyVerification } from "./vaultAccessPresentation";
 import { observedVaultMountState, patchAuthorizedEntriesFromMountResult, vaultMountGate } from "./vaultAccessUiState";
 import useVaultFileActions from "@/hooks/useVaultFileActions";
-import { DISMOUNT_FIRST_HINT, vaultKindFromContainer, type VaultFileTarget } from "@/lib/vaultFileActions";
+import { DISMOUNT_FIRST_HINT, type VaultFileTarget } from "@/lib/vaultFileActions";
 
 function appliedAt(timestamp: number) {
   return new Date(timestamp * 1000).toLocaleString();
@@ -1167,7 +1167,7 @@ export default function VaultAccessTab({ isAdmin, directory, onVisibilityChange 
                 </Button>
               )}
               {fileActionButtons(
-                { path: policyEntries.find(policyEntry => policyEntry.id === entry.entry_id)?.container_path ?? null, label: entry.label, kind: vaultKindFromContainer(entry.container_kind) },
+                { path: policyEntries.find(policyEntry => policyEntry.id === entry.entry_id)?.container_path ?? null, label: entry.label },
                 isMounted || needsCleanup || entry.mount_state === "mounted" ? DISMOUNT_FIRST_HINT
                   : entry.access !== "write" ? "Only the owner, or an account with write access, can change this Vault." : null,
               )}
@@ -1244,7 +1244,7 @@ export default function VaultAccessTab({ isAdmin, directory, onVisibilityChange 
                     <Button variant="outline" size="sm" disabled={mounted || needsCleanup || mountStateUnknown || !canEditEntry} title={mounted || needsCleanup || mountStateUnknown || !canEditEntry ? editDisabledReason : undefined} onClick={() => openEntryEditor(entry.id, "details")}>Edit</Button>
                     <Button variant="outline" size="sm" disabled={mounted || needsCleanup || mountStateUnknown || !canEditEntry} title={mounted || needsCleanup || mountStateUnknown || !canEditEntry ? editDisabledReason : undefined} onClick={() => openEntryEditor(entry.id, "access")}>Manage access</Button>
                     {fileActionButtons(
-                      { path: entry.container_path, label: entry.label, kind: vaultKindFromContainer(entry.container_kind) },
+                      { path: entry.container_path, label: entry.label },
                       mounted || needsCleanup ? DISMOUNT_FIRST_HINT
                         : mountStateUnknown ? "Vault mount status is unavailable. Refresh first." : null,
                     )}
