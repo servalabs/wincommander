@@ -110,10 +110,13 @@ fn shutdown_signal() -> &'static tokio::sync::watch::Sender<bool> {
     static SIGNAL: OnceLock<tokio::sync::watch::Sender<bool>> = OnceLock::new();
     SIGNAL.get_or_init(|| tokio::sync::watch::channel(false).0)
 }
-/// Pro shares a 3-minute deadline across a scrub request's external metadata
-/// tools; leave 30 seconds for report/IPC completion. Scrub failures never use
-/// the generic retry path because Pro may already have changed staged files.
+/// A scrub is declared stuck only after this long without a `scrub-progress`
+/// tick; Pro bounds each file's metadata tools, so a big folder runs for as long
+/// as files keep finishing. Scrub failures never use the generic retry path
+/// because Pro may already have changed staged files.
 const METADATA_SCRUB_REQUEST_TIMEOUT: Duration = Duration::from_secs(210);
+// An earlier scrub keeps running after its dialog closes; queue behind it, not forever.
+const SCRUB_ADMISSION_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 /// Stego operations copy the complete encrypted container byte-for-byte. An
 /// NTFS volume can be many gigabytes, so the normal interactive timeout would
 /// kill a healthy copy mid-transfer and may cause a duplicate retry.
@@ -400,6 +403,8 @@ pub struct ProSession {
     /// `request_id` before writing; reader removes + signals when the
     /// matching reply arrives.
     inflight: InflightMap,
+    /// Ticks on every `scrub-progress` notification this worker sends.
+    scrub_progress: tokio::sync::watch::Receiver<()>,
     /// Handle to the per-session reader task. Wrapped in `Option` so
     /// `Drop` can `.take()` and abort it without `mem::replace`.
     reader: Option<JoinHandle<()>>,
@@ -852,6 +857,7 @@ fn pool_semaphore() -> &'static Semaphore {
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
 pub(crate) struct ProSearchQuiescence {
     _workers: tokio::sync::SemaphorePermit<'static>,
+    _scrub: tokio::sync::SemaphorePermit<'static>,
     _backup: tokio::sync::SemaphorePermit<'static>,
     _agent: tokio::sync::MutexGuard<'static, Option<ProSession>>,
 }
@@ -871,6 +877,8 @@ async fn acquire_search_worker_permits(semaphore: &Semaphore, budget: Duration) 
 #[cfg(all(windows, feature = "experimental-encrypted-search"))]
 pub(crate) async fn quiesce_idle_pro_for_search() -> Result<ProSearchQuiescence, String> {
     let backup = backup::admit().map_err(|_| "A Pro backup is active; search cleanup remains pending.".to_string())?;
+    let scrub = scrub::admit(ADMISSION_TIMEOUT).await
+        .map_err(|_| "A metadata scrub is running; search cleanup remains pending.".to_string())?;
     let workers = acquire_search_worker_permits(pool_semaphore(), ADMISSION_TIMEOUT).await?;
     let agent = timeout(ADMISSION_TIMEOUT, agent_session_slot().lock()).await
         .map_err(|_| "Pro monitoring is busy; search cleanup remains pending.".to_string())?;
@@ -883,7 +891,7 @@ pub(crate) async fn quiesce_idle_pro_for_search() -> Result<ProSearchQuiescence,
         std::mem::take(&mut *pool)
     };
     stop_pro_sessions(sessions.into_iter().map(|entry| entry.session).collect()).await;
-    Ok(ProSearchQuiescence { _workers: workers, _backup: backup, _agent: agent })
+    Ok(ProSearchQuiescence { _workers: workers, _scrub: scrub, _backup: backup, _agent: agent })
 }
 
 /// Compute a Windows named-pipe path from a random suffix. The
@@ -1409,7 +1417,8 @@ async fn spawn_pro_session_unlocked(role: SessionRole) -> Result<ProSession, Str
     // shape: { "title": "...", "body": "..." }. Free's reader opens the custom
     // alert window on Pro's behalf. Other notification events flow to the
     // frontend via app.emit() unchanged.
-    let on_notification: NotificationSink = Box::new(|event, payload| {
+    let (scrub_tick, scrub_progress) = tokio::sync::watch::channel(());
+    let on_notification: NotificationSink = Box::new(move |event, payload| {
         // A finished Fleet command wakes the apply loop here, whether or not a
         // window exists; the generic emit below then reaches any open window.
         crate::fleet_state_wake::on_pro_notification(&event);
@@ -1418,6 +1427,7 @@ async fn spawn_pro_session_unlocked(role: SessionRole) -> Result<ProSession, Str
         // Only forward numeric counters here; the Pro payload's `file` field
         // and any other path-bearing data are intentionally not passed on.
         if event == "scrub-progress" {
+            scrub_tick.send_replace(());
             let current = payload
                 .get("current")
                 .and_then(serde_json::Value::as_u64)
@@ -1521,6 +1531,7 @@ async fn spawn_pro_session_unlocked(role: SessionRole) -> Result<ProSession, Str
         child,
         session_token: token,
         inflight,
+        scrub_progress,
         reader: Some(reader),
         log_drains,
     })
@@ -1567,6 +1578,7 @@ async fn dispatch_request_open(
 ) -> Result<serde_json::Value, DispatchFailure> {
     let request_id = req.request_id;
     let request_timeout = request_timeout_for(&req.feature_id, &req.args);
+    let is_scrub = scrub::matches(&req.feature_id);
     let (tx, rx) = oneshot::channel();
 
     // Insert before write so a fast reader (already-buffered reply)
@@ -1585,17 +1597,18 @@ async fn dispatch_request_open(
         return Err(e);
     }
 
-    let response = match request_timeout {
-        Some(request_timeout) => match timeout(request_timeout, rx).await {
-            Ok(response) => response,
-            Err(_) => {
-                session.inflight.lock().await.remove(&request_id);
-                return Err(DispatchFailure::OutcomeUnknown(
-                    "Pro response timeout".to_string(),
-                ));
-            }
-        },
-        None => rx.await,
+    let waited = match request_timeout {
+        Some(idle) if is_scrub => {
+            deadlines::while_progressing(rx, session.scrub_progress.clone(), idle).await
+        }
+        Some(request_timeout) => timeout(request_timeout, rx).await.ok(),
+        None => Some(rx.await),
+    };
+    let Some(response) = waited else {
+        session.inflight.lock().await.remove(&request_id);
+        return Err(DispatchFailure::OutcomeUnknown(
+            "Pro response timeout".to_string(),
+        ));
     };
     match response {
         Ok(result) => result.map_err(|error| {
@@ -1929,6 +1942,59 @@ async fn dispatch_backup_command(
     .await
 }
 
+#[path = "sidecar_scrub.rs"]
+mod scrub;
+
+async fn dispatch_scrub_command(
+    feature_id: &str,
+    args: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let _permit = scrub::admit(SCRUB_ADMISSION_TIMEOUT).await?;
+    if *shutdown_signal().borrow() {
+        return Err("Pro session is closing".to_string());
+    }
+    let mut session = match take_pooled_pro_session().await {
+        Some(session) => session,
+        None => spawn_pro_session()
+            .await
+            .map_err(|error| format!("Pro spawn failed: {error}"))?,
+    };
+    let request = Request {
+        request_id: next_request_id(),
+        feature_id: feature_id.to_owned(),
+        diagnostic_operation_id: None,
+        args,
+    };
+    match dispatch_request(&mut session, request).await {
+        Ok(value) => {
+            return_pro_session_to_pool(session).await;
+            Ok(value)
+        }
+        Err(DispatchFailure::Rejected(error)) => {
+            return_pro_session_to_pool(session).await;
+            Err(error)
+        }
+        Err(transport_err) => {
+            // A scrub can rewrite its input or output before Pro sends its
+            // response. Replaying it after a broken/slow IPC response can
+            // run a second scrub concurrently against those same files.
+            // Drop this session (which kills its child) and let the caller
+            // decide whether to retry after the original operation stops.
+            crate::log_message(
+                "error",
+                &format!(
+                    "[Sidecar] '{}' failed without retry to avoid replaying file mutations: {}",
+                    feature_id, transport_err
+                ),
+            );
+            Err(format!(
+                "Metadata scrub could not finish safely and was not retried: {}",
+                transport_err
+            ))
+        }
+    }
+}
+
 pub async fn dispatch_paid_command(
     feature_id: &str,
     args: serde_json::Value,
@@ -2019,6 +2085,9 @@ pub async fn dispatch_paid_command(
 
     if backup::matches(feature_id) {
         return dispatch_backup_command(feature_id, args).await;
+    }
+    if scrub::matches(feature_id) {
+        return dispatch_scrub_command(feature_id, args).await;
     }
 
     // Agent-affine commands (fleet, collectors, and stateful monitors) run on
@@ -2136,24 +2205,6 @@ pub async fn dispatch_paid_command(
                 // Semantic error — pipe is still healthy, recycle.
                 return_pro_session_to_pool(session).await;
                 return Err(e);
-            }
-            Err(transport_err) if feature_id == "scrub_metadata_paths" => {
-                // A scrub can rewrite its input or output before Pro sends its
-                // response. Replaying it after a broken/slow IPC response can
-                // run a second scrub concurrently against those same files.
-                // Drop this session (which kills its child) and let the caller
-                // decide whether to retry after the original operation stops.
-                crate::log_message(
-                    "error",
-                    &format!(
-                        "[Sidecar] '{}' failed without retry to avoid replaying file mutations: {}",
-                        feature_id, transport_err
-                    ),
-                );
-                return Err(format!(
-                    "Metadata scrub could not finish safely and was not retried: {}",
-                    transport_err
-                ));
             }
             Err(transport_err) if is_vault_mount_mutation(feature_id) => {
                 crate::log_message("error", &format!(
@@ -2314,7 +2365,8 @@ mod tests {
         let process = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, child.id().unwrap()) };
         assert!(!process.is_null());
         let session = super::ProSession { vault_runtime_version: None, write: Arc::new(tokio::sync::Mutex::new(write)), child,
-            session_token: String::new(), inflight: Arc::new(tokio::sync::Mutex::new(HashMap::new())), reader: None, log_drains: vec![] };
+            session_token: String::new(), inflight: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            scrub_progress: tokio::sync::watch::channel(()).1, reader: None, log_drains: vec![] };
         (session, client, read, process)
     }
     #[cfg(all(windows, feature = "experimental-encrypted-search"))]

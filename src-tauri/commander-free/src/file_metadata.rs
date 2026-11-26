@@ -183,10 +183,31 @@ pub async fn scrub_metadata_paths_headless(
     options: Option<ScrubOptions>,
 ) -> Result<ScrubReport, String> {
     crate::license::require_paid("metadata scrubber")?;
-    let args = serde_json::json!({
-        "paths": paths,
-        "options": options,
-    });
+    let args = scrub_request_args(paths, options);
     let v = crate::sidecar::dispatch_paid_command("scrub_metadata_paths", args).await?;
     serde_json::from_value(v).map_err(|e| format!("scrub report decode: {}", e))
+}
+
+// Without it Pro keeps its old 3-minute run cap; Free's own wait only ends when files stop finishing.
+const SCRUB_MAX_WAIT_SECS: u64 = 4 * 60 * 60 + 30;
+
+fn scrub_request_args(paths: Vec<String>, options: Option<ScrubOptions>) -> serde_json::Value {
+    serde_json::json!({
+        "paths": paths,
+        "options": options,
+        "maxWaitSecs": SCRUB_MAX_WAIT_SECS,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scrub_request_lets_pro_run_a_large_folder_for_up_to_four_hours() {
+        let args = scrub_request_args(vec!["C:\\Pictures".into()], None);
+        assert_eq!(args["maxWaitSecs"], 14_430);
+        assert_eq!(args["paths"][0], "C:\\Pictures");
+        assert!(args["options"].is_null());
+    }
 }

@@ -22,6 +22,27 @@ lists only a selection of those changes.
   and list 50 files at a time. In the "files not cleaned" list a file's reason
   now sits on its own full-width line under the name, so a long reason no
   longer wraps into a narrow column.
+- Fix Share Safely (Metadata Scrubber) failing with "Pro worker busy; request
+  not sent" when previewing or scrubbing a large folder such as Pictures. All
+  paid features shared one Pro worker, and a new request gave up after 30
+  seconds if that worker was still busy. That happened, for example, when the
+  dialog was closed during a long scrub and reopened, because the earlier scrub
+  keeps running. Scrubs now have their own worker. Other Pro features no longer
+  wait behind a scrub, and a scrub no longer waits behind them. A second scrub
+  waits up to 5 minutes for an earlier one to finish, because both may change
+  the same files. A large folder is no longer cut off after 3.5 minutes. Free
+  now lets Pro run a scrub for up to 4 hours, and waits as long as files keep
+  finishing, giving up only after 3.5 minutes with no file finished. A scrub
+  that may have started is still never repeated
+  automatically. When Pro is still busy, the message now says so in plain
+  words: "WinCommander Pro is still finishing another task. Try again in a
+  moment." For a scrub it says an earlier metadata scrub is still finishing.
+- Fix the Share Safely report listing Windows folder files such as
+  desktop.ini as "named .ini but is really MP3". Files Windows keeps in
+  folders on its own (desktop.ini, Thumbs.db, ehthumbs.db, and any file that
+  is both hidden and system) are now left out when a folder is scrubbed; one
+  you pick directly is still included. Pro's temporary scrub folders are left
+  out too. A text file saved as UTF-16 is no longer mistaken for an MP3.
 - Fix RAM disks being writable only by the Windows account that created them:
   other users on the same PC saw the drive (for example "TEMP (R:)") but got
   "You don't have permission to save in this location". An NTFS RAM disk made

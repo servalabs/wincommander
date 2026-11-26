@@ -106,7 +106,8 @@ pub fn detect_head(b: &[u8]) -> Option<&'static str> {
         _ if at(0, b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1") => "ole",
         _ if at(0, b"{\\rtf") => "rtf",
         _ if at(0, b"ID3") && b.len() > 3 && (2..=4).contains(&b[3]) => "mp3",
-        _ if b.len() >= 2 && b[0] == 0xFF && (b[1] & 0xE0) == 0xE0 => "mp3",
+        // A UTF-16 BOM says nothing about the format, so it must not count against the extension.
+        _ if at(0, b"\xFF\xFE") || at(0, b"\xFE\xFF") => return None,
         _ if at(0, b"fLaC") => "flac",
         _ if at(0, b"OggS") => "ogg",
         _ if at(0, b"\x1A\x45\xDF\xA3") => "mkv",
