@@ -77,6 +77,12 @@ mod vault_create_staging;
 #[path = "vault_password_change.rs"]
 mod vault_password_change;
 
+#[path = "vault_password_probe.rs"]
+mod vault_password_probe;
+
+#[path = "vault_password_target.rs"]
+mod vault_password_target;
+
 #[path = "vault_rename.rs"]
 mod vault_rename;
 
@@ -931,6 +937,9 @@ async fn dispatch_verb(
         }
         "svc.vault.change_password_personal" => {
             vault_password_change::handle(request_id, vault_access, vault_mount, args, peer).await
+        }
+        "svc.vault.probe_password" => {
+            vault_password_probe::handle(request_id, vault_access, vault_mount, args, peer).await
         }
         "svc.vault.rename" => vault_rename::handle(vault_access, vault_mount, args, peer),
         "svc.vault.display_names" => vault_rename::handle_display_names(vault_access, peer),
@@ -6411,16 +6420,11 @@ mod tests {
     #[tokio::test]
     async fn vault_password_change_allows_standard_user_only_in_active_session() {
         let gate = passing_gate();
-        for (active, expected) in [(true, true), (false, false)] {
-            let result = authorize_with_interactive_session(
-                "svc.vault.change_password_personal",
-                false,
-                active,
-                1234,
-                &gate,
-            )
-            .await;
-            assert_eq!(result.is_ok(), expected);
+        for verb in ["svc.vault.change_password_personal", "svc.vault.probe_password"] {
+            for (active, expected) in [(true, true), (false, false)] {
+                let result = authorize_with_interactive_session(verb, false, active, 1234, &gate).await;
+                assert_eq!(result.is_ok(), expected, "{verb}");
+            }
         }
     }
 

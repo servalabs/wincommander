@@ -1,19 +1,19 @@
 //! `svc.vault.rename` and `svc.vault.display_names`: a Vault's name lives only in
 //! the service's records; the container file itself is never renamed.
 
-use std::collections::HashSet;
 use std::path::Path;
 
 use wincmd_shared::vault_access::{
     is_supported_vault_device_path, normalize_vault_display_name, VaultAccess, VaultMountReason,
 };
 
-use super::vault_password_change::{failure_code, policy_change_allowed, selected_path};
+use super::vault_password_change::selected_path;
+use super::vault_password_target::{failure_code, mount_refusal, target_refusal};
 use super::{
     peer_has_active_interactive_session, AuthenticatedPipePeer, VerbError, PERSONAL_VAULT_SESSION_ABSENT,
     PERSONAL_VAULT_UNAUTHORIZED,
 };
-use crate::vault_access::{PasswordChangeTarget, RenameRecord, VaultAccessStore, VaultError};
+use crate::vault_access::{PasswordChangeTarget, RenameRecord, TargetLookupError, VaultAccessStore, VaultError};
 use crate::vault_mount::VaultMountBroker;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -55,29 +55,51 @@ fn refusal(error: VaultError) -> VerbError {
     }
 }
 
-fn write_refusal(error: VaultError) -> VerbError {
+fn lookup_refusal(error: TargetLookupError) -> VerbError {
     match error {
-        VaultError::ContainerIdentity => identity_changed(),
-        _ => VerbError::new(
+        TargetLookupError::File(_) => target_refusal(error).1,
+        TargetLookupError::Vault(error) => refusal(error),
+    }
+}
+
+fn write_refusal(error: TargetLookupError) -> VerbError {
+    match error {
+        TargetLookupError::Vault(VaultError::ContainerIdentity) => identity_changed(),
+        TargetLookupError::File(_) => target_refusal(error).1,
+        TargetLookupError::Vault(_) => VerbError::new(
             VaultMountBroker::personal_mount_failure_code(VaultMountReason::CallerAccessDenied),
             "this account cannot write the container",
         ),
     }
 }
 
-/// `write_grant` reports the caller's (allowed, access) for a policy entry;
-/// `prove_write` opens an unregistered container read/write as the caller.
+/// A policy Vault needs its owner or a write grant; a personal one is checked
+/// by [`VaultAccessStore::password_change_target`].
+pub(super) fn policy_change_allowed(
+    target: &PasswordChangeTarget,
+    granted: bool,
+    access: Option<VaultAccess>,
+) -> bool {
+    target.entry_id.is_none()
+        || target.caller_owns_entry
+        || (granted && access == Some(VaultAccess::Write))
+}
+
+type RenameLookup<'a> = &'a dyn Fn() -> Result<(PasswordChangeTarget, RenameRecord), TargetLookupError>;
+
+/// `resolve` finds the container in the caller's token; `write_grant` reports the
+/// caller's (allowed, access) for a policy entry; `prove_write` opens an
+/// unregistered container read/write as the caller.
 pub(super) fn rename_for_caller(
     vault_access: &VaultAccessStore,
     vault_mount: &VaultMountBroker,
     caller_sid: &str,
-    session_id: u32,
     request: &RenameRequest,
+    resolve: RenameLookup<'_>,
     write_grant: &dyn Fn(&str) -> (bool, Option<VaultAccess>),
-    prove_write: &dyn Fn(&PasswordChangeTarget) -> Result<(), VaultError>,
+    prove_write: &dyn Fn(&PasswordChangeTarget) -> Result<(), TargetLookupError>,
 ) -> Result<serde_json::Value, VerbError> {
-    let resolve = || vault_access.rename_target(&request.container_path, caller_sid, session_id);
-    let (target, record) = resolve().map_err(refusal)?;
+    let (target, record) = resolve().map_err(lookup_refusal)?;
     if let Some(entry_id) = &target.entry_id {
         let (granted, access) = write_grant(entry_id);
         if !policy_change_allowed(&target, granted, access) {
@@ -89,10 +111,7 @@ pub(super) fn rename_for_caller(
         if !matches!(resolve(), Ok((current, current_record)) if current == target && current_record == record) {
             return Err(identity_changed());
         }
-        let entry_ids: HashSet<String> = target.entry_id.iter().cloned().collect();
-        let identities = HashSet::from([target.container_identity.clone()]);
-        vault_mount
-            .reject_policy_changes_while_mounted_locked(&entry_ids, &identities)
+        mount_refusal(vault_mount, &target)
             .map_err(|reason| VerbError::new(failure_code(reason), "dismount the Vault before renaming it"))?;
         match (record, &target.entry_id) {
             (RenameRecord::Policy, Some(entry_id)) => vault_access.rename_policy_entry(entry_id, &request.name),
@@ -124,14 +143,30 @@ pub(super) fn handle(
         vault_access,
         vault_mount,
         peer.caller_sid(),
-        peer.session_id(),
         &request,
+        &|| {
+            vault_access.rename_target_as_caller(&request.container_path, peer.caller_sid(), peer.session_id(), peer.token())
+        },
         &|entry_id| {
             let authorization = crate::vault_access::authorize_mount_for_token(vault_access, entry_id, peer.token());
             (authorization.allowed, authorization.mode)
         },
-        &|target| crate::vault_access::hold_password_change_files(target, &[], peer.token()).map(drop),
+        &|target| prove_write_as_caller(target, peer.token()),
     )
+}
+
+/// Opens the container read/write in the caller's token; a refusal keeps its OS reason.
+pub(super) fn prove_write_as_caller(
+    target: &PasswordChangeTarget,
+    caller_token: windows_sys::Win32::Foundation::HANDLE,
+) -> Result<(), TargetLookupError> {
+    crate::vault_access::hold_password_change_files(target, &[], caller_token)
+        .map(drop)
+        .map_err(|error| match error {
+            VaultError::ContainerIdentity => TargetLookupError::Vault(error),
+            _ => crate::vault_access::container_fault_as_caller(&target.container_path, caller_token)
+                .map_or(TargetLookupError::Vault(error), TargetLookupError::File),
+        })
 }
 
 pub(super) fn handle_display_names(
@@ -151,11 +186,7 @@ pub(super) fn handle_display_names(
 }
 
 fn display_name_row(row: crate::vault_access::VaultDisplayName) -> serde_json::Value {
-    let mut value = serde_json::json!({ "path": row.path, "name": row.name });
-    if let Some(kind) = row.kind {
-        value["kind"] = serde_json::Value::from(kind);
-    }
-    value
+    serde_json::json!({ "path": row.path, "name": row.name })
 }
 
 #[cfg(test)]

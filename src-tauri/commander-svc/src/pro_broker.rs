@@ -149,8 +149,8 @@ fn broker_timeout_for(feature_id: &str, args: &serde_json::Value) -> std::time::
         wincmd_shared::vault_create_budget::service_budget(
             wincmd_shared::vault_create_budget::size_mib_from_args(args),
         )
-    } else if feature_id == "vault.broker.change_password_personal" {
-        // A wrong old password with a large PIM can use most of the engine's 110 s limit.
+    } else if matches!(feature_id, "vault.broker.change_password_personal" | "vault.broker.probe_password_personal") {
+        // A wrong password with a large PIM can use most of the engine's 110 s limit.
         std::time::Duration::from_secs(150)
     } else if feature_id == "managed.deployment.apply" {
         std::time::Duration::from_secs(300)
@@ -1461,10 +1461,9 @@ mod tests {
         ] {
             assert_eq!(broker_timeout_for(feature, &large), BROKER_TIMEOUT);
         }
-        assert_eq!(
-            broker_timeout_for("vault.broker.change_password_personal", &large),
-            Duration::from_secs(150)
-        );
+        for feature in ["vault.broker.change_password_personal", "vault.broker.probe_password_personal"] {
+            assert_eq!(broker_timeout_for(feature, &large), Duration::from_secs(150));
+        }
     }
 
     #[cfg(windows)]

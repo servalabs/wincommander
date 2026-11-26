@@ -199,17 +199,17 @@ fn display_names_list_only_the_callers_named_vaults() {
     store.rename_personal_vault(&target, "S-1-5-21-owner", "Taxes").unwrap();
     assert_eq!(
         store.display_names_for_caller("S-1-5-21-owner", |_| false),
-        [display_row(r"C:\vaults\notes.hc", "Taxes", None)]
+        [display_row(r"C:\vaults\notes.hc", "Taxes")]
     );
     assert!(store.display_names_for_caller("S-1-5-21-other", |_| false).is_empty());
     assert_eq!(
         store.display_names_for_caller("S-1-5-21-other", |id| id == "shared"),
-        [display_row(r"C:\vaults\shared.hc", "Shared", Some("standard"))]
+        [display_row(r"C:\vaults\shared.hc", "Shared")]
     );
 }
 
-fn display_row(path: &str, name: &str, kind: Option<&'static str>) -> VaultDisplayName {
-    VaultDisplayName { path: path.into(), name: name.into(), kind }
+fn display_row(path: &str, name: &str) -> VaultDisplayName {
+    VaultDisplayName { path: path.into(), name: name.into() }
 }
 
 fn unregistered(path: &str, identity: &str) -> PasswordChangeTarget {
@@ -232,17 +232,17 @@ fn an_unregistered_container_name_is_the_callers_own_and_survives_pruning_and_re
     rename_notes(&store, "Taxes").unwrap();
     assert_eq!(
         store.display_names_for_caller(NAMES_OWNER, |_| false),
-        [display_row(r"C:\vaults\notes.hc", "Taxes", None), display_row(r"D:\Vault\New folder\test3", "Test three", None)]
+        [display_row(r"C:\vaults\notes.hc", "Taxes"), display_row(r"D:\Vault\New folder\test3", "Test three")]
     );
     assert_eq!(
         store.display_names_for_caller("S-1-5-21-other", |_| false),
-        [display_row(r"D:\Vault\New folder\test3", "Theirs", None)]
+        [display_row(r"D:\Vault\New folder\test3", "Theirs")]
     );
     store.rename_unregistered_container(&loose, NAMES_OWNER, "Renamed").unwrap();
     let restarted = store_with_saved_registry(&files, &fail);
     assert_eq!(
         restarted.display_names_for_caller(NAMES_OWNER, |_| false)[1],
-        display_row(r"D:\Vault\New folder\test3", "Renamed", None)
+        display_row(r"D:\Vault\New folder\test3", "Renamed")
     );
     assert_eq!(notes_name(&restarted).as_deref(), Some("Taxes"), "an unregistered name is not a record's name");
 }
@@ -289,20 +289,18 @@ fn a_callers_oldest_unregistered_name_makes_room_for_a_new_one() {
 }
 
 #[test]
-fn a_policy_decoy_vault_reports_its_kind_and_a_policy_name_comes_first() {
+fn a_policy_name_comes_before_the_callers_own_name() {
     let store = rename_store(
         Arc::new(Mutex::new(HashMap::new())),
         Arc::new(AtomicBool::new(false)),
         RecordingAcl::default(),
     );
-    let mut dual = policy(1, 0);
-    dual.entries[0].container_kind = wincmd_shared::vault_access::VaultContainerKind::Dual;
-    store.apply(dual, 7).unwrap();
+    store.apply(policy(1, 0), 7).unwrap();
     store
         .rename_unregistered_container(&unregistered(r"C:\vaults\shared.hc", "v:1:i:9"), NAMES_OWNER, "Mine")
         .unwrap();
     assert_eq!(
         store.display_names_for_caller(NAMES_OWNER, |id| id == "shared"),
-        [display_row(r"C:\vaults\shared.hc", "Shared", Some("decoy")), display_row(r"C:\vaults\shared.hc", "Mine", None)]
+        [display_row(r"C:\vaults\shared.hc", "Shared"), display_row(r"C:\vaults\shared.hc", "Mine")]
     );
 }

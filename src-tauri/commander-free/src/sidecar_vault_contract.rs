@@ -15,6 +15,7 @@ pub(super) fn require_vault_runtime(feature_id: &str, version: Option<u32>) -> R
         &["Get-~", "Volume~", "Info~"][..],
         &["Clear-~", "Encryption~", "Keys~"][..],
         &["Set-~", "EncryptionVolume~", "Password~"][..],
+        &["Test-~", "EncryptionVolume~", "Password~"][..],
     ]
     .iter()
     .any(|parts| matches_parts(feature_id, parts));
@@ -44,6 +45,7 @@ mod tests {
             "Dismount-EncryptedVolume",
             "Dismount-AllEncryptedVolumes",
             "Set-EncryptionVolumePassword",
+            "Test-EncryptionVolumePassword",
         ] {
             for version in [None, Some(0), Some(1), Some(2)] {
                 assert_eq!(

@@ -178,6 +178,7 @@ pub fn is_known_verb(feature_id: &str) -> bool {
             | "svc.vault.mount"
             | "svc.vault.create_personal"
             | "svc.vault.change_password_personal"
+            | "svc.vault.probe_password"
             | "svc.vault.rename"
             | "svc.vault.display_names"
             | "svc.vault.unmount"
@@ -459,6 +460,8 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         "svc.vault.create_personal"
         // Safe for a standard user: the header is rewritten under the caller's own token.
         | "svc.vault.change_password_personal"
+        // Reads one header in the caller's own token, like the change.
+        | "svc.vault.probe_password"
         // Changes only a service-held name; the handler checks the owner or a write grant.
         | "svc.vault.rename"
         | "svc.vault.setup_cloud_backup"
@@ -570,11 +573,10 @@ mod tests {
 
     #[test]
     fn personal_vault_password_change_requires_an_interactive_session_not_admin() {
-        assert!(is_known_verb("svc.vault.change_password_personal"));
-        assert_eq!(
-            classify_verb("svc.vault.change_password_personal"),
-            CapabilityClass::InteractiveSession
-        );
+        for verb in ["svc.vault.change_password_personal", "svc.vault.probe_password"] {
+            assert!(is_known_verb(verb));
+            assert_eq!(classify_verb(verb), CapabilityClass::InteractiveSession);
+        }
     }
 
     #[test]

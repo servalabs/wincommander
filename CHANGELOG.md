@@ -26,18 +26,31 @@ lists only a selection of those changes.
 - Add Change Password (Pro) next to Rename in the same places, with "Change
   password of a vault file…" under Encrypted Volumes. It changes
   the password, and optionally the PIM or keyfile, of a dismounted vault file.
-  For a decoy vault you enter both current passwords and both new ones in one
-  step; both current passwords are checked before either is changed, the new
-  decoy and real passwords must differ, and the vault ends with either both old
-  or both new passwords. You choose the vault type, because the file does not
-  show whether it has a hidden part. The service checks that the
-  vault is yours (or that you own or can write a shared Vault), that it is the
-  registered file, and that nothing has it mounted. Header backups and copies
-  made earlier still open with the old password. Needs a Pro release with the
-  matching password-change engine.
+  You enter only the current password; the new service verb
+  `svc.vault.probe_password` has the engine try the hidden and the outer
+  header every time, with the same work on every vault, and the password then
+  changes the header it opened. After the real password of a decoy vault has
+  changed, the decoy password can be changed too; only that step, which
+  carries the just-proven real password, refuses a new decoy password equal to
+  the real one. A wrong password gives the same `wrong_password` on every
+  vault. A Vault managed in Vault Permissions is refused with
+  `vault_policy_managed`. The service checks that the vault is yours (or one
+  WinCommander has no record of), that it is the registered file, and that
+  nothing has it mounted. If writing a header fails, the original header is
+  written back. Header backups and copies made earlier still open with the old
+  password. Needs a Pro release with the matching password-change engine.
 - Fix Change Password and Rename refusing a vault path pasted with Explorer's
   "Copy as path" (wrapped in quotes) with "Check the vault file ...". The
   service now reads a quoted path as the same file.
+- Fix Change Password and Rename failing with "the vault file could not be
+  found or read" for a vault in a folder whose permissions have no entry for
+  SYSTEM (for example a folder with inherited permissions removed). The service
+  resolved the file in its own SYSTEM token, and Windows' access-denied on that
+  folder was reported as a missing file. It now resolves the file, like the
+  write proof that follows, in the signed-in account's token, and reports a
+  missing file (`vault_file_not_found`), a file Windows refuses to this account
+  (`vault_access_denied`) and a file another program holds
+  (`vault_file_in_use`) separately. Mounting was not affected.
 - Fix Stealth mode leaving no Calculator shortcut: with Hide WinCommander
   already on, turning the Calculator lock on restored the WinCommander
   shortcuts to the Hide snapshot instead of replacing them, so the Start menu

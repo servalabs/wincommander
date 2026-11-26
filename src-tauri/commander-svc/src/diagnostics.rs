@@ -494,24 +494,26 @@ pub(crate) fn record_vault_create_success(operation_id: &str, started: Instant) 
     ));
 }
 
+/// `operation` is "change_password" or "probe_password".
 pub(crate) fn record_vault_password_change(
     operation_id: &str,
+    operation: &'static str,
     failure: Option<VaultMountReason>,
     started: Instant,
 ) {
     let (outcome, error_code, severity, retryable, next) = match failure {
         None => (
             DiagnosticOutcome::Succeeded,
-            "VLT.PASSWORD.CHANGED",
+            if operation == "probe_password" { "VLT.PASSWORD.PROBED" } else { "VLT.PASSWORD.CHANGED" },
             DiagnosticSeverity::Info,
             false,
             "none",
         ),
-        Some(reason) => reason_fields(Some(reason), "change_password"),
+        Some(reason) => reason_fields(Some(reason), operation),
     };
     let _ = record_event(vault_event(
         operation_id,
-        "change_password",
+        operation,
         outcome,
         error_code,
         severity,
@@ -1015,12 +1017,6 @@ fn reason_fields(
             true,
             "check_current_credentials",
         ),
-        Some(VaultMountReason::WrongHeader) => (
-            "VLT.PASSWORD.WRONG_HEADER",
-            DiagnosticSeverity::Warn,
-            true,
-            "choose_other_password",
-        ),
         Some(VaultMountReason::NewPasswordCollides) => (
             "VLT.PASSWORD.NEW_PASSWORD_COLLIDES",
             DiagnosticSeverity::Warn,
@@ -1228,7 +1224,6 @@ mod tests {
     fn password_change_failures_keep_their_own_stable_codes() {
         for (reason, code) in [
             (VaultMountReason::WrongPassword, "VLT.PASSWORD.WRONG_PASSWORD"),
-            (VaultMountReason::WrongHeader, "VLT.PASSWORD.WRONG_HEADER"),
             (VaultMountReason::NewPasswordCollides, "VLT.PASSWORD.NEW_PASSWORD_COLLIDES"),
             (VaultMountReason::WeakNewPassword, "VLT.PASSWORD.WEAK_NEW_PASSWORD"),
             (VaultMountReason::EngineFailed, "VLT.PASSWORD.ENGINE_FAILED"),

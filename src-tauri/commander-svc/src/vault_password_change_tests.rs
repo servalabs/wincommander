@@ -15,6 +15,7 @@ fn a_complete_request_is_accepted_without_copying_passwords() {
     let parsed = validate_request(&request()).expect("valid request");
     assert_eq!(parsed.volume_path, r"D:\Vaults\notes.hc");
     assert_eq!(parsed.target, "hidden");
+    assert!(!parsed.checks_collision);
     assert!(!format!("{parsed:?}").contains("canary"));
 }
 
@@ -30,6 +31,7 @@ fn rejects_unknown_fields_targets_and_relative_paths() {
     for (key, value) in [
         ("TargetSessionId", json!(0)),
         ("Target", json!("both")),
+        ("OldHiddenPassword", json!("old-real")),
         ("VolumePath", json!(r"notes.hc")),
         ("VolumePath", json!(r"\Device\Harddisk1\Partition1")),
         ("TargetKind", json!("device")),
@@ -77,12 +79,56 @@ fn missing_or_non_string_passwords_are_rejected() {
     }
 }
 
+fn decoy_follow_up() -> serde_json::Value {
+    json!({
+        "VolumePath": r"D:\Vaults\decoy.hc",
+        "Target": "outer",
+        "OldPassword": "old-decoy-canary",
+        "NewPassword": "new-decoy-canary",
+        "HiddenPassword": "proven-real-canary",
+        "HiddenKeyfiles": json!([r"D:\keys\real.key"]).to_string(),
+        "HiddenPim": "600",
+    })
+}
+
+#[test]
+fn only_a_decoy_change_carrying_the_proven_real_password_checks_a_collision() {
+    let parsed = validate_request(&decoy_follow_up()).expect("valid follow-up");
+    assert_eq!(parsed.target, "outer");
+    assert!(parsed.checks_collision);
+    assert_eq!(parsed.keyfiles, [r"D:\keys\real.key"], "the real keyfile is held too");
+    assert!(!format!("{parsed:?}").contains("canary"));
+
+    let mut hidden_target = decoy_follow_up();
+    hidden_target["Target"] = json!("hidden");
+    assert!(validate_request(&hidden_target).is_none(), "a hidden change never carries a second password");
+    let mut pim_only = request();
+    pim_only["Target"] = json!("outer");
+    pim_only["HiddenPim"] = json!("600");
+    assert!(validate_request(&pim_only).is_none(), "a PIM alone is no proof");
+    for (key, value) in [("HiddenPassword", json!(7)), ("HiddenPim", json!("0")), ("HiddenKeyfiles", json!([r"real.key"]))] {
+        let mut args = decoy_follow_up();
+        args[key] = value;
+        assert!(validate_request(&args).is_none(), "{key} must be rejected");
+    }
+}
+
+#[test]
+fn blank_real_password_fields_mean_no_collision_check() {
+    let mut args = request();
+    args["Target"] = json!("outer");
+    for key in HIDDEN_KEYS {
+        args[key] = json!("");
+    }
+    args["HiddenKeyfiles"] = json!("[]");
+    assert!(!validate_request(&args).unwrap().checks_collision);
+}
+
 #[test]
 fn broker_failures_map_to_the_contract_codes() {
     for (reason, code) in [
         (VaultMountReason::WrongPassword, "wrong_password"),
         (VaultMountReason::EngineUnlockFailed, "wrong_password"),
-        (VaultMountReason::WrongHeader, "wrong_header"),
         (VaultMountReason::NewPasswordCollides, "new_password_collides"),
         (VaultMountReason::WeakNewPassword, "weak_new_password"),
         (VaultMountReason::AlreadyMounted, "volume_mounted"),
@@ -92,24 +138,6 @@ fn broker_failures_map_to_the_contract_codes() {
     ] {
         assert_eq!(failure_code(reason), code);
     }
-}
-
-#[test]
-fn policy_vaults_need_the_owner_or_a_write_grant() {
-    let personal = PasswordChangeTarget {
-        container_path: r"D:\Vaults\notes.hc".into(),
-        container_identity: "file-1".into(),
-        entry_id: None,
-        caller_owns_entry: false,
-    };
-    assert!(policy_change_allowed(&personal, false, None));
-    let mut managed = PasswordChangeTarget { entry_id: Some("shared".into()), ..personal };
-    assert!(!policy_change_allowed(&managed, false, None));
-    assert!(!policy_change_allowed(&managed, true, Some(VaultAccess::Read)));
-    assert!(!policy_change_allowed(&managed, false, Some(VaultAccess::Write)));
-    assert!(policy_change_allowed(&managed, true, Some(VaultAccess::Write)));
-    managed.caller_owns_entry = true;
-    assert!(policy_change_allowed(&managed, false, None));
 }
 
 #[test]
@@ -123,53 +151,6 @@ fn handler_refuses_before_the_broker_without_an_interactive_caller() {
     assert_eq!(error.kind, PERSONAL_VAULT_SESSION_ABSENT);
 }
 
-fn both_request() -> serde_json::Value {
-    json!({
-        "VolumePath": r"D:\Vaults\decoy.hc",
-        "Target": "both",
-        "OldPassword": "old-decoy-canary",
-        "NewPassword": "new-decoy-canary",
-        "OldHiddenPassword": "old-real-canary",
-        "NewHiddenPassword": "new-real-canary",
-        "OldHiddenKeyfiles": "[]",
-        "NewHiddenKeyfiles": json!([r"D:\keys\real.key"]).to_string(),
-        "NewHiddenPim": "600",
-    })
-}
-
-#[test]
-fn both_passwords_need_both_credentials_and_hold_every_keyfile() {
-    let parsed = validate_request(&both_request()).expect("valid request");
-    assert_eq!(parsed.target, "both");
-    assert_eq!(parsed.keyfiles, [r"D:\keys\real.key"]);
-    assert!(!format!("{parsed:?}").contains("canary"));
-    for (key, value) in [
-        ("OldHiddenPassword", json!("")),
-        ("NewHiddenPassword", json!(7)),
-        ("NewHiddenPim", json!("0")),
-        ("OldHiddenKeyfiles", json!([r"relative.key"])),
-    ] {
-        let mut args = both_request();
-        args[key] = value;
-        assert!(validate_request(&args).is_none(), "{key} must be rejected");
-    }
-    let mut missing = both_request();
-    missing.as_object_mut().unwrap().remove("NewHiddenPassword");
-    assert!(validate_request(&missing).is_none());
-}
-
-#[test]
-fn one_password_requests_accept_only_blank_real_password_fields() {
-    let mut args = request();
-    for key in HIDDEN_KEYS {
-        args[key] = json!("");
-    }
-    args["OldHiddenKeyfiles"] = json!("[]");
-    assert_eq!(validate_request(&args).unwrap().target, "hidden");
-    args["NewHiddenPassword"] = json!("filled-canary");
-    assert!(validate_request(&args).is_none(), "a filled real password would be silently ignored");
-}
-
 #[test]
 fn a_copied_as_path_selection_is_accepted() {
     let mut args = request();
@@ -179,51 +160,4 @@ fn a_copied_as_path_selection_is_accepted() {
     assert!(validate_request(&args).is_none());
     assert_eq!(selected_path("  \"D:\\a b\\c\"  "), r"D:\a b\c");
     assert_eq!(selected_path("\"unbalanced"), "\"unbalanced");
-}
-
-#[test]
-fn only_a_closed_refusal_of_both_passwords_becomes_its_own_code() {
-    for code in DUAL_REFUSALS {
-        let reply = json!({ "status": "password_refused", "code": code });
-        assert_eq!(dual_refusal("both", &reply), Some(code));
-        assert_eq!(dual_refusal("outer", &reply), None, "one-password replies never use these codes");
-    }
-    for reply in [
-        json!({ "status": "password_refused", "code": "wrong_password" }),
-        json!({ "status": "password_refused" }),
-        json!({ "status": "password_changed", "code": "wrong_real_password" }),
-    ] {
-        assert_eq!(dual_refusal("both", &reply), None, "{reply}");
-    }
-}
-
-/// The exact target the service resolves for an extensionless container in a
-/// folder with a space, on this PC's real filesystem, and its write proof.
-#[cfg(windows)]
-#[test]
-fn a_real_extensionless_container_resolves_and_passes_the_write_proof() {
-    use windows_sys::Win32::Security::{TOKEN_DUPLICATE, TOKEN_IMPERSONATE, TOKEN_QUERY};
-    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
-    let dir = std::env::temp_dir().join(format!("wc-chpw-target-{}", std::process::id()));
-    std::fs::create_dir_all(dir.join("New folder")).unwrap();
-    let file = dir.join("New folder").join("test3");
-    std::fs::write(&file, vec![0; 1 << 20]).unwrap();
-    let store = crate::vault_access::test_windows_fs_store(dir.join("policy"));
-    let mut args = request();
-    args["VolumePath"] = json!(format!("\"{}\"", file.display()));
-    args["Target"] = json!("outer");
-    let parsed = validate_request(&args).expect("the dialog's request is valid");
-    let target = store.password_change_target(&parsed.volume_path, "S-1-5-21-owner", 7).unwrap();
-    assert_eq!(target.entry_id, None);
-    assert!(target.container_path.ends_with(r"New folder\test3"));
-    let mut token = std::ptr::null_mut();
-    assert_ne!(
-        unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_IMPERSONATE, &mut token) },
-        0
-    );
-    let held = crate::vault_access::hold_password_change_files(&target, &[], token);
-    unsafe { windows_sys::Win32::Foundation::CloseHandle(token) };
-    assert!(held.is_ok());
-    drop(held);
-    let _ = std::fs::remove_dir_all(&dir);
 }

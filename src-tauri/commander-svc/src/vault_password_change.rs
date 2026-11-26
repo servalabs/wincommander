@@ -1,16 +1,15 @@
-//! `svc.vault.change_password_personal`: the service picks the container; the Pro broker, in the caller's token, rewrites one header or both.
+//! `svc.vault.change_password_personal`: the service picks the container; the Pro broker, in the caller's token, rewrites one header.
 
-use std::collections::HashSet;
 use std::path::Path;
-use std::time::Instant;
 
-use wincmd_shared::vault_access::{VaultAccess, VaultMountReason};
+use wincmd_shared::vault_access::VaultMountReason;
 
+use super::vault_password_target::{broker_on_held_target, failure_code, Refusals};
 use super::{
     peer_has_active_interactive_session, zeroize_json, AuthenticatedPipePeer, VerbError,
-    PERSONAL_VAULT_SESSION_ABSENT, PERSONAL_VAULT_UNAUTHORIZED,
+    PERSONAL_VAULT_SESSION_ABSENT,
 };
-use crate::vault_access::{PasswordChangeTarget, VaultAccessStore, VaultError};
+use crate::vault_access::VaultAccessStore;
 use crate::vault_mount::VaultMountBroker;
 
 const BROKER_FEATURE: &str = "vault.broker.change_password_personal";
@@ -25,21 +24,13 @@ const ALLOWED_KEYS: [&str; 9] = [
     "OldKeyfiles",
     "NewKeyfiles",
 ];
-/// The real (hidden) password of a decoy vault, sent only with Target "both".
-const HIDDEN_KEYS: [&str; 6] = [
-    "OldHiddenPassword",
-    "NewHiddenPassword",
-    "OldHiddenPim",
-    "NewHiddenPim",
-    "OldHiddenKeyfiles",
-    "NewHiddenKeyfiles",
-];
-/// Closed codes the broker returns when it refused a change of both passwords before writing.
-const DUAL_REFUSALS: [&str; 3] = ["wrong_decoy_password", "wrong_real_password", "wrong_both_passwords"];
+/// The proven current real password, with Target "outer" only: it alone lets the
+/// engine refuse a new decoy password that opens the hidden header too.
+const HIDDEN_KEYS: [&str; 3] = ["HiddenPassword", "HiddenPim", "HiddenKeyfiles"];
 const MAX_PIM: u64 = 2_147_468;
 
 /// Overwrites every credential string however the handler returns.
-struct SecretArgs(serde_json::Value);
+pub(super) struct SecretArgs(pub(super) serde_json::Value);
 
 impl Drop for SecretArgs {
     fn drop(&mut self) {
@@ -52,6 +43,7 @@ pub(super) struct PasswordChangeRequest {
     pub(super) volume_path: String,
     pub(super) target: &'static str,
     pub(super) keyfiles: Vec<String>,
+    pub(super) checks_collision: bool,
 }
 
 impl Drop for PasswordChangeRequest {
@@ -70,6 +62,32 @@ pub(super) fn selected_path(text: &str) -> &str {
         .map_or(trimmed, str::trim)
 }
 
+/// An absolute file path, or a partition path with `TargetKind` "device".
+pub(super) fn volume_path(object: &serde_json::Map<String, serde_json::Value>) -> Option<&str> {
+    let volume_path = selected_path(object.get("VolumePath")?.as_str()?);
+    let is_device = wincmd_shared::vault_access::is_supported_vault_device_path(volume_path);
+    let valid = match object.get("TargetKind").map(|kind| (kind, kind.as_str())) {
+        None | Some((serde_json::Value::Null, _)) | Some((_, Some("" | "file"))) => {
+            !is_device && Path::new(volume_path).is_absolute()
+        }
+        Some((_, Some("device"))) => is_device,
+        Some(_) => false,
+    };
+    valid.then_some(volume_path)
+}
+
+/// The keyfiles of one credential; `None` when the field is malformed or the credential is empty.
+pub(super) fn credential_keyfiles(
+    object: &serde_json::Map<String, serde_json::Value>,
+    password_key: &str,
+    keyfiles_key: &str,
+) -> Option<Vec<String>> {
+    let password = object.get(password_key)?.as_str()?;
+    let keyfiles = keyfile_paths(object.get(keyfiles_key))?;
+    // VeraCrypt accepts keyfiles alone, but never an empty credential.
+    (!password.is_empty() || !keyfiles.is_empty()).then_some(keyfiles)
+}
+
 /// Checks the request shape only; it never copies a password out of `args`.
 pub(super) fn validate_request(args: &serde_json::Value) -> Option<PasswordChangeRequest> {
     let object = args.as_object()?;
@@ -79,58 +97,40 @@ pub(super) fn validate_request(args: &serde_json::Value) -> Option<PasswordChang
     {
         return None;
     }
-    let volume_path = selected_path(object.get("VolumePath")?.as_str()?);
-    let is_device = wincmd_shared::vault_access::is_supported_vault_device_path(volume_path);
-    let valid_path = match object.get("TargetKind").map(|kind| (kind, kind.as_str())) {
-        None | Some((serde_json::Value::Null, _)) | Some((_, Some("" | "file"))) => {
-            !is_device && Path::new(volume_path).is_absolute()
-        }
-        Some((_, Some("device"))) => is_device,
-        Some(_) => false,
-    };
-    if !valid_path {
-        return None;
-    }
+    let volume_path = volume_path(object)?;
     let target = match object.get("Target") {
         None | Some(serde_json::Value::Null) => "outer",
         Some(serde_json::Value::String(value)) if value == "outer" => "outer",
         Some(serde_json::Value::String(value)) if value == "hidden" => "hidden",
-        Some(serde_json::Value::String(value)) if value == "both" => "both",
         Some(_) => return None,
     };
-    let both = target == "both";
-    // A form may send blank real-password fields for one password; filled ones would be ignored silently.
-    if !both && HIDDEN_KEYS.iter().any(|key| !blank(object.get(*key))) {
+    let checks_collision = !blank(object.get("HiddenPassword")) || !blank(object.get("HiddenKeyfiles"));
+    // A real password sent with anything but a decoy change would be ignored silently.
+    if (target == "hidden" || !checks_collision) && HIDDEN_KEYS.iter().any(|key| !blank(object.get(*key))) {
         return None;
     }
-    if !["OldPim", "NewPim", "OldHiddenPim", "NewHiddenPim"]
-        .into_iter()
-        .all(|key| valid_pim(object.get(key)))
-    {
+    if !["OldPim", "NewPim", "HiddenPim"].into_iter().all(|key| valid_pim(object.get(key))) {
         return None;
     }
-    let mut request = PasswordChangeRequest {
-        volume_path: volume_path.to_owned(),
-        target,
-        keyfiles: Vec::new(),
-    };
-    let mut credentials = vec![("OldPassword", "OldKeyfiles"), ("NewPassword", "NewKeyfiles")];
-    if both {
-        credentials.extend([
-            ("OldHiddenPassword", "OldHiddenKeyfiles"),
-            ("NewHiddenPassword", "NewHiddenKeyfiles"),
-        ]);
-    }
-    for (password_key, keyfiles_key) in credentials {
-        let password = object.get(password_key)?.as_str()?;
-        let keyfiles = keyfile_paths(object.get(keyfiles_key))?;
-        // VeraCrypt accepts keyfiles alone, but never an empty credential.
-        if password.is_empty() && keyfiles.is_empty() {
+    let mut keyfiles = credential_keyfiles(object, "OldPassword", "OldKeyfiles")?;
+    keyfiles.extend(credential_keyfiles(object, "NewPassword", "NewKeyfiles")?);
+    if checks_collision {
+        let password = match object.get("HiddenPassword") {
+            None | Some(serde_json::Value::Null) => "",
+            Some(value) => value.as_str()?,
+        };
+        let hidden = keyfile_paths(object.get("HiddenKeyfiles"))?;
+        if password.is_empty() && hidden.is_empty() {
             return None;
         }
-        request.keyfiles.extend(keyfiles);
+        keyfiles.extend(hidden);
     }
-    Some(request)
+    Some(PasswordChangeRequest {
+        volume_path: volume_path.to_owned(),
+        target,
+        keyfiles,
+        checks_collision,
+    })
 }
 
 fn blank(value: Option<&serde_json::Value>) -> bool {
@@ -142,7 +142,7 @@ fn blank(value: Option<&serde_json::Value>) -> bool {
     }
 }
 
-fn valid_pim(value: Option<&serde_json::Value>) -> bool {
+pub(super) fn valid_pim(value: Option<&serde_json::Value>) -> bool {
     match value {
         None | Some(serde_json::Value::Null) => true,
         Some(serde_json::Value::String(text)) if text.is_empty() => true,
@@ -171,69 +171,16 @@ fn keyfile_paths(value: Option<&serde_json::Value>) -> Option<Vec<String>> {
         .then_some(paths)
 }
 
-/// Bare codes are the shared contract the app maps to its own wording.
-pub(super) fn failure_code(reason: VaultMountReason) -> &'static str {
-    match reason {
-        VaultMountReason::WrongPassword | VaultMountReason::EngineUnlockFailed => "wrong_password",
-        VaultMountReason::WrongHeader => "wrong_header",
-        VaultMountReason::NewPasswordCollides => "new_password_collides",
-        VaultMountReason::WeakNewPassword => "weak_new_password",
-        VaultMountReason::AlreadyMounted => "volume_mounted",
-        VaultMountReason::EngineFailed => "engine_failed",
-        other => VaultMountBroker::personal_mount_failure_code(other),
-    }
-}
-
-/// The broker's "nothing written" reply for a change of both passwords, as one of [`DUAL_REFUSALS`].
-pub(super) fn dual_refusal(target: &str, reply: &serde_json::Value) -> Option<&'static str> {
-    if target != "both" || reply.get("status").and_then(serde_json::Value::as_str) != Some("password_refused") {
-        return None;
-    }
-    let code = reply.get("code").and_then(serde_json::Value::as_str)?;
-    DUAL_REFUSALS.into_iter().find(|known| *known == code)
-}
-
-fn dual_refusal_diagnostic(code: &str) -> &'static str {
-    match code {
-        "wrong_decoy_password" => "VLT.PASSWORD.WRONG_DECOY_PASSWORD",
-        "wrong_real_password" => "VLT.PASSWORD.WRONG_REAL_PASSWORD",
-        _ => "VLT.PASSWORD.WRONG_BOTH_PASSWORDS",
-    }
-}
-
-/// A policy Vault needs its owner or a write grant; a personal one is checked
-/// by [`VaultAccessStore::password_change_target`].
-pub(super) fn policy_change_allowed(
-    target: &PasswordChangeTarget,
-    granted: bool,
-    access: Option<VaultAccess>,
-) -> bool {
-    target.entry_id.is_none()
-        || target.caller_owns_entry
-        || (granted && access == Some(VaultAccess::Write))
-}
-
-fn target_refusal(error: VaultError) -> (&'static str, VerbError) {
-    match error {
-        VaultError::ContainerIdentity => (
-            "VLT.PASSWORD.IDENTITY_CHANGED",
-            VerbError::new(
-                "vault_policy_identity_changed",
-                "the selected container is not the registered Vault",
-            ),
-        ),
-        VaultError::Forbidden => (
-            "VLT.PASSWORD.NOT_AUTHORIZED",
-            VerbError::new(PERSONAL_VAULT_UNAUTHORIZED, "the selected Vault belongs to another account"),
-        ),
-        VaultError::Validation => (
-            "VLT.PASSWORD.INVALID_TARGET",
-            VerbError::new("vault_validation_failed", "the selected container could not be found"),
-        ),
-        _ => (
-            "VLT.PASSWORD.POLICY_UNAVAILABLE",
-            VerbError::new("vault_policy_unavailable", "the selected Vault policy could not be verified"),
-        ),
+pub(super) fn interactive_peer<'a>(
+    peer: Option<&'a AuthenticatedPipePeer>,
+    log: &Refusals,
+) -> Result<&'a AuthenticatedPipePeer, VerbError> {
+    match peer {
+        Some(peer) if !peer.caller_sid().is_empty() && peer_has_active_interactive_session(peer) => Ok(peer),
+        _ => Err(log.refuse((
+            "VLT.PASSWORD.SESSION_UNAVAILABLE",
+            VerbError::new(PERSONAL_VAULT_SESSION_ABSENT, "no interactive Windows session"),
+        ))),
     }
 }
 
@@ -245,129 +192,44 @@ pub(super) async fn handle(
     peer: Option<&AuthenticatedPipePeer>,
 ) -> Result<serde_json::Value, VerbError> {
     let mut args = SecretArgs(args);
-    let started = Instant::now();
-    let diagnostic_id = format!("VLT-{operation_id}");
-    let refuse = |code: &'static str, next: &'static str, error: VerbError| {
-        crate::diagnostics::record_vault_failure(&diagnostic_id, "change_password", code, next, false, started);
-        error
-    };
-    let peer = match peer {
-        Some(peer) if !peer.caller_sid().is_empty() && peer_has_active_interactive_session(peer) => peer,
-        _ => {
-            return Err(refuse(
-                "VLT.PASSWORD.SESSION_UNAVAILABLE",
-                "sign_in_interactively",
-                VerbError::new(PERSONAL_VAULT_SESSION_ABSENT, "no interactive Windows session"),
-            ))
-        }
-    };
+    let log = Refusals::new(operation_id, "change_password");
+    let peer = interactive_peer(peer, &log)?;
     let Some(request) = validate_request(&args.0) else {
-        return Err(refuse(
+        return Err(log.refuse((
             "VLT.PASSWORD.REQUEST_INVALID",
-            "review_request",
             VerbError::new("vault_validation_failed", "password change request is invalid"),
-        ));
+        )));
     };
-    let resolve = || {
-        vault_access.password_change_target(&request.volume_path, peer.caller_sid(), peer.session_id())
-    };
-    let target = resolve().map_err(|error| {
-        let (code, verb_error) = target_refusal(error);
-        refuse(code, "review_selected_target", verb_error)
-    })?;
-    if let Some(entry_id) = &target.entry_id {
-        let authorization =
-            crate::vault_access::authorize_mount_for_token(vault_access, entry_id, peer.token());
-        if !policy_change_allowed(&target, authorization.allowed, authorization.mode) {
-            return Err(refuse(
-                "VLT.PASSWORD.NOT_AUTHORIZED",
-                "request_authorization",
-                VerbError::new(PERSONAL_VAULT_UNAUTHORIZED, "caller cannot change this Vault's password"),
-            ));
-        }
-    }
-    // Held under the mount lock so no mount can start while the header is rewritten.
-    vault_mount.with_exclusive_operation(|| {
-        if resolve().ok().as_ref() != Some(&target) {
-            return Err(refuse(
-                "VLT.PASSWORD.IDENTITY_CHANGED",
-                "review_selected_target",
-                VerbError::new("vault_policy_identity_changed", "the selected container changed"),
-            ));
-        }
-        let entry_ids: HashSet<String> = target.entry_id.iter().cloned().collect();
-        let identities = HashSet::from([target.container_identity.clone()]);
-        if let Err(reason) = vault_mount.reject_policy_changes_while_mounted_locked(&entry_ids, &identities) {
-            crate::diagnostics::record_vault_password_change(&diagnostic_id, Some(reason), started);
-            return Err(VerbError::new(failure_code(reason), "dismount the Vault before changing its password"));
-        }
-        let _held = crate::vault_access::hold_password_change_files(&target, &request.keyfiles, peer.token())
-            .map_err(|error| match error {
-                VaultError::ContainerIdentity => refuse(
-                    "VLT.PASSWORD.IDENTITY_CHANGED",
-                    "review_selected_target",
-                    VerbError::new("vault_policy_identity_changed", "the selected container changed"),
-                ),
-                _ => refuse(
-                    "VLT.PASSWORD.CALLER_ACCESS_DENIED",
-                    "check_container_permissions",
-                    VerbError::new(
-                        VaultMountBroker::personal_mount_failure_code(VaultMountReason::CallerAccessDenied),
-                        "this account cannot write the container or read its keyfiles",
-                    ),
-                ),
-            })?;
-        if request.target != "both" {
-            if let Some(object) = args.0.as_object_mut() {
-                for key in HIDDEN_KEYS {
-                    if let Some(mut value) = object.remove(key) {
-                        zeroize_json(&mut value);
-                    }
+    if !request.checks_collision {
+        if let Some(object) = args.0.as_object_mut() {
+            for key in HIDDEN_KEYS {
+                if let Some(mut value) = object.remove(key) {
+                    zeroize_json(&mut value);
                 }
             }
         }
-        args.0["VolumePath"] = serde_json::Value::String(target.container_path.clone());
-        args.0["TargetSessionId"] = serde_json::Value::from(peer.session_id());
-        let result = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(crate::pro_broker::vault_call(
-                crate::pro_broker::VaultCall {
-                    request_id: operation_id,
-                    target_session_id: peer.session_id(),
-                    caller_sid: peer.caller_sid(),
-                    caller_token: Some(peer.token()),
-                    caller_authentication_id: Some(peer.authentication_id()),
-                    presentation: wincmd_shared::vault_access::VaultPresentation::PerUser,
-                    feature_id: BROKER_FEATURE,
-                    args: args.0.take(),
-                },
-            ))
-        });
-        if let Some(code) = result.as_ref().ok().and_then(|reply| dual_refusal(request.target, reply)) {
-            crate::diagnostics::record_vault_failure(
-                &diagnostic_id,
-                "change_password",
-                dual_refusal_diagnostic(code),
-                "check_current_credentials",
-                true,
-                started,
-            );
-            return Err(VerbError::new(code, "neither Vault password was changed"));
-        }
-        let failure = match &result {
-            Ok(reply) if reply.get("status").and_then(serde_json::Value::as_str) == Some("password_changed") => None,
-            Ok(_) => Some(VaultMountReason::BrokerReplyRejected),
-            Err(reason) => Some(*reason),
-        };
-        crate::diagnostics::record_vault_password_change(&diagnostic_id, failure, started);
-        match failure {
-            None => Ok(serde_json::json!({
-                "status": "password_changed",
-                "path": target.container_path,
-                "target": request.target,
-            })),
-            Some(reason) => Err(VerbError::new(failure_code(reason), "the Vault password was not changed")),
-        }
-    })
+    }
+    let (path, result) = broker_on_held_target(
+        &log,
+        operation_id,
+        vault_access,
+        vault_mount,
+        peer,
+        &request.volume_path,
+        &request.keyfiles,
+        BROKER_FEATURE,
+        &mut args.0,
+    )?;
+    let failure = match &result {
+        Ok(reply) if reply.get("status").and_then(serde_json::Value::as_str) == Some("password_changed") => None,
+        Ok(_) => Some(VaultMountReason::BrokerReplyRejected),
+        Err(reason) => Some(*reason),
+    };
+    log.record(failure);
+    match failure {
+        None => Ok(serde_json::json!({ "status": "password_changed", "path": path, "target": request.target })),
+        Some(reason) => Err(VerbError::new(failure_code(reason), "the Vault password was not changed")),
+    }
 }
 
 #[cfg(test)]

@@ -63,18 +63,16 @@ pub enum RenameRecord {
     Unregistered,
 }
 
-/// One row of `svc.vault.display_names`. `kind` is set only when WinCommander
-/// recorded it; VeraCrypt itself cannot tell a decoy vault without its real password.
+/// One row of `svc.vault.display_names`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VaultDisplayName {
     pub path: String,
     pub name: String,
-    pub kind: Option<&'static str>,
 }
 
 impl VaultDisplayName {
-    fn new(path: String, name: String, kind: Option<&'static str>) -> Self {
-        Self { path, name, kind }
+    fn new(path: String, name: String) -> Self {
+        Self { path, name }
     }
 }
 
@@ -124,24 +122,18 @@ impl VaultAccessStore {
 
     /// Writes only the names file, pruning names of records that no longer
     /// exist; a failed save leaves the previous names in memory and on disk.
+    /// `target` was resolved in the caller's token, so the record is found by
+    /// identity: the service itself may not be able to open the container's folder.
     pub(crate) fn rename_personal_vault(
         &self,
         target: &PasswordChangeTarget,
         owner_sid: &str,
         name: &str,
     ) -> Result<(), VaultError> {
-        let record = self
-            .personal_record_for_path(&target.container_path)?
-            .ok_or(VaultError::Validation)?;
+        let mut state = self.state.lock().map_err(|_| VaultError::Persistence)?;
+        let record = single_record_for(&state, target)?.ok_or(VaultError::Validation)?;
         if record.owner_sid != owner_sid {
             return Err(VaultError::Forbidden);
-        }
-        if record.container_identity != target.container_identity {
-            return Err(VaultError::ContainerIdentity);
-        }
-        let mut state = self.state.lock().map_err(|_| VaultError::Persistence)?;
-        if state.personal.get(&personal_key(&record.container_path)) != Some(&record) {
-            return Err(VaultError::Persistence);
         }
         self.save_name(
             &mut state,
@@ -165,12 +157,10 @@ impl VaultAccessStore {
         if target.entry_id.is_some() || caller_sid.is_empty() {
             return Err(VaultError::Validation);
         }
-        if !wincmd_shared::vault_access::is_supported_vault_device_path(&target.container_path)
-            && self.personal_record_for_path(&target.container_path)?.is_some()
-        {
+        let mut state = self.state.lock().map_err(|_| VaultError::Persistence)?;
+        if single_record_for(&state, target)?.is_some() {
             return Err(VaultError::ContainerIdentity);
         }
-        let mut state = self.state.lock().map_err(|_| VaultError::Persistence)?;
         self.save_name(
             &mut state,
             PersonalVaultName {
@@ -262,7 +252,7 @@ impl VaultAccessStore {
             .filter(|record| state.personal_registry_healthy && record.owner_sid == caller_sid)
             .filter_map(|record| {
                 let name = state.personal_names.name_for(record)?;
-                Some(VaultDisplayName::new(record.container_path.clone(), name.to_owned(), None))
+                Some(VaultDisplayName::new(record.container_path.clone(), name.to_owned()))
             })
             .collect();
         personal.extend(
@@ -273,7 +263,7 @@ impl VaultAccessStore {
                 .filter(|entry| entry.owner_sid == caller_sid)
                 .filter_map(|entry| {
                     let path = entry.container_path.clone()?;
-                    Some(VaultDisplayName::new(path, entry.name.clone(), None))
+                    Some(VaultDisplayName::new(path, entry.name.clone()))
                 }),
         );
         let entries: Vec<(String, VaultDisplayName, bool)> = state
@@ -286,13 +276,9 @@ impl VaultAccessStore {
                     .entries
                     .iter()
                     .map(|entry| {
-                        let kind = match entry.container_kind {
-                            wincmd_shared::vault_access::VaultContainerKind::Dual => "decoy",
-                            wincmd_shared::vault_access::VaultContainerKind::Standard => "standard",
-                        };
                         (
                             entry.id.clone(),
-                            VaultDisplayName::new(entry.container_path.clone(), entry.label.clone(), Some(kind)),
+                            VaultDisplayName::new(entry.container_path.clone(), entry.label.clone()),
                             entry.primary_owner_sid.as_deref() == Some(caller_sid),
                         )
                     })
@@ -310,4 +296,20 @@ impl VaultAccessStore {
         names.extend(personal);
         names
     }
+}
+
+/// The one personal record of `target`'s file; a hard-linked second record fails closed.
+fn single_record_for(state: &State, target: &PasswordChangeTarget) -> Result<Option<PersonalVaultRecord>, VaultError> {
+    if !state.personal_registry_healthy {
+        return Err(VaultError::Persistence);
+    }
+    let mut records = state
+        .personal
+        .values()
+        .filter(|record| record.container_identity == target.container_identity);
+    let record = records.next().cloned();
+    if records.next().is_some() {
+        return Err(VaultError::Persistence);
+    }
+    Ok(record)
 }

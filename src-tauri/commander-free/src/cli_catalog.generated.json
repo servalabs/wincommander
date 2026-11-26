@@ -7345,6 +7345,14 @@
       "frontendReferences": []
     },
     {
+      "id": "backend:Test\u002dEncryptionVolumePassword",
+      "name": "Test\u002dEncryptionVolumePassword",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": []
+    },
+    {
       "id": "backend:Test\u002dOneDriveInstalled",
       "name": "Test\u002dOneDriveInstalled",
       "transport": "backend\u002dscript",

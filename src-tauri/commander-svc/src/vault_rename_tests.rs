@@ -27,6 +27,26 @@ fn request(path: &str, name: &str) -> RenameRequest {
     validate_request(&json!({ "container_path": path, "name": name })).unwrap()
 }
 
+/// The production flow with the lookup run in this process instead of a caller's token.
+fn rename_as(
+    store: &VaultAccessStore,
+    broker: &VaultMountBroker,
+    caller_sid: &str,
+    session_id: u32,
+    request: &RenameRequest,
+    write_grant: &dyn Fn(&str) -> (bool, Option<VaultAccess>),
+    prove_write: &dyn Fn(&PasswordChangeTarget) -> Result<(), VaultError>,
+) -> Result<serde_json::Value, VerbError> {
+    rename_for_caller(
+        store,
+        broker,
+        caller_sid,
+        request,
+        &|| store.rename_target(&request.container_path, caller_sid, session_id).map_err(TargetLookupError::Vault),
+        write_grant,
+        &|target| prove_write(target).map_err(TargetLookupError::Vault),
+    )
+}
 fn store_with_personal_vault() -> (VaultAccessStore, String) {
     let store = crate::vault_access::test_policy_store();
     let identity = store
@@ -88,7 +108,7 @@ fn personal_name(store: &VaultAccessStore) -> Option<String> {
 fn the_owner_renames_a_registered_personal_vault() {
     let (store, _) = store_with_personal_vault();
     let broker = crate::vault_mount::test_broker_with_mount(None);
-    let reply = rename_for_caller(&store, &broker, OWNER, 7, &request(PERSONAL_PATH, "  Taxes "), &no_grant, &writable).unwrap();
+    let reply = rename_as(&store, &broker, OWNER, 7, &request(PERSONAL_PATH, "  Taxes "), &no_grant, &writable).unwrap();
     assert_eq!(reply, json!({ "status": "renamed", "name": "Taxes" }));
     assert_eq!(personal_name(&store).as_deref(), Some("Taxes"));
 }
@@ -97,7 +117,7 @@ fn the_owner_renames_a_registered_personal_vault() {
 fn another_account_cannot_rename_a_personal_vault() {
     let (store, _) = store_with_personal_vault();
     let broker = crate::vault_mount::test_broker_with_mount(None);
-    let error = rename_for_caller(&store, &broker, OTHER, 8, &request(PERSONAL_PATH, "Mine"), &no_grant, &writable).unwrap_err();
+    let error = rename_as(&store, &broker, OTHER, 8, &request(PERSONAL_PATH, "Mine"), &no_grant, &writable).unwrap_err();
     assert_eq!(error.kind, PERSONAL_VAULT_UNAUTHORIZED);
     assert_eq!(personal_name(&store), None);
 }
@@ -107,7 +127,7 @@ fn a_write_grant_renames_a_policy_vault_and_a_read_grant_does_not() {
     let store = store_with_policy_vault();
     let broker = crate::vault_mount::test_broker_with_mount(None);
     let rename = |access: Option<VaultAccess>, name: &str| {
-        rename_for_caller(&store, &broker, OTHER, 8, &request(POLICY_PATH, name), &move |_| (access.is_some(), access), &read_only)
+        rename_as(&store, &broker, OTHER, 8, &request(POLICY_PATH, name), &move |_| (access.is_some(), access), &read_only)
     };
     assert_eq!(rename(Some(VaultAccess::Read), "Read only").unwrap_err().kind, PERSONAL_VAULT_UNAUTHORIZED);
     assert_eq!(rename(None, "No grant").unwrap_err().kind, PERSONAL_VAULT_UNAUTHORIZED);
@@ -121,14 +141,14 @@ fn a_write_grant_renames_a_policy_vault_and_a_read_grant_does_not() {
 fn a_mounted_vault_is_refused_and_keeps_its_name() {
     let (store, identity) = store_with_personal_vault();
     let broker = crate::vault_mount::test_broker_with_mount(Some(&identity));
-    let error = rename_for_caller(&store, &broker, OWNER, 7, &request(PERSONAL_PATH, "Taxes"), &no_grant, &writable).unwrap_err();
+    let error = rename_as(&store, &broker, OWNER, 7, &request(PERSONAL_PATH, "Taxes"), &no_grant, &writable).unwrap_err();
     assert_eq!(error.kind, "volume_mounted");
     assert_eq!(personal_name(&store), None);
 
     let policy = store_with_policy_vault();
     let policy_identity = policy.password_change_target(POLICY_PATH, OWNER, 7).unwrap().container_identity;
     let broker = crate::vault_mount::test_broker_with_mount(Some(&policy_identity));
-    let error = rename_for_caller(&policy, &broker, OTHER, 8, &request(POLICY_PATH, "Finance"), &|_| {
+    let error = rename_as(&policy, &broker, OTHER, 8, &request(POLICY_PATH, "Finance"), &|_| {
         (true, Some(VaultAccess::Write))
     }, &read_only)
     .unwrap_err();
@@ -141,12 +161,12 @@ fn an_unregistered_container_is_named_for_the_caller_only_after_a_write_proof() 
     let store = crate::vault_access::test_policy_store();
     let broker = crate::vault_mount::test_broker_with_mount(None);
     let names = |caller: &str| store.display_names_for_caller(caller, |_| false);
-    let error = rename_for_caller(&store, &broker, OWNER, 7, &request(PERSONAL_PATH, "Taxes"), &no_grant, &read_only)
+    let error = rename_as(&store, &broker, OWNER, 7, &request(PERSONAL_PATH, "Taxes"), &no_grant, &read_only)
         .unwrap_err();
     assert_eq!(error.kind, "vault_caller_access_denied");
     assert!(names(OWNER).is_empty());
     for path in [PERSONAL_PATH, r"\Device\Harddisk1\Partition1"] {
-        rename_for_caller(&store, &broker, OWNER, 7, &request(path, "Taxes"), &no_grant, &writable).unwrap();
+        rename_as(&store, &broker, OWNER, 7, &request(path, "Taxes"), &no_grant, &writable).unwrap();
     }
     assert_eq!(names(OWNER).len(), 2);
     assert!(names(OTHER).is_empty(), "another account never sees this caller's names");
@@ -160,7 +180,7 @@ fn a_mounted_unregistered_container_is_refused_before_the_write_proof() {
     let identity = store.password_change_target(PERSONAL_PATH, OWNER, 7).unwrap().container_identity;
     let broker = crate::vault_mount::test_broker_with_mount(Some(&identity));
     let proved = std::cell::Cell::new(false);
-    let error = rename_for_caller(&store, &broker, OWNER, 7, &request(PERSONAL_PATH, "Taxes"), &no_grant, &|_| {
+    let error = rename_as(&store, &broker, OWNER, 7, &request(PERSONAL_PATH, "Taxes"), &no_grant, &|_| {
         proved.set(true);
         Ok(())
     })
@@ -217,9 +237,15 @@ mod real_files {
     fn rename(store: &VaultAccessStore, path: &str, name: &str, token: &ProcessToken) -> Result<serde_json::Value, VerbError> {
         let broker = crate::vault_mount::test_broker_with_mount(None);
         let request = validate_request(&json!({ "container_path": path, "name": name })).expect("valid request");
-        rename_for_caller(store, &broker, OWNER, 7, &request, &no_grant, &|target| {
-            crate::vault_access::hold_password_change_files(target, &[], token.0).map(drop)
-        })
+        rename_for_caller(
+            store,
+            &broker,
+            OWNER,
+            &request,
+            &|| store.rename_target_as_caller(&request.container_path, OWNER, 7, token.0),
+            &no_grant,
+            &|target| prove_write_as_caller(target, token.0),
+        )
     }
 
     #[test]
@@ -256,19 +282,19 @@ mod real_files {
         std::fs::set_permissions(&file, read_only).unwrap();
         let store = crate::vault_access::test_windows_fs_store(dir.0.join("policy"));
         let error = rename(&store, &file.to_string_lossy(), "Nope", &own_token()).unwrap_err();
-        assert_eq!(error.kind, "vault_caller_access_denied");
+        assert_eq!(error.kind, "vault_access_denied");
         assert!(store.display_names_for_caller(OWNER, |_| false).is_empty());
         assert!(!dir.0.join("policy").join("vault-personal-names-v1.json").exists());
         std::fs::set_permissions(&file, writable).unwrap();
     }
 
     #[test]
-    fn a_missing_container_is_reported_as_not_the_selected_vault() {
+    fn a_missing_container_is_reported_as_not_found() {
         let dir = temp_dir("missing");
         let store = crate::vault_access::test_windows_fs_store(dir.0.join("policy"));
         let missing = dir.0.join("New folder").join("absent");
         let error = rename(&store, &missing.to_string_lossy(), "Ghost", &own_token()).unwrap_err();
-        assert_eq!(error.kind, "vault_policy_identity_changed");
+        assert_eq!(error.kind, "vault_file_not_found");
     }
 }
 

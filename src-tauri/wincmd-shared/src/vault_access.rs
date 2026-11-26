@@ -691,14 +691,13 @@ pub enum VaultMountReason {
     FormatFilesOpen,
     CreateTimeout,
     WrongPassword,
-    WrongHeader,
     NewPasswordCollides,
     WeakNewPassword,
     EngineFailed,
 }
 
 impl VaultMountReason {
-    pub const ALL: [Self; 38] = [
+    pub const ALL: [Self; 37] = [
         Self::NotAuthorized,
         Self::AdministratorRequired,
         Self::PolicyAccessDenied,
@@ -733,13 +732,12 @@ impl VaultMountReason {
         Self::FormatFilesOpen,
         Self::CreateTimeout,
         Self::WrongPassword,
-        Self::WrongHeader,
         Self::NewPasswordCollides,
         Self::WeakNewPassword,
         Self::EngineFailed,
     ];
 
-    pub const ALL_WIRE_VALUES: [&'static str; 38] = [
+    pub const ALL_WIRE_VALUES: [&'static str; 37] = [
         "not_authorized",
         "administrator_required",
         "policy_access_denied",
@@ -774,7 +772,6 @@ impl VaultMountReason {
         "format_files_open",
         "create_timeout",
         "wrong_password",
-        "wrong_header",
         "new_password_collides",
         "weak_new_password",
         "engine_failed",
@@ -816,7 +813,6 @@ impl VaultMountReason {
             Self::FormatFilesOpen => "format_files_open",
             Self::CreateTimeout => "create_timeout",
             Self::WrongPassword => "wrong_password",
-            Self::WrongHeader => "wrong_header",
             Self::NewPasswordCollides => "new_password_collides",
             Self::WeakNewPassword => "weak_new_password",
             Self::EngineFailed => "engine_failed",
@@ -861,7 +857,6 @@ impl VaultMountReason {
             "format_files_open" | "vault_format_files_open" => Some(Self::FormatFilesOpen),
             "create_timeout" | "vault_create_timeout" => Some(Self::CreateTimeout),
             "wrong_password" | "vault_wrong_password" => Some(Self::WrongPassword),
-            "wrong_header" | "vault_wrong_header" => Some(Self::WrongHeader),
             "new_password_collides" | "vault_new_password_collides" => Some(Self::NewPasswordCollides),
             "weak_new_password" | "vault_weak_new_password" => Some(Self::WeakNewPassword),
             "engine_failed" | "vault_engine_failed" => Some(Self::EngineFailed),
@@ -1461,7 +1456,6 @@ mod tests {
             ("vault_format_files_open", VaultMountReason::FormatFilesOpen),
             ("vault_create_timeout", VaultMountReason::CreateTimeout),
             ("vault_wrong_password", VaultMountReason::WrongPassword),
-            ("vault_wrong_header", VaultMountReason::WrongHeader),
             ("vault_new_password_collides", VaultMountReason::NewPasswordCollides),
             ("vault_weak_new_password", VaultMountReason::WeakNewPassword),
             ("vault_engine_failed", VaultMountReason::EngineFailed),

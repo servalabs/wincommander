@@ -8,6 +8,11 @@ use std::sync::Mutex;
 
 #[path = "vault_access/access_directory_mutation.rs"]
 mod access_directory_mutation;
+#[path = "vault_access/caller_lookup.rs"]
+mod caller_lookup;
+#[cfg(windows)]
+pub(crate) use caller_lookup::container_fault_as_caller;
+pub use caller_lookup::{FileFault, TargetLookupError};
 #[path = "vault_access/display_name.rs"]
 mod display_name;
 pub use display_name::{RenameRecord, VaultDisplayName};
