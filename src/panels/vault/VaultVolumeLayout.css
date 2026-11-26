@@ -35,7 +35,7 @@
 
 .encrypted-volumes-table th:first-child { width: 64px; }
 .encrypted-volumes-table th:nth-child(2) { width: 112px; }
-.encrypted-volumes-table th:last-child { width: 156px; }
+.encrypted-volumes-table th:last-child { width: 182px; }
 
 .encrypted-volumes-table .path-cell {
   max-width: none;

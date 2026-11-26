@@ -1,29 +1,43 @@
 import { describe, expect, test } from "bun:test";
 import {
+  EMPTY_HEADER_CREDENTIALS,
   EMPTY_PASSWORD_CHANGE_FORM,
   buildPasswordChangeRequest,
   passwordChangeFormProblem,
-  passwordChangeTarget,
   vaultPasswordChangeErrorMessage,
+  withoutPasswords,
+  type HeaderCredentials,
   type VaultPasswordChangeForm,
 } from "./vaultPasswordChange";
 
-const form = (changes: Partial<VaultPasswordChangeForm> = {}): VaultPasswordChangeForm => ({
-  ...EMPTY_PASSWORD_CHANGE_FORM,
-  volumePath: "D:\\Vaults\\notes.hc",
-  oldPassword: "old secret",
-  newPassword: "new secret",
-  confirmPassword: "new secret",
+const header = (oldPassword: string, newPassword: string, changes: Partial<HeaderCredentials> = {}): HeaderCredentials => ({
+  ...EMPTY_HEADER_CREDENTIALS,
+  oldPassword,
+  newPassword,
+  confirmPassword: newPassword,
   ...changes,
 });
 
-describe("vault password change form", () => {
+const form = (changes: Partial<HeaderCredentials> = {}): VaultPasswordChangeForm => ({
+  ...EMPTY_PASSWORD_CHANGE_FORM,
+  volumePath: "D:\\Vaults\\notes.hc",
+  outer: header("old secret", "new secret", changes),
+});
+
+const decoyForm = (decoy: Partial<HeaderCredentials> = {}, real: Partial<HeaderCredentials> = {}): VaultPasswordChangeForm => ({
+  volumePath: "D:\\Vaults\\notes.hc",
+  vaultKind: "decoy",
+  outer: header("old decoy", "new decoy", decoy),
+  hidden: header("old real", "new real", real),
+});
+
+describe("standard vault password change form", () => {
   test("a complete form has no problem", () => {
     expect(passwordChangeFormProblem(form())).toBeNull();
   });
 
   test("requires a vault file, the current password and a new password", () => {
-    expect(passwordChangeFormProblem(form({ volumePath: "  " }))).toBe("Choose the vault file.");
+    expect(passwordChangeFormProblem({ ...form(), volumePath: "  " })).toBe("Choose the vault file.");
     expect(passwordChangeFormProblem(form({ oldPassword: "" }))).toBe("Enter the current password.");
     expect(passwordChangeFormProblem(form({ newPassword: "", confirmPassword: "" }))).toBe("Enter a new password.");
   });
@@ -40,8 +54,8 @@ describe("vault password change form", () => {
   test("the new credential must differ from the current one", () => {
     const same = form({ newPassword: "old secret", confirmPassword: "old secret" });
     expect(passwordChangeFormProblem(same)).toBe("The new password must be different from the current one.");
-    expect(passwordChangeFormProblem({ ...same, newPim: "600" })).toBeNull();
-    expect(passwordChangeFormProblem({ ...same, newKeyfile: "D:\\keys\\new.key" })).toBeNull();
+    expect(passwordChangeFormProblem({ ...same, outer: { ...same.outer, newPim: "600" } })).toBeNull();
+    expect(passwordChangeFormProblem({ ...same, outer: { ...same.outer, newKeyfile: "D:\\keys\\new.key" } })).toBeNull();
   });
 
   test("rejects a PIM outside the engine's range", () => {
@@ -51,24 +65,56 @@ describe("vault password change form", () => {
     }
     expect(passwordChangeFormProblem(form({ oldPim: "1", newPim: "2147468" }))).toBeNull();
   });
+
+  test("leftover real-password fields never block or leak into a standard change", () => {
+    const leftover = { ...form(), hidden: header("", "x", { confirmPassword: "y" }) };
+    expect(passwordChangeFormProblem(leftover)).toBeNull();
+    expect(Object.keys(buildPasswordChangeRequest(leftover)).some(key => key.includes("Hidden"))).toBe(false);
+  });
 });
 
-describe("vault password change target", () => {
-  test("a single-password vault always changes its only password", () => {
-    expect(passwordChangeTarget({ vaultKind: "standard", which: "real" })).toBe("outer");
+describe("decoy vault password change form", () => {
+  test("a complete form has no problem", () => {
+    expect(passwordChangeFormProblem(decoyForm())).toBeNull();
   });
 
-  test("a decoy vault changes only the chosen password", () => {
-    expect(passwordChangeTarget({ vaultKind: "decoy", which: "decoy" })).toBe("outer");
-    expect(passwordChangeTarget({ vaultKind: "decoy", which: "real" })).toBe("hidden");
+  test("asks for all four passwords", () => {
+    expect(passwordChangeFormProblem(decoyForm({ oldPassword: "" }))).toBe("Enter the current decoy password.");
+    expect(passwordChangeFormProblem(decoyForm({}, { oldPassword: "" }))).toBe("Enter the current real password.");
+    expect(passwordChangeFormProblem(decoyForm({ newPassword: "", confirmPassword: "" }))).toBe("Enter a new decoy password.");
+    expect(passwordChangeFormProblem(decoyForm({}, { newPassword: "", confirmPassword: "" }))).toBe("Enter a new real password.");
   });
 
-  test("the request carries the chosen header, credentials and optional PIMs", () => {
-    const request = buildPasswordChangeRequest(form({ vaultKind: "decoy", which: "real", newPim: "700", oldKeyfile: " D:\\keys\\old.key " }));
-    expect(request).toEqual({
+  test("each new password must be confirmed", () => {
+    expect(passwordChangeFormProblem(decoyForm({ confirmPassword: "new decoY" }))).toBe("The new decoy passwords do not match.");
+    expect(passwordChangeFormProblem(decoyForm({}, { confirmPassword: "new reaL" }))).toBe("The new real passwords do not match.");
+  });
+
+  test("the new decoy and real passwords must differ", () => {
+    const same = decoyForm({}, { newPassword: "new decoy", confirmPassword: "new decoy" });
+    expect(passwordChangeFormProblem(same)).toBe("The new decoy and real passwords must be different.");
+    expect(passwordChangeFormProblem({ ...same, hidden: { ...same.hidden, newKeyfile: "D:\\keys\\real.key" } })).toBeNull();
+  });
+
+  test("one password may stay the same, but not both", () => {
+    expect(passwordChangeFormProblem(decoyForm({ newPassword: "old decoy", confirmPassword: "old decoy" }))).toBeNull();
+    expect(passwordChangeFormProblem(decoyForm(
+      { newPassword: "old decoy", confirmPassword: "old decoy" },
+      { newPassword: "old real", confirmPassword: "old real" },
+    ))).toBe("Change at least one of the two passwords.");
+  });
+
+  test("rejects a bad real-password PIM", () => {
+    expect(passwordChangeFormProblem(decoyForm({}, { newPim: "0" }))).toContain("PIM");
+  });
+});
+
+describe("vault password change request", () => {
+  test("a standard vault changes its only header", () => {
+    expect(buildPasswordChangeRequest(form({ newPim: "700", oldKeyfile: " D:\\keys\\old.key " }))).toEqual({
       VolumePath: "D:\\Vaults\\notes.hc",
       TargetKind: "file",
-      Target: "hidden",
+      Target: "outer",
       OldPassword: "old secret",
       NewPassword: "new secret",
       OldKeyfiles: JSON.stringify(["D:\\keys\\old.key"]),
@@ -76,11 +122,43 @@ describe("vault password change target", () => {
       NewPim: "700",
     });
   });
+
+  test("a decoy vault sends both headers in one request", () => {
+    const request = buildPasswordChangeRequest(decoyForm(
+      { oldPim: "500" },
+      { newKeyfile: " D:\\keys\\real.key ", oldPim: "900", newPim: "901" },
+    ));
+    expect(request).toEqual({
+      VolumePath: "D:\\Vaults\\notes.hc",
+      TargetKind: "file",
+      Target: "both",
+      OldPassword: "old decoy",
+      NewPassword: "new decoy",
+      OldKeyfiles: "[]",
+      NewKeyfiles: "[]",
+      OldPim: "500",
+      OldHiddenPassword: "old real",
+      NewHiddenPassword: "new real",
+      OldHiddenKeyfiles: "[]",
+      NewHiddenKeyfiles: JSON.stringify(["D:\\keys\\real.key"]),
+      OldHiddenPim: "900",
+      NewHiddenPim: "901",
+    });
+  });
+
+  test("clearing passwords keeps the path, type, PIMs and keyfiles", () => {
+    const cleared = withoutPasswords(decoyForm({ newKeyfile: "D:\\k" }, { oldPim: "9" }));
+    for (const part of [cleared.outer, cleared.hidden]) {
+      expect([part.oldPassword, part.newPassword, part.confirmPassword]).toEqual(["", "", ""]);
+    }
+    expect(cleared.vaultKind).toBe("decoy");
+    expect(cleared.outer.newKeyfile).toBe("D:\\k");
+    expect(cleared.hidden.oldPim).toBe("9");
+  });
 });
 
 describe("vault password change errors", () => {
   test("each contract code gets its own plain message", () => {
-    expect(vaultPasswordChangeErrorMessage("wrong_header")).toContain("That password belongs to the other password of this decoy vault");
     expect(vaultPasswordChangeErrorMessage(new Error("wrong_password"))).toContain("did not open this vault");
     expect(vaultPasswordChangeErrorMessage("new_password_collides")).toContain("other password of this decoy vault");
     expect(vaultPasswordChangeErrorMessage("weak_new_password")).toContain("too weak");
@@ -89,8 +167,18 @@ describe("vault password change errors", () => {
     expect(vaultPasswordChangeErrorMessage("vault_broker_rejected")).toContain("refused this request");
   });
 
+  test("a decoy change names which current password was wrong", () => {
+    expect(vaultPasswordChangeErrorMessage("wrong_decoy_password")).toBe("The current decoy password is wrong. Nothing was changed.");
+    expect(vaultPasswordChangeErrorMessage("vault_wrong_real_password")).toBe("The current real password is wrong, or this vault has only one password. Nothing was changed.");
+    expect(vaultPasswordChangeErrorMessage(new Error("Pro error: wrong_both_passwords"))).toBe("Both current passwords are wrong. Nothing was changed.");
+  });
+
+  test("the real password of a decoy vault in the one-password form points to the decoy type", () => {
+    expect(vaultPasswordChangeErrorMessage("wrong_header")).toBe("This password is the real password of a decoy vault. Choose \"Decoy vault\" and enter both passwords. Nothing was changed.");
+    expect(vaultPasswordChangeErrorMessage("Pro error: vault_wrong_header")).toContain("Choose \"Decoy vault\"");
+  });
+
   test("prefixed and wrapped service codes are recognised", () => {
-    expect(vaultPasswordChangeErrorMessage("Pro error: vault_wrong_header")).toContain("That password belongs");
     expect(vaultPasswordChangeErrorMessage("vault_already_mounted")).toContain("Dismount the vault first");
   });
 

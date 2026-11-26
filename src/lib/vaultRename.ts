@@ -1,9 +1,13 @@
+import type { VaultPasswordKind } from "./vaultPasswordChange";
+
 /** Same bound the service applies (bytes, like a Fleet Vault label). */
 export const MAX_VAULT_NAME_BYTES = 128;
 
 export interface VaultDisplayName {
   path: string;
   name: string;
+  /** The type the vault was created as, when the service knows it. */
+  kind?: VaultPasswordKind;
 }
 
 export interface VaultRenameResult {
@@ -25,18 +29,35 @@ export function vaultPathKey(path: string): string {
   return path.trim().replace(/\//g, "\\").replace(/^\\\\\?\\|^\\\?\?\\/, "").toLowerCase();
 }
 
-export function findVaultName(names: readonly VaultDisplayName[], path: string | null | undefined): string | null {
+function findVaultRow(names: readonly VaultDisplayName[], path: string | null | undefined): VaultDisplayName | null {
   if (!path?.trim()) return null;
   const key = vaultPathKey(path);
-  return names.find(entry => vaultPathKey(entry.path) === key)?.name ?? null;
+  return names.find(entry => vaultPathKey(entry.path) === key) ?? null;
 }
+
+export function findVaultName(names: readonly VaultDisplayName[], path: string | null | undefined): string | null {
+  return findVaultRow(names, path)?.name ?? null;
+}
+
+export function findVaultKind(names: readonly VaultDisplayName[], path: string | null | undefined): VaultPasswordKind | null {
+  return findVaultRow(names, path)?.kind ?? null;
+}
+
+// "dual" is the policy container_kind spelling of a decoy vault.
+const readKind = (kind: unknown): VaultPasswordKind | undefined =>
+  kind === "decoy" || kind === "dual" ? "decoy" : kind === "standard" ? "standard" : undefined;
 
 /** Keeps only well-formed rows so a bad reply can never show a wrong name. */
 export function readVaultDisplayNames(value: unknown): VaultDisplayName[] {
   const rows = (value as { names?: unknown } | null)?.names;
   if (!Array.isArray(rows)) throw new Error("vault_display_names_invalid");
-  return rows.filter((row): row is VaultDisplayName =>
-    typeof row?.path === "string" && typeof row?.name === "string" && row.path !== "" && row.name !== "");
+  return rows
+    .filter((row): row is VaultDisplayName & { kind?: unknown } =>
+      typeof row?.path === "string" && typeof row?.name === "string" && row.path !== "" && row.name !== "")
+    .map(row => {
+      const kind = readKind(row.kind);
+      return kind ? { path: row.path, name: row.name, kind } : { path: row.path, name: row.name };
+    });
 }
 
 /** Maps the stable service codes to plain wording; never echoes raw error text. */

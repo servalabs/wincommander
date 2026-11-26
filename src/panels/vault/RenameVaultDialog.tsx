@@ -7,10 +7,17 @@ import { useTheme } from "../../context/ThemeContext";
 import { showSuccess } from "../../utils/toast";
 import { MAX_VAULT_NAME_BYTES, findVaultName, vaultNameProblem, vaultRenameErrorMessage } from "@/lib/vaultRename";
 
-export default function RenameVaultDialog({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
+interface RenameVaultDialogProps {
+  isOpen: boolean;
+  onClose: () => void;
+  /** Prefilled from the vault row that opened the dialog; the person can still pick another file. */
+  initialPath?: string;
+}
+
+export default function RenameVaultDialog({ isOpen, onClose, initialPath = "" }: RenameVaultDialogProps) {
   const { theme } = useTheme();
   const { names, renameVault } = useVaultNames();
-  const [volumePath, setVolumePath] = useState("");
+  const [volumePath, setVolumePath] = useState(initialPath);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState("");
@@ -61,7 +68,7 @@ export default function RenameVaultDialog({ isOpen, onClose }: { isOpen: boolean
 
   return (
     <Dialog isOpen={isOpen} onClose={close} title="Rename Vault"
-      className={`mount-dialog ${theme === "light" ? "light" : ""}`}>
+      className={`mount-dialog vault-file-dialog vault-file-dialog--fit ${theme === "light" ? "light" : ""}`}>
       <div className="wc-dialog-body">
         <p className="vault-card-status-line">
           This changes only the name WinCommander shows. The vault file keeps its file name and location.

@@ -1,5 +1,5 @@
 import { isImeComposing } from "@/lib/keyboard";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -30,6 +30,8 @@ import { applyVaultAccessPreset, vaultAccessPreset, type VaultAccessPreset } fro
 import VaultAccessEditor from "./VaultAccessEditor";
 import { vaultEntryResultLabel, vaultPolicyVerification } from "./vaultAccessPresentation";
 import { observedVaultMountState, patchAuthorizedEntriesFromMountResult, vaultMountGate } from "./vaultAccessUiState";
+import useVaultFileActions from "@/hooks/useVaultFileActions";
+import { DISMOUNT_FIRST_HINT, vaultKindFromContainer, type VaultFileTarget } from "@/lib/vaultFileActions";
 
 function appliedAt(timestamp: number) {
   return new Date(timestamp * 1000).toLocaleString();
@@ -269,6 +271,15 @@ export default function VaultAccessTab({ isAdmin, directory, onVisibilityChange 
   const vaultChangeRefreshPending = useRef(false);
   const [draftDirty, setDraftDirty] = useState(initialDraft !== null);
   const { getOwnerPolicyFragment, getStatus, applyOwnerPolicyFragment, forgetPolicy, mountEntry, unmountEntry, listAuthorizedEntries, getCapabilities, listOwnerPrincipals } = useVaultAccess<VaultAccessPolicy, VaultPolicyStatus>();
+  const { actions: fileActions, dialogs: fileDialogs } = useVaultFileActions();
+  const fileActionButtons = (target: VaultFileTarget, blockedReason: string | null) => {
+    // A disabled button takes no pointer events, so its reason sits on a wrapper.
+    const wrap = (button: ReactNode) => blockedReason ? <span className="inline-flex" title={blockedReason}>{button}</span> : button;
+    return <>
+      {fileActions.changePassword && wrap(<Button variant="outline" size="sm" disabled={!!blockedReason} onClick={() => fileActions.changePassword?.(target)}>Change Password</Button>)}
+      {wrap(<Button variant="outline" size="sm" disabled={!!blockedReason} onClick={() => fileActions.rename(target)}>Rename</Button>)}
+    </>;
+  };
   const error = useMemo(() => policy ? validateVaultAccessIntent(policy) : null, [policy]);
 
   const replacePolicy = useCallback((next: VaultAccessPolicy | null, dirty: boolean, basePolicy?: VaultAccessPolicy | null) => {
@@ -1155,6 +1166,11 @@ export default function VaultAccessTab({ isAdmin, directory, onVisibilityChange 
                   {mountingEntryId === entry.entry_id ? "Mounting…" : "Mount"}
                 </Button>
               )}
+              {fileActionButtons(
+                { path: policyEntries.find(policyEntry => policyEntry.id === entry.entry_id)?.container_path ?? null, label: entry.label, kind: vaultKindFromContainer(entry.container_kind) },
+                isMounted || needsCleanup || entry.mount_state === "mounted" ? DISMOUNT_FIRST_HINT
+                  : entry.access !== "write" ? "Only the owner, or an account with write access, can change this Vault." : null,
+              )}
             </div>;
           })}
           <div className="fleet-vault-refresh-row">
@@ -1227,6 +1243,11 @@ export default function VaultAccessTab({ isAdmin, directory, onVisibilityChange 
                   <td data-label="Actions"><div className="fleet-vault-policy-actions">
                     <Button variant="outline" size="sm" disabled={mounted || needsCleanup || mountStateUnknown || !canEditEntry} title={mounted || needsCleanup || mountStateUnknown || !canEditEntry ? editDisabledReason : undefined} onClick={() => openEntryEditor(entry.id, "details")}>Edit</Button>
                     <Button variant="outline" size="sm" disabled={mounted || needsCleanup || mountStateUnknown || !canEditEntry} title={mounted || needsCleanup || mountStateUnknown || !canEditEntry ? editDisabledReason : undefined} onClick={() => openEntryEditor(entry.id, "access")}>Manage access</Button>
+                    {fileActionButtons(
+                      { path: entry.container_path, label: entry.label, kind: vaultKindFromContainer(entry.container_kind) },
+                      mounted || needsCleanup ? DISMOUNT_FIRST_HINT
+                        : mountStateUnknown ? "Vault mount status is unavailable. Refresh first." : null,
+                    )}
                     {mounted || needsCleanup ? <Button variant="outline" size="sm" disabled={unmountingEntryId === entry.id || mountStateUnknown || !canEditEntry} title={mountStateUnknown ? "Vault mount status is unavailable. Refresh before dismounting." : !canEditEntry ? "This Windows account cannot dismount this Vault." : undefined} onClick={() => void unmountSelectedEntry(entry.id)}>{unmountingEntryId === entry.id ? "Unmounting…" : needsCleanup ? "Retry cleanup" : "Dismount"}</Button>
                       : <Button variant="primary" size="sm" disabled={saving || mountingEntryId === entry.id || !authorized || mountStateUnknown || !canEditEntry} title={mountStateUnknown ? "Vault mount status is unavailable. Refresh before mounting." : !canEditEntry ? "This Windows account cannot mount this Vault." : undefined} onClick={() => { if (authorized) openMountPrompt(authorized); }}>{mountingEntryId === entry.id ? "Mounting…" : "Mount"}</Button>}
                     {canRepairSharedAccess && <Button variant="outline" size="sm" disabled={saving || mounted || needsCleanup || mountStateUnknown || !canEditEntry} title={mountStateUnknown ? "Vault mount status is unavailable. Refresh before changing this policy." : !canEditEntry ? "This Windows account cannot repair this Vault policy." : undefined} onClick={repairSharedAccess}>Repair shared access</Button>}
@@ -1500,6 +1521,7 @@ export default function VaultAccessTab({ isAdmin, directory, onVisibilityChange 
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {fileDialogs}
     </div>
   );
 }

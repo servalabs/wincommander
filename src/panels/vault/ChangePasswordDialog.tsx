@@ -3,19 +3,26 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { Button, Callout, Dialog, FormGroup, Icon, InputGroup } from "@/components/ui/bp";
 import VaultOperationNotice from "@/components/shared/VaultOperationNotice";
 import useBackend from "../../hooks/useBackend";
+import useVaultNames from "../../hooks/useVaultNames";
 import { useTheme } from "../../context/ThemeContext";
 import { newDiagnosticOperationId, recordDiagnostic } from "../../lib/diagnostics";
 import { showSuccess } from "../../utils/toast";
+import { findVaultKind } from "@/lib/vaultRename";
 import {
   EMPTY_PASSWORD_CHANGE_FORM,
   PASSWORD_CHANGE_BUSY,
   PASSWORD_CHANGE_WARNING,
+  VAULT_KIND_HINT,
   passwordChangeFormProblem,
   vaultPasswordChangeErrorMessage,
+  withoutPasswords,
+  type HeaderCredentials,
   type VaultPasswordChangeForm,
+  type VaultPasswordKind,
 } from "@/lib/vaultPasswordChange";
 
-type FormField = keyof VaultPasswordChangeForm;
+type HeaderName = "outer" | "hidden";
+type CredentialField = keyof HeaderCredentials;
 
 interface ChoiceProps<T extends string> {
   label: string;
@@ -40,31 +47,51 @@ function Choice<T extends string>({ label, value, options, onChange }: ChoicePro
 }
 
 const VAULT_KIND_OPTIONS = [
-  { value: "standard", text: "One password" },
+  { value: "standard", text: "Standard vault (one password)" },
   { value: "decoy", text: "Decoy vault (two passwords)" },
 ] as const;
 
-const WHICH_OPTIONS = [
-  { value: "decoy", text: "Decoy password" },
-  { value: "real", text: "Real password" },
-] as const;
+interface ChangePasswordDialogProps {
+  isOpen: boolean;
+  onClose: () => void;
+  /** Prefilled from the vault row that opened the dialog; the person can still pick another file. */
+  initialPath?: string;
+  initialKind?: VaultPasswordKind;
+}
 
-export default function ChangePasswordDialog({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
+export default function ChangePasswordDialog({ isOpen, onClose, initialPath = "", initialKind }: ChangePasswordDialogProps) {
   const { theme } = useTheme();
   const { changeVolumePassword } = useBackend();
-  const [form, setForm] = useState<VaultPasswordChangeForm>(EMPTY_PASSWORD_CHANGE_FORM);
+  const { names } = useVaultNames();
+  const [form, setForm] = useState<VaultPasswordChangeForm>(() => ({
+    ...EMPTY_PASSWORD_CHANGE_FORM,
+    volumePath: initialPath,
+    vaultKind: initialKind ?? findVaultKind(names, initialPath) ?? "standard",
+  }));
   const [showPasswords, setShowPasswords] = useState(false);
   const [showExtras, setShowExtras] = useState(false);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState("");
   const [changed, setChanged] = useState(false);
   const problem = passwordChangeFormProblem(form);
+  const isDecoy = form.vaultKind === "decoy";
+  const headers: HeaderName[] = isDecoy ? ["outer", "hidden"] : ["outer"];
+  const word = (header: HeaderName) => (isDecoy ? (header === "outer" ? "decoy " : "real ") : "");
 
-  const update = useCallback((field: FormField, value: string) => {
-    setForm(current => ({ ...current, [field]: value }));
+  const edit = useCallback((change: (current: VaultPasswordChangeForm) => VaultPasswordChangeForm) => {
+    setForm(change);
     setFailure("");
     setChanged(false);
   }, []);
+
+  const setPath = useCallback((volumePath: string) => {
+    const hinted = findVaultKind(names, volumePath);
+    edit(current => ({ ...current, volumePath, ...(hinted ? { vaultKind: hinted } : {}) }));
+  }, [edit, names]);
+
+  const updateHeader = useCallback((header: HeaderName, field: CredentialField, value: string) => {
+    edit(current => ({ ...current, [header]: { ...current[header], [field]: value } }));
+  }, [edit]);
 
   const close = useCallback(() => {
     if (busy) return;
@@ -75,16 +102,18 @@ export default function ChangePasswordDialog({ isOpen, onClose }: { isOpen: bool
     onClose();
   }, [busy, onClose]);
 
-  const browse = useCallback(async (field: "volumePath" | "oldKeyfile" | "newKeyfile") => {
+  const browse = useCallback(async (target: "volume" | { header: HeaderName; field: "oldKeyfile" | "newKeyfile" }) => {
     try {
-      const selected = await open(field === "volumePath"
+      const selected = await open(target === "volume"
         ? { multiple: false, filters: [{ name: "Container File", extensions: ["hc", "tc", "*"] }] }
         : { multiple: false });
-      if (typeof selected === "string") update(field, selected);
+      if (typeof selected !== "string") return;
+      if (target === "volume") setPath(selected);
+      else updateHeader(target.header, target.field, selected);
     } catch {
       setFailure("The file picker could not be opened. Type the path instead.");
     }
-  }, [update]);
+  }, [setPath, updateHeader]);
 
   const submit = useCallback(async () => {
     if (busy || problem) return;
@@ -93,12 +122,12 @@ export default function ChangePasswordDialog({ isOpen, onClose }: { isOpen: bool
     setFailure("");
     const request = form;
     // Passwords leave component state as soon as the request is sent.
-    setForm(current => ({ ...current, oldPassword: "", newPassword: "", confirmPassword: "" }));
+    setForm(withoutPasswords);
     try {
       const result = await changeVolumePassword(request);
       if (!result.success || result.data?.status !== "password_changed") throw new Error(result.error || "");
       setChanged(true);
-      showSuccess("Vault password changed.", undefined, { kind: "notification", operationId });
+      showSuccess(request.vaultKind === "decoy" ? "Vault passwords changed." : "Vault password changed.", undefined, { kind: "notification", operationId });
       recordDiagnostic({ operationId, feature: "vault", action: "change_password", stage: "service_receipt",
         lifecycle: "verified", outcome: "succeeded", severity: "info", retryability: "never",
         suggestedNextAction: "none", privacyClass: "local_sensitive" });
@@ -112,11 +141,11 @@ export default function ChangePasswordDialog({ isOpen, onClose }: { isOpen: bool
     }
   }, [busy, changeVolumePassword, form, problem]);
 
-  const passwordField = (field: "oldPassword" | "newPassword" | "confirmPassword", label: string) => (
-    <FormGroup label={label} labelFor={`change-${field}`}>
-      <InputGroup id={`change-${field}`} type={showPasswords ? "text" : "password"} value={form[field]}
-        autoComplete="off" onChange={event => update(field, event.target.value)}
-        rightElement={field === "oldPassword" ? (
+  const passwordField = (header: HeaderName, field: "oldPassword" | "newPassword" | "confirmPassword", label: string) => (
+    <FormGroup key={`${header}-${field}`} label={label} labelFor={`change-${header}-${field}`}>
+      <InputGroup id={`change-${header}-${field}`} type={showPasswords ? "text" : "password"} value={form[header][field]}
+        autoComplete="off" onChange={event => updateHeader(header, field, event.target.value)}
+        rightElement={header === "outer" && field === "oldPassword" ? (
           <Button icon={showPasswords ? "eye-off" : "eye-open"} minimal
             aria-label={showPasswords ? "Hide passwords" : "Show passwords"}
             onClick={() => setShowPasswords(!showPasswords)} />
@@ -124,59 +153,59 @@ export default function ChangePasswordDialog({ isOpen, onClose }: { isOpen: bool
     </FormGroup>
   );
 
-  const keyfileField = (field: "oldKeyfile" | "newKeyfile", label: string) => (
-    <FormGroup label={label} labelFor={`change-${field}`}>
-      <InputGroup id={`change-${field}`} placeholder="Path to keyfile" value={form[field]} autoComplete="off"
-        onChange={event => update(field, event.target.value)}
-        rightElement={<Button icon="folder-open" minimal aria-label={`Browse for ${label.toLowerCase()}`} onClick={() => void browse(field)} />} />
+  const keyfileField = (header: HeaderName, field: "oldKeyfile" | "newKeyfile", label: string) => (
+    <FormGroup key={`${header}-${field}`} label={label} labelFor={`change-${header}-${field}`}>
+      <InputGroup id={`change-${header}-${field}`} placeholder="Path to keyfile" value={form[header][field]} autoComplete="off"
+        onChange={event => updateHeader(header, field, event.target.value)}
+        rightElement={<Button icon="folder-open" minimal aria-label={`Browse for ${label.toLowerCase()}`} onClick={() => void browse({ header, field })} />} />
     </FormGroup>
   );
 
-  const pimField = (field: "oldPim" | "newPim", label: string) => (
-    <FormGroup label={label} labelFor={`change-${field}`} helperText="Leave blank unless the vault uses a custom PIM.">
-      <InputGroup id={`change-${field}`} type="number" min={1} max={2147468} placeholder="Default" value={form[field]}
-        autoComplete="off" onChange={event => update(field, event.target.value)} />
+  const pimField = (header: HeaderName, field: "oldPim" | "newPim", label: string) => (
+    <FormGroup key={`${header}-${field}`} label={label} labelFor={`change-${header}-${field}`} helperText="Leave blank unless the vault uses a custom PIM.">
+      <InputGroup id={`change-${header}-${field}`} type="number" min={1} max={2147468} placeholder="Default" value={form[header][field]}
+        autoComplete="off" onChange={event => updateHeader(header, field, event.target.value)} />
     </FormGroup>
   );
 
   return (
     <Dialog isOpen={isOpen} onClose={close} title="Change Vault Password"
-      className={`mount-dialog ${theme === "light" ? "light" : ""}`}>
+      className={`mount-dialog vault-file-dialog ${theme === "light" ? "light" : ""}`}>
       <div className="wc-dialog-body">
         <Callout intent="warning" icon="warning-sign" className="mb-4">{PASSWORD_CHANGE_WARNING}</Callout>
         <VaultOperationNotice tone="info" message={busy ? PASSWORD_CHANGE_BUSY : ""} />
         <VaultOperationNotice message={failure} />
-        <VaultOperationNotice tone="success" message={changed ? "The password was changed. Use the new password the next time you mount this vault." : ""} />
+        <VaultOperationNotice tone="success" message={changed
+          ? `The ${isDecoy ? "passwords were" : "password was"} changed. Use the new ${isDecoy ? "passwords" : "password"} the next time you mount this vault.`
+          : ""} />
         <fieldset disabled={busy} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
           <FormGroup label="Vault file" labelFor="change-volume-path" helperText="The vault must be dismounted.">
             <InputGroup id="change-volume-path" placeholder="/path/to/volume.hc" value={form.volumePath} autoComplete="off"
-              onChange={event => update("volumePath", event.target.value)}
-              rightElement={<Button icon="folder-open" minimal aria-label="Browse for the vault file" onClick={() => void browse("volumePath")} />} />
+              onChange={event => setPath(event.target.value)}
+              rightElement={<Button icon="folder-open" minimal aria-label="Browse for the vault file" onClick={() => void browse("volume")} />} />
           </FormGroup>
 
-          <FormGroup label="Vault type">
+          <FormGroup label="Vault type" helperText={VAULT_KIND_HINT}>
             <Choice label="Vault type" value={form.vaultKind} options={VAULT_KIND_OPTIONS}
-              onChange={value => update("vaultKind", value)} />
+              onChange={value => edit(current => ({ ...current, vaultKind: value }))} />
           </FormGroup>
-          {form.vaultKind === "decoy" && (
-            <FormGroup label="Which password" helperText="Only this password changes. The other one keeps working as before.">
-              <Choice label="Which password" value={form.which} options={WHICH_OPTIONS}
-                onChange={value => update("which", value)} />
-            </FormGroup>
-          )}
 
-          {passwordField("oldPassword", "Current password")}
-          {passwordField("newPassword", "New password")}
-          {passwordField("confirmPassword", "Type the new password again")}
+          {headers.map(header => [
+            passwordField(header, "oldPassword", `Current ${word(header)}password`),
+            passwordField(header, "newPassword", `New ${word(header)}password`),
+            passwordField(header, "confirmPassword", `Type the new ${word(header)}password again`),
+          ])}
 
           <Button minimal small icon={showExtras ? "chevron-down" : "chevron-right"}
-            text="PIM and keyfile options" onClick={() => setShowExtras(!showExtras)} aria-expanded={showExtras} />
+            text="Advanced: PIM and keyfile" onClick={() => setShowExtras(!showExtras)} aria-expanded={showExtras} />
           {showExtras && (
             <div className="mount-options-grid" aria-label="PIM and keyfile options">
-              {pimField("oldPim", "Current PIM (optional)")}
-              {pimField("newPim", "New PIM (optional)")}
-              {keyfileField("oldKeyfile", "Current keyfile (optional)")}
-              {keyfileField("newKeyfile", "New keyfile (optional)")}
+              {headers.map(header => [
+                pimField(header, "oldPim", `Current ${word(header)}PIM (optional)`),
+                pimField(header, "newPim", `New ${word(header)}PIM (optional)`),
+                keyfileField(header, "oldKeyfile", `Current ${word(header)}keyfile (optional)`),
+                keyfileField(header, "newKeyfile", `New ${word(header)}keyfile (optional)`),
+              ])}
             </div>
           )}
           {problem && form.volumePath && <p className="vault-card-status-line" role="status"><Icon icon="info-sign" size={12} /> {problem}</p>}
