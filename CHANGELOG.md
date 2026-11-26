@@ -39,6 +39,20 @@ lists only a selection of those changes.
   network drives and subst folders are never removed. Secure Storage also
   lists another account's Vault that is still held after that account signed
   out or the volume closed, with no path and no dismount button.
+- Share Safely (Scrub Meta): the "files not cleaned" panel is open by default
+  instead of hidden behind a small chevron (where it could also show an empty
+  box). It names every file with its type icon, folder and reason
+  (unsupported format, type mismatch, in use by another app, no permission
+  and so on), grouped by reason, 50 at a time; files with nothing to remove
+  are listed but not counted as "not cleaned". With more
+  than one folder selected the results are shown per folder, each a
+  collapsible section with its own status ("Ready — 36 files, 30 to clean,
+  6 nothing to remove"). Each file card shows a file-type icon instead of a
+  grey text badge, keeps its explanations behind an (i) button, and groups
+  the removed properties by kind (GPS / location, Camera & device, Dates &
+  times and so on), collapsed to names and counts. The engine line under the
+  drop zone reads "ExifTool 13.59 · qpdf 12.4.2 · JPEG, PNG, …" instead of
+  the garbled qpdf banner.
 - Share Safely now reports every file in a scrub, one entry per file, each
   with its selected folder, extension, real type (read from the file's
   content) and outcome. A file that was not cleaned now says why: an
@@ -51,7 +65,6 @@ lists only a selection of those changes.
 - Fix the Hidden Data Remover version text ("vExifTool 13.59; qpdf version
   12.4.2Run qpdf --copyright to see..."). The version is now the ExifTool
   number, and the ExifTool and qpdf versions are also reported separately.
-
 - Fix Stealth mode leaving no Calculator shortcut: with Hide WinCommander
   already on, turning the Calculator lock on restored the WinCommander
   shortcuts to the Hide snapshot instead of replacing them, so the Start menu

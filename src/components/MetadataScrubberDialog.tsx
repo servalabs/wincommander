@@ -26,50 +26,16 @@ import { useTheme } from '../context/ThemeContext';
 import { useAppState } from '../context/AppContext';
 import useDependencies from '../hooks/useDependencies';
 import { createAsyncListenerScope } from '../lib/asyncListeners';
+import type { GpsCoords, ScrubError, ScrubReport, ScrubResult } from '../lib/scrubTypes';
+import { formatEngineLine, groupRemovedProperties, parseEngineVersions } from '../lib/scrubPresentation';
+import { aggregateByRoot, notCleanedEntries, shouldShowFolderSections } from '../lib/scrubReportModel';
+import ScrubFileIcon from './scrub/ScrubFileIcon';
+import ScrubInfoButton from './scrub/ScrubInfoButton';
+import RemovedPropertyGroups from './scrub/RemovedPropertyGroups';
+import NotCleanedList from './scrub/NotCleanedList';
+import FolderSection from './scrub/FolderSection';
 
 const GPS_MAP_MESSAGE = 'wincommander:metadata-gps-map';
-
-interface StrippedField {
-  /** Stable category id — drives chip colour + summary roll-up. */
-  category: string;
-  /** Friendly chip label, e.g. "ICC Color Profile". */
-  label: string;
-  /** Sanitized names of the metadata properties cleared from this category.
-   *  These intentionally contain property names only, never the original
-   *  author, device, location, or other personal values. */
-  details?: string[];
-  /** Bytes of the segment / chunk removed. */
-  bytes: number;
-  /** True iff the stripped data typically identifies the operator
-   *  (GPS, camera serial, author name, dates). Drives red highlight. */
-  isIdentifying: boolean;
-}
-
-interface GpsCoords {
-  lat: number;
-  lon: number;
-  /** Human-friendly "37.7749° N, 122.4194° W" string. */
-  label: string;
-}
-
-interface ScrubResult {
-  inputPath: string;
-  outputPath: string;
-  fileType: string;
-  bytesIn: number;
-  bytesOut: number;
-  fieldsStripped: StrippedField[];
-  /** Present iff the pre-scan extracted valid GPS from the file. */
-  gpsCoords?: GpsCoords;
-  /** Up to 6 sample values for the per-file tooltip / preview. */
-  sampleValues?: string[];
-  /** Marker that this row came from a dry-run preview. */
-  dryRun?: boolean;
-  /** Identifying metadata STILL PRESENT after the scrub (survivors), plus
-   *  can't-fully-remove advisories (e.g. a PDF we couldn't rewrite). Non-empty
-   *  means this file is NOT safe to share. */
-  residualFields?: StrippedField[];
-}
 
 interface ScrubProgress {
   current: number;
@@ -179,25 +145,6 @@ function CategoryChip({
   );
 }
 
-interface ScrubError {
-  inputPath: string;
-  message: string;
-}
-
-interface ScrubReport {
-  scrubbed: ScrubResult[];
-  errors: ScrubError[];
-  totalInputBytes: number;
-  totalOutputBytes: number;
-  skippedCount?: number;
-  /** Paths of files that were NOT processed (unsupported format / content
-   *  mismatch). Named so the user knows exactly what was left un-cleaned. */
-  skippedFiles?: string[];
-  /** Files that still carry identifying metadata after the scrub. Non-zero
-   *  drives the red "still present — not safe to share" warning. */
-  residualCount?: number;
-}
-
 // Reasonable subset of formats ExifTool can write to. ExifTool itself
 // supports many more — the file picker filter is a hint, not a
 // gatekeeper (operators can pick "All files" and ExifTool decides).
@@ -229,12 +176,6 @@ function formatBytes(n: number): string {
 
 function basename(path: string): string {
   return path.split(/[/\\]/).pop() ?? path;
-}
-
-/** True iff `file` lives under (or is) the queued root `root`. Used to group the
- *  final per-file results back under each queued folder for the report. */
-function isUnderRoot(file: string, root: string): boolean {
-  return file === root || file.startsWith(`${root}\\`) || file.startsWith(`${root}/`);
 }
 
 function parseSampleValue(s: string): { key: string; value: string } {
@@ -279,6 +220,7 @@ export default function MetadataScrubberDialog({
   const engineKnown = dependencyStatus != null;
   const engineInstalled = scrubberDep?.installed === true;
   const engineVersion = scrubberDep?.version ?? '';
+  const engineLine = formatEngineLine(parseEngineVersions(engineVersion, scrubberDep?.versions ?? undefined));
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
   const [running, setRunning] = useState(false);
   const [report, setReport] = useState<ScrubReport | null>(null);
@@ -589,7 +531,7 @@ export default function MetadataScrubberDialog({
               </div>
               {engineVersion && (
                 <div style={{ marginTop: 14, fontSize: 10, color: 'var(--color-text-muted)' }}>
-                  Hidden Data Remover v{engineVersion} · JPEG, PNG, HEIC, PDF, Office, RAW, Photoshop, MP4 and more
+                  {engineLine}
                 </div>
               )}
             </div>
@@ -1067,16 +1009,15 @@ function ScrubReportView({ report, roots, folderPaths }: ScrubReportViewProps) {
   const gpsResults = report.scrubbed.filter(
     (r): r is ScrubResult & { gpsCoords: GpsCoords } => !!r.gpsCoords,
   );
-  // Per-folder breakdown of the batch, so the "N files" total also shows which
-  // folder each came from — mirrors the per-item bars. Shown only when it adds
-  // information (more than one queued item, or at least one folder).
-  const perFolder = roots.map((root) => ({
-    root,
-    name: basename(root),
-    isFolder: folderPaths.has(root),
-    cleaned: report.scrubbed.filter((r) => isUnderRoot(r.inputPath, root)).length,
-  }));
-  const showPerFolder = perFolder.length > 1 || perFolder.some((f) => f.isFolder);
+  const notCleaned = notCleanedEntries(report);
+  // The per-file list names every file; only older engines can count more than they name.
+  const notCleanedCount = Array.isArray(report.files)
+    ? notCleaned.length
+    : Math.max(report.skippedCount ?? 0, notCleaned.length);
+  const listedPaths = new Set(notCleaned.map((e) => e.path.toLowerCase()));
+  const unlistedErrors = report.errors.filter((e) => !listedPaths.has(e.inputPath.toLowerCase()));
+  const folderBuckets = aggregateByRoot(report, notCleaned, roots, folderPaths);
+  const showFolderSections = shouldShowFolderSections(folderBuckets);
 
   return (
     <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -1148,64 +1089,6 @@ function ScrubReportView({ report, roots, folderPaths }: ScrubReportViewProps) {
         />
         <StatCard label="Types" value={String(categoryRollup.length)} />
       </div>
-
-      {/* ── Per-folder breakdown ──────────────────────────────────── */}
-      {showPerFolder && (
-        <div>
-          <div
-            style={{
-              fontSize: 10,
-              fontWeight: 700,
-              textTransform: 'uppercase',
-              letterSpacing: 0.8,
-              color: 'var(--color-text-muted)',
-              marginBottom: 6,
-            }}
-          >
-            {isDryRun ? 'By folder — would clean' : 'By folder — cleaned'}
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            {perFolder.map((f) => (
-              <div
-                key={f.root}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  padding: '4px 8px',
-                  background: 'var(--color-bg-secondary)',
-                  border: '1px solid var(--color-border)',
-                  borderRadius: 4,
-                  fontSize: 11,
-                }}
-              >
-                <Icon
-                  icon={f.isFolder ? 'folder-close' : 'document'}
-                  size={11}
-                  color="var(--color-text-muted)"
-                  style={{ flexShrink: 0 }}
-                />
-                <span
-                  title={f.root}
-                  style={{
-                    flex: 1,
-                    minWidth: 0,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                    fontFamily: 'var(--font-mono)',
-                  }}
-                >
-                  {f.name}
-                </span>
-                <span style={{ flexShrink: 0, color: 'var(--color-text-muted)', fontFamily: 'var(--font-mono)' }}>
-                  {f.cleaned} {f.cleaned === 1 ? 'file' : 'files'}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
 
       {/* ── STILL-PRESENT warning (survivors) ─────────────────────── */}
       {!isDryRun && residualResults.length > 0 && (
@@ -1334,93 +1217,38 @@ function ScrubReportView({ report, roots, folderPaths }: ScrubReportViewProps) {
         </div>
       )}
 
-      {/* ── Per-file cards ─────────────────────────────────────────── */}
-      {report.scrubbed.length > 0 && (
+      {/* ── Per-file cards, one collapsible section per queued folder ── */}
+      {showFolderSections ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {folderBuckets.map((bucket) => (
+            <FolderSection
+              key={bucket.root || 'individual-files'}
+              bucket={bucket}
+              isDryRun={isDryRun}
+              defaultExpanded={!isDryRun && bucket.stillPresent > 0}
+            >
+              {bucket.results.length > 0 ? (
+                <FileCardList results={bucket.results} showHeader={false} />
+              ) : (
+                <div style={{ fontSize: 11, color: 'var(--color-text-muted)', fontStyle: 'italic' }}>
+                  No supported files in this folder.
+                </div>
+              )}
+            </FolderSection>
+          ))}
+        </div>
+      ) : report.scrubbed.length > 0 && (
         <FileCardList results={report.scrubbed} />
       )}
 
-      {/* ── Skipped (unsupported / content-mismatch) — NAMED so the user
-             knows exactly which files were left un-cleaned. ─────────── */}
-      {!!report.skippedCount && report.skippedCount > 0 && (
-        <SkippedFilesNote
-          count={report.skippedCount}
-          files={report.skippedFiles ?? []}
-        />
+      {/* ── Not cleaned — every file named, grouped by reason. ───────── */}
+      {notCleanedCount > 0 && (
+        <NotCleanedList count={notCleanedCount} entries={notCleaned} roots={roots} />
       )}
 
       {/* ── Errors (genuine failures, not unsupported-format) ────────── */}
-      {report.errors.length > 0 && (
-        <ErrorsSummary errors={report.errors} />
-      )}
-    </div>
-  );
-}
-
-function SkippedFilesNote({ count, files }: { count: number; files: string[] }) {
-  const [expanded, setExpanded] = useState(false);
-  // Files matter here — a skipped file is an un-cleaned file. If the backend
-  // gave us names, make them expandable; otherwise fall back to the count.
-  const hasNames = files.length > 0;
-  return (
-    <div
-      style={{
-        border: '1px solid color-mix(in srgb, var(--color-warning, #f59e0b) 40%, transparent)',
-        borderRadius: 6,
-        overflow: 'hidden',
-        fontSize: 11,
-      }}
-    >
-      <button
-        onClick={() => hasNames && setExpanded((v) => !v)}
-        style={{
-          width: '100%',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
-          padding: '6px 10px',
-          background: 'color-mix(in srgb, var(--color-warning, #f59e0b) 8%, var(--color-bg-secondary))',
-          border: 'none',
-          cursor: hasNames ? 'pointer' : 'default',
-          textAlign: 'left',
-          color: 'var(--color-text-secondary)',
-        }}
-      >
-        <Icon icon="ban-circle" size={11} style={{ flexShrink: 0, color: 'var(--color-warning, #f59e0b)' }} />
-        <span style={{ flex: 1 }}>
-          {count} file{count === 1 ? '' : 's'} <strong>not cleaned</strong> — unsupported format or content mismatch
-        </span>
-        {hasNames && (
-          <Icon icon={expanded ? 'chevron-up' : 'chevron-down'} size={12} style={{ color: 'var(--color-text-muted)' }} />
-        )}
-      </button>
-      {expanded && hasNames && (
-        <div
-          style={{
-            maxHeight: 160,
-            overflowY: 'auto',
-            padding: '6px 10px',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 3,
-            background: 'var(--color-bg-secondary)',
-          }}
-        >
-          {files.map((f) => (
-            <div
-              key={f}
-              title={f}
-              style={{
-                fontFamily: 'var(--font-mono)',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                color: 'var(--color-text-primary)',
-              }}
-            >
-              {basename(f)}
-            </div>
-          ))}
-        </div>
+      {unlistedErrors.length > 0 && (
+        <ErrorsSummary errors={unlistedErrors} />
       )}
     </div>
   );
@@ -1533,13 +1361,7 @@ function FileCard({ result, index }: { result: ScrubResult; index: number }) {
   const identifyingFields = result.fieldsStripped.filter((f) => f.isIdentifying);
   const otherFields = result.fieldsStripped.filter((f) => !f.isIdentifying);
   const orderedFields = [...identifyingFields, ...otherFields];
-  const removedProperties = orderedFields.flatMap((field) => {
-    const details = field.details?.filter(Boolean) ?? [];
-    return (details.length > 0 ? details : [field.label]).map((detail) => ({
-      ...field,
-      detail,
-    }));
-  });
+  const removedGroups = groupRemovedProperties(orderedFields);
   const residualFields = result.residualFields ?? [];
   const hasResidual = residualFields.length > 0;
   const sourceName = basename(result.inputPath);
@@ -1593,7 +1415,7 @@ function FileCard({ result, index }: { result: ScrubResult; index: number }) {
             −{formatBytes(bytesDelta)}
           </span>
         )}
-        <Tag minimal style={{ flexShrink: 0, fontSize: 10 }}>{result.fileType}</Tag>
+        <ScrubFileIcon path={result.inputPath} fileType={result.fileType} />
       </div>
 
       {/* ─── Body ───────────────────────────────────────────────── */}
@@ -1602,13 +1424,13 @@ function FileCard({ result, index }: { result: ScrubResult; index: number }) {
           {/* Values below came from the original pre-scan, not the clean copy. */}
           {metaItems.length > 0 && (
             <div>
-              <div style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.9, color: 'var(--color-text-muted)', marginBottom: 5 }}>
+              <div style={{ display: 'flex', alignItems: 'center', fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.9, color: 'var(--color-text-muted)', marginBottom: 5 }}>
                 Examples found in the original:
-              </div>
-              <div style={{ fontSize: 10, color: 'var(--color-text-muted)', marginBottom: 5, lineHeight: 1.4 }}>
-                {hasResidual
-                  ? 'These values were found before cleaning. Check the remaining-data warning below.'
-                  : 'These values were present before cleaning and are not in the cleaned copy.'}
+                <ScrubInfoButton topic="examples found in the original">
+                  {hasResidual
+                    ? 'These values were found before cleaning. Check the remaining-data warning below.'
+                    : 'These values were present before cleaning and are not in the cleaned copy.'}
+                </ScrubInfoButton>
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                 {metaItems.map(({ key, value }, i) => (
@@ -1652,35 +1474,17 @@ function FileCard({ result, index }: { result: ScrubResult; index: number }) {
 
           {/* File-by-file receipt. The engine sends property names only, so the
               receipt explains what changed without repeating personal values. */}
-          {removedProperties.length > 0 && (
+          {removedGroups.length > 0 && (
             <div>
-              <div style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.9, color: 'var(--color-text-muted)', marginBottom: 4 }}>
+              <div style={{ display: 'flex', alignItems: 'center', fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.9, color: 'var(--color-text-muted)', marginBottom: 4 }}>
                 {result.dryRun ? 'Will remove from this file:' : 'Removed from this file:'}
+                <ScrubInfoButton topic={result.dryRun ? 'what will be removed' : 'what was removed'}>
+                  {hasResidual
+                    ? 'This receipt lists property names. Check the remaining-data warning below.'
+                    : 'This receipt lists property names; the clean copy contains none of their original values.'}
+                </ScrubInfoButton>
               </div>
-              <div style={{ fontSize: 10, color: 'var(--color-text-muted)', marginBottom: 5, lineHeight: 1.4 }}>
-                {hasResidual
-                  ? 'This receipt lists property names. Check the remaining-data warning below.'
-                  : 'This receipt lists property names; the clean copy contains none of their original values.'}
-              </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
-                {removedProperties.map((field, i) => (
-                  <span
-                    key={`${field.category}-${field.detail}-${i}`}
-                    title={`${field.label} — ${field.detail}${field.isIdentifying ? ' · could identify you' : ''}`}
-                    style={{
-                      display: 'inline-flex', alignItems: 'center', gap: 4,
-                      fontSize: 10, padding: '1px 6px', borderRadius: 3,
-                      background: categoryTint(field.category).bg,
-                      color: categoryTint(field.category).fg,
-                      border: `1px solid ${categoryTint(field.category).border}`,
-                      maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {field.isIdentifying && <Icon icon="shield" size={9} style={{ flexShrink: 0 }} />}
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{field.detail}</span>
-                  </span>
-                ))}
-              </div>
+              <RemovedPropertyGroups groups={removedGroups} tintFor={categoryTint} />
             </div>
           )}
 
@@ -1712,7 +1516,7 @@ function FileCard({ result, index }: { result: ScrubResult; index: number }) {
             </div>
           )}
 
-          {metaItems.length === 0 && removedProperties.length === 0 && !result.gpsCoords && !hasResidual && (
+          {metaItems.length === 0 && removedGroups.length === 0 && !result.gpsCoords && !hasResidual && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--color-text-muted)', fontSize: 11, fontStyle: 'italic', padding: '2px 0' }}>
               <Icon icon="tick-circle" size={11} style={{ color: 'var(--color-success)', flexShrink: 0 }} />
               No metadata found — already clean
@@ -1741,29 +1545,30 @@ function FileCard({ result, index }: { result: ScrubResult; index: number }) {
   );
 }
 
-function FileCardList({ results }: { results: ScrubResult[] }) {
+function FileCardList({ results, showHeader = true }: { results: ScrubResult[]; showHeader?: boolean }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      {/* Batch file list */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          padding: '6px 10px',
-          background: 'var(--color-bg-secondary)',
-          border: '1px solid var(--color-border)',
-          borderRadius: 6,
-        }}
-      >
-        <Icon icon="document" size={11} color="var(--color-text-muted)" style={{ flexShrink: 0 }} />
-        <span style={{ flex: 1, minWidth: 0, fontSize: 11, color: 'var(--color-text-primary)', fontWeight: 700 }}>
-          File details
-        </span>
-        <span style={{ fontSize: 11, color: 'var(--color-text-muted)', flexShrink: 0, fontFamily: 'var(--font-mono)' }}>
-          {results.length} item{results.length === 1 ? '' : 's'}
-        </span>
-      </div>
+      {showHeader && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: '6px 10px',
+            background: 'var(--color-bg-secondary)',
+            border: '1px solid var(--color-border)',
+            borderRadius: 6,
+          }}
+        >
+          <Icon icon="document" size={11} color="var(--color-text-muted)" style={{ flexShrink: 0 }} />
+          <span style={{ flex: 1, minWidth: 0, fontSize: 11, color: 'var(--color-text-primary)', fontWeight: 700 }}>
+            File details
+          </span>
+          <span style={{ fontSize: 11, color: 'var(--color-text-muted)', flexShrink: 0, fontFamily: 'var(--font-mono)' }}>
+            {results.length} item{results.length === 1 ? '' : 's'}
+          </span>
+        </div>
+      )}
 
       <div
         style={{
