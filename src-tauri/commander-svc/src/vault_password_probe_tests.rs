@@ -61,6 +61,39 @@ fn handler_refuses_before_the_broker_without_an_interactive_caller() {
     let store = crate::vault_access::test_store();
     let broker = VaultMountBroker::new();
     let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
-    let error = runtime.block_on(handle(1, &store, &broker, request(), None)).unwrap_err();
+    let error = runtime.block_on(handle(1, &store, &broker, request(), None, true)).unwrap_err();
     assert_eq!(error.kind, super::super::PERSONAL_VAULT_SESSION_ABSENT);
+}
+
+#[test]
+fn a_noted_vault_refuses_its_decoy_password_and_a_hidden_answer_is_returned() {
+    let unread = || -> Result<bool, crate::vault_access::VaultError> { unreachable!("a hidden answer never reads the note") };
+    assert_eq!(super::super::vault_password_target::probe_outcome("hidden", unread).ok(), Some("hidden"));
+    assert_eq!(super::super::vault_password_target::probe_outcome("outer", || Ok(false)).ok(), Some("outer"));
+    let (_, refused) = super::super::vault_password_target::probe_outcome("outer", || Ok(true)).unwrap_err();
+    assert_eq!((refused.kind, refused.message.as_str()), ("real_password_required", "this vault needs its real password"));
+    let (_, unreadable) = super::super::vault_password_target::probe_outcome("outer", || {
+        Err(crate::vault_access::VaultError::Persistence)
+    })
+    .unwrap_err();
+    assert_eq!(unreadable.kind, "vault_policy_unavailable", "an unreadable note never lets a decoy through");
+}
+
+#[test]
+fn only_a_noted_store_refuses_a_decoy_answer() {
+    let store = crate::vault_access::test_policy_store();
+    let target = crate::vault_access::PasswordChangeTarget {
+        container_path: r"D:\Vaults\notes.hc".into(),
+        container_identity: "v:9:i:3".into(),
+        entry_id: None,
+        caller_owns_entry: false,
+    };
+    let noted = || store.has_hidden_part(&target.container_identity);
+    assert_eq!(super::super::vault_password_target::probe_outcome("outer", noted).ok(), Some("outer"));
+    store.note_hidden_part(&target).unwrap();
+    let noted = || store.has_hidden_part(&target.container_identity);
+    assert_eq!(
+        super::super::vault_password_target::probe_outcome("outer", noted).unwrap_err().1.kind,
+        "real_password_required"
+    );
 }

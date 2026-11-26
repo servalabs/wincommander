@@ -120,18 +120,6 @@ impl VaultAccessStore {
             self.password_change_target(container_path, caller_sid, caller_session)
         })
     }
-
-    pub fn rename_target_as_caller(
-        &self,
-        container_path: &str,
-        caller_sid: &str,
-        caller_session: u32,
-        caller_token: windows_sys::Win32::Foundation::HANDLE,
-    ) -> Result<(PasswordChangeTarget, RenameRecord), TargetLookupError> {
-        resolve_as_caller(container_path, caller_token, || {
-            self.rename_target(container_path, caller_sid, caller_session)
-        })
-    }
 }
 
 #[cfg(all(windows, test))]

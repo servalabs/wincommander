@@ -494,7 +494,7 @@ pub(crate) fn record_vault_create_success(operation_id: &str, started: Instant) 
     ));
 }
 
-/// `operation` is "change_password" or "probe_password".
+/// `operation` is "change_password", "probe_password" or "rename".
 pub(crate) fn record_vault_password_change(
     operation_id: &str,
     operation: &'static str,
@@ -504,7 +504,11 @@ pub(crate) fn record_vault_password_change(
     let (outcome, error_code, severity, retryable, next) = match failure {
         None => (
             DiagnosticOutcome::Succeeded,
-            if operation == "probe_password" { "VLT.PASSWORD.PROBED" } else { "VLT.PASSWORD.CHANGED" },
+            match operation {
+                "probe_password" => "VLT.PASSWORD.PROBED",
+                "rename" => "VLT.RENAME.COMPLETED",
+                _ => "VLT.PASSWORD.CHANGED",
+            },
             DiagnosticSeverity::Info,
             false,
             "none",

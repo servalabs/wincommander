@@ -146,9 +146,50 @@ fn handler_refuses_before_the_broker_without_an_interactive_caller() {
     let broker = VaultMountBroker::new();
     let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
     let error = runtime
-        .block_on(handle(1, &store, &broker, request(), None))
+        .block_on(handle(1, &store, &broker, request(), None, true))
         .unwrap_err();
     assert_eq!(error.kind, PERSONAL_VAULT_SESSION_ABSENT);
+}
+
+#[test]
+fn an_outer_change_on_a_noted_vault_needs_proven_hidden_credentials() {
+    use crate::vault_access::VaultError;
+    let unread = || -> Result<bool, VaultError> { unreachable!("a hidden change never reads the note") };
+    assert_eq!(outer_gate("hidden", false, unread).ok(), Some(OuterGate::Allowed));
+    assert_eq!(outer_gate("outer", false, || Ok(false)).ok(), Some(OuterGate::Allowed));
+    assert_eq!(outer_gate("outer", true, || Ok(false)).ok(), Some(OuterGate::Allowed), "the engine still checks the collision");
+    assert_eq!(outer_gate("outer", false, || Ok(true)).unwrap_err().1.kind, "real_password_required");
+    assert_eq!(outer_gate("outer", true, || Ok(true)).ok(), Some(OuterGate::ProveHidden));
+    assert_eq!(outer_gate("outer", true, || Err(VaultError::Persistence)).unwrap_err().1.kind, "vault_policy_unavailable");
+}
+
+#[test]
+fn hidden_credentials_count_only_when_the_probe_opens_the_hidden_header() {
+    assert!(hidden_proof_refusal(Ok("hidden")).is_ok());
+    for wrong in [Ok("outer"), Err(VaultMountReason::WrongPassword), Err(VaultMountReason::EngineUnlockFailed)] {
+        let (_, refused) = hidden_proof_refusal(wrong).unwrap_err();
+        assert_eq!(refused.kind, "real_password_required", "{wrong:?}");
+    }
+    assert_eq!(hidden_proof_refusal(Err(VaultMountReason::EngineFailed)).unwrap_err().1.kind, "engine_failed");
+}
+
+#[test]
+fn the_hidden_proof_carries_only_the_real_credential_and_is_scrubbed() {
+    let mut args = request();
+    args["Target"] = json!("outer");
+    args["TargetKind"] = json!("file");
+    args["HiddenPassword"] = json!("real-canary");
+    args["HiddenPim"] = json!("600");
+    args["HiddenKeyfiles"] = json!(json!([r"D:\keys\real.key"]).to_string());
+    let mut proof = hidden_proof_args(&args);
+    assert_eq!(
+        proof.0,
+        json!({ "TargetKind": "file", "Password": "real-canary", "Pim": "600", "Keyfiles": json!([r"D:\keys\real.key"]).to_string() })
+    );
+    zeroize_json(&mut proof.0);
+    assert!(!proof.0.to_string().contains("real-canary"));
+    let keyfiles_only = hidden_proof_args(&json!({ "HiddenKeyfiles": "[]" }));
+    assert_eq!(keyfiles_only.0["Password"], "");
 }
 
 #[test]

@@ -1,11 +1,14 @@
 //! `svc.vault.probe_password`: which header the current password opens. The
 //! engine tries the hidden and the outer header every time, so the file alone
-//! decides and a wrong password costs the same on every Vault.
+//! decides and a wrong password costs the same on every Vault. A hidden answer
+//! notes the Vault; after that its decoy password is refused.
 
 use wincmd_shared::vault_access::VaultMountReason;
 
 use super::vault_password_change::{credential_keyfiles, interactive_peer, valid_pim, volume_path, SecretArgs};
-use super::vault_password_target::{broker_on_held_target, failure_code, Refusals};
+use super::vault_password_target::{
+    call_broker, failure_code, note_if_hidden, on_held_target, opened_header, probe_outcome, Refusals,
+};
 use super::{AuthenticatedPipePeer, VerbError};
 use crate::vault_access::VaultAccessStore;
 use crate::vault_mount::VaultMountBroker;
@@ -38,16 +41,15 @@ pub(super) fn validate_request(args: &serde_json::Value) -> Option<ProbeRequest>
     })
 }
 
-/// Only the two header names leave the service.
-pub(super) fn opened_header(reply: &serde_json::Value) -> Option<&'static str> {
-    if reply.get("status").and_then(serde_json::Value::as_str) != Some("password_opened") {
-        return None;
-    }
-    match reply.get("header").and_then(serde_json::Value::as_str)? {
-        "outer" => Some("outer"),
-        "hidden" => Some("hidden"),
-        _ => None,
-    }
+/// The header `args`' credential opens, from the caller's session broker.
+pub(super) fn probe_header(
+    operation_id: u64,
+    peer: &AuthenticatedPipePeer,
+    target: &crate::vault_access::PasswordChangeTarget,
+    args: &mut serde_json::Value,
+) -> Result<&'static str, VaultMountReason> {
+    let reply = call_broker(operation_id, peer, target, BROKER_FEATURE, args)?;
+    opened_header(&reply).ok_or(VaultMountReason::BrokerReplyRejected)
 }
 
 pub(super) async fn handle(
@@ -56,6 +58,7 @@ pub(super) async fn handle(
     vault_mount: &VaultMountBroker,
     args: serde_json::Value,
     peer: Option<&AuthenticatedPipePeer>,
+    caller_privileged: bool,
 ) -> Result<serde_json::Value, VerbError> {
     let mut args = SecretArgs(args);
     let log = Refusals::new(operation_id, "probe_password");
@@ -66,26 +69,27 @@ pub(super) async fn handle(
             VerbError::new("vault_validation_failed", "password check request is invalid"),
         )));
     };
-    let (_, result) = broker_on_held_target(
+    let header = on_held_target(
         &log,
-        operation_id,
         vault_access,
         vault_mount,
         peer,
+        caller_privileged,
         &request.volume_path,
         &request.keyfiles,
-        BROKER_FEATURE,
-        &mut args.0,
+        |target| {
+            let header = probe_header(operation_id, peer, target, &mut args.0).map_err(|reason| {
+                log.record(Some(reason));
+                VerbError::new(failure_code(reason), "the password was not checked")
+            })?;
+            let header = probe_outcome(header, || vault_access.has_hidden_part(&target.container_identity))
+                .map_err(|refusal| log.refuse(refusal))?;
+            note_if_hidden(&log, vault_access, target, header == "hidden");
+            log.record(None);
+            Ok(header)
+        },
     )?;
-    let header = match &result {
-        Ok(reply) => opened_header(reply).ok_or(VaultMountReason::BrokerReplyRejected),
-        Err(reason) => Err(*reason),
-    };
-    log.record(header.err());
-    match header {
-        Ok(header) => Ok(serde_json::json!({ "header": header })),
-        Err(reason) => Err(VerbError::new(failure_code(reason), "the password was not checked")),
-    }
+    Ok(serde_json::json!({ "header": header }))
 }
 
 #[cfg(test)]

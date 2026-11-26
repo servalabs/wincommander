@@ -601,18 +601,6 @@ pub struct PersonalVaultRecord {
     pub syncthing_opt_in: Option<bool>,
 }
 
-/// Same bound as a Fleet Vault label, so either kind of name fits both stores.
-pub const MAX_VAULT_DISPLAY_NAME_BYTES: usize = 128;
-
-/// Returns the trimmed name, or `None` when it is empty, too long or has a control character.
-pub fn normalize_vault_display_name(name: &str) -> Option<String> {
-    let trimmed = name.trim();
-    (!trimmed.is_empty()
-        && trimmed.len() <= MAX_VAULT_DISPLAY_NAME_BYTES
-        && !trimmed.chars().any(char::is_control))
-    .then(|| trimmed.to_owned())
-}
-
 impl std::fmt::Debug for VaultMountRequest {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -1033,17 +1021,6 @@ pub struct VaultSaveAccessDirectoryResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn display_names_are_trimmed_bounded_and_free_of_control_characters() {
-        assert_eq!(normalize_vault_display_name("  Taxes 2026 "), Some("Taxes 2026".into()));
-        assert_eq!(normalize_vault_display_name("Ünïcode ✓"), Some("Ünïcode ✓".into()));
-        let longest = "a".repeat(MAX_VAULT_DISPLAY_NAME_BYTES);
-        assert_eq!(normalize_vault_display_name(&longest), Some(longest.clone()));
-        for invalid in ["", "   ", "line\nbreak", "tab\there", "nul\0", &format!("{longest}b")] {
-            assert_eq!(normalize_vault_display_name(invalid), None, "{invalid:?}");
-        }
-    }
 
     #[test]
     fn mounted_result_can_report_sync_warning_without_changing_mount_outcome() {

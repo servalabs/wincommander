@@ -462,7 +462,7 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         | "svc.vault.change_password_personal"
         // Reads one header in the caller's own token, like the change.
         | "svc.vault.probe_password"
-        // Changes only a service-held name; the handler checks the owner or a write grant.
+        // Renames the file in the caller's own token after its password opens it.
         | "svc.vault.rename"
         | "svc.vault.setup_cloud_backup"
         | "svc.vault.manage_cloud_backup"

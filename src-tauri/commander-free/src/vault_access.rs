@@ -618,15 +618,39 @@ pub async fn vault_release_orphaned_drive_letters() -> Result<Value, String> {
     crate::svc_client::call(RELEASE_ORPHANED_DRIVE_LETTERS, json!({})).await
 }
 
-/// Free path: a name is service-held data, so no Pro engine is involved. The
-/// service decides who may rename and never touches the container file.
+/// Renames the container file. The service checks the password through the
+/// session broker and renames the file in the caller's own token. The password
+/// is sent once and cleared from this command's copy before the wait begins.
 #[tauri::command]
-pub async fn vault_rename(container_path: String, name: String) -> Result<Value, String> {
-    crate::svc_client::call(RENAME, rename_payload(container_path, name)).await
+pub async fn vault_rename(
+    container_path: String,
+    new_name: String,
+    mut password: String,
+    pim: Option<String>,
+    keyfiles: Option<Vec<String>>,
+) -> Result<Value, String> {
+    let payload = rename_payload(container_path, new_name, &password, pim, keyfiles);
+    password.zeroize();
+    crate::svc_client::call(RENAME, payload).await
 }
 
-fn rename_payload(container_path: String, name: String) -> Value {
-    json!({ "container_path": container_path, "name": name })
+fn rename_payload(
+    container_path: String,
+    new_name: String,
+    password: &str,
+    pim: Option<String>,
+    keyfiles: Option<Vec<String>>,
+) -> Value {
+    let mut payload = json!({
+        "container_path": container_path,
+        "new_name": new_name,
+        "password": password,
+        "keyfiles": keyfiles.unwrap_or_default(),
+    });
+    if let Some(pim) = pim.filter(|pim| !pim.trim().is_empty()) {
+        payload["pim"] = Value::String(pim);
+    }
+    payload
 }
 
 #[tauri::command]
@@ -784,8 +808,24 @@ mod tests {
         assert_eq!(RENAME, "svc.vault.rename");
         assert_eq!(DISPLAY_NAMES, "svc.vault.display_names");
         assert_eq!(
-            rename_payload(r"D:\Vaults\notes.hc".into(), "Taxes".into()),
-            json!({ "container_path": r"D:\Vaults\notes.hc", "name": "Taxes" })
+            rename_payload(r"D:\Vaults\notes.hc".into(), "Taxes".into(), "pw", None, None),
+            json!({ "container_path": r"D:\Vaults\notes.hc", "new_name": "Taxes", "password": "pw", "keyfiles": [] })
+        );
+        assert_eq!(
+            rename_payload(
+                r"D:\Vaults\notes.hc".into(),
+                "Taxes".into(),
+                "",
+                Some("600".into()),
+                Some(vec![r"D:\k.key".into()])
+            ),
+            json!({
+                "container_path": r"D:\Vaults\notes.hc",
+                "new_name": "Taxes",
+                "password": "",
+                "keyfiles": [r"D:\k.key"],
+                "pim": "600",
+            })
         );
         assert_eq!(DRIVE_LETTERS, "svc.vault.drive_letters");
         assert_eq!(CAPABILITIES, "svc.vault.capabilities");
