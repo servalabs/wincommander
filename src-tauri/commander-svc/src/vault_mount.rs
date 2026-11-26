@@ -802,6 +802,10 @@ impl VaultMountBroker {
             VaultMountReason::HiddenTooLarge => "vault_hidden_too_large",
             VaultMountReason::FormatFilesOpen => "vault_format_files_open",
             VaultMountReason::CreateTimeout => "vault_create_timeout",
+            VaultMountReason::WrongPassword => "vault_wrong_password",
+            VaultMountReason::NewPasswordCollides => "vault_new_password_collides",
+            VaultMountReason::WeakNewPassword => "vault_weak_new_password",
+            VaultMountReason::EngineFailed => "vault_engine_failed",
         }
     }
 
@@ -3892,6 +3896,41 @@ fn failed(
     }
 }
 
+/// A broker whose driver shows either nothing or one live mount of `container_identity`.
+#[cfg(test)]
+pub(crate) fn test_broker_with_mount(container_identity: Option<&str>) -> VaultMountBroker {
+    let mut broker = VaultMountBroker::new();
+    let Some(container_identity) = container_identity else {
+        broker.engine_snapshot = Some(|| Ok(HashMap::new()));
+        return broker;
+    };
+    broker.engine_snapshot = Some(|| Ok(HashMap::from([(12, "test-mount:12".into())])));
+    broker.active.lock().unwrap().insert(
+        "mounted".into(),
+        ActiveMount {
+            authentication_id: None,
+            drive_letter: "V:".into(),
+            internal_drive: 12,
+            presentation: VaultPresentation::Machine,
+            session_id: 7,
+            caller_sid: "S-1-5-21-owner".into(),
+            policy_id: "personal".into(),
+            policy_version: 1,
+            personal: true,
+            syncthing_managed: false,
+            syncthing_resume_unresolved: false,
+            container_identity: container_identity.into(),
+            access: wincmd_shared::vault_access::VaultAccess::Write,
+            mounted_at: 1,
+            cleanup_required: false,
+            driver_slot_absent: false,
+            engine_mount_identity: Some("test-mount:12".into()),
+            canonical_container_path: None,
+        },
+    );
+    broker
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5017,6 +5056,10 @@ mod tests {
             (VaultMountReason::HiddenTooLarge, "vault_hidden_too_large"),
             (VaultMountReason::FormatFilesOpen, "vault_format_files_open"),
             (VaultMountReason::CreateTimeout, "vault_create_timeout"),
+            (VaultMountReason::WrongPassword, "vault_wrong_password"),
+            (VaultMountReason::NewPasswordCollides, "vault_new_password_collides"),
+            (VaultMountReason::WeakNewPassword, "vault_weak_new_password"),
+            (VaultMountReason::EngineFailed, "vault_engine_failed"),
         ] {
             assert_eq!(
                 VaultMountBroker::personal_mount_failure_code(reason),

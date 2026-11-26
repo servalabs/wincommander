@@ -11,6 +11,10 @@ import { useAppState } from "../../context/AppContext";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useTheme } from "../../context/ThemeContext";
 import CreateVolumeWizard from "./CreateVolumeWizard";
+import { VaultFileMoreMenu } from "./VaultFileActionButtons";
+import useVaultNames from "../../hooks/useVaultNames";
+import useVaultFileActions from "../../hooks/useVaultFileActions";
+import { findVaultName } from "@/lib/vaultRename";
 import VolumeActionsMenu from "./VolumeActionsMenu";
 import SystemEncryptionSection from "./SystemEncryptionSection";
 import RamDisksSection from "./RamDisksSection";
@@ -114,6 +118,10 @@ interface EncryptedVolumesTabProps {
   statusError: string | null;
 }
 
+function VaultName({ name }: { name: string | null }) {
+  return name ? <strong className="vault-volume-name">{name}</strong> : null;
+}
+
 // Encrypted Volumes tab: the card body (header, install-prompt, action row,
 // volumes table) plus the Mount Encrypted Volume dialog — its state/handlers
 // used to live on the whole panel; they now live here with the tab that
@@ -130,6 +138,8 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
   const [mountRemovable, setMountRemovable] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [createWizardOpen, setCreateWizardOpen] = useState(false);
+  const { names: vaultNames } = useVaultNames();
+  const { actions: vaultFileActions, dialogs: vaultFileDialogs } = useVaultFileActions();
   const { letters: availableLetters, loading: mountLettersLoading, unavailable: mountLettersUnavailable,
     refresh: refreshMountLetters } = useVaultDriveLetters();
   const [mountType, setMountType] = useState<'file' | 'partition'>('file');
@@ -492,6 +502,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
               onClick={() => openMountDialog()}
               className="vault-action-btn"
             />
+            {vaultFileActions && <VaultFileMoreMenu actions={vaultFileActions} />}
           </TierGate>
         </div>
 
@@ -545,6 +556,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
                       </td>
                       <td role="cell"><span className={`type-badge${vol.type === "Hidden" ? " type-badge--hidden" : ""}`}>{vol.accessible === false ? "Unavailable" : vol.type}</span></td>
                       <td className="path-cell" role="cell">
+                        <VaultName name={findVaultName(vaultNames, vol.path)} />
                         <span className="truncate-path" title={vol.path || undefined}>{vol.path || "Path unavailable"}</span>
                         {vol.accessible === false && <span className="vault-volume-unavailable">{vol.dismountAllowed === true
                           ? "This drive is not available in this sign-in. Choose Dismount to clean up its verified mount state, then mount it again."
@@ -584,6 +596,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
         onClose={() => setCreateWizardOpen(false)}
         onCreated={() => { setCreateWizardOpen(false); refreshVault(true); }}
       />
+      {vaultFileDialogs}
       <Dialog
         isOpen={mountDialogOpen}
         onClose={closeMountDialog}

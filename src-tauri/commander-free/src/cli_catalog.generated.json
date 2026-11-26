@@ -6865,6 +6865,14 @@
       ]
     },
     {
+      "id": "backend:Set\u002dEncryptionVolumePassword",
+      "name": "Set\u002dEncryptionVolumePassword",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": []
+    },
+    {
       "id": "backend:Set\u002dExplorerOpensQuickAccess",
       "name": "Set\u002dExplorerOpensQuickAccess",
       "transport": "backend\u002dscript",
@@ -7331,6 +7339,14 @@
     {
       "id": "backend:Test\u002dEdgeInstalled",
       "name": "Test\u002dEdgeInstalled",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": []
+    },
+    {
+      "id": "backend:Test\u002dEncryptionVolumePassword",
+      "name": "Test\u002dEncryptionVolumePassword",
       "transport": "backend\u002dscript",
       "registered": true,
       "debugOnly": false,
@@ -10779,7 +10795,8 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/panels/privacy/StartupPinConfig.tsx"
+        "src/panels/privacy/StartupPinConfig.tsx",
+        "src/panels/secret/index.tsx"
       ]
     },
     {
@@ -12424,6 +12441,16 @@
       ]
     },
     {
+      "id": "tauri:vault_display_names",
+      "name": "vault_display_names",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useVaultNames.ts"
+      ]
+    },
+    {
       "id": "tauri:vault_enroll_personal_syncthing",
       "name": "vault_enroll_personal_syncthing",
       "transport": "tauri",
@@ -12491,6 +12518,16 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/hooks/useBackend.ts"
+      ]
+    },
+    {
+      "id": "tauri:vault_rename",
+      "name": "vault_rename",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useVaultNames.ts"
       ]
     },
     {

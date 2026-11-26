@@ -67,7 +67,8 @@ fn request_timeout_for(feature_id: &str) -> std::time::Duration {
         | "svc.vault.release_orphaned_drive_letters" => {
             VAULT_MUTATION_TIMEOUT
         }
-        "svc.vault.mount" => VAULT_MOUNT_TIMEOUT,
+        // A rename checks the password in the session broker, as long as a mount's unlock.
+        "svc.vault.mount" | "svc.vault.rename" => VAULT_MOUNT_TIMEOUT,
         "svc.vault.enroll_personal_syncthing" => SYNCTHING_ENROLLMENT_TIMEOUT,
         "svc.vault.manage_personal_syncthing" => SYNCTHING_MANAGEMENT_TIMEOUT,
         "svc.vault.setup_cloud_backup" => std::time::Duration::from_secs(190),
@@ -85,6 +86,7 @@ fn may_still_be_completing(feature_id: &str) -> bool {
             | "svc.vault.apply_owner_fragment"
             | "svc.vault.unmount"
             | "svc.vault.dismount_personal"
+            | "svc.vault.rename"
             | "svc.vault.enroll_personal_syncthing"
             | "svc.vault.manage_personal_syncthing"
             | "svc.vault.setup_cloud_backup"
@@ -666,6 +668,8 @@ mod tests {
         );
         assert!(may_still_be_completing("svc.vault.apply_owner_fragment"));
         assert_eq!(request_timeout_for("svc.vault.mount"), VAULT_MOUNT_TIMEOUT);
+        assert_eq!(request_timeout_for("svc.vault.rename"), VAULT_MOUNT_TIMEOUT);
+        assert!(may_still_be_completing("svc.vault.rename"));
         assert_eq!(
             request_timeout_for("svc.vault.apply_policy"),
             VAULT_MUTATION_TIMEOUT

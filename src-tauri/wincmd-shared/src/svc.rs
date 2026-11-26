@@ -177,6 +177,10 @@ pub fn is_known_verb(feature_id: &str) -> bool {
             | "svc.vault.authorize_mount"
             | "svc.vault.mount"
             | "svc.vault.create_personal"
+            | "svc.vault.change_password_personal"
+            | "svc.vault.probe_password"
+            | "svc.vault.rename"
+            | "svc.vault.display_names"
             | "svc.vault.unmount"
             | "svc.vault.dismount_personal"
             | "svc.vault.enroll_personal_syncthing"
@@ -437,6 +441,8 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         // Per-user status read: the handler keys the registration lookup on
         // the authenticated pipe token's SID and accepts no SID selector.
         | "svc.vault.personal_status"
+        // Returns only names the token's SID owns or may rename.
+        | "svc.vault.display_names"
         | "svc.vault.capabilities"
         | "svc.search.fence_capabilities" => CapabilityClass::ReadOnly,
 
@@ -452,6 +458,12 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         // service prepares a fixed driver and the Pro engine performs all
         // caller-controlled file I/O in the authenticated caller's token.
         "svc.vault.create_personal"
+        // Safe for a standard user: the header is rewritten under the caller's own token.
+        | "svc.vault.change_password_personal"
+        // Reads one header in the caller's own token, like the change.
+        | "svc.vault.probe_password"
+        // Renames the file in the caller's own token after its password opens it.
+        | "svc.vault.rename"
         | "svc.vault.setup_cloud_backup"
         | "svc.vault.manage_cloud_backup"
         | "svc.vault.attest_cloud_backup" => CapabilityClass::InteractiveSession,
@@ -557,6 +569,22 @@ mod tests {
             classify_verb("svc.vault.create_personal"),
             CapabilityClass::InteractiveSession
         );
+    }
+
+    #[test]
+    fn personal_vault_password_change_requires_an_interactive_session_not_admin() {
+        for verb in ["svc.vault.change_password_personal", "svc.vault.probe_password"] {
+            assert!(is_known_verb(verb));
+            assert_eq!(classify_verb(verb), CapabilityClass::InteractiveSession);
+        }
+    }
+
+    #[test]
+    fn vault_rename_requires_an_interactive_session_and_name_reads_stay_read_only() {
+        assert!(is_known_verb("svc.vault.rename"));
+        assert_eq!(classify_verb("svc.vault.rename"), CapabilityClass::InteractiveSession);
+        assert!(is_known_verb("svc.vault.display_names"));
+        assert_eq!(classify_verb("svc.vault.display_names"), CapabilityClass::ReadOnly);
     }
 
     #[test]

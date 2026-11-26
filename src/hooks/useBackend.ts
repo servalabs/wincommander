@@ -7,6 +7,14 @@ import { createSearchMaintenanceClient } from "../lib/searchMaintenanceClient";
 import { createBackendRequestTracker } from "../lib/backendRequestTracker";
 import { requestDestructiveCapability } from "./destructiveAuthz";
 import { afterVaultMutation } from "../lib/vaultChangeEvents";
+import {
+  buildPasswordChangeRequest,
+  buildPasswordProbeRequest,
+  type HeaderCredentials,
+  type VaultPasswordChangeResult,
+  type VaultPasswordHeader,
+} from "../lib/vaultPasswordChange";
+import type { VaultRenameRequest } from "../lib/vaultFileRename";
 import type { VaultSyncWarning } from "../lib/vaultSyncWarning";
 import type { ScrubFileOutcome, ScrubRootSummary } from "../lib/scrubTypes";
 import type { PersonalVaultSyncEnrollment, VaultSyncRecoveryAction } from "../lib/vaultSyncRecovery";
@@ -2052,6 +2060,12 @@ export function useBackend(retainCleanupScanErrors = false) {
           DeviceLabel: params.Device.label,
         } : {}),
       }),
+    probeVolumePassword: (volumePath: string, credentials: HeaderCredentials) =>
+      execute<unknown>("Test-EncryptionVolumePassword", buildPasswordProbeRequest(volumePath, credentials)),
+    changeVolumePassword: (volumePath: string, target: VaultPasswordHeader, credentials: HeaderCredentials, provenReal?: HeaderCredentials | null) =>
+      afterVaultMutation(() => execute<VaultPasswordChangeResult>("Set-EncryptionVolumePassword", buildPasswordChangeRequest(volumePath, target, credentials, provenReal))),
+    // The path changes, so every vault list and Vault Permissions refresh afterwards.
+    renameVaultFile: (request: VaultRenameRequest) => afterVaultMutation(() => invoke<unknown>("vault_rename", { ...request })),
     createDualVolume: (params: CreateDualVolumeParams) =>
       execute("Create-DualVolume", {
         TargetKind: params.TargetKind ?? "file",

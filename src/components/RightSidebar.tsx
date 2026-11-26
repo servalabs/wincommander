@@ -36,6 +36,9 @@ import { createVaultStatusRefresh } from "../lib/vaultStatusRefresh";
 import { changeQuickMountSlot } from "../lib/quickMountSlots";
 import { canOpenQuickMountDrive, quickMountExplorerTarget, quickMountExplorerTargetForDrive, openQuickMountIfEnabled, type QuickMountExplorerTarget } from "../lib/quickMountObservation";
 import { vaultMountResultLabel, type VaultAuthorizedEntry } from "../panels/fleet/vaultAccessTypes";
+import useVaultFileActions from "../hooks/useVaultFileActions";
+import { rowVaultFileActions } from "../lib/vaultFileActions";
+import { vaultPathKey } from "../lib/vaultRename";
 import './RightSidebar.css';
 
 // The service can add a preferred mount letter without exposing a container
@@ -242,6 +245,12 @@ export default function RightSidebar() {
         () => appSettings?.app?.vault?.quickMountSlots ?? [],
         [appSettings?.app?.vault?.quickMountSlots],
     );
+    const { actions: vaultFileActions, dialogs: vaultFileDialogs } = useVaultFileActions();
+    const qmSelectedSlot = quickMountSlots[qmSelectedIdx];
+    // Both actions work on a dismounted vault file, never a partition.
+    const qmFileActions = qmSelectedSlot && qmSelectedSlot.targetType !== 'partition'
+        ? rowVaultFileActions(vaultFileActions, Boolean(encryptionStatus?.volumes?.some(volume => volume.path && vaultPathKey(volume.path) === vaultPathKey(qmSelectedSlot.filePath))))
+        : null;
 
     const [fleetVaultsUnavailable, setFleetVaultsUnavailable] = useState(false);
     const fleetVaultRefresh = useMemo(() => createVaultStatusRefresh<FleetQuickMountEntry[]>(
@@ -1489,6 +1498,25 @@ export default function RightSidebar() {
                                                     onClick={() => handleQmRemoveSlot(qmSelectedIdx)}>
                                                     <Icon icon="cross" size={12} />
                                                 </button>
+                                                {/* Each action closes Quick Mount first so the vault dialog owns focus. */}
+                                                {qmFileActions && qmSelectedSlot && (
+                                                    <span className="inline-flex gap-[6px]">
+                                                        <button type="button" className="qm-slot-edit-btn" title="Change Password"
+                                                            aria-label="Change this vault's password" disabled={qmBusy}
+                                                            onClick={() => { setQmOpen(false); qmFileActions.changePassword({ path: qmSelectedSlot.filePath }); }}>
+                                                            <Icon icon="key" size={12} />
+                                                        </button>
+                                                        <button type="button" className="qm-slot-edit-btn" title="Rename"
+                                                            aria-label="Rename this vault file" disabled={qmBusy}
+                                                            onClick={() => {
+                                                                setQmOpen(false);
+                                                                // The shortcut stores the file path, so it follows the renamed file.
+                                                                qmFileActions.rename({ path: qmSelectedSlot.filePath, onRenamed: path => void patchQmSlots(qmSelectedSlot, { ...qmSelectedSlot, filePath: path }) });
+                                                            }}>
+                                                            <Icon icon="annotation" size={12} />
+                                                        </button>
+                                                    </span>
+                                                )}
                                                 {!explorerPreference.enabled && qmMountedTarget && canOpenQuickMountDrive(encryptionStatus, vaultStatusError, qmMountedTarget.drive, quickMountSlots[qmSelectedIdx]?.filePath, qmMountedTarget) && (
                                                     <button type="button" className="qm-btn qm-btn--primary qm-explorer-btn" disabled={qmBusy}
                                                         onClick={() => void openQuickMountTarget(qmMountedTarget)}>
@@ -1535,6 +1563,7 @@ export default function RightSidebar() {
                         )}
                     </DialogContent>
             </Dialog>
+            {vaultFileDialogs}
 
             {/* Lockdown countdown popup — shown only when armed from the sidebar
                 CLICK (the hotkey path stays popup-less). Click ABORT, the rail

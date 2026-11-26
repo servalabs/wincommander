@@ -678,10 +678,14 @@ pub enum VaultMountReason {
     HiddenTooLarge,
     FormatFilesOpen,
     CreateTimeout,
+    WrongPassword,
+    NewPasswordCollides,
+    WeakNewPassword,
+    EngineFailed,
 }
 
 impl VaultMountReason {
-    pub const ALL: [Self; 33] = [
+    pub const ALL: [Self; 37] = [
         Self::NotAuthorized,
         Self::AdministratorRequired,
         Self::PolicyAccessDenied,
@@ -715,9 +719,13 @@ impl VaultMountReason {
         Self::HiddenTooLarge,
         Self::FormatFilesOpen,
         Self::CreateTimeout,
+        Self::WrongPassword,
+        Self::NewPasswordCollides,
+        Self::WeakNewPassword,
+        Self::EngineFailed,
     ];
 
-    pub const ALL_WIRE_VALUES: [&'static str; 33] = [
+    pub const ALL_WIRE_VALUES: [&'static str; 37] = [
         "not_authorized",
         "administrator_required",
         "policy_access_denied",
@@ -751,6 +759,10 @@ impl VaultMountReason {
         "hidden_too_large",
         "format_files_open",
         "create_timeout",
+        "wrong_password",
+        "new_password_collides",
+        "weak_new_password",
+        "engine_failed",
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -788,6 +800,10 @@ impl VaultMountReason {
             Self::HiddenTooLarge => "hidden_too_large",
             Self::FormatFilesOpen => "format_files_open",
             Self::CreateTimeout => "create_timeout",
+            Self::WrongPassword => "wrong_password",
+            Self::NewPasswordCollides => "new_password_collides",
+            Self::WeakNewPassword => "weak_new_password",
+            Self::EngineFailed => "engine_failed",
         }
     }
 
@@ -828,6 +844,12 @@ impl VaultMountReason {
             "hidden_too_large" | "vault_hidden_too_large" => Some(Self::HiddenTooLarge),
             "format_files_open" | "vault_format_files_open" => Some(Self::FormatFilesOpen),
             "create_timeout" | "vault_create_timeout" => Some(Self::CreateTimeout),
+            "wrong_password" | "vault_wrong_password" => Some(Self::WrongPassword),
+            "new_password_collides" | "vault_new_password_collides" => Some(Self::NewPasswordCollides),
+            "weak_new_password" | "vault_weak_new_password" => Some(Self::WeakNewPassword),
+            "engine_failed" | "vault_engine_failed" => Some(Self::EngineFailed),
+            // The engine's own in-use refusal is the same outcome as the service's mount check.
+            "volume_mounted" | "vault_volume_mounted" => Some(Self::AlreadyMounted),
             _ => None,
         }
     }
@@ -1410,12 +1432,19 @@ mod tests {
             ("vault_hidden_too_large", VaultMountReason::HiddenTooLarge),
             ("vault_format_files_open", VaultMountReason::FormatFilesOpen),
             ("vault_create_timeout", VaultMountReason::CreateTimeout),
+            ("vault_wrong_password", VaultMountReason::WrongPassword),
+            ("vault_new_password_collides", VaultMountReason::NewPasswordCollides),
+            ("vault_weak_new_password", VaultMountReason::WeakNewPassword),
+            ("vault_engine_failed", VaultMountReason::EngineFailed),
         ] {
             assert_eq!(VaultMountReason::from_wire(prefixed), Some(reason));
             assert_eq!(format!("vault_{}", reason.as_str()), prefixed);
         }
         for unknown in ["vault_vault_create_timeout", "vault_broker_rejected", "vault_create_failed"] {
             assert_eq!(VaultMountReason::from_wire(unknown), None);
+        }
+        for mounted in ["volume_mounted", "vault_volume_mounted"] {
+            assert_eq!(VaultMountReason::from_wire(mounted), Some(VaultMountReason::AlreadyMounted));
         }
         let declaration = renderer
             .split("export const VAULT_MOUNT_REASONS = [")

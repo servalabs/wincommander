@@ -3148,6 +3148,8 @@ pub fn run() {
             vault_cloud_backup::vault_setup_cloud_backup,
             vault_cloud_backup::vault_manage_cloud_backup,
             vault_access::vault_release_orphaned_drive_letters,
+            vault_access::vault_rename,
+            vault_access::vault_display_names,
             vault_access::vault_list_authorized_entries,
             vault_access::get_vault_available_drive_letters,
             vault_access::vault_list_known_principals,

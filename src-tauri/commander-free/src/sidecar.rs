@@ -133,6 +133,7 @@ fn is_vault_mount_mutation(feature_id: &str) -> bool {
         &["Dismount-~", "Encrypted~", "Volume~"][..],
         &["Dismount-~", "AllEncryption~", "Volumes~"][..],
         &["Dismount-~", "AllEncrypted~", "Volumes~"][..],
+        &["Set-~", "EncryptionVolume~", "Password~"][..],
     ]
     .iter()
     .any(|parts| crate::command_strings::matches_parts(feature_id, parts))
@@ -141,7 +142,10 @@ fn is_vault_mount_mutation(feature_id: &str) -> bool {
 fn request_timeout_for(feature_id: &str, args: &serde_json::Value) -> Option<Duration> {
     if backup::matches(feature_id) { return Some(STEGO_TRANSFER_TIMEOUT); }
 
-    if is_vault_mount_mutation(feature_id) {
+    // The password probe sweeps both headers, as long as a wrong password in a change; replaying it is harmless.
+    if is_vault_mount_mutation(feature_id)
+        || crate::command_strings::matches_parts(feature_id, &["Test-~", "EncryptionVolume~", "Password~"])
+    {
         return Some(VAULT_MUTATION_TIMEOUT);
     }
     match feature_id {
@@ -2483,6 +2487,7 @@ mod tests {
             "Dismount-EncryptedVolume",
             "Dismount-AllEncryptionVolumes",
             "Dismount-AllEncryptedVolumes",
+            "Set-EncryptionVolumePassword",
         ] {
             assert!(is_vault_mount_mutation(command));
             assert_eq!(
@@ -2491,6 +2496,11 @@ mod tests {
             );
         }
         assert!(!is_vault_mount_mutation("Get-EncryptedVolumeStatus"));
+        assert!(!is_vault_mount_mutation("Test-EncryptionVolumePassword"));
+        assert_eq!(
+            request_timeout_for("Test-EncryptionVolumePassword", &serde_json::Value::Null),
+            Some(Duration::from_secs(180))
+        );
         assert!(!is_vault_mount_mutation("Mount-EncryptionVolume-Other"));
     }
 

@@ -1799,6 +1799,8 @@ pub(crate) fn get_command_tier(command: &str) -> &'static str {
         // ── Vault/volumes create+mount+dismount (paid; stdin-based engine, Pro-Rust handler) ──
         "Mount-EncryptionVolume"
         | "Create-EncryptionVolume"
+        | "Set-EncryptionVolumePassword"
+        | "Test-EncryptionVolumePassword"
         | "Dismount-EncryptionVolume"
         | "Get-EncryptedBackupTargetStatus"
         | "Provision-EncryptedBackupTarget"
@@ -2052,6 +2054,8 @@ mod command_tier_tests {
     fn sibling_encryption_volume_commands_stay_paid() {
         assert_eq!(get_command_tier("Mount-EncryptionVolume"), "paid");
         assert_eq!(get_command_tier("Create-EncryptionVolume"), "paid");
+        assert_eq!(get_command_tier("Set-EncryptionVolumePassword"), "paid");
+        assert_eq!(get_command_tier("Test-EncryptionVolumePassword"), "paid");
         assert_eq!(get_command_tier("Dismount-EncryptionVolume"), "paid");
         assert_eq!(get_command_tier("Get-EncryptedBackupTargetStatus"), "paid");
         assert_eq!(get_command_tier("Provision-EncryptedBackupTarget"), "paid");
@@ -2895,6 +2899,8 @@ fn get_module_for_command(command: &str) -> Option<&'static str> {
         "Dismount-EncryptionVolume" => Some("vault/volumes"),
         "Open-EncryptionVolume" => Some("vault/volumes"),
         "Create-EncryptionVolume" => Some("vault/volumes"),
+        "Set-EncryptionVolumePassword" => Some("vault/volumes"),
+        "Test-EncryptionVolumePassword" => Some("vault/volumes"),
         "Create-DualVolume" => Some("vault/volumes"),
         "Create-StegoMp4" => Some("vault/volumes"),
         "Extract-StegoMp4" => Some("vault/volumes"),

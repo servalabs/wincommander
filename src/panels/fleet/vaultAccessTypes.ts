@@ -58,6 +58,10 @@ export const VAULT_MOUNT_REASONS = [
   "hidden_too_large",
   "format_files_open",
   "create_timeout",
+  "wrong_password",
+  "new_password_collides",
+  "weak_new_password",
+  "engine_failed",
 ] as const;
 export type VaultMountReason = typeof VAULT_MOUNT_REASONS[number];
 
@@ -95,6 +99,10 @@ const VAULT_MOUNT_REASON_LABELS: Record<VaultMountReason, string> = {
   hidden_too_large: "The hidden volume is too large for the outer volume",
   format_files_open: "Another program held the new Vault open while it was prepared",
   create_timeout: "Creating the Vault took longer than the time allowed",
+  wrong_password: "The current password, PIM, or keyfiles did not open this Vault",
+  new_password_collides: "The new password is the same as the other password of this decoy vault. Choose a different one",
+  weak_new_password: "The new password is too weak. Use a longer password",
+  engine_failed: "The encrypted-volume engine could not change this Vault's password",
 };
 
 export interface VaultGrantInput {

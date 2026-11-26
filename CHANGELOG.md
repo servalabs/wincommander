@@ -65,6 +65,74 @@ lists only a selection of those changes.
 - Fix the Hidden Data Remover version text ("vExifTool 13.59; qpdf version
   12.4.2Run qpdf --copyright to see..."). The version is now the ExifTool
   number, and the ExifTool and qpdf versions are also reported separately.
+- Add Rename (Pro), which renames a dismounted vault's file on disk, in the
+  same folder, after you enter the vault's current password (and its PIM or
+  keyfile, if it uses them). The new name starts as the current file name; a
+  name without an extension keeps the current one. Names Windows refuses, a
+  name that already exists and an unchanged name are refused before anything
+  changes, and checking the password can take about 30 seconds. On success the
+  dialog says "Renamed to <name>.", every vault list and Vault Permissions
+  refresh because the path changed, and a Quick Mount shortcut for that file
+  follows the new path. When WinCommander has noted that a vault has a hidden
+  part, its decoy password is refused with "Wrong password. Enter the real
+  password for this vault.". The file is renamed with your own Windows
+  access, keeps its permissions, and WinCommander's records follow it; if
+  they cannot be saved the file gets its old name back. Your own vault can be
+  renamed only by you; a shared Vault only by its owner or an account it is
+  shared with for editing, not by an administrator outside the share. In
+  Vault Permissions both actions are disabled, with that reason, for any other
+  account. Rename no longer stores a separate display
+  name; names saved by earlier builds still show.
+- Change Password and Rename appear once on each dismounted vault row: My
+  vaults, the selected Quick Mount vault, and the More (⋯) menu of each saved
+  Vault in Vault Permissions, where they are disabled with a dismount hint
+  while the Vault is mounted. Mounted rows under Encrypted Volumes and Cloud
+  backup no longer show a key button. Under Encrypted Volumes, a More (⋯)
+  button at the right end of the Create Volume and Mount Volume row replaces
+  the two links and opens either dialog for a vault file you choose, including
+  one no list shows; it stays on that row at narrow widths. In Vault
+  Permissions, Change Password, Rename, Repair shared
+  access, Forget policy and Remove policy moved into the More menu, so each
+  saved Vault keeps one line of buttons. Both dialogs size to their content,
+  show progress next to their buttons instead of stacked notices, and show the
+  header-backup warning only with the new-password boxes.
+- Add Change Password (Pro) in the same places. It changes
+  the password, and optionally the PIM or keyfile, of a dismounted vault file.
+  You enter one current password and press Continue; WinCommander checks it
+  first and then asks for the new password, with no vault type to choose. The
+  engine tries the hidden and the outer header every time, with the same work
+  on every vault, and the password changes the header it opened. A wrong
+  password says only "Wrong password.". When the password you entered is the
+  real password of a decoy vault, the dialog then asks "Also change the decoy
+  password?"; each change says which password changed and that the other one
+  still works, a wrong decoy password keeps the real-password change, and only
+  that step refuses a new decoy password equal to the real one. Once the real
+  password has opened a vault (checked, changed or renamed with it), or
+  WinCommander created the vault file with a decoy, the service notes that the
+  vault has a hidden part; from then on the decoy password alone changes and
+  renames nothing ("Wrong password. Enter the real password for this vault."),
+  and a decoy change needs the real password proven again. The note is kept by
+  the file's identity, follows a rename and is never shown. A Vault in Vault
+  Permissions can be changed only by its owner or an account it is shared with
+  for editing; anyone else, an administrator included, is told exactly that. The dialog names a
+  missing, locked or inaccessible vault file, and says when the engine kept the
+  original header. The service checks that the vault is yours (or one
+  WinCommander has no record of), that it is the registered file, and that
+  nothing has it mounted. Header backups and copies made earlier still open
+  with the old password. Needs a Pro release with the matching password-change
+  engine.
+- Fix Change Password and Rename refusing a vault path pasted with Explorer's
+  "Copy as path" (wrapped in quotes) with "Check the vault file ...". The
+  service now reads a quoted path as the same file.
+- Fix Change Password and Rename failing with "the vault file could not be
+  found or read" for a vault in a folder whose permissions have no entry for
+  SYSTEM (for example a folder with inherited permissions removed). The service
+  resolved the file in its own SYSTEM token, and Windows' access-denied on that
+  folder was reported as a missing file. It now resolves the file, like the
+  write proof that follows, in the signed-in account's token, and reports a
+  missing file (`vault_file_not_found`), a file Windows refuses to this account
+  (`vault_access_denied`) and a file another program holds
+  (`vault_file_in_use`) separately. Mounting was not affected.
 - Fix Stealth mode leaving no Calculator shortcut: with Hide WinCommander
   already on, turning the Calculator lock on restored the WinCommander
   shortcuts to the Hide snapshot instead of replacing them, so the Start menu

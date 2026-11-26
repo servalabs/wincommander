@@ -8,6 +8,23 @@ use std::sync::Mutex;
 
 #[path = "vault_access/access_directory_mutation.rs"]
 mod access_directory_mutation;
+#[path = "vault_access/caller_lookup.rs"]
+mod caller_lookup;
+#[cfg(windows)]
+pub(crate) use caller_lookup::container_fault_as_caller;
+pub use caller_lookup::{FileFault, TargetLookupError};
+#[path = "vault_access/container_rename.rs"]
+mod container_rename;
+#[cfg(windows)]
+pub(crate) use container_rename::{prove_rename_access_as_caller, rename_container_as_caller, target_exists_as_caller};
+pub use container_rename::RenameFault;
+#[path = "vault_access/display_name.rs"]
+mod display_name;
+pub use display_name::VaultDisplayName;
+#[path = "vault_access/hidden_note.rs"]
+mod hidden_note;
+#[path = "vault_access/rename_records.rs"]
+mod rename_records;
 #[cfg(windows)]
 #[path = "vault_access/local_principals.rs"]
 mod local_principals;
@@ -562,6 +579,8 @@ struct State {
     personal_pending: HashMap<String, PendingPersonalVault>,
     legacy_recoveries: HashMap<String, LegacyRecoveryRecord>,
     personal_registry_healthy: bool,
+    personal_names: display_name::PersonalVaultNames,
+    hidden_parts: hidden_note::HiddenPartNotes,
     access_directory: VaultAccessDirectory,
     access_directory_healthy: bool,
     rollback_recovery: Option<PolicyRollbackRecovery>,
@@ -714,6 +733,19 @@ struct PersonalVaultRegistry {
     legacy_recoveries: Vec<LegacyRecoveryRecord>,
 }
 
+fn personal_registry_bytes(
+    records: &HashMap<String, PersonalVaultRecord>,
+    pending: &HashMap<String, PendingPersonalVault>,
+    legacy_recoveries: &HashMap<String, LegacyRecoveryRecord>,
+) -> Result<Vec<u8>, VaultError> {
+    serde_json::to_vec(&PersonalVaultRegistry {
+        records: records.values().cloned().collect(),
+        pending: pending.values().cloned().collect(),
+        legacy_recoveries: legacy_recoveries.values().cloned().collect(),
+    })
+    .map_err(|_| VaultError::Persistence)
+}
+
 #[derive(Clone)]
 pub struct PersonalCreationReservation {
     normalized_path: String,
@@ -801,6 +833,16 @@ pub enum SelectedContainerMountRoute {
     Unmanaged { record: PersonalVaultRecord },
 }
 
+/// The service-resolved container a password change may rewrite. A policy
+/// Vault names its entry so the caller's grant is checked against it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PasswordChangeTarget {
+    pub container_path: String,
+    pub container_identity: String,
+    pub entry_id: Option<String>,
+    pub caller_owns_entry: bool,
+}
+
 impl VaultAccessStore {
     #[cfg_attr(windows, allow(dead_code))]
     pub fn open(
@@ -840,6 +882,8 @@ impl VaultAccessStore {
                 personal_pending: HashMap::new(),
                 legacy_recoveries: HashMap::new(),
                 personal_registry_healthy: true,
+                personal_names: display_name::PersonalVaultNames::default(),
+                hidden_parts: hidden_note::HiddenPartNotes::default(),
                 access_directory: empty_access_directory(),
                 access_directory_healthy: true,
                 rollback_recovery: None,
@@ -857,6 +901,8 @@ impl VaultAccessStore {
         recovered_mount_identities: &HashSet<String>,
     ) {
         self.load_access_directory_at_startup();
+        self.load_personal_names_at_startup();
+        self.load_hidden_parts_at_startup();
         let mut loaded: Option<PersistedPolicy> = self
             .fs
             .read(&self.path)
@@ -1833,6 +1879,59 @@ impl VaultAccessStore {
         })
     }
 
+    /// Resolve a password-change target. A registered personal container must
+    /// belong to the caller and still be the registered file; an unregistered
+    /// one relies, like an ordinary mount, on the caller's own Windows access
+    /// and the current credentials. A policy Vault is authorized by the caller.
+    pub fn password_change_target(
+        &self,
+        container_path: &str,
+        caller_sid: &str,
+        caller_session: u32,
+    ) -> Result<PasswordChangeTarget, VaultError> {
+        match self.selected_container_mount_route(container_path, caller_sid, caller_session)? {
+            SelectedContainerMountRoute::Unmanaged { record } => {
+                if !wincmd_shared::vault_access::is_supported_vault_device_path(&record.container_path) {
+                    if let Some(personal) = self.personal_record_for_path(&record.container_path)? {
+                        if personal.container_identity != record.container_identity {
+                            return Err(VaultError::ContainerIdentity);
+                        }
+                        if personal.owner_sid != caller_sid {
+                            return Err(VaultError::Forbidden);
+                        }
+                    }
+                }
+                Ok(PasswordChangeTarget {
+                    container_path: record.container_path,
+                    container_identity: record.container_identity,
+                    entry_id: None,
+                    caller_owns_entry: false,
+                })
+            }
+            SelectedContainerMountRoute::Managed { entry_id } => {
+                let normalized = self
+                    .fs
+                    .normalize_existing_container_path(Path::new(container_path))?;
+                let container_identity = self.fs.stable_file_identity(&normalized)?;
+                let caller_owns_entry = {
+                    let state = self.state.lock().map_err(|_| VaultError::Persistence)?;
+                    state.active.as_ref().is_some_and(|active| {
+                        active.policy.entries.iter().any(|entry| {
+                            entry.id == entry_id
+                                && entry.primary_owner_sid.as_deref() == Some(caller_sid)
+                        })
+                    })
+                };
+                Ok(PasswordChangeTarget {
+                    container_path: normalized.to_string_lossy().into_owned(),
+                    container_identity,
+                    entry_id: Some(entry_id),
+                    caller_owns_entry,
+                })
+            }
+        }
+    }
+
     /// Prepares an existing, unregistered container for one-time adoption.
     /// The ACL implementation proves access through the authenticated caller
     /// token and retains a no-delete-share handle until commit or rollback.
@@ -2020,12 +2119,7 @@ impl VaultAccessStore {
         pending: &HashMap<String, PendingPersonalVault>,
         legacy_recoveries: &HashMap<String, LegacyRecoveryRecord>,
     ) -> Result<(), VaultError> {
-        let bytes = serde_json::to_vec(&PersonalVaultRegistry {
-            records: records.values().cloned().collect(),
-            pending: pending.values().cloned().collect(),
-            legacy_recoveries: legacy_recoveries.values().cloned().collect(),
-        })
-        .map_err(|_| VaultError::Persistence)?;
+        let bytes = personal_registry_bytes(records, pending, legacy_recoveries)?;
         self.fs
             .atomic_write(&self.personal_path, &bytes)
             .map_err(|_| VaultError::Persistence)
@@ -4969,6 +5063,43 @@ pub(crate) fn hold_unmanaged_mount_files(
     })
 }
 
+/// Proves, in the caller's token, write access to the resolved container and
+/// read access to the keyfiles, and pins them until the broker has finished.
+#[cfg(windows)]
+pub(crate) fn hold_password_change_files(
+    target: &PasswordChangeTarget,
+    keyfiles: &[String],
+    caller_token: windows_sys::Win32::Foundation::HANDLE,
+) -> Result<UnmanagedMountFileGuard, VaultError> {
+    with_caller_impersonation(caller_token, || {
+        let mut files = Vec::new();
+        if wincmd_shared::vault_access::is_supported_vault_device_path(&target.container_path) {
+            use std::os::windows::fs::OpenOptionsExt;
+            use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
+            let device = format!(r"\\?\GLOBALROOT{}", target.container_path.trim());
+            files.push(
+                std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+                    .open(device)
+                    .map_err(|_| VaultError::AclReadback)?,
+            );
+        } else {
+            let file = hold_mount_file(Path::new(&target.container_path), true, &mut files)?;
+            if file_identity_from_handle(&file)? != target.container_identity {
+                return Err(VaultError::ContainerIdentity);
+            }
+            files.push(file);
+        }
+        for path in keyfiles {
+            let file = hold_mount_file(Path::new(path), false, &mut files)?;
+            files.push(file);
+        }
+        Ok(UnmanagedMountFileGuard { _files: files })
+    })
+}
+
 #[cfg(windows)]
 fn hold_mount_file(
     path: &Path,
@@ -5912,6 +6043,8 @@ fn denied(reason: VaultMountDenial) -> VaultAuthorizeMountResponse {
 mod tests {
     include!("vault_access/policy_change_tests.rs");
     include!("vault_access/rollback_recovery_tests.rs");
+    include!("vault_access/display_name_tests.rs");
+    include!("vault_access/rename_records_tests.rs");
     #[cfg(windows)]
     #[test]
     fn windows_administrator_directory_resolves_real_user_accounts() {
@@ -6291,6 +6424,10 @@ mod tests {
             Box::new(Acl),
             PathBuf::from("/policy"),
         )
+    }
+    #[cfg(windows)]
+    pub(super) fn windows_fs_store(dir: PathBuf) -> VaultAccessStore {
+        VaultAccessStore::open(Box::new(WindowsVaultFs), Box::new(Resolver), Box::new(Acl), dir)
     }
     fn store_with_groups(
         files: Arc<Mutex<HashMap<PathBuf, Vec<u8>>>>,
@@ -8257,6 +8394,55 @@ mod tests {
     }
 
     #[test]
+    fn password_change_refuses_another_owners_or_a_replaced_registered_container() {
+        let store = store(Arc::new(Mutex::new(HashMap::new())));
+        let path = r"D:\Vault\notes.hc";
+        let unregistered = store
+            .password_change_target(path, "S-1-test-Alex", 7)
+            .unwrap();
+        assert_eq!(unregistered.entry_id, None);
+        let mut record = PersonalVaultRecord {
+            container_path: path.into(),
+            container_identity: unregistered.container_identity.clone(),
+            owner_sid: "S-1-test-Other".into(),
+            scope: VaultPresentation::PerUser,
+            created_by_session: 3,
+            syncthing_opt_in: None,
+        };
+        store.insert_personal_record_for_test(record.clone());
+        assert!(matches!(
+            store.password_change_target(path, "S-1-test-Alex", 7),
+            Err(VaultError::Forbidden)
+        ));
+        record.owner_sid = "S-1-test-Alex".into();
+        store.insert_personal_record_for_test(record.clone());
+        assert_eq!(
+            store.password_change_target(path, "S-1-test-Alex", 7).unwrap(),
+            unregistered
+        );
+        record.container_identity = "replaced-file".into();
+        store.insert_personal_record_for_test(record);
+        assert!(matches!(
+            store.password_change_target(path, "S-1-test-Alex", 7),
+            Err(VaultError::ContainerIdentity)
+        ));
+    }
+
+    #[test]
+    fn password_change_names_the_policy_entry_and_whether_the_caller_owns_it() {
+        let store = store(Arc::new(Mutex::new(HashMap::new())));
+        let path = "D:\\Vault\\sales";
+        let mut managed_policy = policy(1, 0);
+        managed_policy.entries[0].container_path = path.into();
+        store.apply(managed_policy, 7).unwrap();
+        let target = store
+            .password_change_target(path, "S-1-test-Alex", 7)
+            .unwrap();
+        assert_eq!(target.entry_id.as_deref(), Some("shared"));
+        assert!(!target.caller_owns_entry, "a policy without a primary owner grants no ownership");
+    }
+
+    #[test]
     fn file_policy_never_captures_a_sibling_container_in_the_same_directory() {
         let files = Arc::new(Mutex::new(HashMap::new()));
         let vault_store = store(files.clone());
@@ -9780,4 +9966,16 @@ pub fn test_store() -> std::sync::Arc<VaultAccessStore> {
 #[allow(clippy::items_after_test_module)]
 pub(crate) fn test_policy_store() -> VaultAccessStore {
     tests::store(std::sync::Arc::new(Mutex::new(HashMap::new())))
+}
+
+/// Like [`test_policy_store`], over record files the test can read and seed.
+#[cfg(test)]
+pub(crate) fn test_policy_store_over(files: std::sync::Arc<Mutex<HashMap<PathBuf, Vec<u8>>>>) -> VaultAccessStore {
+    tests::store(files)
+}
+
+/// A store on the real Windows filesystem, keeping its records in `dir`.
+#[cfg(all(test, windows))]
+pub(crate) fn test_windows_fs_store(dir: PathBuf) -> VaultAccessStore {
+    tests::windows_fs_store(dir)
 }
