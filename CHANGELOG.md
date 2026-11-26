@@ -14,15 +14,15 @@ lists only a selection of those changes.
   Manage saved Vaults (in Secure Storage and Fleet) and the Quick Mount vault
   picker, plus "Rename a vault file…" under Secure Storage > Encrypted Volumes
   for any other file. A mounted vault's row shows it disabled until the vault
-  is dismounted. It changes only the
-  name WinCommander shows for a dismounted vault; the vault file keeps its file
-  name and location. Your own vault can be renamed only by you; a shared Vault
-  by its owner or an account with write access. Any other vault file you can
-  write (one WinCommander has no record of) can be named too; that name is
-  yours only and other Windows accounts do not see it. The name appears next
-  to the path of a mounted vault. Personal vault names are kept in their own
-  file, so an older WinCommander version still opens your personal vaults (it
-  just shows no names).
+  is dismounted. It renames the vault file itself, in its own folder, after
+  the vault's current password (and PIM or keyfile) opens it; the check takes
+  up to about 30 seconds. A name without an extension keeps the old one, a
+  name Windows cannot use or one already taken is refused, and nothing is ever
+  overwritten. The file is renamed with your own Windows access, keeps its
+  permissions, and WinCommander's records follow it; if they cannot be saved
+  the file gets its old name back. Your own vault can be renamed only by you; a
+  shared Vault by its owner, an administrator or an account with write access.
+  Names saved by earlier builds still show.
 - Add Change Password (Pro) next to Rename in the same places, with "Change
   password of a vault file…" under Encrypted Volumes. It changes
   the password, and optionally the PIM or keyfile, of a dismounted vault file.
@@ -34,8 +34,14 @@ lists only a selection of those changes.
   real password of a decoy vault, the dialog then asks "Also change the decoy
   password?"; each change says which password changed and that the other one
   still works, a wrong decoy password keeps the real-password change, and only
-  that step refuses a new decoy password equal to the real one. A Vault managed
-  in Vault Permissions is refused with a pointer there. The dialog names a
+  that step refuses a new decoy password equal to the real one. Once the real
+  password has opened a vault (checked, changed or renamed with it), or
+  WinCommander created the vault file with a decoy, the service notes that the
+  vault has a hidden part; from then on the decoy
+  password alone changes and renames nothing ("Enter the real password"), and
+  a decoy change needs the real password proven again. The note is kept by the
+  file's identity, follows a rename and is never shown. A Vault managed in
+  Vault Permissions can be changed by its owner or an administrator. The dialog names a
   missing, locked or inaccessible vault file, and says when the engine kept the
   original header. The service checks that the vault is yours (or one
   WinCommander has no record of), that it is the registered file, and that

@@ -13,9 +13,18 @@ mod caller_lookup;
 #[cfg(windows)]
 pub(crate) use caller_lookup::container_fault_as_caller;
 pub use caller_lookup::{FileFault, TargetLookupError};
+#[path = "vault_access/container_rename.rs"]
+mod container_rename;
+#[cfg(windows)]
+pub(crate) use container_rename::{prove_rename_access_as_caller, rename_container_as_caller, target_exists_as_caller};
+pub use container_rename::RenameFault;
 #[path = "vault_access/display_name.rs"]
 mod display_name;
-pub use display_name::{RenameRecord, VaultDisplayName};
+pub use display_name::VaultDisplayName;
+#[path = "vault_access/hidden_note.rs"]
+mod hidden_note;
+#[path = "vault_access/rename_records.rs"]
+mod rename_records;
 #[cfg(windows)]
 #[path = "vault_access/local_principals.rs"]
 mod local_principals;
@@ -571,6 +580,7 @@ struct State {
     legacy_recoveries: HashMap<String, LegacyRecoveryRecord>,
     personal_registry_healthy: bool,
     personal_names: display_name::PersonalVaultNames,
+    hidden_parts: hidden_note::HiddenPartNotes,
     access_directory: VaultAccessDirectory,
     access_directory_healthy: bool,
     rollback_recovery: Option<PolicyRollbackRecovery>,
@@ -723,6 +733,19 @@ struct PersonalVaultRegistry {
     legacy_recoveries: Vec<LegacyRecoveryRecord>,
 }
 
+fn personal_registry_bytes(
+    records: &HashMap<String, PersonalVaultRecord>,
+    pending: &HashMap<String, PendingPersonalVault>,
+    legacy_recoveries: &HashMap<String, LegacyRecoveryRecord>,
+) -> Result<Vec<u8>, VaultError> {
+    serde_json::to_vec(&PersonalVaultRegistry {
+        records: records.values().cloned().collect(),
+        pending: pending.values().cloned().collect(),
+        legacy_recoveries: legacy_recoveries.values().cloned().collect(),
+    })
+    .map_err(|_| VaultError::Persistence)
+}
+
 #[derive(Clone)]
 pub struct PersonalCreationReservation {
     normalized_path: String,
@@ -860,6 +883,7 @@ impl VaultAccessStore {
                 legacy_recoveries: HashMap::new(),
                 personal_registry_healthy: true,
                 personal_names: display_name::PersonalVaultNames::default(),
+                hidden_parts: hidden_note::HiddenPartNotes::default(),
                 access_directory: empty_access_directory(),
                 access_directory_healthy: true,
                 rollback_recovery: None,
@@ -878,6 +902,7 @@ impl VaultAccessStore {
     ) {
         self.load_access_directory_at_startup();
         self.load_personal_names_at_startup();
+        self.load_hidden_parts_at_startup();
         let mut loaded: Option<PersistedPolicy> = self
             .fs
             .read(&self.path)
@@ -2094,12 +2119,7 @@ impl VaultAccessStore {
         pending: &HashMap<String, PendingPersonalVault>,
         legacy_recoveries: &HashMap<String, LegacyRecoveryRecord>,
     ) -> Result<(), VaultError> {
-        let bytes = serde_json::to_vec(&PersonalVaultRegistry {
-            records: records.values().cloned().collect(),
-            pending: pending.values().cloned().collect(),
-            legacy_recoveries: legacy_recoveries.values().cloned().collect(),
-        })
-        .map_err(|_| VaultError::Persistence)?;
+        let bytes = personal_registry_bytes(records, pending, legacy_recoveries)?;
         self.fs
             .atomic_write(&self.personal_path, &bytes)
             .map_err(|_| VaultError::Persistence)
@@ -6024,6 +6044,7 @@ mod tests {
     include!("vault_access/policy_change_tests.rs");
     include!("vault_access/rollback_recovery_tests.rs");
     include!("vault_access/display_name_tests.rs");
+    include!("vault_access/rename_records_tests.rs");
     #[cfg(windows)]
     #[test]
     fn windows_administrator_directory_resolves_real_user_accounts() {
@@ -9945,6 +9966,12 @@ pub fn test_store() -> std::sync::Arc<VaultAccessStore> {
 #[allow(clippy::items_after_test_module)]
 pub(crate) fn test_policy_store() -> VaultAccessStore {
     tests::store(std::sync::Arc::new(Mutex::new(HashMap::new())))
+}
+
+/// Like [`test_policy_store`], over record files the test can read and seed.
+#[cfg(test)]
+pub(crate) fn test_policy_store_over(files: std::sync::Arc<Mutex<HashMap<PathBuf, Vec<u8>>>>) -> VaultAccessStore {
+    tests::store(files)
 }
 
 /// A store on the real Windows filesystem, keeping its records in `dir`.

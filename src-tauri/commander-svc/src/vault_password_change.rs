@@ -4,7 +4,11 @@ use std::path::Path;
 
 use wincmd_shared::vault_access::VaultMountReason;
 
-use super::vault_password_target::{broker_on_held_target, failure_code, Refusals};
+use super::vault_password_probe::probe_header;
+use super::vault_password_target::{
+    call_broker, failure_code, hidden_proof_refusal, note_if_hidden, note_unreadable, on_held_target,
+    real_password_required, Refusals,
+};
 use super::{
     peer_has_active_interactive_session, zeroize_json, AuthenticatedPipePeer, VerbError,
     PERSONAL_VAULT_SESSION_ABSENT,
@@ -184,12 +188,45 @@ pub(super) fn interactive_peer<'a>(
     }
 }
 
+/// The decoy follow-up's real credential, shaped as a password probe.
+pub(super) fn hidden_proof_args(args: &serde_json::Value) -> SecretArgs {
+    let field = |key: &str| args.get(key).cloned().unwrap_or(serde_json::Value::Null);
+    let password = match field("HiddenPassword") {
+        serde_json::Value::Null => serde_json::Value::String(String::new()),
+        password => password,
+    };
+    SecretArgs(serde_json::json!({
+        "TargetKind": field("TargetKind"),
+        "Password": password,
+        "Pim": field("HiddenPim"),
+        "Keyfiles": field("HiddenKeyfiles"),
+    }))
+}
+
+/// Whether an outer change may go ahead on a Vault the service knows has a hidden part.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum OuterGate {
+    Allowed,
+    ProveHidden,
+}
+
+pub(super) fn outer_gate(target: &str, checks_collision: bool, noted: impl FnOnce() -> Result<bool, crate::vault_access::VaultError>) -> Result<OuterGate, (&'static str, VerbError)> {
+    if target != "outer" || !noted().map_err(|_| note_unreadable())? {
+        Ok(OuterGate::Allowed)
+    } else if checks_collision {
+        Ok(OuterGate::ProveHidden)
+    } else {
+        Err(real_password_required())
+    }
+}
+
 pub(super) async fn handle(
     operation_id: u64,
     vault_access: &VaultAccessStore,
     vault_mount: &VaultMountBroker,
     args: serde_json::Value,
     peer: Option<&AuthenticatedPipePeer>,
+    caller_privileged: bool,
 ) -> Result<serde_json::Value, VerbError> {
     let mut args = SecretArgs(args);
     let log = Refusals::new(operation_id, "change_password");
@@ -209,27 +246,37 @@ pub(super) async fn handle(
             }
         }
     }
-    let (path, result) = broker_on_held_target(
+    on_held_target(
         &log,
-        operation_id,
         vault_access,
         vault_mount,
         peer,
+        caller_privileged,
         &request.volume_path,
         &request.keyfiles,
-        BROKER_FEATURE,
-        &mut args.0,
-    )?;
-    let failure = match &result {
-        Ok(reply) if reply.get("status").and_then(serde_json::Value::as_str) == Some("password_changed") => None,
-        Ok(_) => Some(VaultMountReason::BrokerReplyRejected),
-        Err(reason) => Some(*reason),
-    };
-    log.record(failure);
-    match failure {
-        None => Ok(serde_json::json!({ "status": "password_changed", "path": path, "target": request.target })),
-        Some(reason) => Err(VerbError::new(failure_code(reason), "the Vault password was not changed")),
-    }
+        |target| {
+            let noted = || vault_access.has_hidden_part(&target.container_identity);
+            if let OuterGate::ProveHidden =
+                outer_gate(request.target, request.checks_collision, noted).map_err(|refusal| log.refuse(refusal))?
+            {
+                let mut proof = hidden_proof_args(&args.0);
+                hidden_proof_refusal(probe_header(operation_id, peer, target, &mut proof.0))
+                    .map_err(|refusal| log.refuse(refusal))?;
+            }
+            let failure = match call_broker(operation_id, peer, target, BROKER_FEATURE, &mut args.0) {
+                Ok(reply) if reply.get("status").and_then(serde_json::Value::as_str) == Some("password_changed") => None,
+                Ok(_) => Some(VaultMountReason::BrokerReplyRejected),
+                Err(reason) => Some(reason),
+            };
+            log.record(failure);
+            if let Some(reason) = failure {
+                return Err(VerbError::new(failure_code(reason), "the Vault password was not changed"));
+            }
+            // The engine opened the hidden header with the real password either way.
+            note_if_hidden(&log, vault_access, target, request.target == "hidden" || request.checks_collision);
+            Ok(serde_json::json!({ "status": "password_changed", "path": target.container_path, "target": request.target }))
+        },
+    )
 }
 
 #[cfg(test)]

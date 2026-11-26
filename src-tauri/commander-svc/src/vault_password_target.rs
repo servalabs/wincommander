@@ -31,9 +31,63 @@ impl Refusals {
     pub(super) fn record(&self, failure: Option<VaultMountReason>) {
         crate::diagnostics::record_vault_password_change(&self.diagnostic_id, self.operation, failure, self.started);
     }
+
+    /// The operation itself succeeded; only the hidden-part note was not saved.
+    pub(super) fn note_not_saved(&self) {
+        crate::diagnostics::record_vault_failure(&self.diagnostic_id, self.operation, "VLT.PASSWORD.NOTE_NOT_SAVED", "none", false, self.started);
+    }
 }
 
-fn file_refusal(fault: FileFault) -> (&'static str, VerbError) {
+pub(super) fn real_password_required() -> (&'static str, VerbError) {
+    (
+        "VLT.PASSWORD.REAL_PASSWORD_REQUIRED",
+        VerbError::new("real_password_required", "this vault needs its real password"),
+    )
+}
+
+pub(super) fn note_unreadable() -> (&'static str, VerbError) {
+    (
+        "VLT.PASSWORD.NOTE_UNREADABLE",
+        VerbError::new("vault_policy_unavailable", "the selected Vault record could not be verified"),
+    )
+}
+
+/// A noted Vault answers only to its real password; the note is read only for an outer answer.
+pub(super) fn probe_outcome(
+    header: &'static str,
+    noted: impl FnOnce() -> Result<bool, VaultError>,
+) -> Result<&'static str, (&'static str, VerbError)> {
+    if header == "outer" && noted().map_err(|_| note_unreadable())? {
+        return Err(real_password_required());
+    }
+    Ok(header)
+}
+
+/// The hidden credentials sent with a decoy change must open the hidden header themselves.
+pub(super) fn hidden_proof_refusal(probed: Result<&'static str, VaultMountReason>) -> Result<(), (&'static str, VerbError)> {
+    match probed {
+        Ok("hidden") => Ok(()),
+        Ok(_) | Err(VaultMountReason::WrongPassword | VaultMountReason::EngineUnlockFailed) => Err(real_password_required()),
+        Err(reason) => Err((
+            "VLT.PASSWORD.HIDDEN_PROOF_FAILED",
+            VerbError::new(failure_code(reason), "the real password was not checked"),
+        )),
+    }
+}
+
+/// Only the two header names leave the service.
+pub(super) fn opened_header(reply: &serde_json::Value) -> Option<&'static str> {
+    if reply.get("status").and_then(serde_json::Value::as_str) != Some("password_opened") {
+        return None;
+    }
+    match reply.get("header").and_then(serde_json::Value::as_str)? {
+        "outer" => Some("outer"),
+        "hidden" => Some("hidden"),
+        _ => None,
+    }
+}
+
+pub(super) fn file_refusal(fault: FileFault) -> (&'static str, VerbError) {
     let (diagnostic, message) = match fault {
         FileFault::NotFound => ("VLT.PASSWORD.FILE_NOT_FOUND", "the Vault file could not be found"),
         FileFault::AccessDenied => ("VLT.PASSWORD.FILE_ACCESS_DENIED", "Windows refused this account access to the Vault file"),
@@ -42,7 +96,7 @@ fn file_refusal(fault: FileFault) -> (&'static str, VerbError) {
     (diagnostic, VerbError::new(fault.code(), message))
 }
 
-fn identity_changed() -> (&'static str, VerbError) {
+pub(super) fn identity_changed() -> (&'static str, VerbError) {
     (
         "VLT.PASSWORD.IDENTITY_CHANGED",
         VerbError::new("vault_policy_identity_changed", "the selected container is not the registered Vault"),
@@ -68,11 +122,19 @@ pub(super) fn target_refusal(error: TargetLookupError) -> (&'static str, VerbErr
     }
 }
 
-/// A Vault-Permissions Vault changes its password there; a caller without a grant learns only that it may not.
-pub(super) fn policy_refusal(target: &PasswordChangeTarget, authorized: impl FnOnce(&str) -> bool) -> Result<(), (&'static str, VerbError)> {
+/// A Vault-Permissions Vault's owner or an administrator may change it; another
+/// grantee learns only that it is managed, a caller without a grant only that it may not.
+pub(super) fn policy_refusal(
+    target: &PasswordChangeTarget,
+    caller_privileged: bool,
+    authorized: impl FnOnce(&str) -> bool,
+) -> Result<(), (&'static str, VerbError)> {
     let Some(entry_id) = &target.entry_id else {
         return Ok(());
     };
+    if target.caller_owns_entry || caller_privileged {
+        return Ok(());
+    }
     Err(if authorized(entry_id) {
         (
             "VLT.PASSWORD.POLICY_MANAGED",
@@ -105,25 +167,23 @@ pub(super) fn failure_code(reason: VaultMountReason) -> &'static str {
     }
 }
 
-/// Runs `feature` in the caller's session broker on the resolved, held container.
-/// `args` gets the resolved path; the caller scrubs its secrets. Returns that path and the broker's reply.
+/// Runs `run` on the resolved container, held and dismounted, under the mount lock.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn broker_on_held_target(
+pub(super) fn on_held_target<T>(
     log: &Refusals,
-    operation_id: u64,
     vault_access: &VaultAccessStore,
     vault_mount: &VaultMountBroker,
     peer: &AuthenticatedPipePeer,
+    caller_privileged: bool,
     volume_path: &str,
     keyfiles: &[String],
-    feature: &'static str,
-    args: &mut serde_json::Value,
-) -> Result<(String, Result<serde_json::Value, VaultMountReason>), VerbError> {
+    run: impl FnOnce(&PasswordChangeTarget) -> Result<T, VerbError>,
+) -> Result<T, VerbError> {
     let resolve = || {
         vault_access.password_change_target_as_caller(volume_path, peer.caller_sid(), peer.session_id(), peer.token())
     };
     let target = resolve().map_err(|error| log.refuse(target_refusal(error)))?;
-    policy_refusal(&target, |entry_id| {
+    policy_refusal(&target, caller_privileged, |entry_id| {
         crate::vault_access::authorize_mount_for_token(vault_access, entry_id, peer.token()).allowed
     })
     .map_err(|refusal| log.refuse(refusal))?;
@@ -136,37 +196,62 @@ pub(super) fn broker_on_held_target(
             log.record(Some(reason));
             return Err(VerbError::new(failure_code(reason), "dismount the Vault first"));
         }
-        let _held = crate::vault_access::hold_password_change_files(&target, keyfiles, peer.token()).map_err(|error| {
-            log.refuse(match error {
-                VaultError::ContainerIdentity => identity_changed(),
-                _ => match crate::vault_access::container_fault_as_caller(&target.container_path, peer.token()) {
-                    Some(fault) => file_refusal(fault),
-                    None => (
-                        "VLT.PASSWORD.CALLER_ACCESS_DENIED",
-                        VerbError::new(
-                            VaultMountBroker::personal_mount_failure_code(VaultMountReason::CallerAccessDenied),
-                            "this account cannot write the container or read its keyfiles",
-                        ),
-                    ),
-                },
-            })
-        })?;
-        args["VolumePath"] = serde_json::Value::String(target.container_path.clone());
-        args["TargetSessionId"] = serde_json::Value::from(peer.session_id());
-        let reply = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(crate::pro_broker::vault_call(crate::pro_broker::VaultCall {
-                request_id: operation_id,
-                target_session_id: peer.session_id(),
-                caller_sid: peer.caller_sid(),
-                caller_token: Some(peer.token()),
-                caller_authentication_id: Some(peer.authentication_id()),
-                presentation: wincmd_shared::vault_access::VaultPresentation::PerUser,
-                feature_id: feature,
-                args: args.take(),
-            }))
-        });
-        Ok((target.container_path.clone(), reply))
+        let _held = hold_for_broker(&target, keyfiles, peer).map_err(|refusal| log.refuse(refusal))?;
+        run(&target)
     })
+}
+
+/// Pins the container and keyfiles in the caller's token so the broker cannot be pointed at a substitute.
+pub(super) fn hold_for_broker(
+    target: &PasswordChangeTarget,
+    keyfiles: &[String],
+    peer: &AuthenticatedPipePeer,
+) -> Result<crate::vault_access::UnmanagedMountFileGuard, (&'static str, VerbError)> {
+    crate::vault_access::hold_password_change_files(target, keyfiles, peer.token()).map_err(|error| match error {
+        VaultError::ContainerIdentity => identity_changed(),
+        _ => match crate::vault_access::container_fault_as_caller(&target.container_path, peer.token()) {
+            Some(fault) => file_refusal(fault),
+            None => (
+                "VLT.PASSWORD.CALLER_ACCESS_DENIED",
+                VerbError::new(
+                    VaultMountBroker::personal_mount_failure_code(VaultMountReason::CallerAccessDenied),
+                    "this account cannot write the container or read its keyfiles",
+                ),
+            ),
+        },
+    })
+}
+
+/// One call to the caller's session broker on `target`; `args` gets the resolved path
+/// and is moved out, so the caller's scrub of its own copy still covers every secret.
+pub(super) fn call_broker(
+    operation_id: u64,
+    peer: &AuthenticatedPipePeer,
+    target: &PasswordChangeTarget,
+    feature: &'static str,
+    args: &mut serde_json::Value,
+) -> Result<serde_json::Value, VaultMountReason> {
+    args["VolumePath"] = serde_json::Value::String(target.container_path.clone());
+    args["TargetSessionId"] = serde_json::Value::from(peer.session_id());
+    tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(crate::pro_broker::vault_call(crate::pro_broker::VaultCall {
+            request_id: operation_id,
+            target_session_id: peer.session_id(),
+            caller_sid: peer.caller_sid(),
+            caller_token: Some(peer.token()),
+            caller_authentication_id: Some(peer.authentication_id()),
+            presentation: wincmd_shared::vault_access::VaultPresentation::PerUser,
+            feature_id: feature,
+            args: args.take(),
+        }))
+    })
+}
+
+/// Stores the note when a header answer proved a hidden part; a failed save only logs.
+pub(super) fn note_if_hidden(log: &Refusals, vault_access: &VaultAccessStore, target: &PasswordChangeTarget, hidden: bool) {
+    if hidden && vault_access.note_hidden_part(target).is_err() {
+        log.note_not_saved();
+    }
 }
 
 #[cfg(test)]

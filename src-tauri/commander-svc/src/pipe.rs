@@ -936,12 +936,14 @@ async fn dispatch_verb(
             handle_personal_vault_create(request_id, vault_access, args, peer).await
         }
         "svc.vault.change_password_personal" => {
-            vault_password_change::handle(request_id, vault_access, vault_mount, args, peer).await
+            vault_password_change::handle(request_id, vault_access, vault_mount, args, peer, caller_privileged).await
         }
         "svc.vault.probe_password" => {
-            vault_password_probe::handle(request_id, vault_access, vault_mount, args, peer).await
+            vault_password_probe::handle(request_id, vault_access, vault_mount, args, peer, caller_privileged).await
         }
-        "svc.vault.rename" => vault_rename::handle(vault_access, vault_mount, args, peer),
+        "svc.vault.rename" => {
+            vault_rename::handle(request_id, vault_access, vault_mount, args, peer, caller_privileged)
+        }
         "svc.vault.display_names" => vault_rename::handle_display_names(vault_access, peer),
         "svc.vault.unmount" => handle_vault_unmount(
             request_id,
@@ -2607,6 +2609,7 @@ async fn handle_personal_vault_create(
         None
     };
     args["TargetSessionId"] = serde_json::Value::from(peer.session_id());
+    let creates_hidden_part = creates_hidden_part(&args);
     // Windows filesystem formatting requires privilege for true standard users.
     // SYSTEM receives only a protected staging target, never their chosen path.
     let mut staging = if let Some(registration) = registration
@@ -2709,7 +2712,7 @@ async fn handle_personal_vault_create(
                 "personal vault creation could not be verified",
             ));
         }
-        vault_access
+        let record = vault_access
             .complete_personal_registration_as_caller(
                 registration,
                 peer.token(),
@@ -2730,12 +2733,30 @@ async fn handle_personal_vault_create(
                     "personal vault ownership could not be recorded",
                 )
             })?;
+        let created = crate::vault_access::PasswordChangeTarget {
+            container_path: record.container_path,
+            container_identity: record.container_identity,
+            entry_id: None,
+            caller_owns_entry: true,
+        };
+        if creates_hidden_part && vault_access.note_hidden_part(&created).is_err() {
+            crate::diagnostics::record_vault_failure(&diagnostic_operation_id, "create", "VLT.PASSWORD.NOTE_NOT_SAVED", "none", false, started);
+        }
     }
     if let Some(staging) = &mut staging {
         staging.commit();
     }
     crate::diagnostics::record_vault_create_success(&diagnostic_operation_id, started);
     Ok(result)
+}
+
+/// A decoy creation carries the second (hidden) part's size or password; the Pro broker splits on the same keys.
+fn creates_hidden_part(args: &serde_json::Value) -> bool {
+    args.as_object().is_some_and(|object| {
+        ["HostSizeMB", "SecondSizeMB", "SecondPassword", "InnerKeyfile", "InnerKeyfiles", "InnerPim"]
+            .iter()
+            .any(|key| object.contains_key(*key))
+    })
 }
 
 /// The service does not accept an arbitrary raw path for a destructive
@@ -6426,6 +6447,14 @@ mod tests {
                 assert_eq!(result.is_ok(), expected, "{verb}");
             }
         }
+    }
+
+    #[test]
+    fn only_a_decoy_creation_notes_a_hidden_part() {
+        let dual = serde_json::json!({ "Path": r"C:\v\dual.hc", "HostSizeMB": 500, "SecondSizeMB": 100 });
+        let standard = serde_json::json!({ "Path": r"C:\v\one.hc", "SizeMB": 100, "Password": "x" });
+        assert!(creates_hidden_part(&dual));
+        assert!(!creates_hidden_part(&standard));
     }
 
     #[tokio::test]

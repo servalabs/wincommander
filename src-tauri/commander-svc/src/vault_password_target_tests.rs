@@ -29,11 +29,14 @@ fn a_file_the_caller_cannot_reach_is_never_reported_as_a_validation_failure() {
 }
 
 #[test]
-fn a_vault_permissions_vault_is_refused_and_only_an_authorized_caller_learns_why() {
-    assert!(policy_refusal(&target(None), |_| unreachable!("a personal Vault has no grant")).is_ok());
+fn a_vault_permissions_vault_is_changed_only_by_its_owner_or_an_administrator() {
+    assert!(policy_refusal(&target(None), false, |_| unreachable!("a personal Vault has no grant")).is_ok());
     let managed = target(Some("shared"));
-    assert_eq!(policy_refusal(&managed, |id| id == "shared").unwrap_err().1.kind, "vault_policy_managed");
-    assert_eq!(policy_refusal(&managed, |_| false).unwrap_err().1.kind, PERSONAL_VAULT_UNAUTHORIZED);
+    assert_eq!(policy_refusal(&managed, false, |id| id == "shared").unwrap_err().1.kind, "vault_policy_managed");
+    assert_eq!(policy_refusal(&managed, false, |_| false).unwrap_err().1.kind, PERSONAL_VAULT_UNAUTHORIZED);
+    assert!(policy_refusal(&managed, true, |_| unreachable!("an administrator needs no grant")).is_ok());
+    let owned = PasswordChangeTarget { caller_owns_entry: true, ..target(Some("shared")) };
+    assert!(policy_refusal(&owned, false, |_| unreachable!("the owner needs no grant")).is_ok());
 }
 
 #[test]

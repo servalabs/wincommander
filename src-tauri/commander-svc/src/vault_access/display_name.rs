@@ -1,20 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Vault display names: a policy entry's `label`, or for a personal Vault an
-//! entry in its own file so `vault-personal-v1.json` never changes and older
-//! versions, which reject unknown registry fields, keep reading it. A
-//! container WinCommander holds no record of gets a per-caller name there too.
+//! Vault display names saved by earlier versions: a policy entry's `label`, or
+//! for a personal Vault an entry in its own file so `vault-personal-v1.json`
+//! never changes. A rename now renames the file, so nothing adds a name; an
+//! old name of a container with no record follows its file to the new path.
 
 use super::*;
 
 const PERSONAL_NAMES_FILE: &str = "vault-personal-names-v1.json";
-/// Bounds the names file: a caller's oldest unregistered name makes room for a new one.
-pub(super) const MAX_UNREGISTERED_NAMES_PER_CALLER: usize = 256;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct PersonalVaultNames {
     #[serde(default)]
     names: Vec<PersonalVaultName>,
-    /// An unreadable file is never overwritten, so a rename is refused instead.
+    /// An unreadable file is never overwritten.
     #[serde(skip)]
     unreadable: bool,
 }
@@ -37,12 +35,6 @@ impl PersonalVaultName {
             && self.owner_sid == record.owner_sid
             && self.container_identity == record.container_identity
     }
-
-    fn same_key(&self, other: &Self) -> bool {
-        self.owner_sid == other.owner_sid
-            && self.container_identity == other.container_identity
-            && self.container_path.is_some() == other.container_path.is_some()
-    }
 }
 
 impl PersonalVaultNames {
@@ -52,15 +44,25 @@ impl PersonalVaultNames {
             .find(|entry| entry.is_for(record))
             .map(|entry| entry.name.as_str())
     }
-}
 
-/// Which record a rename changes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RenameRecord {
-    Policy,
-    Personal,
-    /// No WinCommander record: the name is kept for the caller only.
-    Unregistered,
+    /// The names with every unregistered entry for `identity` renamed to
+    /// `file_name`; `None` when nothing changes or the file was unreadable.
+    pub(super) fn moved(&self, identity: &str, file_name: &str) -> Option<Self> {
+        if self.unreadable {
+            return None;
+        }
+        let mut moved = self.clone();
+        let mut changed = false;
+        for entry in &mut moved.names {
+            if entry.container_identity == identity {
+                if let Some(path) = &mut entry.container_path {
+                    *path = rename_records::renamed_path(path, file_name);
+                    changed = true;
+                }
+            }
+        }
+        changed.then_some(moved)
+    }
 }
 
 /// One row of `svc.vault.display_names`.
@@ -77,7 +79,7 @@ impl VaultDisplayName {
 }
 
 impl VaultAccessStore {
-    fn personal_names_path(&self) -> PathBuf {
+    pub(super) fn personal_names_path(&self) -> PathBuf {
         self.personal_path.with_file_name(PERSONAL_NAMES_FILE)
     }
 
@@ -97,143 +99,6 @@ impl VaultAccessStore {
     #[cfg(test)]
     pub(crate) fn personal_display_name_for_test(&self, record: &PersonalVaultRecord) -> Option<String> {
         self.state.lock().unwrap().personal_names.name_for(record).map(str::to_owned)
-    }
-
-    /// Resolves what a rename may change: a policy entry, the caller's own
-    /// registered personal Vault, or a container with no record at all.
-    pub fn rename_target(
-        &self,
-        container_path: &str,
-        caller_sid: &str,
-        caller_session: u32,
-    ) -> Result<(PasswordChangeTarget, RenameRecord), VaultError> {
-        let target = self.password_change_target(container_path, caller_sid, caller_session)?;
-        let record = if target.entry_id.is_some() {
-            RenameRecord::Policy
-        } else if !wincmd_shared::vault_access::is_supported_vault_device_path(&target.container_path)
-            && self.personal_record_for_path(&target.container_path)?.is_some()
-        {
-            RenameRecord::Personal
-        } else {
-            RenameRecord::Unregistered
-        };
-        Ok((target, record))
-    }
-
-    /// Writes only the names file, pruning names of records that no longer
-    /// exist; a failed save leaves the previous names in memory and on disk.
-    /// `target` was resolved in the caller's token, so the record is found by
-    /// identity: the service itself may not be able to open the container's folder.
-    pub(crate) fn rename_personal_vault(
-        &self,
-        target: &PasswordChangeTarget,
-        owner_sid: &str,
-        name: &str,
-    ) -> Result<(), VaultError> {
-        let mut state = self.state.lock().map_err(|_| VaultError::Persistence)?;
-        let record = single_record_for(&state, target)?.ok_or(VaultError::Validation)?;
-        if record.owner_sid != owner_sid {
-            return Err(VaultError::Forbidden);
-        }
-        self.save_name(
-            &mut state,
-            PersonalVaultName {
-                owner_sid: record.owner_sid.clone(),
-                container_identity: record.container_identity.clone(),
-                name: name.to_owned(),
-                container_path: None,
-            },
-        )
-    }
-
-    /// Names a container WinCommander holds no record of, for `caller_sid`
-    /// only. The caller's write access to it is proven before this is called.
-    pub(crate) fn rename_unregistered_container(
-        &self,
-        target: &PasswordChangeTarget,
-        caller_sid: &str,
-        name: &str,
-    ) -> Result<(), VaultError> {
-        if target.entry_id.is_some() || caller_sid.is_empty() {
-            return Err(VaultError::Validation);
-        }
-        let mut state = self.state.lock().map_err(|_| VaultError::Persistence)?;
-        if single_record_for(&state, target)?.is_some() {
-            return Err(VaultError::ContainerIdentity);
-        }
-        self.save_name(
-            &mut state,
-            PersonalVaultName {
-                owner_sid: caller_sid.to_owned(),
-                container_identity: target.container_identity.clone(),
-                name: name.to_owned(),
-                container_path: Some(target.container_path.clone()),
-            },
-        )
-    }
-
-    fn save_name(&self, state: &mut State, entry: PersonalVaultName) -> Result<(), VaultError> {
-        if !state.personal_registry_healthy || state.personal_names.unreadable {
-            return Err(VaultError::Persistence);
-        }
-        let mut names: Vec<PersonalVaultName> = state
-            .personal_names
-            .names
-            .iter()
-            .filter(|kept| !kept.same_key(&entry))
-            .filter(|kept| kept.container_path.is_some() || state.personal.values().any(|live| kept.is_for(live)))
-            .cloned()
-            .collect();
-        if entry.container_path.is_some() {
-            let callers = |kept: &PersonalVaultName| kept.container_path.is_some() && kept.owner_sid == entry.owner_sid;
-            while names.iter().filter(|kept| callers(kept)).count() >= MAX_UNREGISTERED_NAMES_PER_CALLER {
-                if let Some(oldest) = names.iter().position(callers) {
-                    names.remove(oldest);
-                }
-            }
-        }
-        names.push(entry);
-        let updated = PersonalVaultNames { names, unreadable: false };
-        let bytes = serde_json::to_vec(&updated).map_err(|_| VaultError::Persistence)?;
-        self.fs
-            .atomic_write(&self.personal_names_path(), &bytes)
-            .map_err(|_| VaultError::Persistence)?;
-        state.personal_names = updated;
-        Ok(())
-    }
-
-    /// Only the label changes, so no ACL, group or grant is re-applied. The
-    /// version still moves so a stale policy draft cannot silently undo it.
-    pub(crate) fn rename_policy_entry(&self, entry_id: &str, label: &str) -> Result<(), VaultError> {
-        let mut state = self.state.lock().map_err(|_| VaultError::Persistence)?;
-        if state.status.validation_state != VaultValidationState::Current
-            || state.rollback_recovery.is_some()
-        {
-            return Err(VaultError::Persistence);
-        }
-        let active = state.active.clone().ok_or(VaultError::Validation)?;
-        let mut replacement = active.clone();
-        replacement
-            .policy
-            .entries
-            .iter_mut()
-            .find(|entry| entry.id == entry_id)
-            .ok_or(VaultError::Validation)?
-            .label = label.to_owned();
-        replacement.policy.expected_previous_version = active.policy.version;
-        replacement.policy.version = active
-            .policy
-            .version
-            .checked_add(1)
-            .ok_or(VaultError::Validation)?;
-        validate_policy(&replacement.policy)?;
-        let bytes = serde_json::to_vec(&replacement).map_err(|_| VaultError::Persistence)?;
-        self.fs
-            .atomic_write(&self.path, &bytes)
-            .map_err(|_| VaultError::Persistence)?;
-        state.status.version = replacement.policy.version;
-        state.active = Some(replacement);
-        Ok(())
     }
 
     /// The policy Vaults the caller owns or `may_rename` allows, its own named
@@ -296,20 +161,4 @@ impl VaultAccessStore {
         names.extend(personal);
         names
     }
-}
-
-/// The one personal record of `target`'s file; a hard-linked second record fails closed.
-fn single_record_for(state: &State, target: &PasswordChangeTarget) -> Result<Option<PersonalVaultRecord>, VaultError> {
-    if !state.personal_registry_healthy {
-        return Err(VaultError::Persistence);
-    }
-    let mut records = state
-        .personal
-        .values()
-        .filter(|record| record.container_identity == target.container_identity);
-    let record = records.next().cloned();
-    if records.next().is_some() {
-        return Err(VaultError::Persistence);
-    }
-    Ok(record)
 }

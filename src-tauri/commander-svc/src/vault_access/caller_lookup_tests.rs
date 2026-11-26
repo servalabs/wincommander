@@ -133,7 +133,7 @@ fn the_service_lookup_steps_and_their_os_errors_on_a_folder_without_a_system_ent
     let caller = process_token();
     let service = service_stand_in(&caller);
     let fs = WindowsVaultFs;
-    let (steps, mount_route, change, rename) = with_caller_impersonation(service.0, || {
+    let (steps, mount_route, change) = with_caller_impersonation(service.0, || {
         let canonical = std::fs::canonicalize(&fixture.file);
         let steps = vec![
             ("std::fs::symlink_metadata(file)", os(std::fs::symlink_metadata(&fixture.file))),
@@ -154,7 +154,6 @@ fn the_service_lookup_steps_and_their_os_errors_on_a_folder_without_a_system_ent
             steps,
             store.selected_container_mount_route(fixture.path(), "S-1-5-21-owner", 7).map(drop),
             store.password_change_target(fixture.path(), "S-1-5-21-owner", 7).map(drop),
-            store.rename_target(fixture.path(), "S-1-5-21-owner", 7).map(drop),
         ))
     })
     .unwrap();
@@ -163,12 +162,10 @@ fn the_service_lookup_steps_and_their_os_errors_on_a_folder_without_a_system_ent
     }
     println!("service stand-in | selected_container_mount_route (mount) -> {mount_route:?}");
     println!("service stand-in | password_change_target -> {change:?}");
-    println!("service stand-in | rename_target -> {rename:?}");
     assert_eq!(steps[3].1, "os error 5", "the folder refuses the service");
     assert_eq!(steps[6].1, "Err(Validation)", "and that refusal becomes Validation");
     assert_eq!(mount_route, Ok(()), "a mount never canonicalizes the parent");
     assert_eq!(change, Err(VaultError::Validation));
-    assert_eq!(rename, Err(VaultError::Validation));
 }
 
 #[test]
@@ -177,16 +174,12 @@ fn a_caller_who_owns_the_folder_resolves_the_target_even_when_the_service_cannot
     let store = crate::vault_access::test_windows_fs_store(fixture.root.join("policy"));
     let caller = process_token();
     let service = service_stand_in(&caller);
-    let (change, rename) = with_caller_impersonation(service.0, || {
-        Ok((
-            store.password_change_target_as_caller(fixture.path(), "S-1-5-21-owner", 7, caller.0),
-            store.rename_target_as_caller(fixture.path(), "S-1-5-21-owner", 7, caller.0),
-        ))
+    let change = with_caller_impersonation(service.0, || {
+        Ok(store.password_change_target_as_caller(fixture.path(), "S-1-5-21-owner", 7, caller.0))
     })
     .unwrap();
     let target = change.expect("the caller can open its own folder");
     assert!(target.container_path.ends_with(r"New folder\test3"));
-    assert_eq!(rename.expect("rename resolves too"), (target.clone(), RenameRecord::Unregistered));
     assert!(hold_password_change_files(&target, &[], caller.0).is_ok());
 }
 
@@ -197,10 +190,6 @@ fn a_caller_the_folder_refuses_gets_access_denied_never_not_found() {
     let refused = service_stand_in(&process_token());
     assert_eq!(
         store.password_change_target_as_caller(fixture.path(), "S-1-5-21-owner", 7, refused.0),
-        Err(TargetLookupError::File(FileFault::AccessDenied))
-    );
-    assert_eq!(
-        store.rename_target_as_caller(fixture.path(), "S-1-5-21-owner", 7, refused.0),
         Err(TargetLookupError::File(FileFault::AccessDenied))
     );
 }
@@ -255,21 +244,44 @@ fn os_errors_map_to_the_contract_codes() {
 }
 
 #[test]
-fn a_rename_is_saved_by_the_service_even_when_it_cannot_open_the_folder() {
+fn the_caller_renames_a_file_in_a_folder_the_service_cannot_open_and_the_note_follows_it() {
     let fixture = Fixture::new("rename");
     let store = crate::vault_access::test_windows_fs_store(fixture.root.join("policy"));
     let caller = process_token();
     let service = service_stand_in(&caller);
-    let saved = with_caller_impersonation(service.0, || {
-        let (target, record) = store
-            .rename_target_as_caller(fixture.path(), "S-1-5-21-owner", 7, caller.0)
-            .map_err(|_| VaultError::Validation)?;
-        assert_eq!(record, RenameRecord::Unregistered);
-        // The impersonation above ended; act as the stand-in again for the save.
-        with_caller_impersonation(service.0, || store.rename_unregistered_container(&target, "S-1-5-21-owner", "Test three"))
-    });
+    let renamed = fixture.folder.join("Test three");
+    let new_path = renamed.to_str().unwrap();
+    let target = with_caller_impersonation(service.0, || {
+        Ok(store.password_change_target_as_caller(fixture.path(), "S-1-5-21-owner", 7, caller.0))
+    })
+    .unwrap()
+    .unwrap();
+    store.note_hidden_part(&target).unwrap();
+    let acl_before = snapshot_one_acl(&fixture.file).unwrap();
+    assert!(acl_before.dacl_protected);
+    assert_eq!(
+        rename_container_as_caller(&target.container_path, &target.container_identity, new_path, service.0),
+        Err(RenameFault::File(FileFault::AccessDenied)),
+        "the service's own token never renames it"
+    );
+    assert_eq!(prove_rename_access_as_caller(&target, caller.0), Ok(()));
+    assert_eq!(target_exists_as_caller(new_path, caller.0), Ok(false));
+    assert_eq!(
+        rename_container_as_caller(&target.container_path, &target.container_identity, new_path, caller.0),
+        Ok(())
+    );
+    let saved = with_caller_impersonation(service.0, || store.move_records_for_rename(&target, "Test three"));
     assert_eq!(saved, Ok(()));
-    let names = store.display_names_for_caller("S-1-5-21-owner", |_| false);
-    assert_eq!(names.len(), 1);
-    assert_eq!(names[0].name, "Test three");
+    assert!(renamed.is_file() && !fixture.file.exists());
+    assert_eq!(WindowsVaultFs.stable_file_identity(&renamed).unwrap(), target.container_identity);
+    let acl_after = snapshot_one_acl(&renamed).unwrap();
+    assert_eq!(
+        (acl_after.descriptor, acl_after.dacl_protected),
+        (acl_before.descriptor, true),
+        "a same-folder rename keeps the file's own ACL"
+    );
+    assert_eq!(store.has_hidden_part(&target.container_identity), Ok(true));
+    let notes = std::fs::read_to_string(fixture.root.join("policy").join("vault-hidden-parts-v1.json")).unwrap();
+    assert!(notes.contains(r"New folder\\Test three"), "{notes}");
+    assert_eq!(target_exists_as_caller(new_path, caller.0), Ok(true));
 }
