@@ -10,6 +10,18 @@ lists only a selection of those changes.
 
 ## Unreleased
 
+- Share Safely (Scrub Meta): the "files not cleaned" panel no longer opens to
+  an empty box. It names every file with its type icon, folder and reason
+  (unsupported format, type mismatch, in use by another app, no permission,
+  nothing to remove and so on), grouped by reason, 50 at a time. With more
+  than one folder selected the results are shown per folder, each a
+  collapsible section with its own status ("Ready — 36 files, 30 to clean,
+  6 nothing to remove"). Each file card shows a file-type icon instead of a
+  grey text badge, keeps its explanations behind an (i) button, and groups
+  the removed properties by kind (GPS / location, Camera & device, Dates &
+  times and so on), collapsed to names and counts. The engine line under the
+  drop zone reads "ExifTool 13.59 · qpdf 12.4.2 · JPEG, PNG, …" instead of
+  the garbled qpdf banner.
 - Fix Stealth mode leaving no Calculator shortcut: with Hide WinCommander
   already on, turning the Calculator lock on restored the WinCommander
   shortcuts to the Hide snapshot instead of replacing them, so the Start menu

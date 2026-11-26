@@ -22,6 +22,8 @@ export interface DependencyInfo {
     missing: string[] | null;
     canHide: boolean;
     canStart: boolean;
+    /** Bundled engine versions, e.g. the scrubber's ExifTool and qpdf. */
+    versions?: { exiftool?: string | null; qpdf?: string | null } | null;
 }
 
 export interface DependencyStatusResponse {
