@@ -18,11 +18,16 @@ function NotCleanedRow({ entry, roots }: { entry: NotCleanedEntry; roots: readon
       {entry.isFolder ? <FileTypeIcon kind="folders" size={16} /> : <ScrubFileIcon path={entry.path} size={16} showLabel={false} />}
       <span style={{ minWidth: 0, fontFamily: 'var(--font-mono)', color: 'var(--color-text-primary)', overflowWrap: 'anywhere' }}>
         {name}
-        {entry.note && <span style={{ fontFamily: 'inherit', color: WARN, marginLeft: 6 }}>{entry.note}</span>}
       </span>
       <span style={{ minWidth: 0, color: 'var(--color-text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {folder}
       </span>
+      {/* Spans name and folder columns so a long engine reason reads in one or two lines. */}
+      {entry.note && (
+        <span data-note style={{ gridColumn: '2 / -1', minWidth: 0, color: WARN, lineHeight: 1.4, overflowWrap: 'anywhere' }}>
+          {entry.note}
+        </span>
+      )}
     </div>
   );
 }

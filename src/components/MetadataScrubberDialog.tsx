@@ -27,13 +27,11 @@ import { useAppState } from '../context/AppContext';
 import useDependencies from '../hooks/useDependencies';
 import { createAsyncListenerScope } from '../lib/asyncListeners';
 import type { GpsCoords, ScrubError, ScrubReport, ScrubResult } from '../lib/scrubTypes';
-import { formatEngineLine, groupRemovedProperties, parseEngineVersions } from '../lib/scrubPresentation';
+import { formatBytes, formatEngineLine, parseEngineVersions } from '../lib/scrubPresentation';
 import { aggregateByRoot, notCleanedEntries, shouldShowFolderSections } from '../lib/scrubReportModel';
-import ScrubFileIcon from './scrub/ScrubFileIcon';
-import ScrubInfoButton from './scrub/ScrubInfoButton';
-import RemovedPropertyGroups from './scrub/RemovedPropertyGroups';
 import NotCleanedList from './scrub/NotCleanedList';
 import FolderSection from './scrub/FolderSection';
+import FileDetailsList from './scrub/FileDetailsList';
 
 const GPS_MAP_MESSAGE = 'wincommander:metadata-gps-map';
 
@@ -168,27 +166,8 @@ const SUPPORTED_EXTENSIONS = [
   'mp3', 'm4a', 'flac', 'wav',
 ];
 
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / (1024 * 1024)).toFixed(2)} MB`;
-}
-
 function basename(path: string): string {
   return path.split(/[/\\]/).pop() ?? path;
-}
-
-function parseSampleValue(s: string): { key: string; value: string } {
-  const idx = s.indexOf(':');
-  if (idx > 0 && idx < 50) {
-    const rawKey = s.slice(0, idx).trim();
-    const cleanKey = rawKey
-      .replace(/^GPS\s+/i, '')
-      .replace(/([a-z])([A-Z])/g, '$1 $2')
-      .replace(/([A-Z]{2,})([A-Z][a-z])/g, '$1 $2');
-    return { key: cleanKey, value: s.slice(idx + 1).trim() };
-  }
-  return { key: '', value: s };
 }
 
 interface MetadataScrubberDialogProps {
@@ -1217,7 +1196,7 @@ function ScrubReportView({ report, roots, folderPaths }: ScrubReportViewProps) {
         </div>
       )}
 
-      {/* ── Per-file cards, one collapsible section per queued folder ── */}
+      {/* ── Per-file sections, grouped per queued folder ── */}
       {showFolderSections ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {folderBuckets.map((bucket) => (
@@ -1228,7 +1207,7 @@ function ScrubReportView({ report, roots, folderPaths }: ScrubReportViewProps) {
               defaultExpanded={!isDryRun && bucket.stillPresent > 0}
             >
               {bucket.results.length > 0 ? (
-                <FileCardList results={bucket.results} showHeader={false} />
+                <FileDetailsList results={bucket.results} tintFor={categoryTint} showTitle={false} />
               ) : (
                 <div style={{ fontSize: 11, color: 'var(--color-text-muted)', fontStyle: 'italic' }}>
                   No supported files in this folder.
@@ -1238,7 +1217,7 @@ function ScrubReportView({ report, roots, folderPaths }: ScrubReportViewProps) {
           ))}
         </div>
       ) : report.scrubbed.length > 0 && (
-        <FileCardList results={report.scrubbed} />
+        <FileDetailsList results={report.scrubbed} tintFor={categoryTint} />
       )}
 
       {/* ── Not cleaned — every file named, grouped by reason. ───────── */}
@@ -1350,241 +1329,6 @@ function StatCard({ label, value, sub }: { label: string; value: string; sub?: s
         {sub && (
           <span style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>{sub}</span>
         )}
-      </div>
-    </div>
-  );
-}
-
-function FileCard({ result, index }: { result: ScrubResult; index: number }) {
-  const bytesDelta = Math.max(0, result.bytesIn - result.bytesOut);
-  const metaItems = (result.sampleValues ?? []).map(parseSampleValue).filter((m) => m.value);
-  const identifyingFields = result.fieldsStripped.filter((f) => f.isIdentifying);
-  const otherFields = result.fieldsStripped.filter((f) => !f.isIdentifying);
-  const orderedFields = [...identifyingFields, ...otherFields];
-  const removedGroups = groupRemovedProperties(orderedFields);
-  const residualFields = result.residualFields ?? [];
-  const hasResidual = residualFields.length > 0;
-  const sourceName = basename(result.inputPath);
-  const outputIsOriginal = result.outputPath === result.inputPath;
-
-  return (
-    <div
-      style={{
-        background: 'var(--color-bg-secondary)',
-        border: hasResidual
-          ? '2px solid var(--color-danger)'
-          : result.gpsCoords
-            ? '1px solid color-mix(in srgb, var(--color-danger) 45%, transparent)'
-            : '1px solid var(--color-border)',
-        borderRadius: 6,
-        overflow: 'hidden',
-        fontSize: 11,
-        flexShrink: 0,
-      }}
-    >
-      {/* ─── Header ─────────────────────────────────────────────── */}
-      <div
-        style={{
-          display: 'flex', alignItems: 'center', gap: 7,
-          padding: '6px 10px',
-          background: 'var(--color-bg-tertiary)',
-          borderBottom: '1px solid var(--color-border)',
-        }}
-      >
-        <Icon
-          icon={hasResidual ? 'warning-sign' : 'tick-circle'}
-          size={11}
-          style={{ color: hasResidual ? 'var(--color-danger)' : 'var(--color-success)', flexShrink: 0 }}
-        />
-        <span
-          style={{
-            fontFamily: 'var(--font-mono)', fontWeight: 700, flex: 1, minWidth: 0,
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-          }}
-          title={result.inputPath}
-        >
-          {sourceName || `Item ${String(index + 1).padStart(2, '0')}`}
-        </span>
-        {result.gpsCoords && (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10, color: 'var(--color-danger)', fontWeight: 700, flexShrink: 0 }}>
-            <Icon icon="map-marker" size={10} /> GPS
-          </span>
-        )}
-        {bytesDelta > 0 && (
-          <span style={{ color: 'var(--color-success)', fontFamily: 'var(--font-mono)', fontSize: 10, flexShrink: 0 }}>
-            −{formatBytes(bytesDelta)}
-          </span>
-        )}
-        <ScrubFileIcon path={result.inputPath} fileType={result.fileType} />
-      </div>
-
-      {/* ─── Body ───────────────────────────────────────────────── */}
-      <div style={{ display: 'flex' }}>
-        <div style={{ flex: 1, minWidth: 0, padding: '9px 10px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {/* Values below came from the original pre-scan, not the clean copy. */}
-          {metaItems.length > 0 && (
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.9, color: 'var(--color-text-muted)', marginBottom: 5 }}>
-                Examples found in the original:
-                <ScrubInfoButton topic="examples found in the original">
-                  {hasResidual
-                    ? 'These values were found before cleaning. Check the remaining-data warning below.'
-                    : 'These values were present before cleaning and are not in the cleaned copy.'}
-                </ScrubInfoButton>
-              </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                {metaItems.map(({ key, value }, i) => (
-                  <span
-                    key={i}
-                    style={{
-                      display: 'inline-flex', alignItems: 'center', gap: 4,
-                      padding: '3px 8px', borderRadius: 4, fontSize: 11,
-                      background: 'var(--color-bg-tertiary)',
-                      border: '1px solid var(--color-border)',
-                      maxWidth: 280,
-                    }}
-                  >
-                    {key && <span style={{ color: 'var(--color-text-muted)', fontSize: 10, flexShrink: 0 }}>{key}:</span>}
-                    <span
-                      style={{ fontWeight: 700, color: 'var(--color-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                      title={value}
-                    >
-                      {value}
-                    </span>
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* GPS coordinate inline */}
-          {result.gpsCoords && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <Icon icon="map-marker" size={10} style={{ color: 'var(--color-danger)', flexShrink: 0 }} />
-              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--color-danger)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4 }}>
-                {result.dryRun
-                  ? 'Location to remove:'
-                  : hasResidual
-                    ? 'Location found before cleaning — check remaining-data warning:'
-                    : 'Location removed:'}{' '}
-                {result.gpsCoords.label}
-              </span>
-            </div>
-          )}
-
-          {/* File-by-file receipt. The engine sends property names only, so the
-              receipt explains what changed without repeating personal values. */}
-          {removedGroups.length > 0 && (
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.9, color: 'var(--color-text-muted)', marginBottom: 4 }}>
-                {result.dryRun ? 'Will remove from this file:' : 'Removed from this file:'}
-                <ScrubInfoButton topic={result.dryRun ? 'what will be removed' : 'what was removed'}>
-                  {hasResidual
-                    ? 'This receipt lists property names. Check the remaining-data warning below.'
-                    : 'This receipt lists property names; the clean copy contains none of their original values.'}
-                </ScrubInfoButton>
-              </div>
-              <RemovedPropertyGroups groups={removedGroups} tintFor={categoryTint} />
-            </div>
-          )}
-
-          {/* Still-present metadata — the file is NOT safe to share. */}
-          {hasResidual && (
-            <div>
-              <div style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.9, color: 'var(--color-danger)', marginBottom: 4 }}>
-                Still present:
-              </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
-                {residualFields.map((f, i) => (
-                  <span
-                    key={`res-${i}`}
-                    title={f.label}
-                    style={{
-                      display: 'inline-flex', alignItems: 'center', gap: 4,
-                      fontSize: 10, padding: '1px 6px', borderRadius: 3,
-                      background: 'var(--color-danger-dim)',
-                      color: 'var(--color-danger)',
-                      border: '1px solid color-mix(in srgb, var(--color-danger) 45%, transparent)',
-                      maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                    }}
-                  >
-                    <Icon icon="warning-sign" size={9} style={{ flexShrink: 0 }} />
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.label}</span>
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {metaItems.length === 0 && removedGroups.length === 0 && !result.gpsCoords && !hasResidual && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--color-text-muted)', fontSize: 11, fontStyle: 'italic', padding: '2px 0' }}>
-              <Icon icon="tick-circle" size={11} style={{ color: 'var(--color-success)', flexShrink: 0 }} />
-              No metadata found — already clean
-            </div>
-          )}
-
-          {!result.dryRun && result.outputPath && (
-            <div style={{ minWidth: 0, fontSize: 10, color: 'var(--color-text-muted)' }}>
-              <div style={{ marginBottom: 2 }}>
-                {outputIsOriginal ? 'Scrubbed original saved at:' : 'Clean copy saved at:'}
-              </div>
-              <div
-                title={result.outputPath}
-                style={{
-                  fontFamily: 'var(--font-mono)', color: 'var(--color-text-primary)',
-                  overflowWrap: 'anywhere', lineHeight: 1.4,
-                }}
-              >
-                {result.outputPath}
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function FileCardList({ results, showHeader = true }: { results: ScrubResult[]; showHeader?: boolean }) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      {showHeader && (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            padding: '6px 10px',
-            background: 'var(--color-bg-secondary)',
-            border: '1px solid var(--color-border)',
-            borderRadius: 6,
-          }}
-        >
-          <Icon icon="document" size={11} color="var(--color-text-muted)" style={{ flexShrink: 0 }} />
-          <span style={{ flex: 1, minWidth: 0, fontSize: 11, color: 'var(--color-text-primary)', fontWeight: 700 }}>
-            File details
-          </span>
-          <span style={{ fontSize: 11, color: 'var(--color-text-muted)', flexShrink: 0, fontFamily: 'var(--font-mono)' }}>
-            {results.length} item{results.length === 1 ? '' : 's'}
-          </span>
-        </div>
-      )}
-
-      <div
-        style={{
-          display: 'grid',
-          // Do not make this a second scrolling region. The dialog body owns
-          // scrolling for the whole report, so every file remains reachable
-          // with one continuous scrollbar regardless of card height.
-          gridTemplateColumns: 'repeat(auto-fit, minmax(min(300px, 100%), 1fr))',
-          gap: 8,
-          alignContent: 'start',
-          minWidth: 0,
-        }}
-      >
-        {results.map((result, index) => (
-          <FileCard key={result.inputPath} result={result} index={index} />
-        ))}
       </div>
     </div>
   );

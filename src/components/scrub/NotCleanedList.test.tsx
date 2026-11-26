@@ -74,6 +74,19 @@ describe('NotCleanedList', () => {
     expect(mixedHtml).toContain('data-kind="folders"');
   });
 
+  test('a long reason gets its own full-width line under the file name, not a narrow column', () => {
+    const reason = 'The file is locked by another process and could not be opened for writing (os error 32)';
+    const entries = notCleanedEntries({
+      files: [{
+        path: `${ROOT}\\report.docx`, root: ROOT, extension: 'docx', detectedType: null, typeMismatch: false, cleanedAs: null,
+        outcome: 'failed', reason: 'locked', message: reason, outputPath: null, scrubbedIndex: null, removedCategories: [], dryRun: true,
+      }],
+    });
+    const html = renderToStaticMarkup(<NotCleanedList count={1} entries={entries} roots={[ROOT]} />);
+    expect(html).toMatch(/<span data-note="true" style="grid-column:2 \/ -1[^"]*">[^<]*os error 32/);
+    expect(html).not.toContain('report.docx<span');
+  });
+
   test('count without names is reported and not expandable', () => {
     const html = renderToStaticMarkup(<NotCleanedList count={5} entries={[]} roots={[]} defaultExpanded />);
     expect(html).toContain('5 files <strong>not cleaned</strong> — unsupported format or content mismatch');
@@ -89,14 +102,20 @@ describe('NotCleanedList', () => {
 });
 
 describe('RemovedPropertyGroups', () => {
-  test('starts collapsed to group names with counts', () => {
+  test('shows every group with every property at once, with no per-group toggles', () => {
     const groups = groupRemovedProperties([
       { category: 'exif', label: 'Camera & GPS', bytes: 1, isIdentifying: true, details: ['Aperture Value', 'Camera or device model', 'Create Date'] },
     ]);
-    const html = renderToStaticMarkup(<RemovedPropertyGroups groups={groups} tintFor={tint} />);
+    const html = renderToStaticMarkup(
+      <RemovedPropertyGroups groups={groups} tintFor={tint} valueByDetail={new Map([['Create Date', '2024:05:01']])} />,
+    );
     expect(html).toContain('Camera &amp; device');
     expect(html).toContain('Dates &amp; times');
-    expect(html).toContain('aria-expanded="false"');
-    expect(html).not.toContain('Aperture Value');
+    expect(html).toContain('Aperture Value');
+    expect(html).toContain('Camera or device model');
+    expect(html).toContain('Create Date:</span><strong');
+    expect(html).toContain('2024:05:01');
+    expect(html).not.toContain('aria-expanded');
+    expect(html).not.toContain('<button');
   });
 });
