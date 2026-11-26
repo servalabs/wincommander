@@ -101,11 +101,26 @@ describe("password change steps", () => {
     expect(refused.first.oldPassword).toBe("");
   });
 
-  test("a policy-managed vault stops at the Vault Permissions message", () => {
+  test("the decoy password of a noted vault stays on the first box and asks for the real one", () => {
+    const typed = run(startPasswordChange(PATH), ...type("first", { oldPassword: "decoy" }));
+    const refused = run(typed, { type: "send" }, { type: "failed", error: "service rejected request: real_password_required" });
+    expect(refused.step).toBe("current");
+    expect(refused.header).toBeNull();
+    expect(refused.failure).toBe("Wrong password. Enter the real password for this vault.");
+    expect(refused.first.oldPassword).toBe("");
+    const outerRefused = run(probedAs("outer"), { type: "send" }, { type: "failed", error: "real_password_required" });
+    expect(outerRefused.step).toBe("current");
+    expect(outerRefused.first.oldPassword).toBe("");
+    expect(outerRefused.first.newPassword).toBe("");
+  });
+
+  test("only a policy refusal stops the flow, and it names who may change the password", () => {
     const typed = run(startPasswordChange(PATH), ...type("first", { oldPassword: "current" }));
+    expect(run(typed, { type: "send" }, { type: "failed", error: "engine_failed" }).step).toBe("current");
     const stopped = run(typed, { type: "send" }, { type: "failed", error: "vault_policy_managed" });
     expect(stopped.step).toBe("policy");
-    expect(stopped.failure).toBe("This Vault is managed in Vault Permissions. Change its password there.");
+    expect(stopped.failure).toBe("Only this vault's owner or an administrator can change its password.");
+    expect(stopped.failure).not.toContain("Vault Permissions");
     expect(stopped.first.oldPassword).toBe("");
     expect(passwordChangeProblem(stopped)).toBeNull();
   });

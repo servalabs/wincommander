@@ -9,18 +9,19 @@ const VaultFileDialogs = lazy(() => import("../panels/vault/VaultFileDialogs"));
 export default function useVaultFileActions() {
   const { names } = useVaultNames();
   const { canUse } = useEntitlements();
-  const canChangePassword = canUse("paid");
+  // Both actions check the password in the Pro engine.
+  const canChangeVaultFiles = canUse("paid");
   const [request, setRequest] = useState<VaultFileRequest | null>(null);
 
   const show = useCallback((dialog: VaultFileRequest["dialog"], target: VaultFileTarget) => {
     const path = resolveVaultFilePath(target, names);
-    setRequest(current => ({ id: (current?.id ?? 0) + 1, dialog, path, open: true }));
+    setRequest(current => ({ id: (current?.id ?? 0) + 1, dialog, path, pathLocked: path !== "", open: true, onRenamed: target.onRenamed }));
   }, [names]);
 
-  const actions = useMemo<VaultFileActions>(() => ({
-    ...(canChangePassword ? { changePassword: (target: VaultFileTarget) => show("password", target) } : {}),
+  const actions = useMemo<VaultFileActions | null>(() => canChangeVaultFiles ? {
+    changePassword: target => show("password", target),
     rename: target => show("rename", target),
-  }), [canChangePassword, show]);
+  } : null, [canChangeVaultFiles, show]);
 
   const close = useCallback(() => setRequest(current => current && { ...current, open: false }), []);
 

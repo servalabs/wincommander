@@ -1,6 +1,7 @@
 import {
   EMPTY_HEADER_CREDENTIALS,
   POLICY_MANAGED,
+  REAL_PASSWORD_REQUIRED,
   WRONG_DECOY_PASSWORD,
   WRONG_PASSWORD,
   currentPasswordProblem,
@@ -80,7 +81,7 @@ function failed(flow: PasswordChangeFlow, error: unknown): PasswordChangeFlow {
     return { ...settled, decoy: failure === WRONG_DECOY_PASSWORD ? withoutCurrent(flow.decoy) : flow.decoy, failure };
   }
   // A current password that stops opening the vault after the probe sends the person back to the first box.
-  if (stage === "probe" || failure === WRONG_PASSWORD) {
+  if (stage === "probe" || failure === WRONG_PASSWORD || failure === REAL_PASSWORD_REQUIRED) {
     return { ...settled, step: "current", header: null, first: withoutCurrent(withoutNew(flow.first)), provenReal: null, failure };
   }
   return { ...settled, provenReal: null, failure };

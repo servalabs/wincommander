@@ -11,7 +11,7 @@ import { useAppState } from "../../context/AppContext";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useTheme } from "../../context/ThemeContext";
 import CreateVolumeWizard from "./CreateVolumeWizard";
-import { VaultFileLinks } from "./VaultFileActionButtons";
+import { OtherVaultFileMenu } from "./VaultFileActionButtons";
 import useVaultNames from "../../hooks/useVaultNames";
 import useVaultFileActions from "../../hooks/useVaultFileActions";
 import { findVaultName } from "@/lib/vaultRename";
@@ -592,7 +592,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading, statusUnav
             </div>
           )}
         </div>
-        <VaultFileLinks actions={vaultFileActions} />
+        {vaultFileActions && <OtherVaultFileMenu actions={vaultFileActions} />}
       </SectionCard>
 
       <CreateVolumeWizard

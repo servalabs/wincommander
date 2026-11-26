@@ -7,5 +7,6 @@ import "./index.css";
 export default function VaultFileDialogs({ request, onClose }: { request: VaultFileRequest; onClose: () => void }) {
   return request.dialog === "password"
     ? <ChangePasswordDialog key={request.id} isOpen={request.open} onClose={onClose} initialPath={request.path} />
-    : <RenameVaultDialog key={request.id} isOpen={request.open} onClose={onClose} initialPath={request.path} />;
+    : <RenameVaultDialog key={request.id} isOpen={request.open} onClose={onClose} initialPath={request.path}
+      pathLocked={request.pathLocked} onRenamed={request.onRenamed} />;
 }

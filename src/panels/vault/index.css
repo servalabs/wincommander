@@ -1215,25 +1215,78 @@ input::-webkit-credentials-auto-fill-button {
 /* Beats the Privacy panel's .mount-dialog.mount-dialog width once that panel has loaded. */
 .mount-dialog.mount-dialog.vault-file-dialog {
   width: min(480px, calc(100vw - 32px)) !important;
-}
-
-.mount-dialog.vault-file-dialog--fit {
+  /* Size to the form; the shared mount-dialog height left a tall empty body. */
   height: auto;
 }
 
-.vault-file-links {
+.mount-dialog.vault-file-dialog .wc-dialog-body {
+  flex: 0 1 auto;
+  padding: 20px 24px;
+}
+
+.vault-file-dialog .vault-operation-notice {
+  flex-shrink: 0;
+  height: auto;
+  overflow: visible;
+  line-height: 1.45;
+}
+
+.vault-file-dialog__fields {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px 12px;
-  margin-top: 10px;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
 }
 
-.vault-file-links button {
-  max-width: 100%;
+.vault-file-dialog .mount-options-grid {
+  margin-top: 0;
+}
+
+.vault-file-dialog .vault-file-dialog__advanced {
+  align-self: flex-start;
   height: auto;
-  min-height: 28px;
-  white-space: normal;
-  text-align: left;
+  min-height: 0;
+  padding: 2px 0;
+  background: none;
+  font-size: 12px;
+}
+
+.vault-file-dialog__note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.vault-file-dialog__note > svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.vault-file-dialog__note--warning > svg {
+  color: var(--color-warning);
+}
+
+.vault-file-dialog__progress {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-right: auto;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.vault-file-other {
+  margin-top: 10px;
 }
 
 .vault-volume-unavailable {

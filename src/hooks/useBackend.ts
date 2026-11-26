@@ -14,6 +14,7 @@ import {
   type VaultPasswordChangeResult,
   type VaultPasswordHeader,
 } from "../lib/vaultPasswordChange";
+import type { VaultRenameRequest } from "../lib/vaultFileRename";
 import type { VaultSyncWarning } from "../lib/vaultSyncWarning";
 import type { PersonalVaultSyncEnrollment, VaultSyncRecoveryAction } from "../lib/vaultSyncRecovery";
 import type { VaultSyncAction, VaultSyncManagementResult } from "../types/generated/ipc";
@@ -2060,6 +2061,8 @@ export function useBackend(retainCleanupScanErrors = false) {
       execute<unknown>("Test-EncryptionVolumePassword", buildPasswordProbeRequest(volumePath, credentials)),
     changeVolumePassword: (volumePath: string, target: VaultPasswordHeader, credentials: HeaderCredentials, provenReal?: HeaderCredentials | null) =>
       afterVaultMutation(() => execute<VaultPasswordChangeResult>("Set-EncryptionVolumePassword", buildPasswordChangeRequest(volumePath, target, credentials, provenReal))),
+    // The path changes, so every vault list and Vault Permissions refresh afterwards.
+    renameVaultFile: (request: VaultRenameRequest) => afterVaultMutation(() => invoke<unknown>("vault_rename", { ...request })),
     createDualVolume: (params: CreateDualVolumeParams) =>
       execute("Create-DualVolume", {
         TargetKind: params.TargetKind ?? "file",

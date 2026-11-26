@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { cleanVaultPath, findVaultName, vaultRenameErrorMessage } from "./vaultRename";
+import { cleanVaultPath, findVaultName } from "./vaultRename";
+import { vaultRenameErrorMessage } from "./vaultFileRename";
 import { buildPasswordChangeRequest, buildPasswordProbeRequest, EMPTY_HEADER_CREDENTIALS, vaultPasswordChangeErrorMessage } from "./vaultPasswordChange";
 
 describe("vault paths copied from Explorer", () => {
@@ -34,6 +35,6 @@ describe("validation failures name a known reason only", () => {
   });
 
   test("rename maps a write refusal", () => {
-    expect(vaultRenameErrorMessage("vault_caller_access_denied")).toContain("did not let this account write the vault file");
+    expect(vaultRenameErrorMessage("vault_caller_access_denied")).toContain("did not let this account rename the vault file");
   });
 });

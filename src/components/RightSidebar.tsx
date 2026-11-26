@@ -37,7 +37,7 @@ import { changeQuickMountSlot } from "../lib/quickMountSlots";
 import { canOpenQuickMountDrive, quickMountExplorerTarget, quickMountExplorerTargetForDrive, openQuickMountIfEnabled, type QuickMountExplorerTarget } from "../lib/quickMountObservation";
 import { vaultMountResultLabel, type VaultAuthorizedEntry } from "../panels/fleet/vaultAccessTypes";
 import useVaultFileActions from "../hooks/useVaultFileActions";
-import { DISMOUNT_FIRST_HINT, type VaultFileTarget } from "../lib/vaultFileActions";
+import { rowVaultFileActions } from "../lib/vaultFileActions";
 import { vaultPathKey } from "../lib/vaultRename";
 import './RightSidebar.css';
 
@@ -247,16 +247,10 @@ export default function RightSidebar() {
     );
     const { actions: vaultFileActions, dialogs: vaultFileDialogs } = useVaultFileActions();
     const qmSelectedSlot = quickMountSlots[qmSelectedIdx];
-    const qmFileActionBlocked = qmSelectedSlot?.targetType === 'partition'
-        ? 'Change Password and Rename work on a vault file, not a partition.'
-        : encryptionStatus?.volumes?.some(volume => volume.path && qmSelectedSlot && vaultPathKey(volume.path) === vaultPathKey(qmSelectedSlot.filePath))
-            ? DISMOUNT_FIRST_HINT : null;
-    const openQmFileAction = (action: ((target: VaultFileTarget) => void) | undefined) => {
-        if (!action || !qmSelectedSlot) return;
-        // Close Quick Mount first so the vault dialog owns focus.
-        setQmOpen(false);
-        action({ path: qmSelectedSlot.filePath });
-    };
+    // Both actions work on a dismounted vault file, never a partition.
+    const qmFileActions = qmSelectedSlot && qmSelectedSlot.targetType !== 'partition'
+        ? rowVaultFileActions(vaultFileActions, Boolean(encryptionStatus?.volumes?.some(volume => volume.path && vaultPathKey(volume.path) === vaultPathKey(qmSelectedSlot.filePath))))
+        : null;
 
     const [fleetVaultsUnavailable, setFleetVaultsUnavailable] = useState(false);
     const fleetVaultRefresh = useMemo(() => createVaultStatusRefresh<FleetQuickMountEntry[]>(
@@ -1504,23 +1498,25 @@ export default function RightSidebar() {
                                                     onClick={() => handleQmRemoveSlot(qmSelectedIdx)}>
                                                     <Icon icon="cross" size={12} />
                                                 </button>
-                                                {/* A disabled button takes no hover, so the reason also sits on the wrapper. */}
-                                                <span className="inline-flex gap-[6px]" title={qmFileActionBlocked ?? undefined}>
-                                                    {vaultFileActions.changePassword && (
-                                                        <button type="button" className="qm-slot-edit-btn" title={qmFileActionBlocked ?? 'Change Password'}
-                                                            aria-label="Change this vault's password"
-                                                            disabled={qmBusy || Boolean(qmFileActionBlocked)}
-                                                            onClick={() => openQmFileAction(vaultFileActions.changePassword)}>
+                                                {/* Each action closes Quick Mount first so the vault dialog owns focus. */}
+                                                {qmFileActions && qmSelectedSlot && (
+                                                    <span className="inline-flex gap-[6px]">
+                                                        <button type="button" className="qm-slot-edit-btn" title="Change Password"
+                                                            aria-label="Change this vault's password" disabled={qmBusy}
+                                                            onClick={() => { setQmOpen(false); qmFileActions.changePassword({ path: qmSelectedSlot.filePath }); }}>
                                                             <Icon icon="key" size={12} />
                                                         </button>
-                                                    )}
-                                                    <button type="button" className="qm-slot-edit-btn" title={qmFileActionBlocked ?? 'Rename'}
-                                                        aria-label="Rename this vault"
-                                                        disabled={qmBusy || Boolean(qmFileActionBlocked)}
-                                                        onClick={() => openQmFileAction(vaultFileActions.rename)}>
-                                                        <Icon icon="annotation" size={12} />
-                                                    </button>
-                                                </span>
+                                                        <button type="button" className="qm-slot-edit-btn" title="Rename"
+                                                            aria-label="Rename this vault file" disabled={qmBusy}
+                                                            onClick={() => {
+                                                                setQmOpen(false);
+                                                                // The shortcut stores the file path, so it follows the renamed file.
+                                                                qmFileActions.rename({ path: qmSelectedSlot.filePath, onRenamed: path => void patchQmSlots(qmSelectedSlot, { ...qmSelectedSlot, filePath: path }) });
+                                                            }}>
+                                                            <Icon icon="annotation" size={12} />
+                                                        </button>
+                                                    </span>
+                                                )}
                                                 {!explorerPreference.enabled && qmMountedTarget && canOpenQuickMountDrive(encryptionStatus, vaultStatusError, qmMountedTarget.drive, quickMountSlots[qmSelectedIdx]?.filePath, qmMountedTarget) && (
                                                     <button type="button" className="qm-btn qm-btn--primary qm-explorer-btn" disabled={qmBusy}
                                                         onClick={() => void openQuickMountTarget(qmMountedTarget)}>

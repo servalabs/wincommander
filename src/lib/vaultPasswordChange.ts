@@ -113,7 +113,10 @@ export const WRONG_PASSWORD = "Wrong password.";
 
 export const WRONG_DECOY_PASSWORD = "Wrong password. The first password change was kept.";
 
-export const POLICY_MANAGED = "This Vault is managed in Vault Permissions. Change its password there.";
+/** The service noted a hidden part and the decoy password opened only the outer one. */
+export const REAL_PASSWORD_REQUIRED = "Wrong password. Enter the real password for this vault.";
+
+export const POLICY_MANAGED = "Only this vault's owner or an administrator can change its password.";
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : typeof error === "string" ? error : "").toLowerCase();
 const hasCode = (detail: string, code: string) => new RegExp(`(?:^|[^a-z_])(?:vault_)?${code}(?:$|[^a-z_])`).test(detail);
@@ -127,6 +130,9 @@ export function vaultPasswordChangeErrorMessage(error: unknown, stage: PasswordC
   const detail = errorText(error);
   const has = (code: string) => hasCode(detail, code);
   if (has("vault_policy_managed")) return POLICY_MANAGED;
+  if (has("real_password_required")) {
+    return stage === "decoy" ? "The decoy password was not changed. The first password change was kept." : REAL_PASSWORD_REQUIRED;
+  }
   if (has("wrong_password") || has("engine_unlock_failed")) return stage === "decoy" ? WRONG_DECOY_PASSWORD : WRONG_PASSWORD;
   // Outside the decoy follow-up a collision would tell a decoy-password holder something about the real password.
   if (stage === "decoy" && has("new_password_collides")) return "The new decoy password must differ from the real password.";

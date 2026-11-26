@@ -2160,7 +2160,9 @@
   gap: 8px;
 }
 
-.fleet-vault-policy-actions { flex-wrap: wrap; }
+/* One line per saved Vault; the rarer actions sit in the More menu. */
+.fleet-vault-policy-actions { flex-wrap: nowrap; }
+.fleet-vault-policy-grid td[data-label="Actions"] { max-width: none; }
 .fleet-vault-existing-path > input { min-width: 0; flex: 1; }
 
 /* Saved Vaults stay a table for as long as the panel can show it without
@@ -2240,7 +2242,7 @@
     white-space: normal;
   }
 
-  .fleet-vault-policy-actions { min-width: 0; }
+  .fleet-vault-policy-actions { min-width: 0; flex-wrap: wrap; }
 }
 
 @container (max-width: 420px) {

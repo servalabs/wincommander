@@ -4,11 +4,12 @@ import type { VaultDisplayName } from "./vaultRename";
 export interface VaultFileTarget {
   path: string | null;
   label?: string;
+  /** Lets a list that stores the path (such as a Quick Mount shortcut) follow the renamed file. */
+  onRenamed?: (path: string) => void;
 }
 
 export interface VaultFileActions {
-  /** Absent without Pro: the password change runs in the Pro engine. */
-  changePassword?: (target: VaultFileTarget) => void;
+  changePassword: (target: VaultFileTarget) => void;
   rename: (target: VaultFileTarget) => void;
 }
 
@@ -17,7 +18,10 @@ export interface VaultFileRequest {
   id: number;
   dialog: "password" | "rename";
   path: string;
+  /** A row's own vault stays fixed; only the "Other vault file" entry lets the person pick a file. */
+  pathLocked: boolean;
   open: boolean;
+  onRenamed?: (path: string) => void;
 }
 
 export const DISMOUNT_FIRST_HINT = "Dismount this vault to change its password or rename it.";
@@ -28,4 +32,9 @@ export function resolveVaultFilePath(target: VaultFileTarget, names: readonly Va
   const label = target.label?.trim();
   const matches = label ? names.filter(row => row.name === label) : [];
   return matches.length === 1 ? matches[0]!.path : "";
+}
+
+/** A mounted vault gets no Change Password or Rename: neither can run until it is dismounted. */
+export function rowVaultFileActions(actions: VaultFileActions | null, isMounted: boolean): VaultFileActions | null {
+  return isMounted ? null : actions;
 }

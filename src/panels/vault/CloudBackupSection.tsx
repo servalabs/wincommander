@@ -2,7 +2,6 @@
 import SectionCard from "@/components/shared/SectionCard";
 import VaultCloudBackupButton from "@/components/shared/VaultCloudBackupButton";
 import type { EncryptionStatus } from "@/hooks/useBackend";
-import { MountedVaultFileButton } from "./VaultFileActionButtons";
 
 interface Props { volumes: NonNullable<EncryptionStatus["volumes"]>; statusError?: string | null }
 export default function CloudBackupSection({ volumes, statusError }: Props) {
@@ -15,7 +14,6 @@ export default function CloudBackupSection({ volumes, statusError }: Props) {
     {available.map(volume => <div key={`${volume.internalDrive}-${volume.letter}`} className="flex items-center justify-between gap-2 py-2">
       <strong>{volume.letter}</strong>
       <span className="flex items-center gap-1">
-        <MountedVaultFileButton driveLabel={volume.letter} />
         <VaultCloudBackupButton driveLabel={volume.letter} internalDrive={volume.internalDrive} disabled={Boolean(statusError)} />
       </span>
     </div>)}

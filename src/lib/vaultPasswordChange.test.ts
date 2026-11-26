@@ -115,13 +115,21 @@ describe("vault password change errors", () => {
     expect(vaultPasswordChangeErrorMessage("wrong_password", "change")).toBe("Wrong password.");
   });
 
+  test("the decoy password of a noted vault asks for the real password", () => {
+    for (const stage of ["probe", "change"] as const) {
+      expect(vaultPasswordChangeErrorMessage("service rejected request: real_password_required", stage))
+        .toBe("Wrong password. Enter the real password for this vault.");
+    }
+    expect(vaultPasswordChangeErrorMessage("real_password_required", "decoy")).toContain("first password change was kept");
+  });
+
   test("a wrong decoy password in the follow-up says the first change was kept", () => {
     expect(vaultPasswordChangeErrorMessage("wrong_password", "decoy")).toBe("Wrong password. The first password change was kept.");
   });
 
-  test("a policy-managed vault points to Vault Permissions", () => {
+  test("a policy refusal names who may change the password instead of pointing back to Vault Permissions", () => {
     const error = new Error("service rejected request: vault_policy_managed");
-    expect(vaultPasswordChangeErrorMessage(error, "probe")).toBe("This Vault is managed in Vault Permissions. Change its password there.");
+    expect(vaultPasswordChangeErrorMessage(error, "probe")).toBe("Only this vault's owner or an administrator can change its password.");
     expect(isPolicyManagedError(error)).toBe(true);
     expect(isPolicyManagedError("wrong_password")).toBe(false);
   });

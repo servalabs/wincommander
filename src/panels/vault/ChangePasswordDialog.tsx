@@ -1,6 +1,6 @@
 import { useCallback, useReducer, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Button, Callout, Dialog, FormGroup, Icon, InputGroup } from "@/components/ui/bp";
+import { Button, Dialog, FormGroup, Icon, InputGroup, Spinner } from "@/components/ui/bp";
 import VaultOperationNotice from "@/components/shared/VaultOperationNotice";
 import useBackend from "../../hooks/useBackend";
 import { useTheme } from "../../context/ThemeContext";
@@ -147,13 +147,11 @@ export default function ChangePasswordDialog({ isOpen, onClose, initialPath = ""
     <Dialog isOpen={isOpen} onClose={close} title="Change Vault Password"
       className={`mount-dialog vault-file-dialog ${theme === "light" ? "light" : ""}`}>
       <div className="wc-dialog-body">
-        {stage && <Callout intent="warning" icon="warning-sign" className="mb-4">{PASSWORD_CHANGE_WARNING}</Callout>}
-        <VaultOperationNotice tone="info" message={busy ? (stage === "probe" ? PASSWORD_PROBE_BUSY : PASSWORD_CHANGE_BUSY) : ""} />
         <VaultOperationNotice tone="success" message={flow.success} />
         <VaultOperationNotice message={flow.failure} />
         {step === "decoy-ask" && <p className="vault-card-status-line" role="status">{DECOY_QUESTION}</p>}
         {stage && (
-          <fieldset disabled={busy} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+          <fieldset disabled={busy} className="vault-file-dialog__fields">
             <FormGroup label="Vault file" labelFor="change-volume-path" helperText="The vault must be dismounted.">
               <InputGroup id="change-volume-path" placeholder="/path/to/volume.hc" value={flow.volumePath} autoComplete="off"
                 disabled={step !== "current"} onChange={event => dispatch({ type: "path", volumePath: event.target.value })}
@@ -162,14 +160,19 @@ export default function ChangePasswordDialog({ isOpen, onClose, initialPath = ""
                   : undefined} />
             </FormGroup>
             {fields}
-            <Button minimal small icon={showExtras ? "chevron-down" : "chevron-right"}
+            {/* Only a new header invalidates old backups, so the warning waits for the new-password step. */}
+            {stage !== "probe" && (
+              <p className="vault-file-dialog__note vault-file-dialog__note--warning"><Icon icon="warning-sign" size={12} /> {PASSWORD_CHANGE_WARNING}</p>
+            )}
+            <Button minimal small icon={showExtras ? "chevron-down" : "chevron-right"} className="vault-file-dialog__advanced"
               text="Advanced: PIM and keyfile" onClick={() => setShowExtras(!showExtras)} aria-expanded={showExtras} />
             {showExtras && <div className="mount-options-grid" aria-label="PIM and keyfile options">{extras}</div>}
-            {problem && flow.volumePath && !busy && <p className="vault-card-status-line" role="status"><Icon icon="info-sign" size={12} /> {problem}</p>}
+            {problem && flow.volumePath && !busy && <p className="vault-file-dialog__note" role="status"><Icon icon="info-sign" size={12} /> {problem}</p>}
           </fieldset>
         )}
       </div>
       <div className="mount-dialog-footer">
+        {busy && <span className="vault-file-dialog__progress" role="status"><Spinner size={14} /> {stage === "probe" ? PASSWORD_PROBE_BUSY : PASSWORD_CHANGE_BUSY}</span>}
         {step === "decoy-ask" ? <>
           <Button icon="cross" text="NO" onClick={() => dispatch({ type: "decoy-no" })} minimal className="modal-cancel-btn" />
           <Button icon="key" text="YES" onClick={() => dispatch({ type: "decoy-yes" })} className="modal-primary-btn" />
