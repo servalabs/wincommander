@@ -25,6 +25,12 @@ lists only a selection of those changes.
   automatically. When Pro is still busy, the message now says so in plain
   words: "WinCommander Pro is still finishing another task. Try again in a
   moment." For a scrub it says an earlier metadata scrub is still finishing.
+- Fix the Share Safely report listing Windows folder files such as
+  desktop.ini as "named .ini but is really MP3". Files Windows keeps in
+  folders on its own (desktop.ini, Thumbs.db, ehthumbs.db, and any file that
+  is both hidden and system) are now left out when a folder is scrubbed; one
+  you pick directly is still included. Pro's temporary scrub folders are left
+  out too. A text file saved as UTF-16 is no longer mistaken for an MP3.
 - Fix RAM disks being writable only by the Windows account that created them:
   other users on the same PC saw the drive (for example "TEMP (R:)") but got
   "You don't have permission to save in this location". An NTFS RAM disk made

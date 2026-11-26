@@ -57,6 +57,17 @@ fn containers_and_text_are_detected() {
 }
 
 #[test]
+fn utf16_desktop_ini_is_not_reported_as_a_misnamed_mp3() {
+    let desktop_ini = b"\xFF\xFE[\0.\0S\0h\0e\0l\0l\0C\0l\0a\0s\0s\0I\0n\0f\0o\0]\0";
+    assert_eq!(detect_head(desktop_ini), None);
+    assert_eq!(detect_head(b"\xFE\xFF\0[\0.\0S"), None);
+    assert!(!is_mismatch("ini", detect_head(desktop_ini)));
+    assert!(!is_mismatch("jpg", detect_head(desktop_ini)));
+    assert_eq!(detect_head(b"\xFF\xFB\x90\x64\0\0\0\0"), None);
+    assert_eq!(detect_head(b"ID3\x04\0\0\0\0\0\x10"), Some("mp3"));
+}
+
+#[test]
 fn office_and_opendocument_zips_are_told_apart() {
     let odt = [
         b"PK\x03\x04".as_slice(),

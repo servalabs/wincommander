@@ -13,7 +13,29 @@ pub struct Listed {
 }
 
 fn skip_dir(name: &str) -> bool {
-    name == "_scrubbed" || name.starts_with(".wincommander-pdf-check-")
+    name == "_scrubbed"
+        || name.starts_with(".wincommander-pdf-check-")
+        || name.starts_with(".wincommander-scrub-stage-")
+}
+
+// Windows writes these into folders on its own; they are not content the user shares.
+fn is_shell_file(name: &str, meta: &fs::Metadata) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "desktop.ini" | "thumbs.db" | "ehthumbs.db"
+    ) || is_hidden_system(meta)
+}
+
+#[cfg(windows)]
+fn is_hidden_system(meta: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const HIDDEN_SYSTEM: u32 = 0x2 | 0x4;
+    meta.file_attributes() & HIDDEN_SYSTEM == HIDDEN_SYSTEM
+}
+
+#[cfg(not(windows))]
+fn is_hidden_system(_: &fs::Metadata) -> bool {
+    false
 }
 
 fn walk(dir: &Path, root: &str, recursive: bool, out: &mut Vec<Listed>) {
@@ -43,6 +65,9 @@ fn walk(dir: &Path, root: &str, recursive: bool, out: &mut Vec<Listed>) {
             continue;
         }
         if meta.is_file() {
+            if is_shell_file(&entry.file_name().to_string_lossy(), &meta) {
+                continue;
+            }
             out.push(Listed {
                 path,
                 root: root.to_string(),
@@ -69,4 +94,60 @@ pub fn list_run(paths: &[String], recursive: bool) -> Vec<Listed> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names(listed: &[Listed]) -> Vec<String> {
+        let mut names: Vec<String> = listed
+            .iter()
+            .map(|l| l.path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn folder_walk_skips_windows_shell_files_and_scrub_staging() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["photo.jpg", "desktop.ini", "Thumbs.db", "EHTHUMBS.DB"] {
+            fs::write(dir.path().join(name), b"x").unwrap();
+        }
+        let stage = dir.path().join(".wincommander-scrub-stage-abc123");
+        fs::create_dir(&stage).unwrap();
+        fs::write(stage.join("staged.jpg"), b"x").unwrap();
+        let root = dir.path().to_string_lossy().into_owned();
+        assert_eq!(names(&list_run(&[root], true)), ["photo.jpg"]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn folder_walk_skips_hidden_system_files_but_keeps_merely_hidden_ones() {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            SetFileAttributesW, FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_SYSTEM,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let set = |name: &str, attributes: u32| {
+            let path = dir.path().join(name);
+            fs::write(&path, b"x").unwrap();
+            let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+            assert_ne!(unsafe { SetFileAttributesW(wide.as_ptr(), attributes) }, 0);
+        };
+        set("shell.dat", FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM);
+        set("hidden.jpg", FILE_ATTRIBUTE_HIDDEN);
+        let root = dir.path().to_string_lossy().into_owned();
+        assert_eq!(names(&list_run(&[root], true)), ["hidden.jpg"]);
+    }
+
+    #[test]
+    fn a_shell_file_the_user_picked_directly_is_still_listed() {
+        let dir = tempfile::tempdir().unwrap();
+        let picked = dir.path().join("desktop.ini");
+        fs::write(&picked, b"x").unwrap();
+        let listed = list_run(&[picked.to_string_lossy().into_owned()], true);
+        assert_eq!(names(&listed), ["desktop.ini"]);
+    }
 }
