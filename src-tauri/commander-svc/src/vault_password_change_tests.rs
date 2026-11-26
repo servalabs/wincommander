@@ -122,3 +122,108 @@ fn handler_refuses_before_the_broker_without_an_interactive_caller() {
         .unwrap_err();
     assert_eq!(error.kind, PERSONAL_VAULT_SESSION_ABSENT);
 }
+
+fn both_request() -> serde_json::Value {
+    json!({
+        "VolumePath": r"D:\Vaults\decoy.hc",
+        "Target": "both",
+        "OldPassword": "old-decoy-canary",
+        "NewPassword": "new-decoy-canary",
+        "OldHiddenPassword": "old-real-canary",
+        "NewHiddenPassword": "new-real-canary",
+        "OldHiddenKeyfiles": "[]",
+        "NewHiddenKeyfiles": json!([r"D:\keys\real.key"]).to_string(),
+        "NewHiddenPim": "600",
+    })
+}
+
+#[test]
+fn both_passwords_need_both_credentials_and_hold_every_keyfile() {
+    let parsed = validate_request(&both_request()).expect("valid request");
+    assert_eq!(parsed.target, "both");
+    assert_eq!(parsed.keyfiles, [r"D:\keys\real.key"]);
+    assert!(!format!("{parsed:?}").contains("canary"));
+    for (key, value) in [
+        ("OldHiddenPassword", json!("")),
+        ("NewHiddenPassword", json!(7)),
+        ("NewHiddenPim", json!("0")),
+        ("OldHiddenKeyfiles", json!([r"relative.key"])),
+    ] {
+        let mut args = both_request();
+        args[key] = value;
+        assert!(validate_request(&args).is_none(), "{key} must be rejected");
+    }
+    let mut missing = both_request();
+    missing.as_object_mut().unwrap().remove("NewHiddenPassword");
+    assert!(validate_request(&missing).is_none());
+}
+
+#[test]
+fn one_password_requests_accept_only_blank_real_password_fields() {
+    let mut args = request();
+    for key in HIDDEN_KEYS {
+        args[key] = json!("");
+    }
+    args["OldHiddenKeyfiles"] = json!("[]");
+    assert_eq!(validate_request(&args).unwrap().target, "hidden");
+    args["NewHiddenPassword"] = json!("filled-canary");
+    assert!(validate_request(&args).is_none(), "a filled real password would be silently ignored");
+}
+
+#[test]
+fn a_copied_as_path_selection_is_accepted() {
+    let mut args = request();
+    args["VolumePath"] = json!("\"D:\\Vault\\New folder\\test3\"");
+    assert_eq!(validate_request(&args).unwrap().volume_path, r"D:\Vault\New folder\test3");
+    args["VolumePath"] = json!("\"test3\"");
+    assert!(validate_request(&args).is_none());
+    assert_eq!(selected_path("  \"D:\\a b\\c\"  "), r"D:\a b\c");
+    assert_eq!(selected_path("\"unbalanced"), "\"unbalanced");
+}
+
+#[test]
+fn only_a_closed_refusal_of_both_passwords_becomes_its_own_code() {
+    for code in DUAL_REFUSALS {
+        let reply = json!({ "status": "password_refused", "code": code });
+        assert_eq!(dual_refusal("both", &reply), Some(code));
+        assert_eq!(dual_refusal("outer", &reply), None, "one-password replies never use these codes");
+    }
+    for reply in [
+        json!({ "status": "password_refused", "code": "wrong_password" }),
+        json!({ "status": "password_refused" }),
+        json!({ "status": "password_changed", "code": "wrong_real_password" }),
+    ] {
+        assert_eq!(dual_refusal("both", &reply), None, "{reply}");
+    }
+}
+
+/// The exact target the service resolves for an extensionless container in a
+/// folder with a space, on this PC's real filesystem, and its write proof.
+#[cfg(windows)]
+#[test]
+fn a_real_extensionless_container_resolves_and_passes_the_write_proof() {
+    use windows_sys::Win32::Security::{TOKEN_DUPLICATE, TOKEN_IMPERSONATE, TOKEN_QUERY};
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+    let dir = std::env::temp_dir().join(format!("wc-chpw-target-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("New folder")).unwrap();
+    let file = dir.join("New folder").join("test3");
+    std::fs::write(&file, vec![0; 1 << 20]).unwrap();
+    let store = crate::vault_access::test_windows_fs_store(dir.join("policy"));
+    let mut args = request();
+    args["VolumePath"] = json!(format!("\"{}\"", file.display()));
+    args["Target"] = json!("outer");
+    let parsed = validate_request(&args).expect("the dialog's request is valid");
+    let target = store.password_change_target(&parsed.volume_path, "S-1-5-21-owner", 7).unwrap();
+    assert_eq!(target.entry_id, None);
+    assert!(target.container_path.ends_with(r"New folder\test3"));
+    let mut token = std::ptr::null_mut();
+    assert_ne!(
+        unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_IMPERSONATE, &mut token) },
+        0
+    );
+    let held = crate::vault_access::hold_password_change_files(&target, &[], token);
+    unsafe { windows_sys::Win32::Foundation::CloseHandle(token) };
+    assert!(held.is_ok());
+    drop(held);
+    let _ = std::fs::remove_dir_all(&dir);
+}

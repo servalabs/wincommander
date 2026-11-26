@@ -13,19 +13,25 @@ lists only a selection of those changes.
 - Add Rename to Secure Storage > Encrypted Volumes (Free). It changes only the
   name WinCommander shows for a dismounted vault; the vault file keeps its file
   name and location. Your own vault can be renamed only by you; a shared Vault
-  by its owner or an account with write access. A vault file WinCommander has
-  no record of cannot be named. The name appears next to the path of a
-  mounted vault. Personal vault names are kept in their own file, so an older
-  WinCommander version still opens your personal vaults (it just shows no
-  names).
+  by its owner or an account with write access. Any other vault file you can
+  write (one WinCommander has no record of) can be named too; that name is
+  yours only and other Windows accounts do not see it. The name appears next
+  to the path of a mounted vault. Personal vault names are kept in their own
+  file, so an older WinCommander version still opens your personal vaults (it
+  just shows no names).
 - Add Change Password to Secure Storage > Encrypted Volumes (Pro). It changes
   the password, and optionally the PIM or keyfile, of a dismounted vault file.
-  For a decoy vault you choose whether to change the decoy or the real
-  password; the other one is left as it was. The service checks that the
+  For a decoy vault you change the decoy password, the real password, or both
+  at once; when changing both, both current passwords are checked before
+  anything is written, and the vault ends with either both old or both new
+  passwords. The service checks that the
   vault is yours (or that you own or can write a shared Vault), that it is the
   registered file, and that nothing has it mounted. Header backups and copies
   made earlier still open with the old password. Needs a Pro release with the
   matching password-change engine.
+- Fix Change Password and Rename refusing a vault path pasted with Explorer's
+  "Copy as path" (wrapped in quotes) with "Check the vault file ...". The
+  service now reads a quoted path as the same file.
 - Fix Stealth mode leaving no Calculator shortcut: with Hide WinCommander
   already on, turning the Calculator lock on restored the WinCommander
   shortcuts to the Hide snapshot instead of replacing them, so the Start menu

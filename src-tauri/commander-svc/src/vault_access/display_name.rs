@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Vault display names: a policy entry's `label`, or for a personal Vault an
 //! entry in its own file so `vault-personal-v1.json` never changes and older
-//! versions, which reject unknown registry fields, keep reading it.
+//! versions, which reject unknown registry fields, keep reading it. A
+//! container WinCommander holds no record of gets a per-caller name there too.
 
 use super::*;
 
 const PERSONAL_NAMES_FILE: &str = "vault-personal-names-v1.json";
+/// Bounds the names file: a caller's oldest unregistered name makes room for a new one.
+pub(super) const MAX_UNREGISTERED_NAMES_PER_CALLER: usize = 256;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct PersonalVaultNames {
@@ -17,16 +20,28 @@ pub(super) struct PersonalVaultNames {
 }
 
 /// Keyed like a personal mount: owner SID plus stable container identity.
+/// For an unregistered container the "owner" is the caller who named it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct PersonalVaultName {
     owner_sid: String,
     container_identity: String,
     name: String,
+    /// Set only for an unregistered container; a registered Vault's path comes from its record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    container_path: Option<String>,
 }
 
 impl PersonalVaultName {
     fn is_for(&self, record: &PersonalVaultRecord) -> bool {
-        self.owner_sid == record.owner_sid && self.container_identity == record.container_identity
+        self.container_path.is_none()
+            && self.owner_sid == record.owner_sid
+            && self.container_identity == record.container_identity
+    }
+
+    fn same_key(&self, other: &Self) -> bool {
+        self.owner_sid == other.owner_sid
+            && self.container_identity == other.container_identity
+            && self.container_path.is_some() == other.container_path.is_some()
     }
 }
 
@@ -36,6 +51,30 @@ impl PersonalVaultNames {
             .iter()
             .find(|entry| entry.is_for(record))
             .map(|entry| entry.name.as_str())
+    }
+}
+
+/// Which record a rename changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenameRecord {
+    Policy,
+    Personal,
+    /// No WinCommander record: the name is kept for the caller only.
+    Unregistered,
+}
+
+/// One row of `svc.vault.display_names`. `kind` is set only when WinCommander
+/// recorded it; VeraCrypt itself cannot tell a decoy vault without its real password.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VaultDisplayName {
+    pub path: String,
+    pub name: String,
+    pub kind: Option<&'static str>,
+}
+
+impl VaultDisplayName {
+    fn new(path: String, name: String, kind: Option<&'static str>) -> Self {
+        Self { path, name, kind }
     }
 }
 
@@ -62,24 +101,25 @@ impl VaultAccessStore {
         self.state.lock().unwrap().personal_names.name_for(record).map(str::to_owned)
     }
 
-    /// Resolves what a rename may change. `None` is an unregistered container:
-    /// WinCommander holds no record that could carry its name.
+    /// Resolves what a rename may change: a policy entry, the caller's own
+    /// registered personal Vault, or a container with no record at all.
     pub fn rename_target(
         &self,
         container_path: &str,
         caller_sid: &str,
         caller_session: u32,
-    ) -> Result<Option<PasswordChangeTarget>, VaultError> {
+    ) -> Result<(PasswordChangeTarget, RenameRecord), VaultError> {
         let target = self.password_change_target(container_path, caller_sid, caller_session)?;
-        if target.entry_id.is_some() {
-            return Ok(Some(target));
-        }
-        if wincmd_shared::vault_access::is_supported_vault_device_path(&target.container_path) {
-            return Ok(None);
-        }
-        Ok(self
-            .personal_record_for_path(&target.container_path)?
-            .map(|_| target))
+        let record = if target.entry_id.is_some() {
+            RenameRecord::Policy
+        } else if !wincmd_shared::vault_access::is_supported_vault_device_path(&target.container_path)
+            && self.personal_record_for_path(&target.container_path)?.is_some()
+        {
+            RenameRecord::Personal
+        } else {
+            RenameRecord::Unregistered
+        };
+        Ok((target, record))
     }
 
     /// Writes only the names file, pruning names of records that no longer
@@ -100,24 +140,69 @@ impl VaultAccessStore {
             return Err(VaultError::ContainerIdentity);
         }
         let mut state = self.state.lock().map_err(|_| VaultError::Persistence)?;
-        if !state.personal_registry_healthy
-            || state.personal_names.unreadable
-            || state.personal.get(&personal_key(&record.container_path)) != Some(&record)
+        if state.personal.get(&personal_key(&record.container_path)) != Some(&record) {
+            return Err(VaultError::Persistence);
+        }
+        self.save_name(
+            &mut state,
+            PersonalVaultName {
+                owner_sid: record.owner_sid.clone(),
+                container_identity: record.container_identity.clone(),
+                name: name.to_owned(),
+                container_path: None,
+            },
+        )
+    }
+
+    /// Names a container WinCommander holds no record of, for `caller_sid`
+    /// only. The caller's write access to it is proven before this is called.
+    pub(crate) fn rename_unregistered_container(
+        &self,
+        target: &PasswordChangeTarget,
+        caller_sid: &str,
+        name: &str,
+    ) -> Result<(), VaultError> {
+        if target.entry_id.is_some() || caller_sid.is_empty() {
+            return Err(VaultError::Validation);
+        }
+        if !wincmd_shared::vault_access::is_supported_vault_device_path(&target.container_path)
+            && self.personal_record_for_path(&target.container_path)?.is_some()
         {
+            return Err(VaultError::ContainerIdentity);
+        }
+        let mut state = self.state.lock().map_err(|_| VaultError::Persistence)?;
+        self.save_name(
+            &mut state,
+            PersonalVaultName {
+                owner_sid: caller_sid.to_owned(),
+                container_identity: target.container_identity.clone(),
+                name: name.to_owned(),
+                container_path: Some(target.container_path.clone()),
+            },
+        )
+    }
+
+    fn save_name(&self, state: &mut State, entry: PersonalVaultName) -> Result<(), VaultError> {
+        if !state.personal_registry_healthy || state.personal_names.unreadable {
             return Err(VaultError::Persistence);
         }
         let mut names: Vec<PersonalVaultName> = state
             .personal_names
             .names
             .iter()
-            .filter(|entry| !entry.is_for(&record) && state.personal.values().any(|live| entry.is_for(live)))
+            .filter(|kept| !kept.same_key(&entry))
+            .filter(|kept| kept.container_path.is_some() || state.personal.values().any(|live| kept.is_for(live)))
             .cloned()
             .collect();
-        names.push(PersonalVaultName {
-            owner_sid: record.owner_sid.clone(),
-            container_identity: record.container_identity.clone(),
-            name: name.to_owned(),
-        });
+        if entry.container_path.is_some() {
+            let callers = |kept: &PersonalVaultName| kept.container_path.is_some() && kept.owner_sid == entry.owner_sid;
+            while names.iter().filter(|kept| callers(kept)).count() >= MAX_UNREGISTERED_NAMES_PER_CALLER {
+                if let Some(oldest) = names.iter().position(callers) {
+                    names.remove(oldest);
+                }
+            }
+        }
+        names.push(entry);
         let updated = PersonalVaultNames { names, unreadable: false };
         let bytes = serde_json::to_vec(&updated).map_err(|_| VaultError::Persistence)?;
         self.fs
@@ -161,26 +246,37 @@ impl VaultAccessStore {
         Ok(())
     }
 
-    /// The caller's own named personal Vaults plus the policy Vaults it owns or
-    /// `may_rename` allows, as (container path, name) pairs.
+    /// The policy Vaults the caller owns or `may_rename` allows, its own named
+    /// personal Vaults, then the unregistered containers it named.
     pub(crate) fn display_names_for_caller(
         &self,
         caller_sid: &str,
         may_rename: impl Fn(&str) -> bool,
-    ) -> Vec<(String, String)> {
+    ) -> Vec<VaultDisplayName> {
         let Ok(state) = self.state.lock() else {
             return Vec::new();
         };
-        let mut names: Vec<(String, String)> = state
+        let mut personal: Vec<VaultDisplayName> = state
             .personal
             .values()
             .filter(|record| state.personal_registry_healthy && record.owner_sid == caller_sid)
             .filter_map(|record| {
                 let name = state.personal_names.name_for(record)?;
-                Some((record.container_path.clone(), name.to_owned()))
+                Some(VaultDisplayName::new(record.container_path.clone(), name.to_owned(), None))
             })
             .collect();
-        let entries: Vec<(String, String, String, bool)> = state
+        personal.extend(
+            state
+                .personal_names
+                .names
+                .iter()
+                .filter(|entry| entry.owner_sid == caller_sid)
+                .filter_map(|entry| {
+                    let path = entry.container_path.clone()?;
+                    Some(VaultDisplayName::new(path, entry.name.clone(), None))
+                }),
+        );
+        let entries: Vec<(String, VaultDisplayName, bool)> = state
             .active
             .as_ref()
             .filter(|_| state.status.validation_state == VaultValidationState::Current)
@@ -190,10 +286,13 @@ impl VaultAccessStore {
                     .entries
                     .iter()
                     .map(|entry| {
+                        let kind = match entry.container_kind {
+                            wincmd_shared::vault_access::VaultContainerKind::Dual => "decoy",
+                            wincmd_shared::vault_access::VaultContainerKind::Standard => "standard",
+                        };
                         (
                             entry.id.clone(),
-                            entry.container_path.clone(),
-                            entry.label.clone(),
+                            VaultDisplayName::new(entry.container_path.clone(), entry.label.clone(), Some(kind)),
                             entry.primary_owner_sid.as_deref() == Some(caller_sid),
                         )
                     })
@@ -202,12 +301,13 @@ impl VaultAccessStore {
             .unwrap_or_default();
         // The grant check takes this lock itself.
         drop(state);
-        names.extend(
-            entries
-                .into_iter()
-                .filter(|(id, _, _, owned)| *owned || may_rename(id))
-                .map(|(_, path, label, _)| (path, label)),
-        );
+        // A policy name wins over a caller's own name for the same path.
+        let mut names: Vec<VaultDisplayName> = entries
+            .into_iter()
+            .filter(|(id, _, owned)| *owned || may_rename(id))
+            .map(|(_, row, _)| row)
+            .collect();
+        names.extend(personal);
         names
     }
 }

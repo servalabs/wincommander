@@ -10,6 +10,7 @@ use std::sync::Mutex;
 mod access_directory_mutation;
 #[path = "vault_access/display_name.rs"]
 mod display_name;
+pub use display_name::{RenameRecord, VaultDisplayName};
 #[cfg(windows)]
 #[path = "vault_access/local_principals.rs"]
 mod local_principals;
@@ -6398,6 +6399,10 @@ mod tests {
             PathBuf::from("/policy"),
         )
     }
+    #[cfg(windows)]
+    pub(super) fn windows_fs_store(dir: PathBuf) -> VaultAccessStore {
+        VaultAccessStore::open(Box::new(WindowsVaultFs), Box::new(Resolver), Box::new(Acl), dir)
+    }
     fn store_with_groups(
         files: Arc<Mutex<HashMap<PathBuf, Vec<u8>>>>,
         groups: Groups,
@@ -9935,4 +9940,10 @@ pub fn test_store() -> std::sync::Arc<VaultAccessStore> {
 #[allow(clippy::items_after_test_module)]
 pub(crate) fn test_policy_store() -> VaultAccessStore {
     tests::store(std::sync::Arc::new(Mutex::new(HashMap::new())))
+}
+
+/// A store on the real Windows filesystem, keeping its records in `dir`.
+#[cfg(all(test, windows))]
+pub(crate) fn test_windows_fs_store(dir: PathBuf) -> VaultAccessStore {
+    tests::windows_fs_store(dir)
 }
