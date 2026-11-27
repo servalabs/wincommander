@@ -6,6 +6,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
 const HEAD_BYTES: usize = 4096;
+const TEXT_PROBE_BYTES: usize = 8192;
 const ZIP_TAIL_BYTES: u64 = 65536;
 
 /// Canonical type for a lowercase extension (no dot), or None when unknown.
@@ -52,6 +53,51 @@ pub fn type_for_extension(ext: &str) -> Option<&'static str> {
 /// Formats whose bytes are the user's content with no separate metadata block.
 pub fn carries_no_hidden_metadata(ext: &str) -> bool {
     matches!(type_for_extension(ext), Some("text" | "bmp" | "ico"))
+}
+
+/// Whether text content under this extension has nothing to remove. These
+/// text formats keep author, file path or location fields of their own.
+pub fn text_carries_no_hidden_metadata(ext: &str) -> bool {
+    !matches!(
+        ext,
+        "svg" | "htm" | "html" | "xhtml" | "rtf" | "eml" | "mht" | "mhtml" | "xmp" | "gpx" | "kml"
+    )
+}
+
+/// True when the file starts as plain text: UTF-8 without NULs, or UTF-16
+/// with a byte-order mark. Unreadable files are not text.
+pub fn is_plain_text_file(path: &Path) -> bool {
+    let Ok(mut file) = File::open(path) else {
+        return false;
+    };
+    let mut head = vec![0u8; TEXT_PROBE_BYTES];
+    let n = read_up_to(&mut file, &mut head);
+    is_plain_text(&head[..n])
+}
+
+fn is_plain_text(b: &[u8]) -> bool {
+    let (body, little_endian) = match b {
+        [0xFF, 0xFE, rest @ ..] => (rest, true),
+        [0xFE, 0xFF, rest @ ..] => (rest, false),
+        _ => return detect_head(b) == Some("text"),
+    };
+    let mut units: Vec<u16> = body
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&pair| {
+            if little_endian {
+                u16::from_le_bytes(pair)
+            } else {
+                u16::from_be_bytes(pair)
+            }
+        })
+        .collect();
+    // The probe can end between the two halves of a surrogate pair.
+    if units.last().is_some_and(|u| (0xD800..0xDC00).contains(u)) {
+        units.pop();
+    }
+    char::decode_utf16(units).all(|c| c.is_ok_and(|c| c != '\0'))
 }
 
 /// Detect the real type of a file from its leading bytes (and, for ZIP, its

@@ -12,10 +12,14 @@ pub struct Listed {
     pub unreadable_dir: Option<i32>,
 }
 
+// Version-control internals and dependency caches are tool state, not content to share, and must never be rewritten.
+const TOOL_DIRS: [&str; 6] = [".git", ".svn", ".hg", ".bzr", "node_modules", "__pycache__"];
+
 fn skip_dir(name: &str) -> bool {
     name == "_scrubbed"
         || name.starts_with(".wincommander-pdf-check-")
         || name.starts_with(".wincommander-scrub-stage-")
+        || TOOL_DIRS.iter().any(|tool| name.eq_ignore_ascii_case(tool))
 }
 
 // Windows writes these into folders on its own; they are not content the user shares.
@@ -140,6 +144,32 @@ mod tests {
         set("hidden.jpg", FILE_ATTRIBUTE_HIDDEN);
         let root = dir.path().to_string_lossy().into_owned();
         assert_eq!(names(&list_run(&[root], true)), ["hidden.jpg"]);
+    }
+
+    #[test]
+    fn folder_walk_skips_version_control_and_dependency_folders() {
+        let dir = tempfile::tempdir().unwrap();
+        for tool in [".git", ".SVN", ".hg", ".bzr", "node_modules", "__pycache__"] {
+            let nested = dir.path().join("project").join(tool).join("hooks");
+            fs::create_dir_all(&nested).unwrap();
+            fs::write(nested.join("pre-commit.sample"), b"#!/bin/sh").unwrap();
+        }
+        fs::write(dir.path().join("project").join("notes.md"), b"# notes").unwrap();
+        let root = dir.path().to_string_lossy().into_owned();
+        assert_eq!(names(&list_run(&[root], true)), ["notes.md"]);
+    }
+
+    #[test]
+    fn a_version_control_folder_or_file_the_user_picked_directly_is_still_listed() {
+        let dir = tempfile::tempdir().unwrap();
+        let git = dir.path().join(".git");
+        fs::create_dir_all(git.join("info")).unwrap();
+        fs::write(git.join("config"), b"[core]").unwrap();
+        fs::write(git.join("info").join("exclude"), b"# exclude").unwrap();
+        let picked_folder = list_run(&[git.to_string_lossy().into_owned()], true);
+        assert_eq!(names(&picked_folder), ["config", "exclude"]);
+        let picked_file = list_run(&[git.join("config").to_string_lossy().into_owned()], true);
+        assert_eq!(names(&picked_file), ["config"]);
     }
 
     #[test]

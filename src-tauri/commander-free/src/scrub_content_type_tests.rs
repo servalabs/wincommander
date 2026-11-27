@@ -68,6 +68,42 @@ fn utf16_desktop_ini_is_not_reported_as_a_misnamed_mp3() {
 }
 
 #[test]
+fn plain_text_is_utf8_without_nuls_or_utf16_with_a_byte_order_mark() {
+    assert!(is_plain_text(b"[core]\n\trepositoryformatversion = 0\n"));
+    assert!(is_plain_text("\u{feff}Café ✈".as_bytes()));
+    assert!(is_plain_text(b"\xFF\xFEs\0c\0r\0e\0e\0n\0"));
+    assert!(is_plain_text(b"\xFE\xFF\0s\0c\0r"));
+    // A fixed-size probe can cut a UTF-8 sequence or a UTF-16 surrogate pair.
+    assert!(is_plain_text(&"ab✈".as_bytes()[..4]));
+    assert!(is_plain_text(b"\xFF\xFEa\0\x3D\xD8"));
+    assert!(!is_plain_text(b"text with a \0 NUL"));
+    assert!(!is_plain_text(b"\xFF\xFEa\0\0\0b\0"));
+    assert!(!is_plain_text(b"x\x01\xab\xcd\xef\x90\xfe"));
+    assert!(!is_plain_text(b"%PDF-1.4\n%%EOF\n"));
+    assert!(!is_plain_text(b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>"));
+    assert!(!is_plain_text(b""));
+}
+
+#[test]
+fn plain_text_files_are_found_by_content_not_extension() {
+    let dir = tempfile::tempdir().unwrap();
+    let write = |name: &str, bytes: &[u8]| {
+        let p = dir.path().join(name);
+        std::fs::write(&p, bytes).unwrap();
+        p
+    };
+    assert!(is_plain_text_file(&write("HEAD", b"ref: refs/heads/main\n")));
+    assert!(is_plain_text_file(&write("Default.rdp", b"\xFF\xFEs\0c\0r\0\r\0\n\0")));
+    assert!(!is_plain_text_file(&write("blob", b"x\x01\xab\xcd\xef\x90\xfe")));
+    let mut late_nul = vec![b'a'; 6000];
+    late_nul.push(0);
+    assert!(!is_plain_text_file(&write("late-nul", &late_nul)));
+    assert!(!is_plain_text_file(&dir.path().join("missing")));
+    assert!(!text_carries_no_hidden_metadata("svg"));
+    assert!(text_carries_no_hidden_metadata("rdp"));
+}
+
+#[test]
 fn office_and_opendocument_zips_are_told_apart() {
     let odt = [
         b"PK\x03\x04".as_slice(),
