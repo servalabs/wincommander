@@ -28,7 +28,6 @@ pub(crate) fn execute_cli(raw_paths: Vec<String>, completed: impl FnOnce(ScrubOu
                 recursive: true,
                 paranoid: Default::default(),
                 replace_originals: false,
-                keep_undo: false,
             }),
         ),
         crate::sidecar::close_pro_session(),

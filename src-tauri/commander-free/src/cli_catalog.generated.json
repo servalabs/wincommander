@@ -12252,16 +12252,6 @@
       ]
     },
     {
-      "id": "tauri:undo_scrub_replace",
-      "name": "undo_scrub_replace",
-      "transport": "tauri",
-      "registered": true,
-      "debugOnly": false,
-      "frontendReferences": [
-        "src/components/MetadataScrubberDialog.tsx"
-      ]
-    },
-    {
       "id": "tauri:uninstall_leftovers_cancel",
       "name": "uninstall_leftovers_cancel",
       "transport": "tauri",

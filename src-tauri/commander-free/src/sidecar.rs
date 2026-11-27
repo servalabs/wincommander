@@ -163,8 +163,7 @@ fn request_timeout_for(feature_id: &str, args: &serde_json::Value) -> Option<Dur
                 wincmd_shared::vault_create_budget::size_mib_from_args(args),
             ),
         ),
-        // Undo copies originals back, so it gets the scrub's budget.
-        "scrub_metadata_paths" | "undo_scrub_replace" => Some(METADATA_SCRUB_REQUEST_TIMEOUT),
+        "scrub_metadata_paths" => Some(METADATA_SCRUB_REQUEST_TIMEOUT),
         "fleet_lab_join" => Some(FLEET_LAB_JOIN_TIMEOUT),
         _ => Some(SESSION_REQUEST_TIMEOUT),
     }

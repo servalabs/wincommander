@@ -761,8 +761,6 @@ async fn cache_scrubbed_source(
                 recursive: false,
                 paranoid: crate::file_metadata::ParanoidOptions::default(),
                 replace_originals: true,
-                // Private staged copies: never kept for Undo.
-                keep_undo: false,
             }),
         )
         .await;
@@ -1358,8 +1356,6 @@ pub async fn safe_paste_prepare_headless(dest_dir: String) -> Result<SafePasteRe
                 recursive: false,
                 paranoid: crate::file_metadata::ParanoidOptions::default(),
                 replace_originals: true,
-                // Private staged copies: never kept for Undo.
-                keep_undo: false,
             }),
         )
         .await?;
