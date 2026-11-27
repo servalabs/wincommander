@@ -38,6 +38,7 @@ pub struct Probe {
     pub len: Option<u64>,
     pub open_os_error: Option<i32>,
     pub path_chars: usize,
+    pub plain_text: bool,
 }
 
 impl Probe {
@@ -48,6 +49,7 @@ impl Probe {
                 .err()
                 .map(|e| e.raw_os_error().unwrap_or(-1)),
             path_chars: path.as_os_str().len(),
+            plain_text: content::is_plain_text_file(path),
         }
     }
 }
@@ -78,7 +80,9 @@ pub fn classify_unprocessed(
     if content::is_mismatch(ext, detected) {
         return (ScrubOutcome::NotCleaned, ScrubReason::ContentMismatch);
     }
-    if content::carries_no_hidden_metadata(ext) {
+    if content::carries_no_hidden_metadata(ext)
+        || (probe.plain_text && content::text_carries_no_hidden_metadata(ext))
+    {
         return (ScrubOutcome::AlreadyClean, ScrubReason::NothingToRemove);
     }
     (ScrubOutcome::NotCleaned, ScrubReason::UnsupportedFormat)

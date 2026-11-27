@@ -6,7 +6,61 @@ fn readable(len: u64) -> Probe {
         len: Some(len),
         open_os_error: None,
         path_chars: 40,
+        plain_text: false,
     }
+}
+
+fn text(len: u64) -> Probe {
+    Probe {
+        plain_text: true,
+        ..readable(len)
+    }
+}
+
+#[test]
+fn text_files_without_a_known_type_have_nothing_to_remove() {
+    for ext in ["", "rdp", "sample", "cfg", "conf", "gitignore"] {
+        assert_eq!(
+            classify_unprocessed(ext, None, text(12)),
+            (ScrubOutcome::AlreadyClean, ScrubReason::NothingToRemove),
+            "{ext:?}"
+        );
+    }
+    // Text formats with their own author or location fields are not assumed clean.
+    for ext in ["html", "svg", "xmp", "gpx"] {
+        assert_eq!(
+            classify_unprocessed(ext, None, text(12)),
+            (ScrubOutcome::NotCleaned, ScrubReason::UnsupportedFormat),
+            "{ext}"
+        );
+    }
+    assert_eq!(
+        classify_unprocessed("", None, readable(12)),
+        (ScrubOutcome::NotCleaned, ScrubReason::UnsupportedFormat)
+    );
+}
+
+#[test]
+fn documents_folder_git_and_rdp_files_are_text_but_binary_blobs_are_not() {
+    let dir = tempfile::tempdir().unwrap();
+    let classify = |name: &str, bytes: &[u8]| {
+        let path = dir.path().join(name);
+        std::fs::write(&path, bytes).unwrap();
+        let ext = path
+            .extension()
+            .map_or(String::new(), |e| e.to_string_lossy().to_lowercase());
+        classify_unprocessed(&ext, content::detect_file(&path), Probe::of(&path))
+    };
+    let clean = (ScrubOutcome::AlreadyClean, ScrubReason::NothingToRemove);
+    let unsupported = (ScrubOutcome::NotCleaned, ScrubReason::UnsupportedFormat);
+    let rdp = b"\xFF\xFEs\0c\0r\0e\0e\0n\0 \0m\0o\0d\0e\0\r\0\n\0";
+    assert_eq!(classify("config", b"[core]\n\tbare = false\n"), clean);
+    assert_eq!(classify("COMMIT_EDITMSG", "Café ✈\n".as_bytes()), clean);
+    assert_eq!(classify("Default.rdp", rdp), clean);
+    assert_eq!(classify("pre-commit.sample", b"#!/bin/sh\n"), clean);
+    assert_eq!(classify("index", b"DIRC\0\0\0\x02\0\0\0\x01"), unsupported);
+    assert_eq!(classify("blob", b"x\x01\xab\xcd\xef\x90\xfe"), unsupported);
+    assert_eq!(classify("pack.idx", b"\xFFtOc\0\0\0\x02"), unsupported);
 }
 
 #[test]

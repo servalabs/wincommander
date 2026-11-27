@@ -130,6 +130,42 @@ fn every_file_in_every_root_is_reported_once_even_when_the_engine_drops_it() {
 }
 
 #[test]
+fn documents_summary_skips_git_internals_and_counts_text_as_nothing_to_remove() {
+    let dir = tempfile::tempdir().unwrap();
+    let docs = dir.path().join("Documents");
+    let hooks = docs.join("Obsidian Vault").join(".git").join("hooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    std::fs::write(hooks.join("pre-commit.sample"), b"#!/bin/sh\n").unwrap();
+    std::fs::write(hooks.parent().unwrap().join("config"), b"[core]\n").unwrap();
+    let rdp = docs.join("Default.rdp");
+    std::fs::write(&rdp, b"\xFF\xFEs\0c\0r\0e\0e\0n\0\r\0\n\0").unwrap();
+    let photo = docs.join("photo.jpg");
+    std::fs::write(&photo, JPEG).unwrap();
+    let roots = vec![docs.to_string_lossy().to_string()];
+    let photo = photo.to_string_lossy().to_string();
+    let rdp = rdp.to_string_lossy().to_string();
+    // An engine that predates text detection still names the .rdp as skipped.
+    let report = ScrubReport {
+        scrubbed: vec![result(&photo, &["exif"], false)],
+        skipped_count: 1,
+        skipped_files: vec![rdp.clone()],
+        ..Default::default()
+    };
+    let (files, summary) = build(&roots, true, &report);
+    assert_eq!(files.len(), 2, "{files:#?}");
+    assert!(files.iter().all(|f| !f.path.contains(".git")));
+    let rdp_item = files.iter().find(|f| f.path == rdp).unwrap();
+    assert_eq!(
+        (rdp_item.outcome, rdp_item.reason),
+        (ScrubOutcome::AlreadyClean, Some(ScrubReason::NothingToRemove))
+    );
+    assert_eq!(
+        (summary[0].total, summary[0].cleaned, summary[0].already_clean, summary[0].not_cleaned),
+        (2, 1, 1, 0)
+    );
+}
+
+#[test]
 fn engine_paths_outside_the_listing_are_still_reported_and_residuals_kept() {
     let roots = vec![r"C:\nowhere-root".to_string()];
     let ghost = r"C:\nowhere-root\sub\photo.jpg";

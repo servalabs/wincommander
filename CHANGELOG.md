@@ -43,6 +43,18 @@ lists only a selection of those changes.
   is both hidden and system) are now left out when a folder is scrubbed; one
   you pick directly is still included. Pro's temporary scrub folders are left
   out too. A text file saved as UTF-16 is no longer mistaken for an MP3.
+- Fix the Share Safely report listing Git repository files and text files as
+  "Unsupported format": scrubbing a Documents folder named every file inside
+  `.git` (`config`, `HEAD`, `hooks\*.sample`, objects) and a UTF-16 `Default.rdp`
+  as not cleaned. Folder scrubs now leave out `.git`, `.svn`, `.hg`, `.bzr`,
+  `node_modules` and `__pycache__` folders entirely, so "Replace originals" can
+  never rewrite a file inside a repository or package cache; a folder or file
+  you pick directly is still included. A file of a type the scrubber does not
+  know (no extension, `.rdp`, `.cfg`, `.sample` and similar) whose start reads
+  as text (UTF-8 without NUL bytes, or UTF-16 with a byte-order mark) now
+  counts as nothing to remove. Binary files of an unknown type, and text
+  formats with author or location fields of their own (HTML, SVG, RTF, email,
+  XMP, GPX, KML), are still reported as not cleaned. Matches Pro.
 - Fix RAM disks being writable only by the Windows account that created them:
   other users on the same PC saw the drive (for example "TEMP (R:)") but got
   "You don't have permission to save in this location". An NTFS RAM disk made
