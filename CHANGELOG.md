@@ -16,6 +16,13 @@ lists only a selection of those changes.
   identity check failed). The request is now wiped on that failure, as it
   already was after a successful send. The desktop app now also wipes its own
   copy of the hidden-volume protection password once the request is built.
+- Share Safely: file-type detection for the report now comes from the
+  `wincmd-filetype` crate, the same table the Pro cleaner uses, so a file's
+  reported reason matches what the cleaner decided. It also recognises RF64
+  WAV, AVIF files whose major brand is `mif1`, FLAC with a leading ID3 tag,
+  MP4 files with a 256-byte `ftyp` box (no longer "icon"), other OpenDocument
+  kinds and `.mka`, and treats text with inline SVG (for example `.tsx`) as
+  text.
 - Share Safely (Scrub Meta): the results keep the two-column grid of file
   cards, but each card's "Will remove from this file" section is now one
   dropdown instead of a separate dropdown per kind of data. Collapsed, it
