@@ -1,0 +1,13 @@
+[package]
+name = "wincmd-filetype"
+version = "0.1.0"
+description = "Share Safely file-type table: extension types, content detection from magic bytes, mismatch rules and the plain-text probe. One table for the Free report and the Pro cleaner, so what Free reports always matches what Pro decided. No platform deps; reads at most the head and tail of a file."
+authors = ["ServaLabs"]
+license = "AGPL-3.0-or-later"
+edition = "2021"
+rust-version = "1.100.0"
+
+[dependencies]
+
+[dev-dependencies]
+tempfile = "3"

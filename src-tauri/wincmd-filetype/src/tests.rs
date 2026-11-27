@@ -80,7 +80,10 @@ fn plain_text_is_utf8_without_nuls_or_utf16_with_a_byte_order_mark() {
     assert!(!is_plain_text(b"\xFF\xFEa\0\0\0b\0"));
     assert!(!is_plain_text(b"x\x01\xab\xcd\xef\x90\xfe"));
     assert!(!is_plain_text(b"%PDF-1.4\n%%EOF\n"));
-    assert!(!is_plain_text(b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>"));
+    // Inline SVG in source code is still text; .svg itself is excluded by extension.
+    assert!(is_plain_text(
+        b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>"
+    ));
     assert!(!is_plain_text(b""));
 }
 
@@ -92,9 +95,18 @@ fn plain_text_files_are_found_by_content_not_extension() {
         std::fs::write(&p, bytes).unwrap();
         p
     };
-    assert!(is_plain_text_file(&write("HEAD", b"ref: refs/heads/main\n")));
-    assert!(is_plain_text_file(&write("Default.rdp", b"\xFF\xFEs\0c\0r\0\r\0\n\0")));
-    assert!(!is_plain_text_file(&write("blob", b"x\x01\xab\xcd\xef\x90\xfe")));
+    assert!(is_plain_text_file(&write(
+        "HEAD",
+        b"ref: refs/heads/main\n"
+    )));
+    assert!(is_plain_text_file(&write(
+        "Default.rdp",
+        b"\xFF\xFEs\0c\0r\0\r\0\n\0"
+    )));
+    assert!(!is_plain_text_file(&write(
+        "blob",
+        b"x\x01\xab\xcd\xef\x90\xfe"
+    )));
     let mut late_nul = vec![b'a'; 6000];
     late_nul.push(0);
     assert!(!is_plain_text_file(&write("late-nul", &late_nul)));
@@ -111,7 +123,8 @@ fn office_and_opendocument_zips_are_told_apart() {
         b"mimetypeapplication/vnd.oasis.opendocument.text",
     ]
     .concat();
-    assert_eq!(detect_head(&odt), Some("zip"));
+    // ODF names its kind in the first entry, so the head alone tells it apart.
+    assert_eq!(detect_head(&odt), Some("odt"));
     let dir = tempfile::tempdir().unwrap();
     let write = |name: &str, bytes: &[u8]| {
         let p = dir.path().join(name);
@@ -132,4 +145,58 @@ fn office_and_opendocument_zips_are_told_apart() {
     );
     assert!(!is_mismatch("docx", Some("zip")));
     assert!(is_mismatch("docx", Some("pdf")));
+}
+
+#[test]
+fn rf64_wav_id3_flac_and_avif_with_a_heif_major_brand_are_their_real_type() {
+    assert_eq!(detect_head(b"RF64\xff\xff\xff\xffWAVEds64"), Some("wav"));
+    let avif = [b"\0\0\0\x1cftypmif1\0\0\0\0".as_slice(), b"mif1avifmiaf"].concat();
+    assert_eq!(detect_head(&avif), Some("avif"));
+    assert!(!is_mismatch("avif", detect_head(&avif)));
+    let dir = tempfile::tempdir().unwrap();
+    let flac = dir.path().join("song.flac");
+    std::fs::write(&flac, b"ID3\x03\0\0\0\0\0\x02\0\0fLaC\0\0\0\x22").unwrap();
+    assert_eq!(detect_file(&flac), Some("flac"));
+    assert!(!is_mismatch("flac", detect_file(&flac)));
+    let mp3 = dir.path().join("song.mp3");
+    std::fs::write(&mp3, b"ID3\x03\0\0\0\0\0\x02\0\0\xFF\xFB\x90\0").unwrap();
+    assert_eq!(detect_file(&mp3), Some("mp3"));
+}
+
+#[test]
+fn an_mp4_with_a_256_byte_ftyp_box_is_not_an_icon() {
+    let mut mp4 = b"\0\0\x01\0ftypisom\0\0\0\0".to_vec();
+    mp4.resize(256, 0);
+    assert_eq!(detect_head(&mp4), Some("mp4"));
+    assert_eq!(detect_head(b"\0\0\x01\0\x01\0\x10\x10"), Some("ico"));
+}
+
+#[test]
+fn other_opendocument_kinds_and_matroska_audio_are_known() {
+    let odg = [
+        b"PK\x03\x04".as_slice(),
+        &[0u8; 26],
+        b"mimetypeapplication/vnd.oasis.opendocument.graphics",
+    ]
+    .concat();
+    assert_eq!(detect_head(&odg), Some("odf"));
+    assert!(!is_mismatch("zip", Some("odf")) && !is_mismatch("odt", Some("odf")));
+    assert!(is_mismatch("jpg", Some("odf")));
+    assert_eq!(type_for_extension("mka"), Some("mkv"));
+}
+
+#[test]
+fn nothing_to_remove_lists() {
+    for ext in [
+        "txt", "csv", "tsv", "md", "json", "log", "ini", "xml", "yaml", "yml", "bmp", "dib", "ico",
+    ] {
+        assert!(carries_no_hidden_metadata(ext), "{ext}");
+    }
+    for ext in ["jpg", "pdf", "svg", "rtf", "html", "docx", ""] {
+        assert!(!carries_no_hidden_metadata(ext), "{ext}");
+    }
+    for ext in TEXT_WITH_METADATA_EXTENSIONS {
+        assert!(!text_carries_no_hidden_metadata(ext));
+    }
+    assert!(text_carries_no_hidden_metadata("cfg"));
 }

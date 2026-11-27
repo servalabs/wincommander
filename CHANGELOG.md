@@ -10,6 +10,17 @@ lists only a selection of those changes.
 
 ## Unreleased
 
+- Share Safely: "Replace originals" now keeps each original for 24 hours, and
+  the results show an Undo button that puts them back (a file changed after
+  cleaning is left alone, and the result says where its original is kept).
+  The switch no longer warns "no backup is made". Safe Copy and Safe Paste
+  never keep copies. File-type detection for the report now comes from the
+  `wincmd-filetype` crate, the same table the Pro cleaner uses, so a file's
+  reported reason matches what the cleaner decided. It also recognises RF64
+  WAV, AVIF files whose major brand is `mif1`, FLAC with a leading ID3 tag,
+  MP4 files with a 256-byte `ftyp` box (no longer "icon"), other OpenDocument
+  kinds and `.mka`, and treats text with inline SVG (for example `.tsx`) as
+  text.
 - Share Safely (Scrub Meta): the results keep the two-column grid of file
   cards, but each card's "Will remove from this file" section is now one
   dropdown instead of a separate dropdown per kind of data. Collapsed, it

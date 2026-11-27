@@ -98,4 +98,22 @@ export interface ScrubReport {
   files?: ScrubFileOutcome[];
   /** One summary per selected path, in the order sent; absent from older engines. */
   roots?: ScrubRootSummary[];
+  /** Replace mode: the originals kept for Undo (24 hours); absent otherwise. */
+  undo?: ScrubUndo;
+}
+
+/** Originals of a Replace run that Pro keeps so the run can be undone. */
+export interface ScrubUndo {
+  jobId: string;
+  files: number;
+  bytes: number;
+  /** When the kept originals are deleted (Unix milliseconds). */
+  expiresMs: number;
+}
+
+/** Result of `undo_scrub_replace`. */
+export interface ScrubUndoReport {
+  restored: string[];
+  /** Files left as they are (changed since cleaning, ...), with where the original still is. */
+  skipped: { path: string; reason: string; keptAt?: string }[];
 }

@@ -3329,6 +3329,7 @@ pub fn run() {
             flow_bridge::flow_set_enabled,
             flow_bridge::flow_fire_now,
             file_metadata::scrub_metadata_paths,
+            file_metadata::undo_scrub_replace,
             file_metadata::get_metadata_scrubber_status,
             print_log::get_print_audit_status,
             print_log::set_print_audit_enabled,

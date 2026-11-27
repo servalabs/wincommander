@@ -996,6 +996,7 @@ dependencies = [
  "uuid",
  "webview2-com",
  "wincmd-clip-rules",
+ "wincmd-filetype",
  "wincmd-pq-experiment",
  "wincmd-search",
  "wincmd-service-auth",
@@ -7806,6 +7807,13 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "ts-rs",
+]
+
+[[package]]
+name = "wincmd-filetype"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
 ]
 
 [[package]]

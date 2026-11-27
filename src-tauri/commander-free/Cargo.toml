@@ -146,6 +146,9 @@ commander-context-shred = { path = "../commander-context-shred" }
 # (Phase 1c re-point) can never drift from what an admin saw pass validation
 # in the console. Pure/no-I/O by design — safe for the AV-scanned Free binary.
 wincmd-clip-rules = { path = "../wincmd-clip-rules" }
+# Share Safely file-type table, shared with the Pro cleaner (one table, so the
+# report's reasons always match what Pro decided).
+wincmd-filetype = { path = "../wincmd-filetype" }
 # Clipboard Guard's per-user listener/read/engine/action/report library
 # (plan §4.2 Phase 1c re-point): paste_monitor.rs drives this crate's
 # event-driven listener + bounded read + wincmd-clip-rules matching/

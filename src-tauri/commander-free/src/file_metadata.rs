@@ -100,6 +100,37 @@ pub struct ScrubReport {
     /// One summary per selected path, in the order the paths were sent.
     #[serde(default)]
     pub roots: Vec<crate::scrub_file_outcomes::ScrubRootSummary>,
+    /// Replace mode with `keep_undo`: the originals Pro kept for Undo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub undo: Option<ScrubUndo>,
+}
+
+/// Originals of a Replace run, kept by Pro for 24 hours.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScrubUndo {
+    pub job_id: String,
+    pub files: u32,
+    pub bytes: u64,
+    /// When the kept originals are deleted (Unix milliseconds).
+    pub expires_ms: i64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScrubUndoSkip {
+    pub path: String,
+    pub reason: String,
+    /// Where the original still is, so the user can copy it back by hand.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kept_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScrubUndoReport {
+    pub restored: Vec<String>,
+    pub skipped: Vec<ScrubUndoSkip>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -115,6 +146,10 @@ pub struct ScrubOptions {
     pub paranoid: ParanoidOptions,
     #[serde(default)]
     pub replace_originals: bool,
+    /// Replace mode: Pro keeps each original for 24 hours so the run can be
+    /// undone. Safe Copy/Paste replace private staged copies and leave it off.
+    #[serde(default)]
+    pub keep_undo: bool,
 }
 
 fn default_recursive() -> bool {
@@ -186,6 +221,19 @@ pub async fn scrub_metadata_paths_headless(
     let args = scrub_request_args(paths, options);
     let v = crate::sidecar::dispatch_paid_command("scrub_metadata_paths", args).await?;
     serde_json::from_value(v).map_err(|e| format!("scrub report decode: {}", e))
+}
+
+/// Put back the originals of a Replace run (the Share Safely "Undo" button).
+/// Not licence-gated: restoring a user's own files must keep working after
+/// a licence lapses (Pro exempts this command the same way).
+#[tauri::command]
+pub async fn undo_scrub_replace(job_id: String) -> Result<ScrubUndoReport, String> {
+    let v = crate::sidecar::dispatch_paid_command(
+        "undo_scrub_replace",
+        serde_json::json!({ "jobId": job_id }),
+    )
+    .await?;
+    serde_json::from_value(v).map_err(|e| format!("undo report decode: {}", e))
 }
 
 // Without it Pro keeps its old 3-minute run cap; Free's own wait only ends when files stop finishing.

@@ -26,7 +26,8 @@ import { useTheme } from '../context/ThemeContext';
 import { useAppState } from '../context/AppContext';
 import useDependencies from '../hooks/useDependencies';
 import { createAsyncListenerScope } from '../lib/asyncListeners';
-import type { GpsCoords, ScrubError, ScrubReport, ScrubResult } from '../lib/scrubTypes';
+import type { GpsCoords, ScrubError, ScrubReport, ScrubResult, ScrubUndoReport } from '../lib/scrubTypes';
+import UndoReplaceBar from './scrub/UndoReplaceBar';
 import { formatBytes, formatEngineLine, parseEngineVersions } from '../lib/scrubPresentation';
 import { aggregateByRoot, notCleanedEntries, shouldShowFolderSections } from '../lib/scrubReportModel';
 import NotCleanedList from './scrub/NotCleanedList';
@@ -396,6 +397,8 @@ export default function MetadataScrubberDialog({
             dryRun,
             recursive: true,
             replaceOriginals: replaceMode,
+            // Pro keeps each replaced original for 24 hours so the run can be undone.
+            keepUndo: replaceMode,
             paranoid: {
               randomizeTimestamps: paranoidMode,
               stripAltStreams: paranoidMode,
@@ -690,7 +693,7 @@ export default function MetadataScrubberDialog({
                 </div>
                 {replaceMode ? (
                   <div style={{ padding: '8px 12px 10px 33px', fontSize: 11, color: 'var(--color-danger)', lineHeight: 1.5, borderTop: '1px solid color-mix(in srgb, var(--color-danger) 20%, transparent)' }}>
-                    Originals will be overwritten in place — no backup is made.
+                    Originals are replaced in place. Each original is kept for 24 hours so the run can be undone.
                   </div>
                 ) : (
                   <div style={{ padding: '0 12px 8px 33px', fontSize: 11, color: 'var(--color-text-muted)' }}>
@@ -716,6 +719,13 @@ export default function MetadataScrubberDialog({
               </div>
             )}
 
+            {report?.undo && (
+              <UndoReplaceBar
+                key={report.undo.jobId}
+                undo={report.undo}
+                onUndo={(jobId) => invoke<ScrubUndoReport>('undo_scrub_replace', { jobId })}
+              />
+            )}
             {report && (
               <ScrubReportView report={report} roots={selectedPaths} folderPaths={folderPaths} />
             )}
