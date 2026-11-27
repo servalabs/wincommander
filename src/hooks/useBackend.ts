@@ -384,6 +384,8 @@ export interface ScrubMetadataOptions {
   dryRun: boolean;
   recursive: boolean;
   replaceOriginals: boolean;
+  /** With replaceOriginals: Pro keeps each original for 24 hours (Undo). */
+  keepUndo?: boolean;
   paranoid: { randomizeTimestamps: boolean; stripAltStreams: boolean };
 }
 export interface ScrubReportSummary {
