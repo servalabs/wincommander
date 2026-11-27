@@ -174,14 +174,14 @@ pub async fn call_via(pipe_name: &str, feature_id: &str, args: Value) -> Result<
 async fn call_via_with_timeout(
     pipe_name: &str,
     feature_id: &str,
-    args: Value,
+    mut args: Value,
     request_timeout: std::time::Duration,
     diagnostic_operation_id: Option<String>,
 ) -> Result<Value, String> {
     use tokio::time::timeout;
 
     let (mut client, session_token, _verified_peer) =
-        open_authenticated_service_session(pipe_name, feature_id).await?;
+        open_session_or_scrub_args(pipe_name, feature_id, &mut args).await?;
 
     let request_id = next_request_id();
     let mut request = wincmd_shared::Envelope::Request(wincmd_shared::Request {
@@ -421,6 +421,29 @@ fn retries_service_startup_handshake(feature_id: &str) -> bool {
 }
 
 #[cfg(windows)]
+async fn open_session_or_scrub_args(
+    pipe_name: &str,
+    feature_id: &str,
+    args: &mut Value,
+) -> Result<
+    (
+        tokio::net::windows::named_pipe::NamedPipeClient,
+        String,
+        Option<wincmd_service_auth::VerifiedServicePeer>,
+    ),
+    String,
+> {
+    match open_authenticated_service_session(pipe_name, feature_id).await {
+        Ok(session) => Ok(session),
+        Err(error) => {
+            // The only copy of a mount password or keyfile paths; never drop it unscrubbed.
+            zeroize_json(args);
+            Err(error)
+        }
+    }
+}
+
+#[cfg(windows)]
 async fn open_authenticated_service_session(
     pipe_name: &str,
     feature_id: &str,
@@ -599,6 +622,31 @@ mod tests {
         };
         assert!(signed.inner.is_empty());
         assert!(signed.tag.is_empty());
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn clears_mount_payload_when_the_service_session_cannot_open() {
+        let pipe_name = format!(r"\\.\pipe\wincmd-missing-fixture-{}", uuid::Uuid::new_v4());
+        let mut args = serde_json::json!({
+            "entry_id": "shared",
+            "password": "canary-secret",
+            "hidden_protection_password": "hidden-canary",
+            "keyfiles": [r"D:\canary.key"],
+        });
+
+        let result = open_session_or_scrub_args(&pipe_name, "svc.vault.mount", &mut args).await;
+
+        assert!(result.unwrap_err().starts_with("service connect failed"));
+        assert_eq!(
+            args,
+            serde_json::json!({
+                "entry_id": "",
+                "password": "",
+                "hidden_protection_password": "",
+                "keyfiles": [""],
+            })
+        );
     }
 
     #[cfg(windows)]

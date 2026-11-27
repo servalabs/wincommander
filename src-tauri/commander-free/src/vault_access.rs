@@ -390,10 +390,7 @@ pub async fn vault_mount_entry(
         volume_role: volume_role.unwrap_or_default(),
         hidden_protection_password,
     };
-    let payload = serde_json::to_value(&request);
-    // The service-call payload now owns the only remaining copy. Clear the
-    // command-local copy before the potentially long engine wait begins.
-    request.password.zeroize();
+    let payload = mount_request_payload(&mut request);
     let payload = match payload {
         Ok(payload) => payload,
         Err(_) => {
@@ -616,6 +613,17 @@ fn valid_personal_sync_recovery_request(action: Option<&str>, token: Option<&str
 #[tauri::command]
 pub async fn vault_release_orphaned_drive_letters() -> Result<Value, String> {
     crate::svc_client::call(RELEASE_ORPHANED_DRIVE_LETTERS, json!({})).await
+}
+
+fn mount_request_payload(
+    request: &mut wincmd_shared::vault_access::VaultMountRequest,
+) -> serde_json::Result<Value> {
+    let payload = serde_json::to_value(&*request);
+    // The service-call payload now owns the only remaining copy. Clear the
+    // command-local copy before the potentially long engine wait begins.
+    request.password.zeroize();
+    request.hidden_protection_password.zeroize();
+    payload
 }
 
 /// Renames the container file. The service checks the password through the
@@ -917,6 +925,21 @@ mod tests {
             value.get("volume_role"),
             Some(&serde_json::Value::String("outer".into()))
         );
+    }
+
+    #[test]
+    fn mount_payload_clears_both_command_local_passwords() {
+        let mut request = wincmd_shared::vault_access::VaultMountRequest {
+            entry_id: "shared".into(),
+            password: "canary".into(),
+            volume_role: wincmd_shared::vault_access::VaultVolumeRole::Outer,
+            hidden_protection_password: Some("hidden-canary".into()),
+        };
+        let payload = mount_request_payload(&mut request).unwrap();
+        assert_eq!(payload["password"], "canary");
+        assert_eq!(payload["hidden_protection_password"], "hidden-canary");
+        assert!(request.password.is_empty());
+        assert_eq!(request.hidden_protection_password, None);
     }
 
     #[test]

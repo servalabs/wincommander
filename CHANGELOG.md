@@ -10,6 +10,12 @@ lists only a selection of those changes.
 
 ## Unreleased
 
+- Fix a Vault unlock or rename leaving the password, hidden-volume protection
+  password or keyfile paths in desktop memory when the WinCommander service
+  could not be reached (service stopped, no handshake reply, or service
+  identity check failed). The request is now wiped on that failure, as it
+  already was after a successful send. The desktop app now also wipes its own
+  copy of the hidden-volume protection password once the request is built.
 - Share Safely (Scrub Meta): the results keep the two-column grid of file
   cards, but each card's "Will remove from this file" section is now one
   dropdown instead of a separate dropdown per kind of data. Collapsed, it
