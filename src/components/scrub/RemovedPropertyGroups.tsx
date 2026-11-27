@@ -8,11 +8,9 @@ export type Tint = { bg: string; fg: string; border: string };
 export default function RemovedPropertyGroups({
   groups,
   tintFor,
-  valueByDetail,
 }: {
   groups: RemovedPropertyGroup[];
   tintFor: (category: string) => Tint;
-  valueByDetail?: ReadonlyMap<string, string>;
 }) {
   return (
     <dl
@@ -33,11 +31,10 @@ export default function RemovedPropertyGroups({
           <dd style={{ display: 'flex', flexWrap: 'wrap', gap: 3, margin: 0, minWidth: 0 }}>
             {group.properties.map((p) => {
               const t = tintFor(p.category);
-              const value = valueByDetail?.get(p.detail);
               return (
                 <span
                   key={p.detail}
-                  title={`${p.label} — ${p.detail}${value ? `: ${value}` : ''}${p.occurrences > 1 ? ` (${p.occurrences} tags)` : ''}${p.isIdentifying ? ' · could identify you' : ''}`}
+                  title={`${p.label} — ${p.detail}${p.occurrences > 1 ? ` (${p.occurrences} tags)` : ''}${p.isIdentifying ? ' · could identify you' : ''}`}
                   style={{
                     display: 'inline-flex', alignItems: 'center', gap: 4,
                     fontSize: 10, padding: '1px 6px', borderRadius: 3,
@@ -46,8 +43,7 @@ export default function RemovedPropertyGroups({
                   }}
                 >
                   {p.isIdentifying && <Icon icon="shield" size={9} style={{ flexShrink: 0 }} />}
-                  <span>{p.detail}{value && ':'}</span>
-                  {value && <strong style={{ color: 'var(--color-text-primary)' }}>{value}</strong>}
+                  <span>{p.detail}</span>
                   {p.occurrences > 1 && <span style={{ opacity: 0.7 }}>×{p.occurrences}</span>}
                 </span>
               );

@@ -106,15 +106,12 @@ describe('RemovedPropertyGroups', () => {
     const groups = groupRemovedProperties([
       { category: 'exif', label: 'Camera & GPS', bytes: 1, isIdentifying: true, details: ['Aperture Value', 'Camera or device model', 'Create Date'] },
     ]);
-    const html = renderToStaticMarkup(
-      <RemovedPropertyGroups groups={groups} tintFor={tint} valueByDetail={new Map([['Create Date', '2024:05:01']])} />,
-    );
+    const html = renderToStaticMarkup(<RemovedPropertyGroups groups={groups} tintFor={tint} />);
     expect(html).toContain('Camera &amp; device');
     expect(html).toContain('Dates &amp; times');
     expect(html).toContain('Aperture Value');
     expect(html).toContain('Camera or device model');
-    expect(html).toContain('Create Date:</span><strong');
-    expect(html).toContain('2024:05:01');
+    expect(html).toContain('Create Date');
     expect(html).not.toContain('aria-expanded');
     expect(html).not.toContain('<button');
   });

@@ -5,8 +5,8 @@ import {
   formatEngineLine,
   groupRemovedProperties,
   initiallyOpenFiles,
-  pairSampleValues,
   parseEngineVersions,
+  parseSampleValue,
   scrubFileKind,
 } from './scrubPresentation';
 import type { ScrubResult, StrippedField } from './scrubTypes';
@@ -141,21 +141,10 @@ describe('engine version line', () => {
   });
 });
 
-describe('pairSampleValues', () => {
-  const groups = groupRemovedProperties([
-    { category: 'exif', label: 'EXIF', bytes: 1, isIdentifying: true, details: ['Create Date', 'Camera or device model'] },
-  ]);
-
-  test('a sample naming a removed property is shown beside it; the rest stay loose examples', () => {
-    const { valueByDetail, unmatched } = pairSampleValues(groups, ['CreateDate: 2024:05:01', 'Lens Model: 50mm', 'no key here']);
-    expect([...valueByDetail]).toEqual([['Create Date', '2024:05:01']]);
-    expect(unmatched).toEqual([{ key: 'Lens Model', value: '50mm' }, { key: '', value: 'no key here' }]);
-  });
-
-  test('empty values are dropped and a second sample for the same property is not lost', () => {
-    const { valueByDetail, unmatched } = pairSampleValues(groups, ['Create Date:', 'Create Date: a', 'create_date: b']);
-    expect([...valueByDetail]).toEqual([['Create Date', 'a']]);
-    expect(unmatched).toEqual([{ key: 'create_date', value: 'b' }]);
+describe('parseSampleValue', () => {
+  test('splits an engine tag into a readable key and its value', () => {
+    expect(parseSampleValue('GPS DateTimeOriginal: 2024:05:01 10:00')).toEqual({ key: 'Date Time Original', value: '2024:05:01 10:00' });
+    expect(parseSampleValue('no key here')).toEqual({ key: '', value: 'no key here' });
   });
 });
 

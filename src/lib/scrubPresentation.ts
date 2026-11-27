@@ -177,26 +177,6 @@ export function parseSampleValue(s: string): SampleValue {
   return { key: '', value: s };
 }
 
-const nameKey = (name: string) => name.toLowerCase().replace(/[^a-z0-9]/g, '');
-
-/** Attaches each original-file sample to the removed property of the same name;
- *  samples that name no removed property stay as loose examples. */
-export function pairSampleValues(
-  groups: readonly RemovedPropertyGroup[],
-  samples: readonly string[],
-): { valueByDetail: Map<string, string>; unmatched: SampleValue[] } {
-  const detailByKey = new Map(groups.flatMap((g) => g.properties.map((p) => [nameKey(p.detail), p.detail] as const)));
-  const valueByDetail = new Map<string, string>();
-  const unmatched: SampleValue[] = [];
-  for (const sample of samples.map(parseSampleValue)) {
-    if (!sample.value) continue;
-    const detail = detailByKey.get(nameKey(sample.key));
-    if (sample.key && detail && !valueByDetail.has(detail)) valueByDetail.set(detail, sample.value);
-    else unmatched.push(sample);
-  }
-  return { valueByDetail, unmatched };
-}
-
 export const FILE_DETAILS_AUTO_OPEN_MAX = 3;
 
 /** A handful of files all start open; in a big batch only files that still

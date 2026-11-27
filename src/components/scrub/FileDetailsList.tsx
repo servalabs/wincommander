@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react';
 import { Icon } from '@/components/ui/bp';
 import { initiallyOpenFiles } from '@/lib/scrubPresentation';
 import type { ScrubResult } from '@/lib/scrubTypes';
-import FileDetailSection from './FileDetailSection';
+import FileCard from './FileCard';
 import type { Tint } from './RemovedPropertyGroups';
 
 export const FILE_DETAILS_PAGE_SIZE = 50;
@@ -12,8 +12,8 @@ const LINK_BUTTON = {
   color: 'var(--color-accent)', cursor: 'pointer', fontSize: 11, fontWeight: 600, flexShrink: 0,
 } as const;
 
-/** Full-width, one-toggle-per-file report. Paged like NotCleanedList so a
- *  batch of hundreds renders only headers it shows, never hidden bodies. */
+/** Two-column grid of file cards, one removal toggle per card. Paged like
+ *  NotCleanedList so a batch of hundreds renders only the cards it shows. */
 export default function FileDetailsList({
   results,
   tintFor,
@@ -37,7 +37,7 @@ export default function FileDetailsList({
   const remaining = results.length - shown;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }}>
       {(showTitle || canToggleAll) && (
         <div
           style={{
@@ -67,16 +67,28 @@ export default function FileDetailsList({
         </div>
       )}
 
-      {results.slice(0, shown).map((result, index) => (
-        <FileDetailSection
-          key={result.inputPath}
-          result={result}
-          index={index}
-          isOpen={open.has(result.inputPath)}
-          onToggle={toggle}
-          tintFor={tintFor}
-        />
-      ))}
+      <div
+        style={{
+          display: 'grid',
+          // The dialog body owns scrolling, so this grid must never become a second scroll region.
+          gridTemplateColumns: 'repeat(auto-fit, minmax(min(300px, 100%), 1fr))',
+          gap: 8,
+          alignItems: 'start',
+          alignContent: 'start',
+          minWidth: 0,
+        }}
+      >
+        {results.slice(0, shown).map((result, index) => (
+          <FileCard
+            key={result.inputPath}
+            result={result}
+            index={index}
+            isOpen={open.has(result.inputPath)}
+            onToggle={toggle}
+            tintFor={tintFor}
+          />
+        ))}
+      </div>
 
       {remaining > 0 && (
         <button type="button" onClick={() => setShown((n) => n + FILE_DETAILS_PAGE_SIZE)} style={{ ...LINK_BUTTON, alignSelf: 'flex-start' }}>

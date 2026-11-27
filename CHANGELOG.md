@@ -10,18 +10,18 @@ lists only a selection of those changes.
 
 ## Unreleased
 
-- Share Safely (Scrub Meta): each file in the results is now one full-width
-  section with a single toggle, instead of a two-column grid of cards with a
-  separate dropdown per kind of data. Collapsed, a file's header still shows
-  its name, type icon, how many items will be removed and a per-kind summary
-  ("Camera & device 2 · Dates & times 1 · Author & edits 1"). Expanded, it
-  shows every removed property under every kind at once, with the value found
-  in the original beside a property when the scan reported one. Up to three
-  files start open; larger batches start collapsed (except a file that still
-  holds data), with "Expand all" / "Collapse all" in the File details header,
-  and list 50 files at a time. In the "files not cleaned" list a file's reason
-  now sits on its own full-width line under the name, so a long reason no
-  longer wraps into a narrow column.
+- Share Safely (Scrub Meta): the results keep the two-column grid of file
+  cards, but each card's "Will remove from this file" section is now one
+  dropdown instead of a separate dropdown per kind of data. Collapsed, it
+  shows how many items will be removed and a per-kind summary ("Camera &
+  device 2 · Dates & times 1 · Author & edits 1", kinds that could identify
+  you in red); expanded, it lists every removed property under every kind at
+  once. The examples found in the original and the GPS location stay visible
+  on every card. Up to three files start open; larger batches start collapsed
+  (except a file that still holds data), with "Expand all" / "Collapse all" in
+  the File details header, and show 50 files at a time. In the "files not
+  cleaned" list a file's reason now sits on its own full-width line under the
+  name, so a long reason no longer wraps into a narrow column.
 - Fix Share Safely (Metadata Scrubber) failing with "Pro worker busy; request
   not sent" when previewing or scrubbing a large folder such as Pictures. All
   paid features shared one Pro worker, and a new request gave up after 30

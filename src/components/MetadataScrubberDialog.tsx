@@ -1196,7 +1196,7 @@ function ScrubReportView({ report, roots, folderPaths }: ScrubReportViewProps) {
         </div>
       )}
 
-      {/* ── Per-file sections, grouped per queued folder ── */}
+      {/* ── Per-file cards, grouped per queued folder ── */}
       {showFolderSections ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {folderBuckets.map((bucket) => (
